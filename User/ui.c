@@ -179,3 +179,27 @@ void ui_screen_touch(ui_screen_t *screen, uint16_t x, uint16_t y, uint8_t presse
         }
     }
 }
+/* =========================================================================
+ * MODIFICA PER PANADAPTER KENWOOD TS-50 (Modalità IF / Diretta)
+ * ========================================================================= */
+
+// 0 = Ricezione Diretta SDR, 1 = Modalità IF TS-50 (73.045 MHz - Freq)
+uint8_t panadapter_mode = 0; 
+
+// Funzione Callback: viene chiamata ogni volta che tocchi il pulsante sullo schermo
+void ui_if_mode_button_callback(struct ui_button_t *btn, ui_event_t event, void *user_data)
+{
+    // Reagiamo solo quando l'utente solleva il dito dal pulsante (Click completato)
+    if (event == UI_EVENT_RELEASE) {
+        if (panadapter_mode == 0) {
+            panadapter_mode = 1;         // Attiva modalità Kenwood TS-50
+            btn->label = "TS-50 IF";     // Cambia la scritta sul display
+        } else {
+            panadapter_mode = 0;         // Torna in modalità SDR classica
+            btn->label = "DIRECT";       // Ripristina la scritta originale
+        }
+        
+        // Forza il ridisegno immediato del pulsante per mostrare la nuova scritta
+        ui_button_draw(btn);
+    }
+}
