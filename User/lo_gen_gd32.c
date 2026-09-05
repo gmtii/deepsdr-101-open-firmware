@@ -106,14 +106,37 @@ uint8_t lo_gen_gd32_set_freq(uint32_t freq_hz)
          * trick, which had made the identical wrong assumption). CH2
          * (PA7) now gets CCR=0 (leading), CH1 (PA6) gets CCR=half
          * (lagging) - matching PA7<->CLK1 as the real leading net.
+         *
+         * *** SWAPPED BACK, same day - real hardware measurement,
+         * external generator *** - the project owner directly
+         * measured this module's own PA6/PA7 output (below the
+         * 300kHz crossover) with an external signal generator and
+         * found CLK0/CLK1 polarity inverted relative to what the
+         * swap above produced - a DIRECT phase measurement, a more
+         * reliable data point than the SSB-sideband-sense inference
+         * the swap above was based on. Reverted to CH1(PA6)=leading
+         * (CCR=0), CH2(PA7)=lagging (CCR=half) - i.e. back to this
+         * function's ORIGINAL convention, before that same-day swap.
+         * NOT yet re-confirmed whether this reintroduces the SSB
+         * sideband inversion the swap above was chasing in the first
+         * place - the two symptoms (external-generator phase sense,
+         * and SSB sideband sense) SHOULD agree if this is the only
+         * thing in the chain that matters, but haven't both been
+         * re-checked together after this specific change - worth
+         * re-testing SSB reception below 300kHz once this is flashed,
+         * not just trusting the generator measurement alone. If SSB
+         * comes out wrong again after this, the actual bug is
+         * probably elsewhere (e.g. an I/Q channel-order swap
+         * somewhere in the RX chain, independent of CLK0/CLK1 timing)
+         * rather than in this specific phase relationship.
          */
         timer_channel_output_config(TIMER2, TIMER_CH_0, &oc_init_struct);
         timer_channel_output_mode_config(TIMER2, TIMER_CH_0, TIMER_OC_MODE_TOGGLE);
-        timer_channel_output_pulse_value_config(TIMER2, TIMER_CH_0, half);
+        timer_channel_output_pulse_value_config(TIMER2, TIMER_CH_0, 0U);
 
         timer_channel_output_config(TIMER2, TIMER_CH_1, &oc_init_struct);
         timer_channel_output_mode_config(TIMER2, TIMER_CH_1, TIMER_OC_MODE_TOGGLE);
-        timer_channel_output_pulse_value_config(TIMER2, TIMER_CH_1, 0U);
+        timer_channel_output_pulse_value_config(TIMER2, TIMER_CH_1, half);
 
         timer_enable(TIMER2);
         s_running = 1U;
@@ -126,8 +149,8 @@ uint8_t lo_gen_gd32_set_freq(uint32_t freq_hz)
          * no re-init/glitch beyond the timer's own regular ARR/CCR
          * update timing. */
         timer_autoreload_value_config(TIMER2, arr);
-        timer_channel_output_pulse_value_config(TIMER2, TIMER_CH_0, half);
-        timer_channel_output_pulse_value_config(TIMER2, TIMER_CH_1, 0U);
+        timer_channel_output_pulse_value_config(TIMER2, TIMER_CH_0, 0U);
+        timer_channel_output_pulse_value_config(TIMER2, TIMER_CH_1, half);
     }
 
     debug_print_dec("lo_gen_gd32: ARR", arr);

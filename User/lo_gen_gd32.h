@@ -73,22 +73,21 @@
  * interrupt/DMA involvement after setup (no drift is even possible -
  * both channels toggle off the exact same free-running counter).
  *
- * *** PHASE-SENSE, FIXED 01/09/2026 - real hardware bug *** - which
- * physical pin (PA6 or PA7) needs to be the LEADING channel to match
- * the QSD's expected I/Q sense was originally assumed to follow
- * ms5351.c's own "CLK0 leads CLK1 by 90 degrees" comment (PA6<->CLK0
- * leading, PA7<->CLK1 lagging) - but that comment was itself wrong:
- * the Si5351/MS5351 datasheet defines CLKx_PHOFF as a time DELAY, and
- * the high-band register-offset scheme (ms5351.c's main path) writes
- * its nonzero value to CLK0, meaning CLK0 actually LAGS and CLK1
- * LEADS in the real, already-working high-band path. The project
- * owner confirmed this directly: SSB sidebands came out correct above
- * 5MHz but swapped below it, on BOTH this module and ms5351.c's own
- * low-band trick (which had made the identical wrong assumption and
- * was fixed the same day - see its own comment). PA7 (CLK1's net) is
- * now the leading channel, PA6 (CLK0's net) lags - see
- * lo_gen_gd32_set_freq()'s comment in the .c file for exactly where
- * that's implemented.
+ * *** PHASE-SENSE - see lo_gen_gd32_set_freq()'s own comment in the .c
+ * file for the full back-and-forth *** - which physical pin (PA6 or
+ * PA7) needs to be the LEADING channel to match the QSD's expected
+ * I/Q sense went through two real-hardware-driven fixes the same day:
+ * first swapped away from PA6/CLK0-leads (based on re-decoding the
+ * Si5351/MS5351 PHOFF register semantics, confirmed via SSB sideband
+ * sense above/below 5MHz), then swapped BACK to PA6/CLK0-leading
+ * after a direct external-generator phase measurement of this
+ * module's own output (below the 300kHz crossover) showed the first
+ * swap had it backwards specifically here. Currently: PA6 (CLK0's
+ * net) leads, PA7 (CLK1's net) lags - CH1 gets CCR=0, CH2 gets
+ * CCR=half in lo_gen_gd32_set_freq(). NOT yet re-confirmed whether
+ * SSB sideband sense below 300kHz still agrees with this after the
+ * second swap - see that function's comment for what to check if it
+ * doesn't.
  */
 
 /* Anything below this tunes via this module; anything at or above it
