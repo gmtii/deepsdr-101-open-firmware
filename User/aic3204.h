@@ -116,8 +116,12 @@ void aic3204_scan_bus(void);
  * now needs this type in scope.
  */
 typedef enum {
-    AIC3204_RATE_96K = 0,  /* AM/USB/LSB/NFM - the default after aic3204_phase2_init() */
-    AIC3204_RATE_192K      /* WFM */
+    AIC3204_RATE_96K = 0,  /* AM/USB/LSB/NFM default - the default after aic3204_phase2_init() */
+    AIC3204_RATE_192K,     /* WFM */
+    AIC3204_RATE_48K       /* AM/USB/LSB/NFM alternate - added 01/09/2026, see
+                             * aic3204_configure_rate()'s comment for why (a
+                             * user-selectable escape hatch for a birdie tied
+                             * to N*96kHz - moving to 48kHz relocates it) */
 } aic3204_rate_t;
 
 void aic3204_phase2_init(aic3204_rate_t rate);

@@ -15,14 +15,13 @@
  *   (mover filas en RAM es memmove; hacerlo directo en GRAM via EXMC
  *   implicaria releer+reescribir toda la ventana en cada frame).
  *
- * PRESUPUESTO DE RAM (ajustar WATERFALL_ROWS segun lo que quede libre
- * una vez se sumen los buffers de DSP/FFT, que aun no estan
- * dimensionados):
+ * PRESUPUESTO DE RAM (actualizado 01/09/2026 - ver el propio comentario
+ * de WATERFALL_WIDTH sobre el traslado de buffers DSP/FFT/espectro a
+ * TCM RAM, lo que hizo viable este ensanche):
  *   tamano_buffer = WATERFALL_WIDTH * WATERFALL_ROWS * 2 bytes
- *   Con los valores por defecto (800 x 60): 96000 bytes (~93.75KB, igual
- *   presupuesto que la version anterior 480x100 - mismo tamano total,
- *   solo cambia la forma del buffer para que quepa el ancho real del
- *   panel, ver gfx.h). Sigue siendo la mitad larga de los 192KB
+ *   Con los valores actuales (796 x 72): 114624 bytes (~112KB). Antes
+ *   del ensanche a pantalla completa: 672x72 = 96768 bytes (~94.5KB).
+ *   Sigue siendo la mitad larga de los 192KB
  *   disponibles - probablemente haya que BAJAR WATERFALL_ROWS en cuanto
  *   se sepa cuanta RAM piden los buffers de FFT/IQ.
  *
@@ -40,10 +39,18 @@
  * capa de SDR/DSP mas adelante.
  */
 
-#define WATERFALL_WIDTH  672   /* main display column width: screen (800) minus the
-                                  right-hand status column (124px) and panel borders -
-                                  see main.c's radio layout constants (30/07/2026:
-                                  narrowed from full-screen 800 for the redesigned UI) */
+#define WATERFALL_WIDTH  796  /* main display column width - full screen (800) minus a
+                                  4px panel border (2px each side), see main.c's
+                                  radio layout constants. Was 672 (screen minus a
+                                  124px right-hand status column) until 01/09/2026,
+                                  when that column moved into a horizontal strip
+                                  under the top bar instead, freeing the full width
+                                  for spectrum+waterfall - see main.c's
+                                  STATUS_STRIP_Y/H comment. Only feasible RAM-wise
+                                  after moving a set of CPU-only DSP/FFT/spectrum
+                                  working buffers into TCM RAM (see fft.c's
+                                  TCMRAM_BSS comment) to make room for this
+                                  buffer's own ~18KB main-RAM growth. */
 #define WATERFALL_ROWS   72    /* filas visibles simultaneamente, ver presupuesto de RAM arriba
                                   (672*72*2 = ~97KB - same budget as the old 800*60*2) */
 

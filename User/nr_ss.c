@@ -104,13 +104,21 @@
  * port uses it (unlike the original's active code path, which didn't). */
 #define NR_SS_ATT_RATIO 1.63309522f
 
-static float s_dat_stfft[2U * NR_SS_NSTFFT]; /* interleaved re/im, in place through FFT->gain->IFFT */
-static float s_sigf[NR_SS_NFRAME][NR_SS_NSTFFT]; /* last NR_SS_NFRAME processed (real) frames, for overlap-add */
-static float s_sigt[NR_SS_NSTFFT]; /* input ring buffer */
-static float s_win[NR_SS_NSTFFT]; /* Hann window */
-static float s_twiddle_cos[NR_SS_NSTFFT / 2U];
-static float s_twiddle_sin[NR_SS_NSTFFT / 2U];
-static uint16_t s_bitrev[NR_SS_NSTFFT];
+/*
+ * *** 01/09/2026: moved to TCM RAM *** - same reasoning as fft.c's own
+ * TCM comment (freed main-RAM headroom for the widened waterfall;
+ * none of these are DMA targets - this whole module runs as plain
+ * CPU-computed DSP inside the AM/SSB audio chain).
+ */
+#define TCMRAM_BSS __attribute__((section(".tcmram")))
+
+static float s_dat_stfft[2U * NR_SS_NSTFFT] TCMRAM_BSS; /* interleaved re/im, in place through FFT->gain->IFFT */
+static float s_sigf[NR_SS_NFRAME][NR_SS_NSTFFT] TCMRAM_BSS; /* last NR_SS_NFRAME processed (real) frames, for overlap-add */
+static float s_sigt[NR_SS_NSTFFT] TCMRAM_BSS; /* input ring buffer */
+static float s_win[NR_SS_NSTFFT] TCMRAM_BSS; /* Hann window */
+static float s_twiddle_cos[NR_SS_NSTFFT / 2U] TCMRAM_BSS;
+static float s_twiddle_sin[NR_SS_NSTFFT / 2U] TCMRAM_BSS;
+static uint16_t s_bitrev[NR_SS_NSTFFT] TCMRAM_BSS;
 static uint32_t s_pt_w;   /* ring buffer write pointer into s_sigt */
 static uint32_t s_pt_frm; /* which s_sigf[] row gets written next (mod NR_SS_NFRAME) */
 static float s_inv_th = 1.0f; /* 1/threshold - see nr_ss_set_strength() */

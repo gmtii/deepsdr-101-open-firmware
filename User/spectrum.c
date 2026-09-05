@@ -105,18 +105,27 @@ uint16_t spectrum_colormap(float db, float db_min, float db_max)
 #define SPEC_COLOR_BAND_TINT      0x2807
 #define SPEC_LINE_BAND_TINT       0x2006
 
-static float    s_col_ema[SPEC_MAX_W];   /* smoothed dB per column      */
+/* *** 01/09/2026: moved to TCM RAM *** - pure spectrum-rendering
+ * working buffers, never DMA targets (only this file's own drawing
+ * functions touch them) - see fft.c's fuller TCM comment for the
+ * "why" (freed main-RAM headroom for the widened waterfall/spectrum
+ * panel - SPEC_MAX_W was already 800, comfortably covering the new
+ * width, so no size change was needed here, just relocating where
+ * these already-existing buffers live). */
+#define TCMRAM_BSS __attribute__((section(".tcmram")))
+
+static float    s_col_ema[SPEC_MAX_W] TCMRAM_BSS;   /* smoothed dB per column      */
 #if SPECTRUM_PEAK_HOLD
-static float    s_col_peak[SPEC_MAX_W];  /* peak-hold dB per column     */
+static float    s_col_peak[SPEC_MAX_W] TCMRAM_BSS;  /* peak-hold dB per column     */
 #endif
-static uint16_t s_bar_h[SPEC_MAX_W];     /* bar height, px from bottom  */
-static uint16_t s_bar_h_smooth[SPEC_MAX_W]; /* scratch buf for spatial smoothing */
-static uint16_t s_peak_h[SPEC_MAX_W];    /* peak marker height          */
-static uint16_t s_bar_lo[SPEC_MAX_W];    /* OUTLINE only: vertical trace bridge, low end  */
-static uint16_t s_bar_hi[SPEC_MAX_W];    /* OUTLINE only: vertical trace bridge, high end */
-static uint16_t s_row_color[SPEC_MAX_H]; /* gradient fill color per row */
-static uint8_t  s_row_grid[SPEC_MAX_H];  /* 1 = gridline on this row    */
-static uint16_t s_row_buf[SPEC_MAX_W];   /* stripe assembled in RAM     */
+static uint16_t s_bar_h[SPEC_MAX_W] TCMRAM_BSS;     /* bar height, px from bottom  */
+static uint16_t s_bar_h_smooth[SPEC_MAX_W] TCMRAM_BSS; /* scratch buf for spatial smoothing */
+static uint16_t s_peak_h[SPEC_MAX_W] TCMRAM_BSS;    /* peak marker height          */
+static uint16_t s_bar_lo[SPEC_MAX_W] TCMRAM_BSS;    /* OUTLINE only: vertical trace bridge, low end  */
+static uint16_t s_bar_hi[SPEC_MAX_W] TCMRAM_BSS;    /* OUTLINE only: vertical trace bridge, high end */
+static uint16_t s_row_color[SPEC_MAX_H] TCMRAM_BSS; /* gradient fill color per row */
+static uint8_t  s_row_grid[SPEC_MAX_H] TCMRAM_BSS;  /* 1 = gridline on this row    */
+static uint16_t s_row_buf[SPEC_MAX_W] TCMRAM_BSS;   /* stripe assembled in RAM     */
 static uint16_t s_prev_w = 0;            /* detect geometry change      */
 
 /* See spectrum_set_line_smooth()'s comment in spectrum.h. Defaults to

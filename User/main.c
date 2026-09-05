@@ -2,6 +2,7 @@
 #include "rm68120_exmc.h"
 #include "debug_uart.h"
 #include "gfx.h"
+#include "gfx_vfo_font.h"
 #include "ui.h"
 #include "waterfall.h"
 #include "touch.h"
@@ -47,6 +48,22 @@ static void smeter_draw(uint8_t segs);
 static uint8_t smeter_segments_from_peak(float peak);
 static void snr_update_and_draw(const float *db_frame);
 static void spec_agc_apply(const float *db_frame);
+
+/* spec_zoom_t / s_spec_zoom - moved up from their original spot further
+ * down (see spec_zoom_t's own design-comment block, still down there,
+ * right before spec_zoom_full_span_hz()) purely so snr_update_and_draw()
+ * (defined earlier in the file than that block) can see s_spec_zoom for
+ * its own low-IF center-bin correction - same SPEC_ZOOM_1X-only
+ * condition center_mark_offset_px already uses. No behavior change,
+ * just an earlier declaration point for the same single definition. */
+typedef enum {
+    SPEC_ZOOM_1X = 0,
+    SPEC_ZOOM_2X,
+    SPEC_ZOOM_4X,
+    SPEC_ZOOM_8X
+} spec_zoom_t;
+
+static spec_zoom_t s_spec_zoom = SPEC_ZOOM_1X;
 static void tune_encoder_poll(void);
 static void menu_screen_open(void);
 static void menu_screen_close(void);
@@ -229,6 +246,62 @@ volatile uint32_t g_fill_count  = 0; /* how many full fills have been done */
 volatile uint16_t g_panel_id_check1 = 0; /* response to panel command 0x000A */
 volatile uint16_t g_panel_id_check2 = 0; /* response to panel command 0x3A00 */
 volatile uint32_t g_system_clock_snapshot = 0; /* copy of SystemCoreClock, to verify clock startup */
+
+/*
+ * s_nonwfm_use_48k / s_current_rate: added 01/09/2026, per the project
+ * owner - a real birdie was confirmed tied exactly to N*Fs (287*96kHz
+ * = 27.552MHz, landing right in the 11m/CB band, present in a
+ * modified AND an unmodified board alike - ruled out as a power-rail
+ * issue), giving 48kHz (this project's OWN original AM/USB/LSB/NFM
+ * rate, before the later move to 96kHz for wider RF coverage) as a
+ * user-selectable escape hatch: moving Fs relocates the same class of
+ * birdie to a different, hopefully less troublesome spot. See
+ * aic3204_configure_rate()'s DAC-side comment in aic3204.c for the
+ * restored 48kHz register values (NDAC=2/MDAC=7/DOSR=128 and
+ * NADC=1/MADC=28/AOSR=64, both giving exactly 48000Hz from the same
+ * fixed 86.016MHz CODEC_CLKIN - verified numerically, matching the
+ * project's own historical 48kHz values before they were overwritten
+ * by the 96kHz migration).
+ *
+ * Not persisted to CONFIG.CSV (yet) - this started as a diagnostic
+ * toggle for bench A/B testing against the birdie, not a settled
+ * daily preference; every cold boot starts at s_nonwfm_use_48k=0
+ * (96kHz), matching this project's existing default. Revisit adding
+ * it to settings.c's schema if 48kHz turns out to be the preferred
+ * everyday choice.
+ *
+ * s_current_rate tracks whatever rate is ACTUALLY configured on the
+ * codec right now (starts matching cold boot's own default, 96K - see
+ * main()'s own boot sequence below) - apply_demod_mode() compares the
+ * newly-DESIRED rate against this (not just was_wfm!=will_be_wfm) so
+ * tapping the RATE tile while already in a non-WFM mode still forces
+ * the real reconfigure, which a was_wfm/will_be_wfm-only check would
+ * have missed (both stay "non-WFM" across a 48K<->96K change with no
+ * mode change at all). Declared here (not next to apply_demod_mode())
+ * since main()'s own boot sequence, further down, also needs to read
+ * s_nonwfm_use_48k before apply_demod_mode() is ever even declared in
+ * this file's own top-to-bottom order.
+ */
+static uint8_t s_nonwfm_use_48k = 0U;
+static aic3204_rate_t s_current_rate = AIC3204_RATE_96K;
+
+/*
+ * demod_if_offset_hz() - added 01/09/2026 alongside the 48kHz rate
+ * option. Returns whichever of DEMOD_IF_OFFSET_HZ (24000, @ 96kHz) or
+ * DEMOD_IF_OFFSET_HZ_48K (12000, @ 48kHz) matches s_nonwfm_use_48k -
+ * demod_am.c's Fs/4 down-mix rotation structurally shifts by exactly
+ * Fs/4, whatever Fs actually is (see demod_am.h's own comment on why
+ * it's not a generic NCO), so this offset MUST always track the
+ * REAL active rate or the LO ends up mistuned relative to what the
+ * down-mix actually does - every call site that used to read
+ * DEMOD_IF_OFFSET_HZ directly (a single, rate-blind constant) now
+ * calls this instead. WFM is unaffected either way - it never applies
+ * this offset at all (see is_wfm checks at each call site).
+ */
+static uint32_t demod_if_offset_hz(void)
+{
+    return s_nonwfm_use_48k ? DEMOD_IF_OFFSET_HZ_48K : DEMOD_IF_OFFSET_HZ;
+}
 
 int main(void)
 {
@@ -474,7 +547,13 @@ int main(void)
     gd32_i2s_mclk_timer_start();
 
     debug_print("\n--- I2S1: phase 3 (clocks + circular DMA, test tone) ---\n");
-    gd32_i2s_init_slave(AIC3204_RATE_96K);
+    /* Cold boot always starts at s_current_rate's own static-initializer
+     * value (AIC3204_RATE_96K) - matches s_nonwfm_use_48k's own
+     * un-persisted default (0/96K, see its declaration comment) by
+     * construction, not by coincidence: neither is ever loaded from
+     * settings, so both simply start at the values written here in
+     * the source. */
+    gd32_i2s_init_slave(s_current_rate);
 
     /*
      * REORDERED (28/07/2026): sdr_rx_init() moved to run IMMEDIATELY
@@ -496,7 +575,7 @@ int main(void)
     sdr_rx_init();
 
     debug_print("\n--- AIC3204: phase 2 (clock + single-ended ADC baseline + power-up) ---\n");
-    aic3204_phase2_init(AIC3204_RATE_96K);
+    aic3204_phase2_init(s_current_rate);
 
     /*
      * Audio out: switch DMA0/CH4 from the bring-up test tone to the
@@ -806,8 +885,9 @@ int main(void)
                                  (SystemCoreClock / 192000UL) * SDR_RX_BLOCK_SAMPLES_WFM);
             } else {
                 debug_print_dec("demod ISR cycles (last block)", demod_am_get_last_cycles());
-                debug_print_dec("block budget cycles (96kHz, for reference)",
-                                 (SystemCoreClock / 96000UL) * SDR_RX_BLOCK_SAMPLES);
+                debug_print_dec(s_nonwfm_use_48k ? "block budget cycles (48kHz, for reference)"
+                                                   : "block budget cycles (96kHz, for reference)",
+                                 (SystemCoreClock / (s_nonwfm_use_48k ? 48000UL : 96000UL)) * SDR_RX_BLOCK_SAMPLES);
                 {
                     /* Per-stage breakdown (31/07/2026, see
                      * demod_am_get_last_cycles_breakdown()'s comment) -
@@ -884,14 +964,20 @@ static void calib_height_ruler_draw(void)
  *
  *   +--------------------------------------------------------------+
  *   | TOP BAR (h=64): freq (big) | mode | step+vol | time | batt   |
- *   +---------------------------------------------------+----------+
- *   | SPECTRUM (676 wide, 280 tall)                     | RIGHT    |
- *   +---------------------------------------------------+ COLUMN   |
- *   | WATERFALL (672 x 72 rows)                         | S-meter  |
- *   |                                                   | + badges |
- *   +---------------------------------------------------+----------+
+ *   +--------------------------------------------------------------+
+ *   | STATUS STRIP (h=40): S-meter | SNR | NR SPT AGC [..] OVR      |
+ *   +--------------------------------------------------------------+
+ *   | SPECTRUM (796 wide, 240 tall)                                |
+ *   +--------------------------------------------------------------+
+ *   | WATERFALL (796 x 72 rows)                                    |
+ *   +--------------------------------------------------------------+
  *   | BOTTOM BAR: 6 buttons (MODE VOL STEP NR BANDS MENU)          |
  *   +--------------------------------------------------------------+
+ *
+ * (01/09/2026: the old right-hand column - S-meter + badges next to
+ * the spectrum/waterfall - was removed; see STATUS_STRIP_Y/H's own
+ * declaration comment for the full story. Spectrum/waterfall now span
+ * the full screen width.)
  *
  * Every coordinate is an internally-linked constant (static const, not
  * a macro) so sdr_spectrum_waterfall_tick() uses exactly the same
@@ -900,20 +986,38 @@ static void calib_height_ruler_draw(void)
  */
 static const uint16_t TOP_H        = 64;
 
-/* Main (left) display column: spectrum over waterfall. */
-static const uint16_t MAIN_W       = 676;             /* panel width, border included  */
-static const uint16_t SPEC_Y       = 64;
-static const uint16_t SPEC_H       = 280;
-static const uint16_t SPEC_TRACE_X = 2;               /* inside the 1px panel border   */
-static const uint16_t SPEC_TRACE_W = 672;             /* = WATERFALL_WIDTH; /4 exact for the SR/4 marker */
-static const uint16_t WF_PANEL_Y   = 64 + 280 + 2;    /* = 346 */
-static const uint16_t WF_Y         = 64 + 280 + 4;    /* first waterfall row           */
+/*
+ * *** 01/09/2026, right-hand column REMOVED, per the project owner:
+ * "la parte derecha es de poco uso y desaprovecha mucho espacio" ***
+ * - S-meter, SNR readout, and the status badges all move into a new
+ * horizontal STATUS_STRIP row directly under the top bar (see its own
+ * comment below), freeing the old RCOL_X..799 width entirely for the
+ * spectrum/waterfall panel, which now spans the full screen width.
+ * SPEC_H shrinks by exactly STATUS_STRIP_H (280->240) and SPEC_Y grows
+ * by the same amount (64->104) - their SUM is unchanged (344 either
+ * way), which is why WF_PANEL_Y/WF_Y below still come out to the same
+ * numbers as before: the waterfall's own position and height are
+ * completely untouched by this change, only the spectrum panel above
+ * it shrinks vertically to make room, and both panels now stretch
+ * across the full width instead of stopping at the old 676px RCOL
+ * boundary. This was only feasible RAM-wise after moving a whole set
+ * of CPU-only DSP/FFT/spectrum working buffers into TCM RAM (see
+ * fft.c's TCMRAM_BSS comment) - the waterfall's own history buffer
+ * (waterfall.h's WATERFALL_WIDTH) alone needed ~18KB more main RAM at
+ * this new width, which the freed TCM headroom now comfortably covers.
+ */
+#define STATUS_STRIP_Y TOP_H
+#define STATUS_STRIP_H 40
 
-/* Right-hand status column: S-meter + up to 6 state badges. */
-static const uint16_t RCOL_X       = 678;
-static const uint16_t RCOL_W       = 122;             /* to x=799 inclusive            */
-static const uint16_t RCOL_Y       = 64;
-static const uint16_t RCOL_H       = 358;             /* down to the button bar        */
+/* Main (left) display column: spectrum over waterfall - now the ONLY
+ * column, full screen width. */
+static const uint16_t MAIN_W       = 800;             /* panel width, border included - was 676 before the RCOL removal above */
+static const uint16_t SPEC_Y       = 104;             /* = TOP_H(64) + STATUS_STRIP_H(40) - was 64 */
+static const uint16_t SPEC_H       = 240;             /* was 280 - see this block's header comment: SPEC_Y+SPEC_H unchanged at 344 */
+static const uint16_t SPEC_TRACE_X = 2;               /* inside the 1px panel border   */
+static const uint16_t SPEC_TRACE_W = 796;             /* = WATERFALL_WIDTH; /4 exact for the SR/4 marker - was 672 (MAIN_W-4 either way) */
+static const uint16_t WF_PANEL_Y   = 104 + 240 + 2;   /* = 346, same value as before (see header comment) */
+static const uint16_t WF_Y         = 104 + 240 + 4;   /* first waterfall row - same value as before */
 
 /* Bottom button bar: 6 buttons. */
 static const uint16_t BTNBAR_Y     = 428;
@@ -935,7 +1039,11 @@ static ui_screen_t s_demo_screen;
 static ui_panel_t  s_title_panel;
 static ui_panel_t  s_spectrum_panel;
 static ui_panel_t  s_waterfall_panel;
-static ui_panel_t  s_rcol_panel;
+/* s_rcol_panel REMOVED 01/09/2026 - the right-hand status column it
+ * anchored no longer exists, see STATUS_STRIP_Y/H's declaration
+ * comment. Replaced by s_status_strip_panel, the new horizontal
+ * strip's own background panel. */
+static ui_panel_t  s_status_strip_panel;
 static ui_button_t s_btn_mode;
 static ui_button_t s_btn_vol;
 static ui_button_t s_btn_step;
@@ -1158,6 +1266,7 @@ static ui_button_t s_menu_tile_cal; /* touch CALibration one-shot action - HW pa
 static ui_button_t s_menu_tile_cal_ppm; /* MS5351 crystal PPM CALibration one-shot action - HW page, added 26/08/2026, see menu_tile_cal_ppm_callback() */
 static ui_button_t s_menu_tile_ifbw; /* WFM pre-discriminator channel filter width (96K/80K) - HW page slot 4, added 01/09/2026, see menu_tile_ifbw_callback() */
 static ui_button_t s_menu_tile_specagc; /* Spectrum/waterfall auto-scale toggle - HW page slot 5, added 01/09/2026, see menu_tile_specagc_callback() */
+static ui_button_t s_menu_tile_rate; /* AM/USB/LSB/NFM sample rate 96K/48K toggle - HW page slot 6, added 01/09/2026, see menu_tile_rate_callback() */
 /* s_speaker_pa_enabled: backs BOTH the tile's label (menu_tile_speaker_pa_refresh())
  * and the actual GPIO level (speaker_pa_set_enabled(), defined down
  * with the rest of the GPIO drivers near led_gpio_init() - declared
@@ -1641,13 +1750,11 @@ static uint8_t s_scale_adjust_max = 0U; /* 0 = knob moves db_min, 1 = moves db_m
  * --- Spectrum AGC, added 01/09/2026 -------------------------------------
  *
  * Per the project owner: auto-track s_db_min/s_db_max from the actual
- * spectrum instead of only ever setting them by hand. Off by default
- * (matches this project's usual "the new control's default is the
- * old, already-validated behavior" rule) - manual SCALE adjustment
- * (tune_encoder_poll()'s ENCODER_TARGET_SCALE handler) still works
- * exactly as before either way, and now also auto-disables this if it
- * was on, so turning the knob always means "I'm taking over," never
- * "fight the auto-tracker."
+ * spectrum instead of only ever setting them by hand. Manual SCALE
+ * adjustment (tune_encoder_poll()'s ENCODER_TARGET_SCALE handler)
+ * still works exactly as before, and auto-disables this if it was on,
+ * so turning the knob always means "I'm taking over," never "fight
+ * the auto-tracker."
  *
  * Reuses s_db_frame[] - the exact same per-frame FFT data already
  * computed for the panadapter/waterfall and the SNR readout, no new
@@ -1678,9 +1785,18 @@ static uint8_t s_scale_adjust_max = 0U; /* 0 = knob moves db_min, 1 = moves db_m
  * needs the room: target_max = max(target_min + MIN_SPAN_DB,
  * frame_max + CEIL_MARGIN_DB). With no strong signals, the display now
  * always keeps at least MIN_SPAN_DB of headroom above the floor.
+ * *** 01/09/2026, DEFAULT FLIPPED TO ON, same day *** - per the
+ * project owner, after bench-testing the ceiling fix above: "me gusta"
+ * - on by default now, departing from this project's usual "new
+ * control defaults to the old behavior" rule for once, since the
+ * owner explicitly asked for it after confirming the behavior on real
+ * hardware. Manual SCALE adjustment (tune_encoder_poll()'s
+ * ENCODER_TARGET_SCALE handler) still auto-disables this the same way
+ * regardless of the default, so turning the knob always means "I'm
+ * taking over," never "fight the auto-tracker."
  */
 static uint8_t s_spec_agc_enabled = 1U;
-#define SPEC_AGC_FLOOR_MARGIN_DB 0.0f
+#define SPEC_AGC_FLOOR_MARGIN_DB 3.0f
 #define SPEC_AGC_CEIL_MARGIN_DB  6.0f
 #define SPEC_AGC_MIN_SPAN_DB     50.0f /* guaranteed floor-to-ceiling headroom, signal or not */
 #define SPEC_AGC_SMOOTH_ALPHA    0.05f
@@ -1741,12 +1857,12 @@ static float s_spectrum_smooth_alpha = 0.75f; /* same default the #define always
 #define FREQ_TEXT_SCALE 5
 #define FREQ_FIELD_CHARS 11
 #define FREQ_X 8
-#define FREQ_Y 14
-#define MODE_X 348
+#define FREQ_Y 0
+#define MODE_X 396
 #define MODE_Y 21
-#define STEP_X 430
+#define STEP_X 478
 #define STEP_Y 8
-#define VOL_X  430
+#define VOL_X  478
 #define VOL_Y  38
 #define TIME_X 690
 #define TIME_Y 8
@@ -1755,10 +1871,10 @@ static float s_spectrum_smooth_alpha = 0.75f; /* same default the #define always
 #define BATT_W 70 /* narrowed from 80 on 31/07/2026 to make room for the
                     * voltage readout to its right - see
                     * battery_display_draw()'s comment. Screen is 800px
-                    * wide (GFX_SCREEN_WIDTH, RCOL_X+RCOL_W=800) and the
-                    * icon's right edge sits at BATT_X+BATT_W-1, so this
-                    * leaves 799-(690+70-1)=40px for the "XX.XV" text
-                    * (30px at scale 1) plus a safety margin. */
+                    * wide (GFX_SCREEN_WIDTH) and the icon's right edge
+                    * sits at BATT_X+BATT_W-1, so this leaves
+                    * 799-(690+70-1)=40px for the "XX.XV" text (30px at
+                    * scale 1) plus a safety margin. */
 #define BATT_H 16
 
 /*
@@ -1927,12 +2043,12 @@ static float sam_current_ppm_error(void)
  * else occupies that span, and keeping the row parallels how VOL
  * sits right under STEP: this now sits right of STEP the same way
  * VOL sits under it. */
-#define SAM_CALIB_X (STEP_X + 130)
+#define SAM_CALIB_X (594)
 #define SAM_CALIB_Y STEP_Y
 static void sam_calib_display_draw(void)
 {
     if (demod_am_get_mode() != DEMOD_MODE_SAM) {
-        gfx_fill_rect((uint16_t)SAM_CALIB_X, (uint16_t)SAM_CALIB_Y, 120U, 16U, GFX_COLOR_DARKGRAY);
+        gfx_fill_rect((uint16_t)SAM_CALIB_X, (uint16_t)SAM_CALIB_Y, 70U, 16U, GFX_COLOR_DARKGRAY);
         return;
     }
 
@@ -1962,8 +2078,8 @@ static void sam_calib_display_draw(void)
             buf[--pos] = negative ? '-' : '+';
         }
 
-        gfx_fill_rect((uint16_t)SAM_CALIB_X, (uint16_t)SAM_CALIB_Y, 120U, 16U, GFX_COLOR_DARKGRAY);
-        gfx_text((uint16_t)SAM_CALIB_X, (uint16_t)SAM_CALIB_Y, &buf[pos], GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, 2);
+        gfx_fill_rect((uint16_t)SAM_CALIB_X, (uint16_t)SAM_CALIB_Y, 70U, 16U, GFX_COLOR_DARKGRAY);
+        gfx_text((uint16_t)SAM_CALIB_X, (uint16_t)SAM_CALIB_Y, &buf[pos], GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, 1);
     }
 }
 
@@ -1982,8 +2098,8 @@ static void freq_display_draw(void)
     char buf[FREQ_FIELD_CHARS + 1];
 
     tune_freq_format(s_tune_hz, buf);
-    gfx_text((uint16_t)FREQ_X, FREQ_Y, buf,
-             GFX_COLOR_CYAN, GFX_COLOR_DARKGRAY, FREQ_TEXT_SCALE);
+    gfx_vfo_text((uint16_t)FREQ_X, FREQ_Y, buf,
+                 GFX_COLOR_CYAN, GFX_COLOR_DARKGRAY, 2);
 }
 
 static void step_display_draw(void)
@@ -2272,8 +2388,8 @@ static void battery_display_draw(void)
  * offset + label change here) can come once a signal generator has
  * been on the antenna jack.
  */
-#define SMETER_X    (RCOL_X + 6)
-#define SMETER_Y    (RCOL_Y + 22)
+#define SMETER_X    8
+#define SMETER_Y    (uint16_t)(STATUS_STRIP_Y + (STATUS_STRIP_H - SMETER_SEG_H) / 2) /* vertically centered in the strip */
 #define SMETER_SEGS 12
 #define SMETER_SEG_W 8
 #define SMETER_SEG_H 20
@@ -2334,9 +2450,12 @@ static uint8_t smeter_segments_from_peak(float peak)
 /*
  * --- SNR readout, added 01/09/2026 ------------------------------------
  *
- * Drawn in the gap between the S-meter (ends at SMETER_Y+SMETER_SEG_H)
- * and the status badges (start at BADGE_Y0 = RCOL_Y+60) - plenty of
- * clearance for one scale-1 (7px) text line.
+ * *** 01/09/2026, repositioned same day - moved from the old vertical
+ * right-hand column into the new horizontal status strip alongside
+ * the S-meter and badges, per the project owner's layout redesign -
+ * see STATUS_STRIP_Y/H's declaration comment for the full "why". Now
+ * sits immediately to the right of the S-meter, vertically centered
+ * in the strip, rather than in the gap below it. ***
  *
  * DELIBERATELY LABELED "dB", NOT "dBm" - same reasoning as the
  * S-meter's own comment just above: without a calibrated antenna/
@@ -2368,7 +2487,7 @@ static uint8_t smeter_segments_from_peak(float peak)
  * varies; fixed windows are a first-pass approximation only, same
  * spirit as the S-meter's own un-calibrated honesty above.
  *
- * Like the rest of this status column, this only gets fresh data while
+ * Like the rest of the status strip, this only gets fresh data while
  * the settings menu is closed - s_db_frame itself stops updating while
  * the menu covers the spectrum panel (see sdr_spectrum_waterfall_tick()'s
  * own "!s_menu_open" comment) - so unlike the S-meter (driven by
@@ -2377,8 +2496,8 @@ static uint8_t smeter_segments_from_peak(float peak)
  * silently. Acceptable: there's no fresher spectrum data being
  * computed during that window anyway.
  */
-#define SNR_X (RCOL_X + 6)
-#define SNR_Y (SMETER_Y + SMETER_SEG_H + 4)
+#define SNR_X (uint16_t)(SMETER_X + SMETER_SEGS * (SMETER_SEG_W + 1) + 12) /* right after the meter, plus a gap */
+#define SNR_Y (uint16_t)(STATUS_STRIP_Y + (STATUS_STRIP_H - 14U) / 2U) /* vertically centered - 01/09/2026: 14px = one scale-2 text line (GFX_FONT_HEIGHT=7 * scale 2), matching the badges' own font scale - was scale-1 (9px, "SNR +14dB") before the project owner asked for it bigger and without the "SNR" prefix ("muy pequeño") */
 #define SNR_SIGNAL_HALF_WIN 3U  /* bins each side of center counted as "signal" */
 #define SNR_GUARD_HALF_WIN  8U  /* bins each side of center excluded from the noise average */
 
@@ -2386,7 +2505,24 @@ static int32_t s_snr_db_last_drawn = 0x7FFFFFFF; /* force first draw */
 
 static void snr_update_and_draw(const float *db_frame)
 {
+    /* Low-IF correction (added 05/09/2026): db_frame is fftshifted with
+     * db_out[N/2] = DC = the LO (see fft_compute_db_iq()'s own comment),
+     * but whenever the low-IF down-mix is active the wanted signal does
+     * NOT sit on the LO - it's DEMOD_IF_OFFSET_HZ (= Fs/4) ABOVE it (LO
+     * tuned Fs/4 below the station - see demod_am.h's LOW-IF TUNING
+     * note), i.e. bin N/2 + N/4 = 3N/4, not N/2. Sampling "signal" and
+     * "noise" around N/2 in that state was reading the LO-leakage
+     * artifact's own bin, not the station. SAME condition and SAME sign
+     * (positive/higher-index) as center_mark_offset_px already uses for
+     * the panadapter's own center marker - bench-confirmed there
+     * 31/07/2026. Only SPEC_ZOOM_1X needs this: zoom_process_block()
+     * already re-centers the signal on DC before decimating at 2X/4X/
+     * 8X, so N/2 is already correct there (see that function's comment)
+     * - applying +N/4 on top would double-correct. */
     uint32_t center = FFT_BINS_IQ / 2U;
+    if (s_spec_zoom == SPEC_ZOOM_1X && demod_am_get_if_offset_active()) {
+        center = 3U * FFT_BINS_IQ / 4U;
+    }
     uint32_t lo_sig = (center > SNR_SIGNAL_HALF_WIN) ? (center - SNR_SIGNAL_HALF_WIN) : 0U;
     uint32_t hi_sig = center + SNR_SIGNAL_HALF_WIN;
     uint32_t lo_guard = (center > SNR_GUARD_HALF_WIN) ? (center - SNR_GUARD_HALF_WIN) : 0U;
@@ -2432,6 +2568,14 @@ static void snr_update_and_draw(const float *db_frame)
     negative = (snr_rounded < 0) ? 1U : 0U;
     mag = negative ? (uint32_t)(-snr_rounded) : (uint32_t)snr_rounded;
 
+    /* *** 01/09/2026, per the project owner: dropped the "SNR " prefix
+     * and bumped the font to scale 2 (matching the badges' own scale -
+     * see badge_draw()'s gfx_text() call) *** - "sale en texto muy
+     * pequeño y fondo gris [...] igual se puede quitar SNR y subir el
+     * tipo de letra a la medida en dB con el tamaño de los badgets".
+     * Just the sign+digits+"dB" now (e.g. "+14dB", "-3dB") - context
+     * (right next to the S-meter, in the status strip) already makes
+     * clear what this number means without spelling out "SNR". */
     buf[pos] = '\0';
     buf[--pos] = 'B';
     buf[--pos] = 'd';
@@ -2444,22 +2588,10 @@ static void snr_update_and_draw(const float *db_frame)
     if (pos > 0) {
         buf[--pos] = negative ? '-' : '+';
     }
-    if (pos > 0) {
-        buf[--pos] = ' ';
-    }
-    if (pos > 0) {
-        buf[--pos] = 'R';
-    }
-    if (pos > 0) {
-        buf[--pos] = 'N';
-    }
-    if (pos > 0) {
-        buf[--pos] = 'S';
-    }
 
-    gfx_fill_rect((uint16_t)SNR_X, (uint16_t)SNR_Y, (uint16_t)(RCOL_W - 12), 9U,
-                   GFX_COLOR_DARKGRAY);
-    gfx_text((uint16_t)SNR_X, (uint16_t)SNR_Y, &buf[pos], GFX_COLOR_YELLOW, GFX_COLOR_DARKGRAY, 1);
+    gfx_fill_rect((uint16_t)SNR_X, (uint16_t)SNR_Y, 80U, 14U,
+                   GFX_COLOR_BLACK);
+    gfx_text((uint16_t)SNR_X, (uint16_t)SNR_Y, &buf[pos], GFX_COLOR_YELLOW, GFX_COLOR_DARKGRAY, 2);
 }
 
 /*
@@ -2571,10 +2703,17 @@ static void spec_agc_apply(const float *db_frame)
  */
 #define BADGE_W 55
 #define BADGE_H 26
-#define BADGE_X0 (RCOL_X + 4)
-#define BADGE_X1 (RCOL_X + 4 + BADGE_W + 4)
-#define BADGE_Y0 (RCOL_Y + 60)
-#define BADGE_ROW_STEP (BADGE_H + 6)
+#define BADGE_GAP 6
+/* *** 01/09/2026: reflowed from a 2-column x 3-row grid into a single
+ * row of 6, per the project owner's status-strip redesign - see
+ * STATUS_STRIP_Y/H's declaration comment. BADGE_COL(n) replaces the
+ * old BADGE_X0/BADGE_X1 pair; there's no more BADGE_ROW_STEP since
+ * everything's on one row now. Starts right after the SNR text with a
+ * clear gap, vertically centered in the strip like every other
+ * element in it. */
+#define BADGE_ROW_X0 (uint16_t)(SNR_X + 90U)
+#define BADGE_COL(n) (uint16_t)(BADGE_ROW_X0 + (n) * (BADGE_W + BADGE_GAP))
+#define BADGE_Y0 (uint16_t)(STATUS_STRIP_Y + (STATUS_STRIP_H - BADGE_H) / 2U)
 
 /* Indexed directly by agc_profile_t (demod_am.h) - MANUAL, SLOW,
  * MEDIUM, FAST in that order. Originally "MAN, SLW, MED, FST" per the
@@ -2718,14 +2857,14 @@ static void badges_draw(void)
                            bw_interactive = 1U; break;
     }
 
-    badge_draw(BADGE_X0, BADGE_Y0,                      "NR",  s_nr_on, GFX_COLOR_GREEN);
+    badge_draw(BADGE_COL(0), BADGE_Y0, "NR",  s_nr_on, GFX_COLOR_GREEN);
     /* SPT badge: lit whenever line smoothing is active (passes > 0),
      * same "on = colored" convention as the other badges - see
      * s_spec_smooth_passes' comment for the repurposing story. The
      * actual pass count only shows on the menu tile (badge_draw() has
      * no room for "SPT 3" at this width). */
-    badge_draw(BADGE_X1, BADGE_Y0,                      "SPT", (uint8_t)(s_spec_smooth_passes > 0U), GFX_COLOR_GREEN);
-    badge_draw(BADGE_X0, (uint16_t)(BADGE_Y0 + BADGE_ROW_STEP),     "AGC", 1U, GFX_COLOR_GREEN);
+    badge_draw(BADGE_COL(1), BADGE_Y0, "SPT", (uint8_t)(s_spec_smooth_passes > 0U), GFX_COLOR_GREEN);
+    badge_draw(BADGE_COL(2), BADGE_Y0, "AGC", 1U, GFX_COLOR_GREEN);
     /* s_btn_agc_profile is a real ui_button_t (see its declaration),
      * not a badge_draw() call - keep its label in sync with the
      * current profile and redraw it here too, so it stays correct
@@ -2745,7 +2884,31 @@ static void badges_draw(void)
     s_btn_audio_bw.bg = bw_interactive ? GFX_COLOR_CYAN : GFX_COLOR_DARKGRAY;
     s_btn_audio_bw.fg = bw_interactive ? GFX_COLOR_BLACK : GFX_COLOR_GRAY;
     ui_button_draw(&s_btn_audio_bw);
-    badge_draw(BADGE_X1, (uint16_t)(BADGE_Y0 + 2 * BADGE_ROW_STEP), "OVR", (uint8_t)(s_rf_agc_backoff_x2 > 0), GFX_COLOR_RED);
+    badge_draw(BADGE_COL(5), BADGE_Y0, "OVR", (uint8_t)(s_rf_agc_backoff_x2 > 0), GFX_COLOR_RED);
+    /* RATE badge, added 01/09/2026 per the project owner - shows the
+     * ACTUAL active sample rate at a glance, display-only (the actual
+     * control for the non-WFM case is the RATE tile on the HW
+     * settings page - see menu_tile_rate_callback()'s comment). WFM
+     * always runs its own fixed 192kHz path regardless of
+     * s_nonwfm_use_48k (see demod_am_set_active_rate()'s own comment
+     * on why WFM is unaffected either way) - shown here in cyan, a
+     * third, neutral color distinct from the 96K/48K pair below,
+     * since 192K isn't really "default" or "a deliberate departure"
+     * the way 96K/48K are relative to EACH OTHER - it's simply
+     * whatever WFM always uses.
+     *
+     * "on" is unconditionally 1 here since this always shows valid,
+     * current information rather than an on/off state - the color
+     * itself carries the meaning instead: green for 96K (the
+     * default), yellow for 48K (a deliberate departure from it,
+     * worth a glance of attention, same convention this project
+     * already uses for its other non-default-state badges). */
+    if (demod_am_get_mode() == DEMOD_MODE_WFM) {
+        badge_draw(BADGE_COL(6), BADGE_Y0, "192K", 1U, GFX_COLOR_CYAN);
+    } else {
+        badge_draw(BADGE_COL(6), BADGE_Y0, s_nonwfm_use_48k ? "48K" : "96K",
+                   1U, s_nonwfm_use_48k ? GFX_COLOR_YELLOW : GFX_COLOR_GREEN);
+    }
 }
 
 /*
@@ -2819,7 +2982,7 @@ static void badges_draw(void)
  *   UI    (slots 0-5): BL (backlight), SCALE, SPT, SMH (smooth),
  *                       SPC (spectrum trace style, HEATMAP<->LINE),
  *                       ZOOM.
- *   HW    (slots 0-1, 4-5): SPK - speaker PA enable/mute (PB7, see
+ *   HW    (slots 0-1, 4-6): SPK - speaker PA enable/mute (PB7, see
  *                       speaker_pa_set_enabled()'s comment - pin/
  *                       polarity UNCONFIRMED as of 03/08/2026). IFBW -
  *                       WFM pre-discriminator channel filter width
@@ -2827,9 +2990,11 @@ static void badges_draw(void)
  *                       menu_tile_ifbw_callback()'s comment). SAGC -
  *                       spectrum/waterfall auto-scale toggle (slot 5,
  *                       added 01/09/2026 - see
- *                       menu_tile_specagc_callback()'s comment).
- *                       Slots 6-7 reserved for future hardware
- *                       settings.
+ *                       menu_tile_specagc_callback()'s comment). RATE -
+ *                       AM/USB/LSB/NFM sample rate 96K/48K toggle
+ *                       (slot 6, added 01/09/2026 - see
+ *                       menu_tile_rate_callback()'s comment).
+ *                       Slot 7 reserved for future hardware settings.
  *   DIG   (slots 0-2), added 09/08/2026: digital-mode (currently just
  *                       RTTY) parameters that no longer fit on RADIO
  *                       once it hit 8/8 - see the SHIFT tile's
@@ -2861,10 +3026,23 @@ static void badges_draw(void)
 #define MENU_AREA_X 0
 #define MENU_AREA_W MAIN_W
 #define MENU_AREA_Y SPEC_Y
-#define MENU_AREA_H (uint16_t)(WF_PANEL_Y + WATERFALL_ROWS + 4U - SPEC_Y) /* 422-64=358 */
+#define MENU_AREA_H (uint16_t)(WF_PANEL_Y + WATERFALL_ROWS + 4U - SPEC_Y) /* 346+72+4-104=318 - was 358 before the status-strip redesign (SPEC_Y grew from 64 to 104) */
 
-#define MENU_TILE_W 159
-#define MENU_TILE_H 108
+/* *** 01/09/2026, RECOMPUTED for the status-strip redesign - real bug
+ * fix, per the project owner *** - MENU_TILE_W/H used to be sized
+ * (159x108) to fit exactly within the OLD 676x358 MENU_AREA. Stealing
+ * 40px of height for the new status strip (MENU_AREA_H: 358->318)
+ * without ALSO shrinking these meant the 3-row tile grid (3*108 +
+ * 2*GAP + 2*margin = 356) no longer fit inside the new, shorter area
+ * (318) - it overflowed by 38px, running the bottom row (which
+ * includes EXIT) 24px into the bottom button bar. Recomputed from
+ * scratch for the new MENU_AREA_W(800)/H(318), same 8px margin/gap
+ * convention as before: width divides EXACTLY (4*190 + 3*8 + 2*8 =
+ * 800); height leaves a harmless 1px of slack (3*95 + 2*8 + 2*8 =
+ * 317, vs 318 available) rather than force an ugly fractional tile
+ * height for the sake of a pixel nobody would ever notice missing. */
+#define MENU_TILE_W 190
+#define MENU_TILE_H 95
 #define MENU_TILE_GAP 8
 #define MENU_TILE_X0 (uint16_t)(MENU_AREA_X + 8)
 #define MENU_TILE_Y0 (uint16_t)(MENU_AREA_Y + 8)
@@ -2885,22 +3063,29 @@ static void badges_draw(void)
  * first row of keys.
  */
 /*
- * Height budget, checked to actually fit MENU_AREA_H (358) - this
- * bit the project owner 07/08/2026: the FIRST version of this budget
- * (56 + 4*68 + gaps) came out to 368, ten pixels TALLER than
- * MENU_AREA_H, so row 3 spilled ten pixels past the bottom of
- * MENU_AREA and into the bottom bar underneath - which
+ * Height budget, checked to actually fit MENU_AREA_H (318, was 358
+ * before the status-strip redesign shrank SPEC_H/grew SPEC_Y - see
+ * MENU_AREA_H's own comment) - this bit the project owner twice now
+ * with the exact same failure mode, both times from changing the
+ * available height without re-checking this budget: first 07/08/2026
+ * (the FIRST version of this budget, 56 + 4*68 + gaps, came out to
+ * 368, ten pixels TALLER than MENU_AREA_H at the time), then again
+ * 01/09/2026 when MENU_AREA_H shrank by 40 out from under the OLD
+ * 65px row height (356 vs the new 318 - a 38px overrun) without this
+ * budget being revisited. Both times: row 3 spilled past the bottom
+ * of MENU_AREA and into the bottom bar underneath, which
  * menu_screen_close() never repaints (see its comment: "only the
  * spectrum+waterfall panels need restoring"), so the overrun stayed
- * corrupted on screen after closing the keypad. Budget, top to
- * bottom: 8 (top margin) + 48 (readout) + 8 (gap) + 4*65 (rows) +
- * 3*8 (inter-row gaps) + 8 (bottom margin) = 356, comfortably inside
- * 358 this time - verify the arithmetic again before ever touching
- * either constant below.
+ * corrupted on screen after closing the keypad. Recomputed budget,
+ * top to bottom: 8 (top margin) + 48 (readout) + 8 (gap) + 4*55
+ * (rows) + 3*8 (inter-row gaps) + 8 (bottom margin) = 316,
+ * comfortably inside 318 this time - VERIFY THE ARITHMETIC AGAIN
+ * before ever touching MENU_AREA_H, FREQ_KEYPAD_READOUT_H, or
+ * FREQ_KEYPAD_TILE_H again - this is now a two-time repeat offender.
  */
 #define FREQ_KEYPAD_READOUT_H 48  /* readout strip height, MENU_AREA_Y+8 downward */
 #define FREQ_KEYPAD_TILE_W    MENU_TILE_W /* same 4-column pitch as MENU_TILE_COL() */
-#define FREQ_KEYPAD_TILE_H    65
+#define FREQ_KEYPAD_TILE_H    55
 #define FREQ_KEYPAD_Y0        (uint16_t)(MENU_AREA_Y + 8 + FREQ_KEYPAD_READOUT_H + MENU_TILE_GAP)
 #define FREQ_KEYPAD_COL(i)    MENU_TILE_COL(i)
 #define FREQ_KEYPAD_ROW(i)    (uint16_t)(FREQ_KEYPAD_Y0 + (i) * (FREQ_KEYPAD_TILE_H + MENU_TILE_GAP))
@@ -2969,15 +3154,41 @@ static void badges_draw(void)
  * waterfall update less often - see sdr_spectrum_waterfall_tick()'s
  * comment for exactly how that's handled (skip drawing, don't block,
  * when a window isn't ready yet).
+ *
+ * spec_zoom_t itself and s_spec_zoom's definition now live earlier in
+ * this file (right after the forward-declarations block, near
+ * snr_update_and_draw()'s own prototype) - see the comment there for
+ * why. Nothing below this point changed behavior.
  */
-typedef enum {
-    SPEC_ZOOM_1X = 0,
-    SPEC_ZOOM_2X,
-    SPEC_ZOOM_4X,
-    SPEC_ZOOM_8X
-} spec_zoom_t;
 
-static spec_zoom_t s_spec_zoom = SPEC_ZOOM_1X;
+/*
+ * spec_zoom_full_span_hz() - added 01/09/2026 alongside the 48kHz
+ * rate option, factoring out a "switch on s_spec_zoom -> full_span_hz"
+ * pattern that had been copy-pasted at THREE separate call sites
+ * (spec_span_labels_draw()'s tick ruler, spec_drag_tune_apply()'s
+ * Hz-per-pixel, and the AM/USB/LSB audio-bandwidth tint's width) -
+ * exactly the kind of unlabeled duplicated assumption that caused the
+ * bug this function fixes in the first place (all three had 96000
+ * hardcoded for SPEC_ZOOM_1X, silently wrong the moment AM/USB/LSB/
+ * NFM's real rate became selectable). One function, one place to get
+ * it right, no fourth copy to eventually drift out of sync.
+ *
+ * NOTE - does NOT account for WFM's own fixed 192kHz rate; none of
+ * the three call sites checked for WFM mode before this change
+ * either, so this doesn't newly introduce that gap, just makes it
+ * easier to close later in one place instead of three.
+ */
+static uint32_t spec_zoom_full_span_hz(void)
+{
+    uint32_t base_span_hz = s_nonwfm_use_48k ? 48000UL : 96000UL;
+    switch (s_spec_zoom) {
+    case SPEC_ZOOM_2X: return base_span_hz / 2U;
+    case SPEC_ZOOM_4X: return base_span_hz / 4U;
+    case SPEC_ZOOM_8X: return base_span_hz / 8U;
+    case SPEC_ZOOM_1X:
+    default:           return base_span_hz;
+    }
+}
 
 /*
  * Panadapter frequency scale under the spectrum trace - 5 reference
@@ -3043,26 +3254,25 @@ static void spec_span_labels_draw(void)
     uint32_t panel_center_hz;
     uint8_t i;
 
-    switch (s_spec_zoom) {
-    case SPEC_ZOOM_2X: full_span_hz = 48000UL;  break;
-    case SPEC_ZOOM_4X: full_span_hz = 24000UL;  break;
-    case SPEC_ZOOM_8X: full_span_hz = 12000UL;  break;
-    case SPEC_ZOOM_1X:
-    default:           full_span_hz = 96000UL;  break;
-    }
+    /* *** 01/09/2026: rate-aware via spec_zoom_full_span_hz() *** -
+     * see that function's own comment for the full "why" (this used
+     * to hardcode 96000 for SPEC_ZOOM_1X, silently wrong once AM/USB/
+     * LSB/NFM's real rate became selectable between 96kHz/48kHz). */
+    full_span_hz = spec_zoom_full_span_hz();
     half_span_hz = (int32_t)(full_span_hz / 2U);
 
     /* See this function's PANEL-CENTER FREQUENCY comment above - same
      * condition sdr_spectrum_waterfall_tick() uses for
-     * center_mark_offset_px. s_tune_hz > DEMOD_IF_OFFSET_HZ always
-     * holds here (TUNE_MIN_HZ=30kHz > DEMOD_IF_OFFSET_HZ=24kHz - was
-     * 100kHz before 01/09/2026, lowered to reach DCF77/similar LF
-     * stations, still comfortably above this invariant's floor - see
+     * center_mark_offset_px. s_tune_hz > demod_if_offset_hz() always
+     * holds here (TUNE_MIN_HZ=30kHz > either possible offset -
+     * 24kHz @ 96kHz, or the smaller 12kHz @ 48kHz - was 100kHz before
+     * 01/09/2026, lowered to reach DCF77/similar LF stations, still
+     * comfortably above this invariant's floor either way - see
      * TUNE_MIN_HZ's own comment), so the subtraction below never
      * underflows. */
     panel_center_hz = s_tune_hz;
     if (s_spec_zoom == SPEC_ZOOM_1X && demod_am_get_if_offset_active()) {
-        panel_center_hz = s_tune_hz - DEMOD_IF_OFFSET_HZ;
+        panel_center_hz = s_tune_hz - demod_if_offset_hz();
     }
 
     /* Clear the whole scale strip (ticks + labels) in one go, then
@@ -3928,18 +4138,24 @@ static uint8_t rx_capture_looks_corrupted(void)
  * not a separate "lighter" one for live switches to drift out of sync
  * with).
  */
+/*
+ * s_nonwfm_use_48k/s_current_rate declared near main()'s own boot
+ * sequence (needed there too - see this file's earlier declaration
+ * comment for the full "birdie escape hatch" reasoning).
+ */
 static void apply_demod_mode(demod_mode_t mode)
 {
-    uint8_t was_wfm    = (demod_am_get_mode() == DEMOD_MODE_WFM) ? 1U : 0U;
     uint8_t will_be_wfm = (mode == DEMOD_MODE_WFM) ? 1U : 0U;
+    aic3204_rate_t desired_rate = will_be_wfm ? AIC3204_RATE_192K :
+        (s_nonwfm_use_48k ? AIC3204_RATE_48K : AIC3204_RATE_96K);
 
     /* See this function's own comment history: setting s_mode BEFORE
      * anything touches the DMA avoids a real race where the ISR could
      * read a stale mode for the first several blocks after a switch. */
     demod_am_set_mode(mode);
 
-    if (was_wfm != will_be_wfm) {
-        aic3204_rate_t rate = will_be_wfm ? AIC3204_RATE_192K : AIC3204_RATE_96K;
+    if (desired_rate != s_current_rate) {
+        aic3204_rate_t rate = desired_rate;
         uint32_t block_samples = will_be_wfm ? SDR_RX_BLOCK_SAMPLES_WFM : SDR_RX_BLOCK_SAMPLES;
 
         /* Only the CLEAN result of this bring-up should ever reach the
@@ -3999,8 +4215,18 @@ static void apply_demod_mode(demod_mode_t mode)
             demod_am_reset_diag(); /* fresh diagnostic log for this AM/SSB/LSB/NFM entry - see its own comment */
         }
 
-        debug_print(will_be_wfm ? "mode: switched INTO WFM - codec/DMA now at 192kHz (full reinit)\n"
-                                  : "mode: switched OUT OF WFM - codec/DMA now at 96kHz (full reinit)\n");
+        switch (rate) {
+        case AIC3204_RATE_192K:
+            debug_print("mode: switched INTO WFM - codec/DMA now at 192kHz (full reinit)\n");
+            break;
+        case AIC3204_RATE_48K:
+            debug_print("mode: rate change - codec/DMA now at 48kHz (full reinit)\n");
+            break;
+        case AIC3204_RATE_96K:
+        default:
+            debug_print("mode: rate change - codec/DMA now at 96kHz (full reinit)\n");
+            break;
+        }
 
         /*
          * *** 05/08/2026, added alongside the FULL-RESET rate-switch
@@ -4046,6 +4272,18 @@ static void apply_demod_mode(demod_mode_t mode)
         if (s_rf_agc_rin_level != 0U) {
             aic3204_set_input_impedance((aic3204_rin_t)s_rf_agc_rin_level);
         }
+
+        /* *** 01/09/2026, added alongside the 48kHz rate option ***
+         * - demod_am.c needs to know which of its two coefficient
+         * sets (96kHz/48kHz) to actually run, independent of WFM -
+         * see demod_am_set_active_rate()'s own comment in demod_am.h.
+         * Harmless (and correctly a no-op re-init) when desired_rate
+         * is AIC3204_RATE_192K (WFM) too, since is_48k just resolves
+         * to 0 in that case, same as the AIC3204_RATE_96K case -
+         * WFM never actually reads anything this call sets. */
+        demod_am_set_active_rate((desired_rate == AIC3204_RATE_48K) ? 1U : 0U);
+
+        s_current_rate = desired_rate;
     }
 
     /* See s_settings_ready_for_autosave's comment (same reasoning as
@@ -4325,6 +4563,74 @@ static void menu_tile_specagc_callback(void *widget, ui_event_t event, void *use
         s_spec_agc_enabled = (uint8_t)(s_spec_agc_enabled ? 0U : 1U);
         debug_print(s_spec_agc_enabled ? "spectrum AGC: on\n" : "spectrum AGC: off\n");
         menu_tile_specagc_refresh();
+    }
+}
+
+/*
+ * RATE (HW page, slot 6) - AM/USB/LSB/NFM sample rate, 96K(default)
+ * <-> 48K - see s_nonwfm_use_48k's declaration comment (near main())
+ * for the full "birdie escape hatch" reasoning. WFM is untouched
+ * either way - this only affects the non-WFM rate choice.
+ *
+ * Unlike RFAGC/IFBW/SAGC, tapping this needs to force an IMMEDIATE
+ * live reconfigure if a non-WFM mode is already running - just
+ * flipping s_nonwfm_use_48k wouldn't do anything audible until the
+ * NEXT mode change, which defeats the point of a quick A/B toggle for
+ * bench testing. Calling apply_demod_mode() with the CURRENT mode
+ * re-evaluates desired_rate against s_current_rate (see that
+ * function's own comment) and runs the same full reinit a real mode
+ * change would, without actually changing s_mode itself. While in
+ * WFM, this still flips the stored preference (so it's ready
+ * whenever you do switch out of WFM) but skips the live reconfigure
+ * entirely, since desired_rate would still resolve to 192K regardless
+ * of s_nonwfm_use_48k - calling apply_demod_mode() would be a
+ * harmless no-op in that case anyway, but skipping it avoids the
+ * debug log noise of a "reconfigure" that never actually changes
+ * anything.
+ *
+ * *** 01/09/2026, apply_lo_tune(s_tune_hz) added same day - real bug
+ * fix, per the project owner *** - demod_am_set_active_rate() (called
+ * from inside apply_demod_mode()) changes demod_if_offset_hz()'s
+ * return value (24kHz@96kHz vs 12kHz@48kHz - see that function's own
+ * comment), but apply_demod_mode() itself never re-programs the LO -
+ * that's ENTIRELY apply_lo_tune()'s job, a separate piece of state
+ * (the MS5351/GD32 LO generator) that only gets touched when tuning
+ * actually happens. Without this call, the LO stays at whatever
+ * frequency it was last set to under the OLD offset - the display
+ * still shows the right frequency, but the ACTUAL received signal
+ * sits up to 12kHz off from where it's shown, until the next real
+ * tune (encoder, keypad, band preset - anything that calls apply_lo_
+ * tune() itself) happens to correct it. This exact "stale LO after a
+ * rate change" bug already had a known-good fix pattern elsewhere in
+ * this file - the MODE list picker's own selection handler already
+ * follows apply_demod_mode() with apply_lo_tune(s_tune_hz) for exactly
+ * this reason (entering/leaving WFM also changes demod_if_offset_hz(),
+ * a pre-existing rate change this project already knew needed a
+ * re-tune) - this tile's callback had simply never picked up that same
+ * pairing when it was written, since RFAGC/IFBW/SAGC (the tiles it
+ * was modeled on) don't touch anything LO-related at all.
+ */
+static void menu_tile_rate_refresh(void)
+{
+    s_menu_tile_rate.label = s_nonwfm_use_48k ? "RATE 48K" : "RATE 96K";
+    ui_button_draw(&s_menu_tile_rate);
+}
+
+static void menu_tile_rate_callback(void *widget, ui_event_t event, void *user_data)
+{
+    (void)widget;
+    (void)user_data;
+
+    if (event == UI_EVENT_RELEASE) {
+        s_nonwfm_use_48k = (uint8_t)(s_nonwfm_use_48k ? 0U : 1U);
+        debug_print(s_nonwfm_use_48k ? "nonwfm rate: 48K selected\n" : "nonwfm rate: 96K selected\n");
+        menu_tile_rate_refresh();
+        badges_draw(); /* updates the RATE badge in the status strip - see its comment */
+
+        if (demod_am_get_mode() != DEMOD_MODE_WFM) {
+            apply_demod_mode(demod_am_get_mode());
+            apply_lo_tune(s_tune_hz);
+        }
     }
 }
 
@@ -5164,22 +5470,51 @@ static void menu_freq_keypad_show(void)
  * screen.
  */
 /*
- * DETAIL VIEW geometry - confined to MENU_AREA (676x358 @ (0,SPEC_Y)),
- * same reasoning as the GRID's MENU_TILE_* macros above. Vertical
- * zones, non-overlapping: title (72-100) / hint (104-118) / value
- * area, redrawn on every encoder tick (126-350) / BACK button
+ * DETAIL VIEW geometry - confined to MENU_AREA (800x318 @
+ * (0,SPEC_Y)), same reasoning as the GRID's MENU_TILE_* macros above.
+ *
+ * *** 01/09/2026, RECOMPUTED for the status-strip redesign - real bug
+ * fix, per the project owner (same failure class as MENU_TILE_W/H's
+ * own fix above) *** - every one of these used to be a plain absolute
+ * Y literal, computed back when MENU_AREA_Y was 64. Once MENU_AREA_Y
+ * grew to 104 (status strip taking the first 40px), TITLE_Y(72) and
+ * HINT_Y(104) both landed AT OR ABOVE the new area's own top edge -
+ * i.e. drawn INTO the status strip itself, overlapping the S-meter/
+ * badges, exactly the "doesn't stay confined to spectrum+waterfall"
+ * symptom reported on real hardware. Fixed by treating each value as
+ * an OFFSET from whichever edge of MENU_AREA it was always meant to
+ * hang off of: TITLE_Y/HINT_Y/VALUE_CLEAR_Y (and the two SCALE-
+ * specific Ys) are all offsets from the TOP (MENU_AREA_Y) and shift
+ * down by the same 40px MENU_AREA_Y itself grew by; BACK_Y is an
+ * offset from the BOTTOM (which never moved - MENU_AREA still ends at
+ * 422 either way, see MENU_AREA_H's own comment) and needs no change
+ * at all. VALUE_CLEAR_H (a height, not a position) shrinks by the
+ * same 40px, since it's what actually absorbs the area's own overall
+ * height loss - it's sandwiched between the now-lower-starting hint
+ * text and the unmoved BACK button, so the gap between them is
+ * genuinely smaller than before, not just relocated. VALUE_Y (which
+ * centers a value line WITHIN VALUE_CLEAR_Y/H) is recomputed from
+ * those two, not offset directly, so it stays correctly centered
+ * whatever they come out to. BACK_X is (MENU_AREA_W - BACK_W)/2 -
+ * recentered for the new, wider MENU_AREA_W(800) - it was 228 for the
+ * old 676px width, not a coincidence: (676-220)/2=228 exactly, so
+ * this project already centered it deliberately, just needs
+ * recomputing at the new width.
+ *
+ * Vertical zones, non-overlapping: title (112-140) / hint (144-158) /
+ * value area, redrawn on every encoder tick (166-350) / BACK button
  * (358-414) - all comfortably inside MENU_AREA_Y..MENU_AREA_Y+
- * MENU_AREA_H (64-422).
+ * MENU_AREA_H (104-422).
  */
-#define MENU_DETAIL_TITLE_Y  72
-#define MENU_DETAIL_HINT_Y   104
-#define MENU_DETAIL_VALUE_CLEAR_Y 126
-#define MENU_DETAIL_VALUE_CLEAR_H 224
-#define MENU_DETAIL_VALUE_Y  217 /* centers a scale-6 (42px tall) line in the clear band above */
-#define MENU_DETAIL_SCALE_LABEL_Y 140
-#define MENU_DETAIL_SCALE_VALUE_Y 190
-#define MENU_DETAIL_BACK_X 228
-#define MENU_DETAIL_BACK_Y 358
+#define MENU_DETAIL_TITLE_Y  112
+#define MENU_DETAIL_HINT_Y   144
+#define MENU_DETAIL_VALUE_CLEAR_Y 166
+#define MENU_DETAIL_VALUE_CLEAR_H 184
+#define MENU_DETAIL_VALUE_Y  237 /* centers a scale-6 (42px tall) line in the clear band above: 166+(184-42)/2 */
+#define MENU_DETAIL_SCALE_LABEL_Y 180
+#define MENU_DETAIL_SCALE_VALUE_Y 230
+#define MENU_DETAIL_BACK_X 290 /* (MENU_AREA_W(800) - MENU_DETAIL_BACK_W(220)) / 2, centered */
+#define MENU_DETAIL_BACK_Y 358 /* unchanged - offset from the BOTTOM of MENU_AREA, which never moved */
 #define MENU_DETAIL_BACK_W 220
 #define MENU_DETAIL_BACK_H 56
 
@@ -5455,7 +5790,7 @@ static void menu_grid_show(void)
     case MENU_PAGE_RADIO:
         s_menu_tile_agc = (ui_button_t){
             MENU_OPT_COL(0), MENU_OPT_ROW(0), MENU_TILE_W, MENU_TILE_H,
-            "AGC", GFX_COLOR_BLACK, GFX_COLOR_CYAN, GFX_COLOR_GRAY,
+            "AGC", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
             2, 0, 1, menu_tile_agc_callback, NULL};
         s_menu_tile_squelch = (ui_button_t){
             MENU_OPT_COL(1), MENU_OPT_ROW(1), MENU_TILE_W, MENU_TILE_H,
@@ -5469,7 +5804,7 @@ static void menu_grid_show(void)
          * menu_tile_bw_callback()'s comment). */
         s_menu_tile_bw = (ui_button_t){
             MENU_OPT_COL(3), MENU_OPT_ROW(3), MENU_TILE_W, MENU_TILE_H,
-            "BW", GFX_COLOR_BLACK, GFX_COLOR_CYAN, GFX_COLOR_GRAY,
+            "BW", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
             2, 0, 1, menu_tile_bw_callback, NULL};
         /* PGA: AIC3204 MIC_PGA analog input gain (0-47.5dB) - see
          * aic3204_set_pga_gain_db()'s comment. */
@@ -5539,7 +5874,7 @@ static void menu_grid_show(void)
             2, 0, 1, menu_tile_scale_callback, NULL};
         s_menu_tile_nb = (ui_button_t){
             MENU_OPT_COL(2), MENU_OPT_ROW(2), MENU_TILE_W, MENU_TILE_H,
-            "SPT", GFX_COLOR_BLACK, GFX_COLOR_GREEN, GFX_COLOR_GRAY,
+            "SPT", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
             2, 0, 1, menu_tile_nb_callback, NULL};
         s_menu_tile_smooth = (ui_button_t){
             MENU_OPT_COL(3), MENU_OPT_ROW(3), MENU_TILE_W, MENU_TILE_H,
@@ -5556,7 +5891,7 @@ static void menu_grid_show(void)
          * spec_zoom_t's comment. */
         s_menu_tile_zoom = (ui_button_t){
             MENU_OPT_COL(5), MENU_OPT_ROW(5), MENU_TILE_W, MENU_TILE_H,
-            "ZOOM", GFX_COLOR_BLACK, GFX_COLOR_CYAN, GFX_COLOR_GRAY,
+            "ZOOM", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
             2, 0, 1, menu_tile_zoom_callback, NULL};
         /* Slots 6-7 intentionally empty - room to grow UI further. */
 
@@ -5582,7 +5917,7 @@ static void menu_grid_show(void)
          * settings. */
         s_menu_tile_speaker_pa = (ui_button_t){
             MENU_OPT_COL(0), MENU_OPT_ROW(0), MENU_TILE_W, MENU_TILE_H,
-            "SPK", GFX_COLOR_BLACK, GFX_COLOR_CYAN, GFX_COLOR_GRAY,
+            "SPK", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
             2, 0, 1, menu_tile_speaker_pa_callback, NULL};
         ui_screen_add_button(&s_menu_screen, &s_menu_tile_speaker_pa);
 
@@ -5596,7 +5931,7 @@ static void menu_grid_show(void)
          * repaint the instant this fires. */
         s_menu_tile_sleep = (ui_button_t){
             MENU_OPT_COL(1), MENU_OPT_ROW(1), MENU_TILE_W, MENU_TILE_H,
-            "SLEEP", GFX_COLOR_BLACK, GFX_COLOR_YELLOW, GFX_COLOR_WHITE,
+            "SLEEP", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_WHITE,
             2, 0, 1, menu_tile_sleep_callback, NULL};
         ui_screen_add_button(&s_menu_screen, &s_menu_tile_sleep);
 
@@ -5607,7 +5942,7 @@ static void menu_grid_show(void)
          * wakes it. Slots 3-7 still intentionally empty. */
         s_menu_tile_cal = (ui_button_t){
             MENU_OPT_COL(2), MENU_OPT_ROW(2), MENU_TILE_W, MENU_TILE_H,
-            "CAL", GFX_COLOR_BLACK, GFX_COLOR_YELLOW, GFX_COLOR_WHITE,
+            "CAL", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_WHITE,
             2, 0, 1, menu_tile_cal_callback, NULL};
         ui_screen_add_button(&s_menu_screen, &s_menu_tile_cal);
 
@@ -5620,7 +5955,7 @@ static void menu_grid_show(void)
          * tap. Slots 4-7 still intentionally empty. */
         s_menu_tile_cal_ppm = (ui_button_t){
             MENU_OPT_COL(3), MENU_OPT_ROW(3), MENU_TILE_W, MENU_TILE_H,
-            "PPM", GFX_COLOR_BLACK, GFX_COLOR_YELLOW, GFX_COLOR_WHITE,
+            "PPM", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_WHITE,
             2, 0, 1, menu_tile_cal_ppm_callback, NULL};
         ui_screen_add_button(&s_menu_screen, &s_menu_tile_cal_ppm);
 
@@ -5629,24 +5964,34 @@ static void menu_grid_show(void)
          * slot 4 - slots 5-7 still intentionally empty. */
         s_menu_tile_ifbw = (ui_button_t){
             MENU_OPT_COL(4), MENU_OPT_ROW(4), MENU_TILE_W, MENU_TILE_H,
-            "IFBW", GFX_COLOR_BLACK, GFX_COLOR_CYAN, GFX_COLOR_GRAY,
+            "IFBW", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
             2, 0, 1, menu_tile_ifbw_callback, NULL};
         ui_screen_add_button(&s_menu_screen, &s_menu_tile_ifbw);
 
         /* SAGC: spectrum/waterfall auto-scale toggle, added
          * 01/09/2026 - see menu_tile_specagc_callback()'s comment.
-         * Fills slot 5 - slots 6-7 still intentionally empty. */
+         * Fills slot 5. */
         s_menu_tile_specagc = (ui_button_t){
             MENU_OPT_COL(5), MENU_OPT_ROW(5), MENU_TILE_W, MENU_TILE_H,
-            "SAGC", GFX_COLOR_BLACK, GFX_COLOR_CYAN, GFX_COLOR_GRAY,
+            "SAGC", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
             2, 0, 1, menu_tile_specagc_callback, NULL};
         ui_screen_add_button(&s_menu_screen, &s_menu_tile_specagc);
+
+        /* RATE: AM/USB/LSB/NFM sample rate 96K/48K toggle, added
+         * 01/09/2026 - see menu_tile_rate_callback()'s comment. Fills
+         * slot 6 - slot 7 still intentionally empty. */
+        s_menu_tile_rate = (ui_button_t){
+            MENU_OPT_COL(6), MENU_OPT_ROW(6), MENU_TILE_W, MENU_TILE_H,
+            "RATE", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
+            2, 0, 1, menu_tile_rate_callback, NULL};
+        ui_screen_add_button(&s_menu_screen, &s_menu_tile_rate);
 
         ui_screen_draw(&s_menu_screen);
         menu_tile_speaker_pa_refresh();
         menu_tile_cal_ppm_refresh();
         menu_tile_ifbw_refresh();
         menu_tile_specagc_refresh();
+        menu_tile_rate_refresh();
         break;
 
     case MENU_PAGE_DIG:
@@ -5660,7 +6005,7 @@ static void menu_grid_show(void)
             2, 0, 1, menu_tile_rtty_shift_callback, NULL};
         s_menu_tile_rtty_baud = (ui_button_t){
             MENU_OPT_COL(1), MENU_OPT_ROW(1), MENU_TILE_W, MENU_TILE_H,
-            "BAUD", GFX_COLOR_BLACK, GFX_COLOR_CYAN, GFX_COLOR_GRAY,
+            "BAUD", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
             2, 0, 1, menu_tile_rtty_baud_callback, NULL};
         s_menu_tile_rtty_inv = (ui_button_t){
             MENU_OPT_COL(2), MENU_OPT_ROW(2), MENU_TILE_W, MENU_TILE_H,
@@ -5853,7 +6198,7 @@ static void apply_lo_tune(uint32_t freq_hz)
      * this offset need is about avoiding the LO-leakage artifact
      * landing on the wanted signal, which has nothing to do with
      * which physical oscillator produces the LO. */
-    uint32_t actual_lo_hz = is_wfm ? freq_hz : (freq_hz - DEMOD_IF_OFFSET_HZ);
+    uint32_t actual_lo_hz = is_wfm ? freq_hz : (freq_hz - demod_if_offset_hz());
     uint8_t want_gd32 = (actual_lo_hz < LO_GEN_CROSSOVER_HZ) ? 1U : 0U;
     uint8_t ok;
 
@@ -6024,7 +6369,7 @@ static void rf_agc_poll(void)
 #define RTTY_TEXT_SCALE    2U
 #define RTTY_TEXT_LINE_H   18U /* 7px glyph (gfx_font.h's GFX_FONT_HEIGHT) * scale 2 = 14, +4 leading */
 #define RTTY_TEXT_CHAR_W   12U /* (5+1)px * scale 2 - mirrors gfx.c's own per-glyph step formula (gfx_font.h isn't included outside gfx.c, so this is a plain literal like RTTY_TEXT_COLS' comment already is) */
-#define RTTY_TEXT_COLS     56U /* MAIN_W(676) / RTTY_TEXT_CHAR_W = 56 - same sizing the old ticker used */
+#define RTTY_TEXT_COLS     66U /* MAIN_W(800) / RTTY_TEXT_CHAR_W = 66 - was 56 (MAIN_W=676) before the status-strip redesign widened MAIN_W to the full screen */
 #define RTTY_TEXT_ROWS     8U  /* RTTY_TEXT_PANEL_H / RTTY_TEXT_LINE_H, exact */
 
 static char    s_rtty_text_grid[RTTY_TEXT_ROWS][RTTY_TEXT_COLS + 1U]; /* +1 NUL per row */
@@ -6905,10 +7250,12 @@ static void radio_screen_draw(void)
                                       (uint16_t)(WATERFALL_ROWS + 4), GFX_COLOR_BLACK, GFX_COLOR_GRAY};
     ui_screen_add_panel(&s_demo_screen, &s_waterfall_panel);
 
-    /* Right status column (S-meter + badges drawn on top afterwards). */
-    s_rcol_panel = (ui_panel_t){RCOL_X, RCOL_Y, RCOL_W, RCOL_H,
-                                 GFX_COLOR_BLACK, GFX_COLOR_GRAY};
-    ui_screen_add_panel(&s_demo_screen, &s_rcol_panel);
+    /* Status strip (S-meter + SNR + badges drawn on top afterwards) -
+     * replaces the old right-hand column panel (s_rcol_panel, removed
+     * 01/09/2026) - see STATUS_STRIP_Y/H's declaration comment. */
+    s_status_strip_panel = (ui_panel_t){0, STATUS_STRIP_Y, MAIN_W, STATUS_STRIP_H,
+                                         GFX_COLOR_BLACK, GFX_COLOR_GRAY};
+    ui_screen_add_panel(&s_demo_screen, &s_status_strip_panel);
 
     /* Bottom bar: 6 buttons. enabled=1 set explicitly - if omitted, a
      * freshly declared ui_button_t defaults to enabled=0 (C zero-
@@ -6935,7 +7282,7 @@ static void radio_screen_draw(void)
      * Same cyan "on" look the BW badge used to have here, since this
      * is always "live", never a dark/disabled state. */
     s_btn_agc_profile = (ui_button_t){
-        BADGE_X1, (uint16_t)(BADGE_Y0 + BADGE_ROW_STEP),
+        BADGE_COL(3), BADGE_Y0,
         BADGE_W, BADGE_H,
         k_agc_profile_labels[(uint8_t)demod_am_get_agc_profile()],
         GFX_COLOR_BLACK, GFX_COLOR_CYAN, GFX_COLOR_GRAY,
@@ -6951,7 +7298,7 @@ static void radio_screen_draw(void)
      * overwrites both every time it runs, based on the CURRENT mode,
      * before this is ever visible to anyone. */
     s_btn_audio_bw = (ui_button_t){
-        BADGE_X0, (uint16_t)(BADGE_Y0 + 2 * BADGE_ROW_STEP),
+        BADGE_COL(4), BADGE_Y0,
         BADGE_W, BADGE_H,
         k_audio_bw_labels[(uint8_t)demod_am_get_audio_bw()],
         GFX_COLOR_BLACK, GFX_COLOR_CYAN, GFX_COLOR_GRAY,
@@ -6961,12 +7308,21 @@ static void radio_screen_draw(void)
     ui_screen_draw(&s_demo_screen);
 
     /* Static labels drawn once, bypassing the screen (no touch, no
-     * state): S-meter caption + panadapter span labels. Span: 192kHz
-     * I/Q sampling -> +/-96kHz around the LO, which sits on the
-     * center line of the trace (the demod point marker may sit off-
-     * center - see the SR/4 low-IF notes). */
-    gfx_text((uint16_t)(RCOL_X + 6), (uint16_t)(RCOL_Y + 6), "SIGNAL",
-              GFX_COLOR_GREEN, GFX_COLOR_BLACK, 1);
+     * state): panadapter span labels. Span: 192kHz I/Q sampling ->
+     * +/-96kHz around the LO, which sits on the center line of the
+     * trace (the demod point marker may sit off-center - see the SR/4
+     * low-IF notes).
+     *
+     * *** 01/09/2026: the old "SIGNAL" caption above the S-meter was
+     * dropped, not repositioned *** - it lived in the old vertical
+     * right-hand column, which had room for a label ABOVE the meter;
+     * the new horizontal status strip is only STATUS_STRIP_H(40)px
+     * tall and everything in it (meter/SNR/badges) is vertically
+     * centered within that - there's no clean spot left for a
+     * separate caption line without either uncentering something or
+     * shrinking the strip further. The segmented bar reads as a
+     * signal meter on its own, especially sitting right next to the
+     * SNR readout - the caption wasn't carrying its weight anymore. */
     spec_span_labels_draw();
 
     /* Dynamic readouts, first paint. */
@@ -6989,38 +7345,102 @@ static void radio_screen_draw(void)
  * frequency increases left-to-right - see spec_span_labels_draw()'s
  * tick ruler).
  *
- * QUANTIZED to whole SPEC_DRAG_HZ_STEP jumps (1kHz) rather than
- * applied as continuous fractional Hz - added same day, per the
- * project owner: raw pixel-proportional Hz produced odd non-round
- * frequencies and, on this still-uncalibrated resistive touch panel
- * (see demo_touch_poll()'s CALIBRATION NOTE), tiny single-pixel
- * jitter was enough to wobble the tuned frequency by a few Hz with no
- * visible finger movement. *hz_accum carries the sub-step remainder
- * between calls - same carry technique encoder_take_delta() already
- * uses for quarter-steps, so a slow drag that hasn't crossed a full
- * 1kHz yet isn't lost, just accumulated for next time. Reset by the
- * caller (demo_touch_poll()) at the START of each new drag gesture -
- * see its comment - so leftover remainder from a previous unrelated
- * drag never bleeds into this one.
+ * QUANTIZED to whole steps rather than applied as continuous
+ * fractional Hz - added same day, per the project owner: raw pixel-
+ * proportional Hz produced odd non-round frequencies and, on this
+ * still-uncalibrated resistive touch panel (see demo_touch_poll()'s
+ * CALIBRATION NOTE), tiny single-pixel jitter was enough to wobble
+ * the tuned frequency by a few Hz with no visible finger movement.
+ * *hz_accum carries the sub-step remainder between calls - same carry
+ * technique encoder_take_delta() already uses for quarter-steps, so a
+ * slow drag that hasn't crossed a full step yet isn't lost, just
+ * accumulated for next time. Reset by the caller (demo_touch_poll())
+ * at the START of each new drag gesture - see its comment - so
+ * leftover remainder from a previous unrelated drag never bleeds into
+ * this one.
+ *
+ * *** 01/09/2026: step size now follows k_tune_steps[s_tune_step_idx]
+ * (the SAME step the STEP button/encoder short-press already cycles),
+ * not a fixed 1kHz *** - per the project owner: dragging should
+ * respect whatever step you've already dialed in (100Hz through 1MHz)
+ * rather than always snapping to 1kHz regardless. Read fresh on every
+ * call (not cached), so changing STEP mid-drag takes effect
+ * immediately on the next touch sample - and *hz_accum's leftover
+ * remainder, if any, is simply interpreted against the new step size
+ * next time, no special handling needed (worst case a slightly odd
+ * first jump right after a step change, same as changing step size
+ * always risks with any accumulator-based scheme).
  *
  * Hz-per-pixel (before quantizing) still comes from the current
  * zoom's span (see spec_span_labels_draw()'s switch for where these
  * same span numbers come from) divided across SPEC_TRACE_W, so how
- * much finger travel one 1kHz step takes still scales with zoom -
- * finer control zoomed in, coarser zoomed out - only the OUTPUT is
- * now snapped to round steps, not the sensitivity.
+ * much finger travel one step takes still scales with zoom - finer
+ * control zoomed in, coarser zoomed out - only the OUTPUT is snapped
+ * to round steps, not the sensitivity.
  *
  * Called once per touch SAMPLE while dragging (see demo_touch_poll()),
  * not once per gesture - dx_px is the delta since the LAST sample, not
  * since the press started, so the trace/frequency updates live as the
  * finger moves rather than jumping once on release.
  */
-#define SPEC_DRAG_HZ_STEP 1000.0f /* frequency change per whole drag "step" */
+
+/*
+ * spec_tap_tune_to_x() - added 01/09/2026, per the project owner:
+ * "poder elegir visualmente una señal para sintonizarla" - a genuine
+ * TAP (as opposed to a drag - see s_spec_drag_moved's own comment in
+ * demo_touch_poll() for how the two are told apart) on the spectrum
+ * panel tunes DIRECTLY to whatever frequency that pixel column
+ * represents, rather than nudging the current tune by a relative
+ * amount the way a drag does.
+ *
+ * Uses the EXACT SAME pixel<->Hz mapping spec_span_labels_draw()
+ * already draws its tick labels with (just algebraically inverted:
+ * that function goes Hz->px to place a label, this one goes px->Hz
+ * to interpret a tap) - deliberately, so tapping precisely on a
+ * labeled tick mark tunes to precisely that labeled frequency, no
+ * separate/inconsistent formula to drift out of sync with what the
+ * screen visibly shows. See that function's own comment for why
+ * panel_center_hz sits where it does (the IF-offset correction at
+ * zoom 1x) and why full_span_hz comes from spec_zoom_full_span_hz().
+ *
+ * Deliberately NOT quantized to the current tune step (unlike
+ * spec_drag_tune_apply()'s relative panning) - the whole point is
+ * landing exactly on whatever the finger pointed at, not the nearest
+ * round step, since a real signal's peak has no reason to fall on
+ * one. TUNE_MIN_HZ/MAX_HZ still clamp the result, same as every other
+ * tuning path.
+ */
+static void spec_tap_tune_to_x(uint16_t x)
+{
+    uint32_t full_span_hz = spec_zoom_full_span_hz();
+    uint32_t panel_center_hz = s_tune_hz;
+    int32_t px = (int32_t)x - (int32_t)(MAIN_W / 2);
+    int64_t off_hz;
+    int64_t f;
+
+    if (s_spec_zoom == SPEC_ZOOM_1X && demod_am_get_if_offset_active()) {
+        panel_center_hz = s_tune_hz - demod_if_offset_hz();
+    }
+
+    off_hz = ((int64_t)px * (int64_t)full_span_hz) / (int64_t)SPEC_TRACE_W;
+    f = (int64_t)panel_center_hz + off_hz;
+
+    if (f < (int64_t)TUNE_MIN_HZ) { f = (int64_t)TUNE_MIN_HZ; }
+    if (f > (int64_t)TUNE_MAX_HZ) { f = (int64_t)TUNE_MAX_HZ; }
+
+    if ((uint32_t)f != s_tune_hz) {
+        s_tune_hz = (uint32_t)f;
+        apply_lo_tune(s_tune_hz);
+        freq_display_draw();
+        spec_span_labels_draw();
+    }
+}
 
 static void spec_drag_tune_apply(uint16_t x, uint16_t prev_x, float *hz_accum)
 {
     int32_t dx_px = (int32_t)x - (int32_t)prev_x;
     float hz_per_px;
+    float step_hz;
     int32_t steps;
     int64_t f;
 
@@ -7028,13 +7448,10 @@ static void spec_drag_tune_apply(uint16_t x, uint16_t prev_x, float *hz_accum)
         return; /* no horizontal movement since the last sample */
     }
 
-    switch (s_spec_zoom) {
-    case SPEC_ZOOM_2X: hz_per_px = 48000.0f / (float)SPEC_TRACE_W; break;
-    case SPEC_ZOOM_4X: hz_per_px = 24000.0f / (float)SPEC_TRACE_W; break;
-    case SPEC_ZOOM_8X: hz_per_px = 12000.0f  / (float)SPEC_TRACE_W; break;
-    case SPEC_ZOOM_1X:
-    default:            hz_per_px = 96000.0f / (float)SPEC_TRACE_W; break;
-    }
+    /* *** 01/09/2026: rate-aware via spec_zoom_full_span_hz() *** -
+     * see that function's own comment for the full "why". */
+    hz_per_px = (float)spec_zoom_full_span_hz() / (float)SPEC_TRACE_W;
+    step_hz = (float)k_tune_steps[s_tune_step_idx];
 
     /* Drag right (dx_px > 0) -> frequency DOWN, so subtract - see this
      * function's comment for the "pan the content" reasoning. */
@@ -7044,13 +7461,13 @@ static void spec_drag_tune_apply(uint16_t x, uint16_t prev_x, float *hz_accum)
      * here, same reasoning as encoder_take_delta()'s comment. Usually
      * +/-1 for a normal drag speed; a fast flick between polls can
      * legitimately produce more in one call. */
-    steps = (int32_t)(*hz_accum / SPEC_DRAG_HZ_STEP);
+    steps = (int32_t)(*hz_accum / step_hz);
     if (steps == 0) {
         return; /* hasn't crossed a full step yet - remainder stays in *hz_accum for next time */
     }
-    *hz_accum -= (float)steps * SPEC_DRAG_HZ_STEP;
+    *hz_accum -= (float)steps * step_hz;
 
-    f = (int64_t)s_tune_hz + (int64_t)steps * (int64_t)SPEC_DRAG_HZ_STEP;
+    f = (int64_t)s_tune_hz + (int64_t)steps * (int64_t)step_hz;
 
     if (f < (int64_t)TUNE_MIN_HZ) { f = (int64_t)TUNE_MIN_HZ; }
     if (f > (int64_t)TUNE_MAX_HZ) { f = (int64_t)TUNE_MAX_HZ; }
@@ -7123,9 +7540,11 @@ static void demo_touch_poll(void)
      */
     static uint8_t s_touch_active = 0U;         /* 1 while a press-hold is in progress */
     static uint8_t s_touch_owner_is_menu = 0U;  /* which screen the CURRENT gesture belongs to */
-    static uint8_t s_spec_drag_active = 0U;     /* 1 while the CURRENT gesture is a spectrum drag-to-tune */
+    static uint8_t s_spec_drag_active = 0U;     /* 1 while the CURRENT gesture started inside the spectrum panel */
+    static uint16_t s_spec_tap_start_x = 0U;    /* x of the PRESS that started this gesture - unlike s_spec_drag_prev_x, never updated mid-gesture, so release can measure total travel */
+    static uint8_t s_spec_drag_moved = 0U;      /* 0 until total travel from s_spec_tap_start_x exceeds SPEC_TAP_MOVE_THRESHOLD_PX - see its own comment below */
     static uint16_t s_spec_drag_prev_x = 0U;    /* x of the last sample applied, for per-sample deltas */
-    static float s_spec_drag_hz_accum = 0.0f;   /* sub-SPEC_DRAG_HZ_STEP carry - see spec_drag_tune_apply()'s comment */
+    static float s_spec_drag_hz_accum = 0.0f;   /* sub-step carry - see spec_drag_tune_apply()'s comment */
     /* s_freq_tap_active: added 07/08/2026 alongside the frequency
      * keypad - a tap starting in the top-bar FREQ_TAP_X1/Y1 zone opens
      * menu_freq_keypad_show(). Decided once on press and honored
@@ -7147,21 +7566,26 @@ static void demo_touch_poll(void)
             && x < MENU_AREA_W && y >= MENU_AREA_Y
             && y < (uint16_t)(MENU_AREA_Y + MENU_AREA_H));
 
-        /* Drag-to-tune: a press starting inside the spectrum panel
-         * while the menu ISN'T covering it - see spec_drag_tune_apply()'s
-         * comment. Mutually exclusive with s_touch_owner_is_menu by
+        /* Drag-to-tune / tap-to-tune: a press starting inside the
+         * spectrum panel while the menu ISN'T covering it - see
+         * spec_drag_tune_apply()'s and spec_tap_tune_to_x()'s own
+         * comments for the two behaviors this single press might turn
+         * into. Mutually exclusive with s_touch_owner_is_menu by
          * construction: MENU_AREA exactly covers the spectrum+
          * waterfall, so whenever the menu is open and owns this press,
          * this stays 0. Decided once here, same "decide on the press,
          * hold for the whole gesture" reasoning as s_touch_owner_is_menu
          * above (and for the same reason: the release sample's
-         * coordinates can be garbage). s_spec_drag_hz_accum resets
-         * here too - a fresh gesture starts with a clean carry,
-         * regardless of whatever remainder a previous drag left behind. */
+         * coordinates can be garbage). s_spec_drag_hz_accum/
+         * s_spec_drag_moved both reset here too - a fresh gesture
+         * starts clean, regardless of whatever a previous one left
+         * behind. */
         s_spec_drag_active = (uint8_t)(!s_touch_owner_is_menu
             && x < MAIN_W && y >= SPEC_Y && y < (uint16_t)(SPEC_Y + SPEC_H));
         s_spec_drag_prev_x = x;
+        s_spec_tap_start_x = x;
         s_spec_drag_hz_accum = 0.0f;
+        s_spec_drag_moved = 0U;
 
         /* Frequency keypad tap zone - top bar only, so mutually
          * exclusive with both of the above by construction (MENU_AREA
@@ -7182,8 +7606,39 @@ static void demo_touch_poll(void)
         ui_screen_touch(&s_demo_screen, x, y, pressed);
     }
 
+    /*
+     * SPEC_TAP_MOVE_THRESHOLD_PX: total travel from s_spec_tap_start_x
+     * (not per-sample delta - see s_spec_drag_moved's own declaration
+     * comment) beyond which a press-inside-the-spectrum gesture counts
+     * as a genuine DRAG rather than a TAP. 6px chosen generously above
+     * this still-uncalibrated resistive panel's own known single-
+     * sample jitter (see spec_drag_tune_apply()'s CALIBRATION NOTE
+     * cross-reference) - small enough that a real drag is recognized
+     * almost immediately, large enough that an intended tap's own
+     * finger-contact jitter never gets misread as the start of a drag.
+     */
+#define SPEC_TAP_MOVE_THRESHOLD_PX 6
+
     if (s_spec_drag_active && pressed) {
-        spec_drag_tune_apply(x, s_spec_drag_prev_x, &s_spec_drag_hz_accum);
+        int32_t total_dx = (int32_t)x - (int32_t)s_spec_tap_start_x;
+        if (total_dx < 0) { total_dx = -total_dx; }
+        if (total_dx > SPEC_TAP_MOVE_THRESHOLD_PX) {
+            s_spec_drag_moved = 1U;
+        }
+        /* Only apply the relative-panning behavior once this gesture
+         * has actually proven itself a drag - see spec_tap_tune_to_x()'s
+         * comment for why an as-yet-undecided tap must NOT also nudge
+         * the tune via spec_drag_tune_apply() first (jitter from a
+         * stationary finger could otherwise sneak in a spurious small
+         * relative retune before release ever gets to apply the
+         * intended absolute one). s_spec_drag_prev_x still advances
+         * every sample regardless, so the FIRST call after crossing
+         * the threshold measures only the delta since the last sample,
+         * not the whole gesture's travel - spec_drag_tune_apply()'s own
+         * per-sample-delta design expects exactly that. */
+        if (s_spec_drag_moved) {
+            spec_drag_tune_apply(x, s_spec_drag_prev_x, &s_spec_drag_hz_accum);
+        }
         s_spec_drag_prev_x = x;
     }
 
@@ -7191,9 +7646,20 @@ static void demo_touch_poll(void)
         menu_freq_keypad_show();
     }
 
+    if (s_spec_drag_active && !pressed && !s_spec_drag_moved) {
+        /* Released without ever crossing the drag threshold - a
+         * genuine tap. See spec_tap_tune_to_x()'s own comment. Uses
+         * s_spec_tap_start_x (the ORIGINAL press position), not the
+         * release sample's own (possibly garbage) coordinates - same
+         * "don't trust the release sample" reasoning this whole
+         * function already applies elsewhere on this resistive panel. */
+        spec_tap_tune_to_x(s_spec_tap_start_x);
+    }
+
     if (!pressed) {
         s_touch_active = 0U;   /* gesture over - the next press re-decides ownership */
         s_spec_drag_active = 0U;
+        s_spec_drag_moved = 0U;
         s_freq_tap_active = 0U;
     }
 }
@@ -7348,24 +7814,30 @@ static const float32_t ZOOM_DECIM2_COEFFS[ZOOM_DECIM2_TAPS] = {
 static arm_fir_decimate_instance_f32 s_zoom_dec1_i, s_zoom_dec1_q;
 static arm_fir_decimate_instance_f32 s_zoom_dec2_i, s_zoom_dec2_q;
 static arm_fir_decimate_instance_f32 s_zoom_dec3_i, s_zoom_dec3_q;
-static float32_t s_zoom_dec1_i_state[ZOOM_DECIM2_TAPS + SDR_RX_BLOCK_SAMPLES - 1U];
-static float32_t s_zoom_dec1_q_state[ZOOM_DECIM2_TAPS + SDR_RX_BLOCK_SAMPLES - 1U];
-static float32_t s_zoom_dec2_i_state[ZOOM_DECIM2_TAPS + (SDR_RX_BLOCK_SAMPLES / 2U) - 1U];
-static float32_t s_zoom_dec2_q_state[ZOOM_DECIM2_TAPS + (SDR_RX_BLOCK_SAMPLES / 2U) - 1U];
-static float32_t s_zoom_dec3_i_state[ZOOM_DECIM2_TAPS + (SDR_RX_BLOCK_SAMPLES / 4U) - 1U];
-static float32_t s_zoom_dec3_q_state[ZOOM_DECIM2_TAPS + (SDR_RX_BLOCK_SAMPLES / 4U) - 1U];
+/* *** 01/09/2026: moved to TCM RAM *** - CMSIS decimator states and
+ * their surrounding CPU working buffers, never DMA targets (only this
+ * zoom-cascade's own CPU code touches them, once per raw RX block) -
+ * see fft.c's fuller TCM comment for the "why" (freed main-RAM
+ * headroom for the widened waterfall/spectrum panel). */
+#define TCMRAM_BSS __attribute__((section(".tcmram")))
+static float32_t s_zoom_dec1_i_state[ZOOM_DECIM2_TAPS + SDR_RX_BLOCK_SAMPLES - 1U] TCMRAM_BSS;
+static float32_t s_zoom_dec1_q_state[ZOOM_DECIM2_TAPS + SDR_RX_BLOCK_SAMPLES - 1U] TCMRAM_BSS;
+static float32_t s_zoom_dec2_i_state[ZOOM_DECIM2_TAPS + (SDR_RX_BLOCK_SAMPLES / 2U) - 1U] TCMRAM_BSS;
+static float32_t s_zoom_dec2_q_state[ZOOM_DECIM2_TAPS + (SDR_RX_BLOCK_SAMPLES / 2U) - 1U] TCMRAM_BSS;
+static float32_t s_zoom_dec3_i_state[ZOOM_DECIM2_TAPS + (SDR_RX_BLOCK_SAMPLES / 4U) - 1U] TCMRAM_BSS;
+static float32_t s_zoom_dec3_q_state[ZOOM_DECIM2_TAPS + (SDR_RX_BLOCK_SAMPLES / 4U) - 1U] TCMRAM_BSS;
 
 /* Working buffers, one per stage boundary. s_zoom_f_i/q hold the raw
  * block cast to float and (if needed) re-centered on the tuned
  * frequency, BEFORE stage 1. */
-static float32_t s_zoom_f_i[SDR_RX_BLOCK_SAMPLES];
-static float32_t s_zoom_f_q[SDR_RX_BLOCK_SAMPLES];
-static float32_t s_zoom_s1_i[SDR_RX_BLOCK_SAMPLES / 2U];
-static float32_t s_zoom_s1_q[SDR_RX_BLOCK_SAMPLES / 2U];
-static float32_t s_zoom_s2_i[SDR_RX_BLOCK_SAMPLES / 4U];
-static float32_t s_zoom_s2_q[SDR_RX_BLOCK_SAMPLES / 4U];
-static float32_t s_zoom_s3_i[SDR_RX_BLOCK_SAMPLES / 8U];
-static float32_t s_zoom_s3_q[SDR_RX_BLOCK_SAMPLES / 8U];
+static float32_t s_zoom_f_i[SDR_RX_BLOCK_SAMPLES] TCMRAM_BSS;
+static float32_t s_zoom_f_q[SDR_RX_BLOCK_SAMPLES] TCMRAM_BSS;
+static float32_t s_zoom_s1_i[SDR_RX_BLOCK_SAMPLES / 2U] TCMRAM_BSS;
+static float32_t s_zoom_s1_q[SDR_RX_BLOCK_SAMPLES / 2U] TCMRAM_BSS;
+static float32_t s_zoom_s2_i[SDR_RX_BLOCK_SAMPLES / 4U] TCMRAM_BSS;
+static float32_t s_zoom_s2_q[SDR_RX_BLOCK_SAMPLES / 4U] TCMRAM_BSS;
+static float32_t s_zoom_s3_i[SDR_RX_BLOCK_SAMPLES / 8U] TCMRAM_BSS;
+static float32_t s_zoom_s3_q[SDR_RX_BLOCK_SAMPLES / 8U] TCMRAM_BSS;
 
 /* Accumulates decimated samples across as many raw blocks as it takes
  * to fill one FFT_SIZE window (2/4/8 raw blocks for ZOOM_2X/4X/8X -
@@ -7773,7 +8245,19 @@ static void sdr_spectrum_waterfall_tick(void)
         int16_t band_hi_offset_px = 0;
 
         if (s_spec_zoom == SPEC_ZOOM_1X && demod_am_get_if_offset_active()) {
-            center_mark_offset_px = (int16_t)((uint32_t)SPEC_TRACE_W * DEMOD_IF_OFFSET_HZ / 96000UL);
+            /* = SPEC_TRACE_W/4 exactly, Fs-independent - see this
+             * block's own header comment for the full algebraic
+             * derivation (pixels-per-Hz * DEMOD_IF_OFFSET_HZ, and
+             * DEMOD_IF_OFFSET_HZ is ALWAYS exactly Fs/4, so the Fs
+             * term cancels completely regardless of which rate is
+             * active - 96kHz or 48kHz both land here identically).
+             * Written as SPEC_TRACE_W/4 directly rather than the old
+             * "* DEMOD_IF_OFFSET_HZ / 96000UL" form, which silently
+             * assumed Fs=96000 in its denominator - harmless before
+             * 01/09/2026 when 96kHz was the only rate, but would have
+             * silently computed SPEC_TRACE_W/8 (wrong) once 48kHz
+             * became a real option. */
+            center_mark_offset_px = (int16_t)(SPEC_TRACE_W / 4U);
         }
 
         /*
@@ -7816,18 +8300,13 @@ static void sdr_spectrum_waterfall_tick(void)
             demod_mode_t mode = demod_am_get_mode();
 
             if (mode == DEMOD_MODE_AM || mode == DEMOD_MODE_USB || mode == DEMOD_MODE_LSB) {
-                uint32_t full_span_hz;
                 uint32_t bw_hz = k_audio_bw_hz[(uint8_t)demod_am_get_audio_bw()];
                 int16_t bw_px;
 
-                switch (s_spec_zoom) {
-                case SPEC_ZOOM_2X: full_span_hz = 48000UL; break;
-                case SPEC_ZOOM_4X: full_span_hz = 24000UL; break;
-                case SPEC_ZOOM_8X: full_span_hz = 12000UL;  break;
-                case SPEC_ZOOM_1X:
-                default:           full_span_hz = 96000UL; break;
-                }
-                bw_px = (int16_t)((uint32_t)SPEC_TRACE_W * bw_hz / full_span_hz);
+                /* *** 01/09/2026: rate-aware via spec_zoom_full_span_
+                 * hz() *** - see that function's own comment for the
+                 * full "why". */
+                bw_px = (int16_t)((uint32_t)SPEC_TRACE_W * bw_hz / spec_zoom_full_span_hz());
 
                 band_active = 1U;
                 if (mode == DEMOD_MODE_USB) {

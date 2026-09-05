@@ -249,7 +249,7 @@ void gd32_i2s_init_slave(aic3204_rate_t rate)
                        SPI_I2SCTL(SPI1));
     debug_print_hex32("gd32_i2s: RCU_CFG0 raw (I2SSEL toggle bit is bit 23)", RCU_CFG0);
 
-    debug_print_dec("gd32_i2s: full slave reinit done for rate (0=48K,1=192K)",
+    debug_print_dec("gd32_i2s: full slave reinit done for rate (0=96K,1=192K,2=48K)",
                      (uint32_t)rate);
 
 #if AIC3204_TEST_LOOPBACK

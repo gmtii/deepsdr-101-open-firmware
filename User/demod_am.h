@@ -673,8 +673,20 @@ uint8_t demod_am_get_and_clear_rf_clip_flag(void);
  * sdr_rx.h's SDR_RX_BLOCK_SAMPLES comment) to match demod_am.c's
  * zero-multiply sign-flip rotation - if this ever changes, the
  * rotation algorithm in demod_am.c has to change with it (it is NOT a
- * generic NCO, it only works at exactly Fs/4). */
-#define DEMOD_IF_OFFSET_HZ 24000UL
+ * generic NCO, it only works at exactly Fs/4).
+ *
+ * *** 01/09/2026: TWO values now, not one - see demod_am_set_active_
+ * rate()'s comment below *** - AM/USB/LSB/NFM can run at either 96kHz
+ * or 48kHz (main.c's RATE tile), and since this offset MUST always
+ * equal the ACTUAL running rate's Fs/4 (the down-mix rotation has no
+ * other mode), main.c needs to pick the right one of these two
+ * constants based on s_nonwfm_use_48k, not just use
+ * DEMOD_IF_OFFSET_HZ unconditionally the way older code did - see
+ * main.c's demod_if_offset_hz() helper, which is the ONLY place that
+ * should still read either of these two macros directly.
+ */
+#define DEMOD_IF_OFFSET_HZ 24000UL /* Fs/4 @ 96kHz - the default/96kHz-rate value */
+#define DEMOD_IF_OFFSET_HZ_48K 12000UL /* Fs/4 @ 48kHz */
 
 /* Speaker enable pin: PB7, driven high to unmute the speaker amp. */
 
@@ -699,6 +711,34 @@ void demod_am_set_if_offset_active(uint8_t active);
  * signal sits on the panadapter (see spectrum_draw()'s
  * center_mark_offset_px parameter). */
 uint8_t demod_am_get_if_offset_active(void);
+
+/*
+ * demod_am_set_active_rate() - added 01/09/2026, per the project
+ * owner: AM/USB/LSB/NFM can now run at either 96kHz (default) or
+ * 48kHz (main.c's RATE tile - see s_nonwfm_use_48k's declaration
+ * comment there for the full "better SNR + CPU headroom for HFDL"
+ * motivation). MUST be called (from main.c's apply_demod_mode(),
+ * whenever a non-WFM rate is actually applied to the codec) BEFORE
+ * the block hook starts feeding real samples at the new rate -
+ * mismatching this with what the codec is ACTUALLY running at means
+ * every filter in the chain runs its coefficients against samples
+ * arriving at the wrong real-world rate, silently shifting every
+ * cutoff frequency and time constant by whatever ratio the two rates
+ * differ by. This is NOT the same flag as demod_am_set_if_offset_
+ * active() above - that one is about WHETHER the down-mix offset is
+ * active at all (always yes, except the captured boot tune); this one
+ * is about WHICH of two complete coefficient sets (filters, AGC/DC-
+ * blocker time constants, SSB decimator) the DSP chain should be
+ * using, independent of whether the down-mix itself is active.
+ *
+ * WFM is COMPLETELY UNAFFECTED either way - it has always run its own
+ * separate 192kHz path (demod_wfm_process_raw(), its own WFM_ALPF_
+ * and WFM_IFBW_ filters, its own AGC/DC-blocker state) regardless of
+ * what this flag says; this only selects between the AM/USB/LSB/NFM
+ * coefficient sets used by demod_am_process_raw().
+ */
+void demod_am_set_active_rate(uint8_t is_48k);
+uint8_t demod_am_get_active_rate_is_48k(void);
 
 /* Process one raw RX half: SDR_RX_BLOCK_SAMPLES interleaved L/R (I/Q)
  * frames, demodulate, and push the resulting audio block into the

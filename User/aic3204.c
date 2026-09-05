@@ -374,15 +374,24 @@ void aic3204_configure_rate(aic3204_rate_t rate)
     wr(0, 0x08, 0x00, "R8 PLL D lo (captured)");
     wr(0, 0x0B, 0x82, "R11 NDAC=2, power on (captured)");
     wr(0, 0x0C, 0x87, "R12 MDAC=7, power on (captured)");
-    if (rate == AIC3204_RATE_192K) {
+    switch (rate) {
+    case AIC3204_RATE_192K:
         wr(0, 0x0D, 0x00, "R13 DOSR hi (192kHz: DOSR=32)");
         wr(0, 0x0E, 0x20, "R14 DOSR=32 lo (192kHz)");
         wr(0, 0x3C, 0x11 | 0x20, "R60(pg0) PRB_P17 (192kHz) + AUDIO BUS LOOPBACK (TEST)");
-    } else {
+        break;
+    case AIC3204_RATE_48K:
+        wr(0, 0x0D, 0x00, "R13 DOSR hi (48kHz: DOSR=128)");
+        wr(0, 0x0E, 0x80, "R14 DOSR=128 lo (48kHz)");
+        wr(0, 0x3C, 0x01 | 0x20, "R60(pg0) PRB_P1 (48kHz) + AUDIO BUS LOOPBACK (TEST)");
+        break;
+    case AIC3204_RATE_96K:
+    default:
         wr(0, 0x0D, 0x00, "R13 DOSR hi (96kHz: DOSR=64)");
         wr(0, 0x0E, 0x40, "R14 DOSR=64 lo (96kHz)");
         /* bit D5 (0x20) = Audio Bus Loopback, on top of the PRB_P1 base (0x01) */
         wr(0, 0x3C, 0x01 | 0x20, "R60(pg0) PRB_P1 (96kHz) + AUDIO BUS LOOPBACK (TEST)");
+        break;
     }
     debug_print("aic3204: *** LOOPBACK TEST MODE ENABLED - RX should mirror TX, ADC/DAC "
                 "bypassed. Remember to feed a real TX pattern, not silence, and to set "
@@ -395,16 +404,37 @@ void aic3204_configure_rate(aic3204_rate_t rate)
     wr(0, 0x08, 0x00, "R8 PLL D lo (captured)");
     wr(0, 0x0B, 0x82, "R11 NDAC=2, power on (captured)");
     wr(0, 0x0C, 0x87, "R12 MDAC=7, power on (captured)");
-    if (rate == AIC3204_RATE_192K) {
+    switch (rate) {
+    case AIC3204_RATE_192K:
         wr(0, 0x0D, 0x00, "R13 DOSR hi (192kHz: DOSR=32)");
         wr(0, 0x0E, 0x20, "R14 DOSR=32 lo (192kHz)");
         wr(0, 0x3C, 0x11, "R60(pg0) PRB_P17, Filter C (192kHz)");
-    } else {
+        break;
+    case AIC3204_RATE_48K:
+        /* Added 01/09/2026 - restores the ORIGINAL 04/08/2026 48kHz
+         * values (see this function's own header comment history -
+         * this project ran AM/USB/LSB/NFM at 48kHz before later moving
+         * up to 96kHz for wider RF coverage), as a user-selectable
+         * escape hatch: a birdie tied to N*Fs (confirmed 287*96kHz=
+         * 27.552MHz on real hardware, landing right in the 11m/CB
+         * band) moves to a different, less troublesome spot at 48kHz
+         * instead - see main.c's RATE tile. Same Filter-A processing
+         * block (PRB_P1) as 96kHz - only DOSR doubles again (64->128),
+         * same simple "double DOSR, halve Fs" pattern each step down
+         * from 192kHz's 32.
+         */
+        wr(0, 0x0D, 0x00, "R13 DOSR hi (48kHz: DOSR=128)");
+        wr(0, 0x0E, 0x80, "R14 DOSR=128 lo (48kHz)");
+        wr(0, 0x3C, 0x01, "R60(pg0) PRB_P1, Filter A (48kHz) - same block 96kHz uses");
+        break;
+    case AIC3204_RATE_96K:
+    default:
         wr(0, 0x0D, 0x00, "R13 DOSR hi (96kHz: DOSR=64)");
         wr(0, 0x0E, 0x40, "R14 DOSR=64 lo (96kHz)");
         wr(0, 0x3C, 0x01, "R60(pg0) PRB_P1, Filter A (96kHz) - same Filter-A block as "
                            "48kHz used, DOSR=(48000/target_fs)*128=64 per the same TI "
                            "formula, no reason to switch families for an intermediate rate");
+        break;
     }
 #endif
     /*
@@ -447,10 +477,24 @@ void aic3204_configure_rate(aic3204_rate_t rate)
      */
     wr(0, 0x25, 0xEE, "R37 (captured)");
     wr(0, 0x12, 0x81, "R18 NADC=1, power on (captured)");
-    if (rate == AIC3204_RATE_192K) {
+    switch (rate) {
+    case AIC3204_RATE_192K:
         wr(0, 0x13, 0x87, "R19 MADC=7 (192kHz)");
-    } else {
+        break;
+    case AIC3204_RATE_48K:
+        /* Added 01/09/2026, restoring the original 04/08/2026 48kHz
+         * value - see aic3204_configure_rate()'s DAC-side comment for
+         * the full "user-selectable birdie escape hatch" reasoning.
+         * 0x80 (power on) | 28 (MADC) = 0x9C - matches the same
+         * "double MADC each step down from 192kHz's 7" pattern
+         * DOSR already follows on the DAC side (7/14/28, same ratios
+         * as DOSR's 32/64/128). */
+        wr(0, 0x13, 0x9C, "R19 MADC=28 (48kHz)");
+        break;
+    case AIC3204_RATE_96K:
+    default:
         wr(0, 0x13, 0x8E, "R19 MADC=14 (96kHz)");
+        break;
     }
     wr(0, 0x14, 0x40, "R20 AOSR=64 (unchanged - still valid for PRB_R1)");
     wr(0, 0x3D, 0x01, "R61 ADC processing block PRB_R1 (captured)");
@@ -614,7 +658,7 @@ void aic3204_configure_rate(aic3204_rate_t rate)
     wr(1, 0x3C, 0x28, "P1R60 (captured, final)");
     wr(0, 0x00, 0x00, "select page 0 (leave the codec on page 0)");
 
-    debug_print_dec("aic3204: full sequence done for rate (0=48K,1=192K) - clock "
+    debug_print_dec("aic3204: full sequence done for rate (0=96K,1=192K,2=48K) - clock "
                      "tree ready but BCLK/WCLK NOT yet driven (see "
                      "aic3204_start_bclk_wclk()), ADC/DAC still DOWN",
                      (uint32_t)rate);
@@ -645,12 +689,24 @@ void aic3204_configure_rate(aic3204_rate_t rate)
 void aic3204_start_bclk_wclk(aic3204_rate_t rate)
 {
     wr(0, 0x00, 0x00, "select page 0 (aic3204_start_bclk_wclk)");
-    if (rate == AIC3204_RATE_192K) {
+    switch (rate) {
+    case AIC3204_RATE_192K:
         wr(0, 0x1E, 0x87, "R30 BCLK N Divider, N=7 (192kHz: DAC_CLK/N = "
                            "43.008MHz/7 = 6.144MHz = 32*192kHz)");
-    } else {
+        break;
+    case AIC3204_RATE_48K:
+        /* Added 01/09/2026 alongside the 48kHz rate option - see
+         * aic3204_configure_rate()'s DAC-side comment. Same "BCLK =
+         * 32*Fs" convention the other two rates already follow -
+         * verified: 43.008MHz/28 = 1.536MHz = 32*48kHz exactly. */
+        wr(0, 0x1E, 0x9C, "R30 BCLK N Divider, N=28 (48kHz: DAC_CLK/N = "
+                           "43.008MHz/28 = 1.536MHz = 32*48kHz)");
+        break;
+    case AIC3204_RATE_96K:
+    default:
         wr(0, 0x1E, 0x8E, "R30 BCLK N Divider, N=14 (96kHz: DAC_CLK/N = "
                            "43.008MHz/14 = 3.072MHz = 32*96kHz)");
+        break;
     }
     wr(0, 0x1B, 0x0C, "R27 I2S format (captured) - BCLK/WCLK go live NOW");
     debug_print("aic3204: BCLK/WCLK now driven (R30 then R27) - GD32 side should "
@@ -685,7 +741,7 @@ void aic3204_phase2_init(aic3204_rate_t rate)
     debug_print_dec("aic3204: phase 2 complete - full sequence ported from a real I2C "
                      "capture of the original firmware. PLL sourced from MCLK (not BCLK - "
                      "corrected 01/09/2026), P=1/R=4/J=14/D=0 -> CODEC_CLKIN=86.016MHz -> Fs "
-                     "exact on both ADC and DAC divider chains (0=96K,1=192K)", (uint32_t)rate);
+                     "exact on both ADC and DAC divider chains (0=96K,1=192K,2=48K)", (uint32_t)rate);
 }
 
 

@@ -6,16 +6,24 @@
  * Radix-2 DIT FFT, same algorithm/structure as fft.c, deliberately
  * duplicated rather than shared (different size, different input
  * type, different consumer - see the header comment).
+ *
+ * Moved to TCM RAM 01/09/2026 - see fft.c's own comment on its
+ * identically-shaped buffers for the full reasoning (freed main-RAM
+ * headroom for the widened waterfall; none of these are DMA targets,
+ * s_accum included - "ISR context" just means CPU code executing
+ * inside an interrupt handler, still plain core loads/stores, not a
+ * DMA descriptor).
  */
+#define TCMRAM_BSS __attribute__((section(".tcmram")))
 
-static float s_re[RTTY_SCOPE_FFT_SIZE];
-static float s_im[RTTY_SCOPE_FFT_SIZE];
-static float s_twiddle_cos[RTTY_SCOPE_FFT_SIZE / 2U];
-static float s_twiddle_sin[RTTY_SCOPE_FFT_SIZE / 2U];
-static float s_hann[RTTY_SCOPE_FFT_SIZE];
-static uint16_t s_bitrev[RTTY_SCOPE_FFT_SIZE];
+static float s_re[RTTY_SCOPE_FFT_SIZE] TCMRAM_BSS;
+static float s_im[RTTY_SCOPE_FFT_SIZE] TCMRAM_BSS;
+static float s_twiddle_cos[RTTY_SCOPE_FFT_SIZE / 2U] TCMRAM_BSS;
+static float s_twiddle_sin[RTTY_SCOPE_FFT_SIZE / 2U] TCMRAM_BSS;
+static float s_hann[RTTY_SCOPE_FFT_SIZE] TCMRAM_BSS;
+static uint16_t s_bitrev[RTTY_SCOPE_FFT_SIZE] TCMRAM_BSS;
 
-static float s_accum[RTTY_SCOPE_FFT_SIZE]; /* filled by rtty_scope_feed() (ISR context) */
+static float s_accum[RTTY_SCOPE_FFT_SIZE] TCMRAM_BSS; /* filled by rtty_scope_feed() (ISR context) */
 static uint32_t s_accum_count;             /* samples currently in s_accum, ISR-owned */
 static volatile uint8_t s_pending;         /* 1 = s_accum has a full window ready for rtty_scope_poll() */
 

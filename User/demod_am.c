@@ -56,17 +56,41 @@
  * AUDIO_BW_4K0's comment in demod_am.h for why they're kept separate
  * rather than just adding this same 6kHz corner as a 4th selectable
  * option.
+ *
+ * *** 01/09/2026: 48kHz counterparts added (CHF_48K_COEFFS/
+ * ALPF_48K_COEFFS) alongside these 96kHz ones, per the project owner -
+ * see demod_am_set_active_rate()'s comment in demod_am.h for the full
+ * "48kHz option for better SNR + CPU headroom" story. These 48kHz
+ * values are NOT a fresh derivation - they're recovered verbatim from
+ * this project's own real, previously-shipped 48kHz-era source (a
+ * ZIP the project owner still had from before the later 96kHz
+ * migration), then independently re-verified by reproducing them
+ * fresh via scipy (same "unity per-stage" method, fc=4000/6000,
+ * fs=48000) before trusting them - both sources agree bit-for-bit.
+ * demod_am_set_active_rate() selects which pair of CMSIS instances
+ * actually runs each block; see that function for the full mechanism
+ * (a real CMSIS re-init, not a coefficient-pointer swap, since the
+ * decimator/interpolator/Hilbert state buffers below also need
+ * resizing awareness - see DEC_BLOCK_SAMPLES_MAX's own comment).
  */
 #define CHF_STAGES 2U
-static const float32_t CHF_COEFFS[CHF_STAGES * 5U] = {
+static const float32_t CHF_96K_COEFFS[CHF_STAGES * 5U] = {
     0.0137494f, 0.0274987f, 0.0137494f,  1.5590543f, -0.6140518f,
     0.0155017f, 0.0310034f, 0.0155017f,  1.7577536f, -0.8197604f
 };
+static const float32_t CHF_48K_COEFFS[CHF_STAGES * 5U] = {
+    0.0458208332f, 0.0916416663f, 0.0458208332f,  1.1847620863f, -0.3680454189f,
+    0.0562284500f, 0.1124569000f, 0.0562284500f,  1.4538656576f, -0.6787794575f
+};
 
 #define ALPF_STAGES 2U
-static const float32_t ALPF_COEFFS[ALPF_STAGES * 5U] = {
+static const float32_t ALPF_96K_COEFFS[ALPF_STAGES * 5U] = {
     0.0281188f, 0.0562375f, 0.0281188f,  1.3651172f, -0.4775923f,
     0.0331984f, 0.0663969f, 0.0331984f,  1.6117271f, -0.7445208f
+};
+static const float32_t ALPF_48K_COEFFS[ALPF_STAGES * 5U] = {
+    0.0885793562f, 0.1771587125f, 0.0885793562f,  0.8553979328f, -0.2097153578f,
+    0.1152580152f, 0.2305160305f, 0.1152580152f,  1.1130298542f, -0.5740619151f
 };
 
 /*
@@ -106,21 +130,33 @@ static const float32_t ALPF_COEFFS[ALPF_STAGES * 5U] = {
  * higher Nyquist. Passband/corner accuracy is still exact either way.)
  */
 #define ALPF_4K0_STAGES 2U
-static const float32_t ALPF_4K0_COEFFS[ALPF_4K0_STAGES * 5U] = {
+static const float32_t ALPF_4K0_96K_COEFFS[ALPF_4K0_STAGES * 5U] = {
     0.0145993f, 0.0291985f, 0.0145993f,  1.5590543f, -0.6140518f,
     0.0145993f, 0.0291985f, 0.0145993f,  1.7577536f, -0.8197604f
 };
+static const float32_t ALPF_4K0_48K_COEFFS[ALPF_4K0_STAGES * 5U] = {
+    0.0507585897f, 0.1015171793f, 0.0507585897f,  1.1847620863f, -0.3680454189f,
+    0.0507585897f, 0.1015171793f, 0.0507585897f,  1.4538656576f, -0.6787794575f
+};
 
 #define ALPF_2K3_STAGES 2U
-static const float32_t ALPF_2K3_COEFFS[ALPF_2K3_STAGES * 5U] = {
+static const float32_t ALPF_2K3_96K_COEFFS[ALPF_2K3_STAGES * 5U] = {
     0.0051535f, 0.0103069f, 0.0051535f,  1.7367529f, -0.7566184f,
     0.0051535f, 0.0103069f, 0.0051535f,  1.8700597f, -0.8914501f
 };
+static const float32_t ALPF_2K3_48K_COEFFS[ALPF_2K3_STAGES * 5U] = {
+    0.0188829178f, 0.0377658355f, 0.0188829178f,  1.4992832253f, -0.5698972927f,
+    0.0188829178f, 0.0377658355f, 0.0188829178f,  1.7153763282f, -0.7961680677f
+};
 
 #define ALPF_1K8_STAGES 2U
-static const float32_t ALPF_1K8_COEFFS[ALPF_1K8_STAGES * 5U] = {
+static const float32_t ALPF_1K8_96K_COEFFS[ALPF_1K8_STAGES * 5U] = {
     0.0032200f, 0.0064401f, 0.0032200f,  1.7915877f, -0.8040928f,
     0.0032200f, 0.0064401f, 0.0032200f,  1.9006466f, -0.9139129f
+};
+static const float32_t ALPF_1K8_48K_COEFFS[ALPF_1K8_STAGES * 5U] = {
+    0.0120050083f, 0.0240100166f, 0.0120050083f,  1.5997196711f, -0.6451760153f,
+    0.0120050083f, 0.0240100166f, 0.0120050083f,  1.7852530573f, -0.8359813686f
 };
 
 /*
@@ -351,9 +387,13 @@ static const float32_t WFM_ALPF_NARROW_COEFFS[WFM_ALPF_STAGES * 5U] = {
  * mid-session right after AM/SSB were using CHF_COEFFS' instances.
  */
 #define NFM_CHF_STAGES 2U
-static const float32_t NFM_CHF_COEFFS[NFM_CHF_STAGES * 5U] = {
+static const float32_t NFM_CHF_96K_COEFFS[NFM_CHF_STAGES * 5U] = {
     0.0010801f, 0.0021602f, 0.0010801f,  1.3418845f, -0.4625531f,
     1.0000000f, 2.0000000f, 1.0000000f,  1.5925797f, -0.7357921f
+};
+static const float32_t NFM_CHF_48K_COEFFS[NFM_CHF_STAGES * 5U] = {
+    0.0116848837f, 0.0233697674f, 0.0116848837f,  0.8165677084f, -0.1945244350f,
+    1.0000000000f, 2.0000000000f, 1.0000000000f,  1.0686916613f, -0.5633465418f
 };
 
 /*
@@ -472,7 +512,7 @@ static const float32_t NFM_CHF_COEFFS[NFM_CHF_STAGES * 5U] = {
  *      - arm_fir_interpolate_init_f32() enforces this and
  *      demod_am_init() checks its return status.
  */
-#define DECIM_FACTOR 8U /* was 4U @ 48kHz (16U before that, @ 192kHz) - see
+#define DECIM_FACTOR_96K 8U /* was 4U @ 48kHz (16U before that, @ 192kHz) - see
                           * this comment block above. AM/SSB/NFM moved from
                           * 48kHz to 96kHz for better RF coverage while
                           * keeping the SAME 12kHz decimated domain the
@@ -480,7 +520,37 @@ static const float32_t NFM_CHF_COEFFS[NFM_CHF_STAGES * 5U] = {
                           * decimate-by-8 (96kHz -> 12kHz) replaces
                           * decimate-by-4 (48kHz -> 12kHz), same target
                           * output rate either way. */
-#define DEC_BLOCK_SAMPLES (SDR_RX_BLOCK_SAMPLES / DECIM_FACTOR) /* 32, @ 12kHz - UNCHANGED
+/*
+ * *** 01/09/2026: DECIM_FACTOR_48K/DECIM_COEFFS_48K/INTERP_COEFFS_48K
+ * added alongside the above, per the project owner - see
+ * demod_am_set_active_rate()'s comment in demod_am.h for the "48kHz
+ * option" story. These are NOT a fresh derivation - they're this
+ * project's own real, previously-shipped 48kHz-era values, recovered
+ * verbatim from an old source ZIP the project owner still had (from
+ * before the later 48kHz->96kHz migration overwrote them). DECIM_
+ * FACTOR_48K=4 (48kHz -> 12kHz) lands on the exact same 12kHz
+ * decimated domain as the 96K path's decimate-by-8 - the Hilbert
+ * transform and NR both stay completely untouched either way (see
+ * their own comments).
+ *
+ * IMPORTANT DIFFERENCE FROM THE OLD 48kHz-ERA PROJECT: back then,
+ * SDR_RX_BLOCK_SAMPLES itself shrank right alongside Fs (512->128),
+ * so DEC_BLOCK_SAMPLES stayed numerically CONSTANT (32) the whole
+ * time - this time, SDR_RX_BLOCK_SAMPLES stays fixed at 256 (kept
+ * fixed deliberately, for the CPU-overhead benefit of fewer/longer
+ * blocks per second - see main.c's SDR_RX_BLOCK_SAMPLES comment),
+ * which means DEC_BLOCK_SAMPLES_48K comes out to 64 (256/4), NOT 32
+ * like the 96K path's 32 (256/8) - the two rates' decimated block
+ * sizes genuinely differ now, unlike every previous Fs move this
+ * project made. This is why DEC_BLOCK_SAMPLES_MAX and several buffer
+ * sizes below had to grow (nr_ss_process() itself doesn't care - it
+ * takes a runtime length `n` and buffers into its own fixed-size ring
+ * regardless - but the FIXED-SIZE C arrays this file declares for the
+ * decimated-domain signals do care, since C array sizes are compile-
+ * time).
+ */
+#define DECIM_FACTOR_48K 4U
+#define DEC_BLOCK_SAMPLES_96K (SDR_RX_BLOCK_SAMPLES / DECIM_FACTOR_96K) /* 32, @ 12kHz - UNCHANGED
                                                                    * numeric value across every
                                                                    * Fs move this project has made
                                                                    * (192k/16, 48k/4, now 96k/8 -
@@ -489,6 +559,16 @@ static const float32_t NFM_CHF_COEFFS[NFM_CHF_STAGES * 5U] = {
                                                                    * above) - this is also why
                                                                    * nr_ss.h's NR_SS_BLOCK_SAMPLES
                                                                    * needed zero changes, again. */
+#define DEC_BLOCK_SAMPLES_48K (SDR_RX_BLOCK_SAMPLES / DECIM_FACTOR_48K) /* 64, @ 12kHz - see the
+                                                                   * "IMPORTANT DIFFERENCE" comment
+                                                                   * just above for why this does
+                                                                   * NOT match DEC_BLOCK_SAMPLES_96K
+                                                                   * this time. */
+#define DEC_BLOCK_SAMPLES_MAX 64U /* = DEC_BLOCK_SAMPLES_48K, the larger of the two - every fixed-
+                                     * size decimated-domain buffer below is sized to this, not to
+                                     * whichever rate happens to be active, so switching rates live
+                                     * never needs to reallocate anything, only reinterpret how much
+                                     * of an already-large-enough buffer is actually in use. */
 
 /*
  * DECIM_COEFFS/INTERP_COEFFS, regenerated 05/08/2026 for decimate/
@@ -511,8 +591,8 @@ static const float32_t NFM_CHF_COEFFS[NFM_CHF_STAGES * 5U] = {
  * needs; the extra taps (96 vs 41, ~2.3x) cost is negligible against
  * the ISR's real-time budget (see sdr_tick's own cycle-count prints).
  */
-#define DECIM_COEFFS_TAPS 96U
-static const float32_t DECIM_COEFFS[DECIM_COEFFS_TAPS] = {
+#define DECIM_COEFFS_96K_TAPS 96U
+static const float32_t DECIM_COEFFS_96K[DECIM_COEFFS_96K_TAPS] = {
     0.0010989f, 0.0003992f, 0.0002785f, 0.0000067f, -0.0003927f, -0.0008565f,
     -0.0012870f, -0.0015684f, -0.0015915f, -0.0012798f, -0.0006144f, 0.0003447f,
     0.0014523f, 0.0025049f, 0.0032565f, 0.0034804f, 0.0030143f, 0.0018132f,
@@ -547,7 +627,7 @@ static const float32_t HILBERT_COEFFS[HILBERT_COEFFS_TAPS] = {
     -0.0000823578f, 0.0000000000f, 0.0000000000f
 };
 
-#define INTERP_COEFFS_TAPS 96U /* must be a multiple of DECIM_FACTOR (8) - was 40 @
+#define INTERP_COEFFS_96K_TAPS 96U /* must be a multiple of DECIM_FACTOR_96K (8) - was 40 @
                                  * decimate-4/48kHz, 160 @ decimate-16/192kHz. SAME
                                  * shape as DECIM_COEFFS above (both 96 taps now, for
                                  * the first time actually identical tap counts - the
@@ -556,11 +636,11 @@ static const float32_t HILBERT_COEFFS[HILBERT_COEFFS_TAPS] = {
                                  * init_f32() requires a multiple of L) taps, close but
                                  * not literally the same array), scaled to DC gain = 8
                                  * (the interpolation factor L) instead of 1 - see the
-                                 * comment above DECIM_COEFFS_TAPS' old value for why
+                                 * comment above DECIM_COEFFS_96K_TAPS' old value for why
                                  * the reconstruction filter must supply exactly L of
                                  * gain back after zero-stuffing L-1 zeros between
                                  * samples. */
-static const float32_t INTERP_COEFFS[INTERP_COEFFS_TAPS] = {
+static const float32_t INTERP_COEFFS_96K[INTERP_COEFFS_96K_TAPS] = {
     0.0087911f, 0.0031937f, 0.0022281f, 0.0000539f, -0.0031416f, -0.0068521f,
     -0.0102960f, -0.0125474f, -0.0127322f, -0.0102388f, -0.0049153f, 0.0027572f,
     0.0116186f, 0.0200389f, 0.0260523f, 0.0278433f, 0.0241143f, 0.0145053f,
@@ -577,6 +657,42 @@ static const float32_t INTERP_COEFFS[INTERP_COEFFS_TAPS] = {
     0.0145053f, 0.0241143f, 0.0278433f, 0.0260523f, 0.0200389f, 0.0116186f,
     0.0027572f, -0.0049153f, -0.0102388f, -0.0127322f, -0.0125474f, -0.0102960f,
     -0.0068521f, -0.0031416f, 0.0000539f, 0.0022281f, 0.0031937f, 0.0087911f
+};
+
+/*
+ * *** 01/09/2026: DECIM_COEFFS_48K/INTERP_COEFFS_48K, this project's
+ * own real 48kHz-era values, recovered verbatim from an old source ZIP
+ * (see DECIM_FACTOR_48K's own comment above for the full story) - not
+ * a fresh design, a restoration. DECIM_COEFFS_48K (41 taps, DC gain=1)
+ * anti-aliases 48kHz->12kHz; INTERP_COEFFS_48K (40 taps, DC gain=4=
+ * the interpolation factor L, same "must supply back the gain zero-
+ * stuffing removed" reasoning as the 96K pair above) reconstructs
+ * 12kHz->48kHz. Both were reported, at the time, as verified
+ * numerically via scipy - not independently re-verified in THIS
+ * session beyond confirming the byte values match the recovered
+ * source exactly (unlike the shorter biquad filters above, which were
+ * cheap enough to also re-derive fresh and cross-check bit-for-bit).
+ */
+#define DECIM_COEFFS_48K_TAPS 41U
+static const float32_t DECIM_COEFFS_48K[DECIM_COEFFS_48K_TAPS] = {
+    0.0000464098f, 0.0001604721f, 0.0002054552f, -0.0001018100f, -0.0009420342f, -0.0019856045f,
+    -0.0022039177f, -0.0003366122f, 0.0039477596f, 0.0088755645f, 0.0105351209f, 0.0047914879f,
+    -0.0093236751f, -0.0267037662f, -0.0362087960f, -0.0248893350f, 0.0149572705f, 0.0796076886f,
+    0.1526768100f, 0.2105814863f, 0.2326200509f, 0.2105814863f, 0.1526768100f, 0.0796076886f,
+    0.0149572705f, -0.0248893350f, -0.0362087960f, -0.0267037662f, -0.0093236751f, 0.0047914879f,
+    0.0105351209f, 0.0088755645f, 0.0039477596f, -0.0003366122f, -0.0022039177f, -0.0019856045f,
+    -0.0009420342f, -0.0001018100f, 0.0002054552f, 0.0001604721f, 0.0000464098f
+};
+
+#define INTERP_COEFFS_48K_TAPS 40U /* must be a multiple of DECIM_FACTOR_48K (4) */
+static const float32_t INTERP_COEFFS_48K[INTERP_COEFFS_48K_TAPS] = {
+    0.0002119268f, 0.0005815043f, 0.0003992317f, -0.0013967222f, -0.0049632048f, -0.0080461863f,
+    -0.0060033199f, 0.0052135661f, 0.0239471765f, 0.0393545157f, 0.0342535584f, -0.0040805948f,
+    -0.0697381812f, -0.1303465951f, -0.1346151143f, -0.0361678797f, 0.1768670476f, 0.4640366160f,
+    0.7403911421f, 0.9101015131f, 0.9101015131f, 0.7403911421f, 0.4640366160f, 0.1768670476f,
+    -0.0361678797f, -0.1346151143f, -0.1303465951f, -0.0697381812f, -0.0040805948f, 0.0342535584f,
+    0.0393545157f, 0.0239471765f, 0.0052135661f, -0.0060033199f, -0.0080461863f, -0.0049632048f,
+    -0.0013967222f, 0.0003992317f, 0.0005815043f, 0.0002119268f
 };
 
 /*
@@ -604,8 +720,15 @@ static const float32_t INTERP_COEFFS[INTERP_COEFFS_TAPS] = {
  * the corner around the same ~15Hz regardless of Fs, since R=exp(-1/
  * (fs*tau)) - verified: fs=96000 gives 0.99900 to 5 decimal places.
  * Left as a scalar one-pole - cheap enough (1 MAC/sample) that a
- * CMSIS block call isn't worth the extra buffer/call overhead. */
-#define DCB_R 0.9990f
+ * CMSIS block call isn't worth the extra buffer/call overhead.
+ *
+ * *** 01/09/2026: two values now, selected by demod_am_set_active_
+ * rate() into s_dcb_r below *** - DCB_R_48K is this project's own
+ * real, previously-shipped 48kHz-era value (recovered verbatim from
+ * an old source ZIP, then independently re-verified with the same
+ * exp(-1/(fs*tau)) formula before trusting it). */
+#define DCB_R_96K 0.9990f
+#define DCB_R_48K 0.9980f
 
 /* AGC: target output amplitude (of int16 full scale 32767), peak
  * release per sample, and gain bounds. GAIN_MAX bounds how far pure
@@ -661,10 +784,20 @@ static const float32_t INTERP_COEFFS[INTERP_COEFFS_TAPS] = {
  *
  * AGC_PROFILE_MANUAL doesn't use any of these - see the loop in
  * demod_am_process_raw() and agc_profile_t's MANUAL note.
+ *
+ * *** 01/09/2026: _48K counterparts added, same tau targets, computed
+ * at fs=48000 - this project's own real, previously-shipped 48kHz-era
+ * values (recovered verbatim from an old source ZIP, then
+ * independently re-verified with the same exp(-1/(fs*tau)) formula
+ * before trusting them - see demod_am_set_active_rate()'s comment in
+ * demod_am.h for the full "48kHz option" story). ***
  */
-#define AGC_RELEASE_SLOW   0.99998512f
-#define AGC_RELEASE_MEDIUM 0.99994048f
-#define AGC_RELEASE_FAST   0.99982640f
+#define AGC_RELEASE_SLOW_96K   0.99998512f
+#define AGC_RELEASE_MEDIUM_96K 0.99994048f
+#define AGC_RELEASE_FAST_96K   0.99982640f
+#define AGC_RELEASE_SLOW_48K   0.99997024f
+#define AGC_RELEASE_MEDIUM_48K 0.99988096f
+#define AGC_RELEASE_FAST_48K   0.99965284f
 
 /*
  * WFM's OWN DC blocker pole + AGC release coefficients, at WFM's
@@ -995,27 +1128,55 @@ static void debug_print_dec_signed_local(const char *label, int32_t val)
 }
 
 /* SSB decimated-chain instances + state (see the PIPELINE comment
- * above DECIM_COEFFS). CMSIS state sizes:
- *   decimate:    numTaps + blockSize(INPUT, 128) - 1 (was 512 before
- *                04/08/2026, see sdr_rx.h's SDR_RX_BLOCK_SAMPLES comment)
- *   plain FIR:   numTaps + blockSize(decimated, 32) - 1
- *   interpolate: (numTaps/L) + blockSize(decimated, 32) - 1
+ * above DECIM_COEFFS_96K). CMSIS state sizes:
+ *   decimate:    numTaps + blockSize(INPUT, 256) - 1
+ *   plain FIR:   numTaps + blockSize(decimated) - 1
+ *   interpolate: (numTaps/L) + blockSize(decimated) - 1
  * I and Q each need their own decimator state (same coefficients,
- * independent signals - same pattern as the channel filter pair). */
+ * independent signals - same pattern as the channel filter pair).
+ *
+ * *** 01/09/2026: sized to the LARGER of the 96K/48K requirements,
+ * not just the 96K one *** - see DEC_BLOCK_SAMPLES_MAX's own comment
+ * for why the two rates need genuinely different amounts here this
+ * time (unlike every previous Fs move). DECIM_STATE_SIZE_MAX happens
+ * to land on the 96K case (more taps there, 96 vs 41, outweighs its
+ * smaller decimated block size) - HILBERT_STATE_SIZE_MAX and
+ * INTERP_STATE_SIZE_MAX both land on the 48K case instead (same or
+ * fewer taps, but a decimated block that's TWICE as big at 48K -
+ * DEC_BLOCK_SAMPLES_48K=64 vs DEC_BLOCK_SAMPLES_96K=32 - dominates).
+ * Verified by direct computation, not assumed: 96K decim-state=351 vs
+ * 48K's 296 (96K wins); 96K hilbert-state=94 vs 48K's 126 (48K wins);
+ * 96K interp-state=43 vs 48K's 73 (48K wins).
+ */
+#define DECIM_STATE_SIZE_MAX (DECIM_COEFFS_96K_TAPS + SDR_RX_BLOCK_SAMPLES - 1U) /* 351 */
+#define HILBERT_STATE_SIZE_MAX (HILBERT_COEFFS_TAPS + DEC_BLOCK_SAMPLES_MAX - 1U) /* 126 */
+#define INTERP_STATE_SIZE_MAX ((INTERP_COEFFS_48K_TAPS / DECIM_FACTOR_48K) + DEC_BLOCK_SAMPLES_MAX - 1U) /* 73 */
 static arm_fir_decimate_instance_f32 s_decim_i_inst;
 static arm_fir_decimate_instance_f32 s_decim_q_inst;
 static arm_fir_instance_f32          s_hilbert_inst;
 static arm_fir_interpolate_instance_f32 s_interp_inst;
-static float32_t s_decim_i_state[DECIM_COEFFS_TAPS + SDR_RX_BLOCK_SAMPLES - 1U];
-static float32_t s_decim_q_state[DECIM_COEFFS_TAPS + SDR_RX_BLOCK_SAMPLES - 1U];
-static float32_t s_hilbert_state[HILBERT_COEFFS_TAPS + DEC_BLOCK_SAMPLES - 1U];
-static float32_t s_interp_state[(INTERP_COEFFS_TAPS / DECIM_FACTOR) + DEC_BLOCK_SAMPLES - 1U];
+/* *** 01/09/2026: moved to TCM RAM *** - CMSIS FIR decimate/
+ * interpolate/Hilbert STATE buffers, never touched by DMA (only
+ * arm_fir_decimate_f32()/arm_fir_interpolate_f32()/arm_fir_f32()
+ * read/write these, all plain CPU calls from within this ISR's own
+ * code) - see fft.c's fuller TCM comment for the "why" (freed
+ * main-RAM headroom for the widened waterfall panel). */
+#define TCMRAM_BSS __attribute__((section(".tcmram")))
+static float32_t s_decim_i_state[DECIM_STATE_SIZE_MAX] TCMRAM_BSS;
+static float32_t s_decim_q_state[DECIM_STATE_SIZE_MAX] TCMRAM_BSS;
+static float32_t s_hilbert_state[HILBERT_STATE_SIZE_MAX] TCMRAM_BSS;
+static float32_t s_interp_state[INTERP_STATE_SIZE_MAX] TCMRAM_BSS;
 
-/* Decimated-rate (12kHz, 32-sample) working buffers. */
-static float32_t s_i_dec[DEC_BLOCK_SAMPLES];         /* decimated I */
-static float32_t s_q_dec[DEC_BLOCK_SAMPLES];         /* decimated Q */
-static float32_t s_q_hilbert_out[DEC_BLOCK_SAMPLES]; /* Hilbert(Q), 90deg-shifted, @ 12kHz */
-static float32_t s_ssb_dec[DEC_BLOCK_SAMPLES];       /* combined SSB audio @ 12kHz */
+/* Decimated-rate (12kHz) working buffers - sized to
+ * DEC_BLOCK_SAMPLES_MAX(64, the 48K case) now, not a single fixed
+ * DEC_BLOCK_SAMPLES the way every previous Fs move left this - only
+ * the first s_dec_block_samples (32 or 64, whichever rate is
+ * currently active - see demod_am_set_active_rate()) entries of each
+ * are actually used/valid in any given block. */
+static float32_t s_i_dec[DEC_BLOCK_SAMPLES_MAX];         /* decimated I */
+static float32_t s_q_dec[DEC_BLOCK_SAMPLES_MAX];         /* decimated Q */
+static float32_t s_q_hilbert_out[DEC_BLOCK_SAMPLES_MAX]; /* Hilbert(Q), 90deg-shifted, @ 12kHz */
+static float32_t s_ssb_dec[DEC_BLOCK_SAMPLES_MAX];       /* combined SSB audio @ 12kHz */
 
 /*
  * --- NR INTEGRATION (Spectral Subtraction, 03/08/2026, revised 04/08/2026) ---
@@ -1046,23 +1207,73 @@ static float32_t s_ssb_dec[DEC_BLOCK_SAMPLES];       /* combined SSB audio @ 12k
  * inline path in step 2d. */
 static arm_fir_decimate_instance_f32    s_nr_decim_inst;
 static arm_fir_interpolate_instance_f32 s_nr_interp_inst;
-static float32_t s_nr_decim_state[DECIM_COEFFS_TAPS + SDR_RX_BLOCK_SAMPLES - 1U];
-static float32_t s_nr_interp_state[(INTERP_COEFFS_TAPS / DECIM_FACTOR) + DEC_BLOCK_SAMPLES - 1U];
-static float32_t s_nr_buf[DEC_BLOCK_SAMPLES]; /* decimated audio (AM only), in place through nr_ss_process() */
+static float32_t s_nr_decim_state[DECIM_STATE_SIZE_MAX] TCMRAM_BSS;
+static float32_t s_nr_interp_state[INTERP_STATE_SIZE_MAX] TCMRAM_BSS;
+static float32_t s_nr_buf[DEC_BLOCK_SAMPLES_MAX]; /* decimated audio (AM only), in place through nr_ss_process() */
 
 /* nr_ss.h fixes its own block size independently (see its comment on
- * NR_SS_BLOCK_SAMPLES) - this guarantees it never silently drifts
- * from demod_am.c's actual decimated rate/block size instead of
- * failing subtly (wrong-length overlap-add) at runtime. */
-_Static_assert(DEC_BLOCK_SAMPLES == NR_SS_BLOCK_SAMPLES,
-               "nr_ss.h's NR_SS_BLOCK_SAMPLES must match demod_am.c's DEC_BLOCK_SAMPLES");
+ * NR_SS_BLOCK_SAMPLES) - previously guaranteed via a compile-time
+ * assert that it never silently drifted from demod_am.c's actual
+ * decimated rate/block size, instead of failing subtly (wrong-length
+ * overlap-add) at runtime.
+ *
+ * *** 01/09/2026: assert REMOVED, real bug avoided *** - with the
+ * 48kHz rate option, DEC_BLOCK_SAMPLES_48K(64) genuinely differs from
+ * NR_SS_BLOCK_SAMPLES(32), so a single compile-time equality no longer
+ * holds for both rates - and nr_ss.h's own contract is strict about
+ * this ("n must equal NR_SS_BLOCK_SAMPLES every call"), so simply
+ * passing the (now variable) decimated block size straight through,
+ * the way both call sites used to, would have silently fed nr_ss_
+ * process() 64 samples at 48kHz when it can only correctly digest 32
+ * per call - not a crash, a quiet loss of NR on half the block's
+ * audio (and probably wrong-length overlap-add reconstruction on the
+ * other half too). Fixed properly: nr_ss_process_chunks() below loops
+ * calling nr_ss_process() exactly NR_SS_BLOCK_SAMPLES at a time,
+ * however many chunks the active rate's decimated block actually
+ * contains - 1 chunk at 96kHz (unchanged behavior), 2 at 48kHz. Both
+ * call sites use it now instead of calling nr_ss_process() directly.
+ */
+static void nr_ss_process_chunks(float32_t *buf, uint32_t n)
+{
+    uint32_t off;
+    for (off = 0U; off + NR_SS_BLOCK_SAMPLES <= n; off += NR_SS_BLOCK_SAMPLES) {
+        nr_ss_process(buf + off, NR_SS_BLOCK_SAMPLES);
+    }
+}
+
+/*
+ * rtty_process_chunks() - added 01/09/2026, per the project owner:
+ * RTTY decode showed no output at all with the 48kHz rate option
+ * selected. Root cause: exactly the same class of bug nr_ss_process_
+ * chunks() above already fixed - rtty.h's RTTY_BLOCK_SAMPLES(32) is a
+ * fixed contract ("n must equal RTTY_BLOCK_SAMPLES every call"), and
+ * rtty_process() itself enforces it at runtime (rtty.c: "if (n !=
+ * RTTY_BLOCK_SAMPLES) { return; }") - silently doing NOTHING rather
+ * than crashing or reading out of bounds. At 48kHz, s_dec_block_
+ * samples is 64, not 32 - every single call was hitting that guard
+ * and bailing out immediately, hence "no output at all" rather than
+ * degraded/partial output. Same fix as NR: loop calling rtty_process()
+ * exactly RTTY_BLOCK_SAMPLES at a time - 1 chunk at 96kHz (unchanged
+ * behavior, byte-for-byte the same as before this function existed),
+ * 2 at 48kHz. (rtty_scope_feed(), used right alongside this at the
+ * same call site, did NOT need this treatment - it already loops
+ * against a bounds check rather than requiring an exact n, genuinely
+ * tolerant of either 32 or 64 as-is.)
+ */
+static void rtty_process_chunks(const float32_t *buf, uint32_t n)
+{
+    uint32_t off;
+    for (off = 0U; off + RTTY_BLOCK_SAMPLES <= n; off += RTTY_BLOCK_SAMPLES) {
+        rtty_process(buf + off, RTTY_BLOCK_SAMPLES);
+    }
+}
 
 /* Delay-matching for decimated I: same technique as before (linear-
  * phase FIR group delay = (numTaps-1)/2, history carried across
  * blocks), just at the 12kHz rate now - so the history is only 31
  * samples of the 32-sample decimated block. */
 static float32_t s_i_delay_hist[HILBERT_GROUP_DELAY_DEC];
-static float32_t s_i_delayed[HILBERT_GROUP_DELAY_DEC + DEC_BLOCK_SAMPLES];
+static float32_t s_i_delayed[HILBERT_GROUP_DELAY_DEC + DEC_BLOCK_SAMPLES_MAX];
 
 /* Demodulation mode - see demod_am.h. Plain uint8_t, not behind a
  * critical section: main.c writes it from the main loop, the ISR
@@ -1157,8 +1368,21 @@ wfm_ifbw_t demod_am_get_wfm_ifbw(void)
  * in demod_am_set_agc_profile(), on the rare event of the user
  * actually changing it.
  */
+/*
+ * s_active_rate_is_48k: which of the two AM/USB/LSB/NFM coefficient
+ * sets (96kHz default, or 48kHz) is currently configured on every
+ * rate-dependent CMSIS instance in this file - see demod_am_set_
+ * active_rate()'s comment (declared further down, near the CMSIS
+ * instances it actually reconfigures) for the full mechanism. Declared
+ * here, ahead of that function, because demod_am_set_agc_profile()
+ * right below also needs to consult it (AGC release coefficients are
+ * rate-dependent too, independent of which CMSIS filter instances are
+ * active).
+ */
+static uint8_t s_active_rate_is_48k = 0U;
+
 static agc_profile_t s_agc_profile = AGC_PROFILE_MEDIUM;
-static float s_agc_release = AGC_RELEASE_MEDIUM;
+static float s_agc_release = AGC_RELEASE_MEDIUM_96K;
 /* WFM's OWN resolved release coefficient, at WFM_AGC_RELEASE_*'s
  * 192kHz values - added 05/08/2026 alongside demod_wfm_process_raw().
  * Kept in lockstep with s_agc_release above from the SAME profile
@@ -1173,17 +1397,17 @@ void demod_am_set_agc_profile(agc_profile_t profile)
     s_agc_profile = profile;
     switch (profile) {
     case AGC_PROFILE_SLOW:
-        s_agc_release = AGC_RELEASE_SLOW;
+        s_agc_release = s_active_rate_is_48k ? AGC_RELEASE_SLOW_48K : AGC_RELEASE_SLOW_96K;
         s_wfm_agc_release = WFM_AGC_RELEASE_SLOW;
         break;
     case AGC_PROFILE_FAST:
-        s_agc_release = AGC_RELEASE_FAST;
+        s_agc_release = s_active_rate_is_48k ? AGC_RELEASE_FAST_48K : AGC_RELEASE_FAST_96K;
         s_wfm_agc_release = WFM_AGC_RELEASE_FAST;
         break;
     case AGC_PROFILE_MANUAL: break; /* unused in MANUAL - see the AGC loop */
     case AGC_PROFILE_MEDIUM:
     default:
-        s_agc_release = AGC_RELEASE_MEDIUM;
+        s_agc_release = s_active_rate_is_48k ? AGC_RELEASE_MEDIUM_48K : AGC_RELEASE_MEDIUM_96K;
         s_wfm_agc_release = WFM_AGC_RELEASE_MEDIUM;
         break;
     }
@@ -1293,14 +1517,36 @@ demod_am_cycles_breakdown_t demod_am_get_last_cycles_breakdown(void)
 static float s_dcb_x1, s_dcb_y1;
 static float s_agc_peak;
 
-/* Signal strength for the UI's S-meter: the AGC's pre-gain envelope
- * peak follower (instant attack, ~180ms release - exactly the
- * ballistics a signal meter wants, no extra state needed). int16
- * full-scale units; the UI converts to dB/S-units itself, OUTSIDE
- * the ISR. */
+/* Signal strength for the UI's S-meter (added 05/09/2026, replacing the
+ * old "just reuse s_agc_peak" approach - see the block comment right
+ * above where it's updated, in demod_am_process_raw(), for the full
+ * "why": s_agc_peak is the peak of s_env[] AFTER the DC blocker has
+ * already stripped the carrier level out (step 2 - "removes the
+ * carrier level in AM"), so it was tracking the AUDIO/modulation
+ * energy left over, not the RF signal itself. A strong steady carrier
+ * with little modulation reads LOW there (nothing left once DC is
+ * removed) while band noise - which has plenty of its own AC content -
+ * reads comparably or higher, so the meter looked like it was
+ * following the noise floor instead of the tuned signal, which is
+ * exactly what it was doing. s_sig_peak fixes this by peak-following
+ * the RAW |I+jQ| magnitude of s_i_buf/s_q_buf - the down-mixed,
+ * channel-filtered complex signal BEFORE the DC blocker touches
+ * anything (same tap point AM/NFM's own squelch RF-level metric
+ * already reads, just peak- instead of average-based - see the
+ * Squelch block's comment) - so it responds to actual RF/IF level
+ * regardless of modulation content, same as a real S-meter. Same
+ * ballistics as before (instant attack, s_agc_release for release -
+ * ~180ms at MEDIUM, matches the profile picker), just sourced from
+ * the right point in the chain. Updated for every mode that reaches
+ * demod_am_process_raw() (AM/USB/LSB/NFM) - WFM has its own separate
+ * S-meter path (s_wfm_agc_peak) untouched by this. int16-ish full-
+ * scale units, same as before; the UI converts to dB/S-units itself,
+ * OUTSIDE the ISR. */
+static float s_sig_peak;
+
 float demod_am_get_signal_peak(void)
 {
-    return s_agc_peak;
+    return s_sig_peak;
 }
 
 /*
@@ -1377,7 +1623,7 @@ uint8_t demod_am_get_if_offset_active(void)
  */
 static float32_t s_i_buf[SDR_RX_BLOCK_SAMPLES];      /* I rail, deinterleaved */
 static float32_t s_q_buf[SDR_RX_BLOCK_SAMPLES];      /* Q rail, deinterleaved */
-static float32_t s_iq_cplx[SDR_RX_BLOCK_SAMPLES * 2U]; /* re-interleaved for arm_cmplx_mag_f32 */
+static float32_t s_iq_cplx[SDR_RX_BLOCK_SAMPLES * 2U] TCMRAM_BSS; /* re-interleaved for arm_cmplx_mag_f32 - TCM-safe, only arm_cmplx_mag_f32() (CPU) touches it */
 static float32_t s_env[SDR_RX_BLOCK_SAMPLES];        /* |I+jQ|, then DC-blocked, then audio-LPF'd */
 
 /* Output assembly buffer: one TX half (stereo interleaved). Static -
@@ -1391,21 +1637,11 @@ void demod_am_init(void)
     gpio_output_options_set(SPK_EN_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_2MHZ, SPK_EN_PIN);
     gpio_bit_set(SPK_EN_PORT, SPK_EN_PIN); /* speaker amp ON */
 
-    /* arm_biquad_cascade_df1_init_f32() zeroes the state buffer it's
-     * given, so we don't need to memset s_chf_i_state/etc ourselves. */
-    arm_biquad_cascade_df1_init_f32(&s_chf_i_inst, CHF_STAGES, CHF_COEFFS, s_chf_i_state);
-    arm_biquad_cascade_df1_init_f32(&s_chf_q_inst, CHF_STAGES, CHF_COEFFS, s_chf_q_state);
-    arm_biquad_cascade_df1_init_f32(&s_alpf_inst, ALPF_STAGES, ALPF_COEFFS, s_alpf_state);
-    arm_biquad_cascade_df1_init_f32(&s_alpf_4k0_inst, ALPF_4K0_STAGES, ALPF_4K0_COEFFS, s_alpf_4k0_state);
-    arm_biquad_cascade_df1_init_f32(&s_alpf_2k3_inst, ALPF_2K3_STAGES, ALPF_2K3_COEFFS, s_alpf_2k3_state);
-    arm_biquad_cascade_df1_init_f32(&s_alpf_1k8_inst, ALPF_1K8_STAGES, ALPF_1K8_COEFFS, s_alpf_1k8_state);
     arm_biquad_cascade_df1_init_f32(&s_wfm_ifbw_i_inst, WFM_IFBW_STAGES, WFM_IFBW_NARROW_COEFFS, s_wfm_ifbw_i_state);
     arm_biquad_cascade_df1_init_f32(&s_wfm_ifbw_q_inst, WFM_IFBW_STAGES, WFM_IFBW_NARROW_COEFFS, s_wfm_ifbw_q_state);
     arm_biquad_cascade_df1_init_f32(&s_wfm_alpf_wide_inst, WFM_ALPF_STAGES, WFM_ALPF_WIDE_COEFFS, s_wfm_alpf_wide_state);
     arm_biquad_cascade_df1_init_f32(&s_wfm_alpf_norm_inst, WFM_ALPF_STAGES, WFM_ALPF_NORM_COEFFS, s_wfm_alpf_norm_state);
     arm_biquad_cascade_df1_init_f32(&s_wfm_alpf_narrow_inst, WFM_ALPF_STAGES, WFM_ALPF_NARROW_COEFFS, s_wfm_alpf_narrow_state);
-    arm_biquad_cascade_df1_init_f32(&s_nfm_chf_i_inst, NFM_CHF_STAGES, NFM_CHF_COEFFS, s_nfm_chf_i_state);
-    arm_biquad_cascade_df1_init_f32(&s_nfm_chf_q_inst, NFM_CHF_STAGES, NFM_CHF_COEFFS, s_nfm_chf_q_state);
 
     /* WFM discriminator/de-emphasis state - see the field comments
      * above. A stale s_fm_i_prev/s_fm_q_prev only matters for the
@@ -1423,44 +1659,15 @@ void demod_am_init(void)
     s_wfm_dcb_y1 = 0.0f;
     s_wfm_agc_peak = WFM_AGC_PEAK_MIN;
 
-    /* SSB decimated chain. The decimate/interpolate inits VALIDATE
-     * their arguments (blockSize%M, numTaps%L) and return a status -
-     * check it and shout over UART if it ever fails, because a failed
-     * init here leaves the instance unusable and the SSB path would
-     * crash or garbage out with no other clue. The plain FIR init has
-     * no failure mode (returns void). All three zero their state
-     * buffers internally. */
-    if (arm_fir_decimate_init_f32(&s_decim_i_inst, DECIM_COEFFS_TAPS, DECIM_FACTOR,
-                                    DECIM_COEFFS, s_decim_i_state,
-                                    SDR_RX_BLOCK_SAMPLES) != ARM_MATH_SUCCESS) {
-        debug_print("demod_am: *** decimator I init FAILED (blockSize %% M != 0?) ***\n");
-    }
-    if (arm_fir_decimate_init_f32(&s_decim_q_inst, DECIM_COEFFS_TAPS, DECIM_FACTOR,
-                                    DECIM_COEFFS, s_decim_q_state,
-                                    SDR_RX_BLOCK_SAMPLES) != ARM_MATH_SUCCESS) {
-        debug_print("demod_am: *** decimator Q init FAILED ***\n");
-    }
-    arm_fir_init_f32(&s_hilbert_inst, HILBERT_COEFFS_TAPS, HILBERT_COEFFS,
-                      s_hilbert_state, DEC_BLOCK_SAMPLES);
-    if (arm_fir_interpolate_init_f32(&s_interp_inst, DECIM_FACTOR, INTERP_COEFFS_TAPS,
-                                       INTERP_COEFFS, s_interp_state,
-                                       DEC_BLOCK_SAMPLES) != ARM_MATH_SUCCESS) {
-        debug_print("demod_am: *** interpolator init FAILED (numTaps %% L != 0?) ***\n");
-    }
+    /* AM/USB/LSB/NFM's own rate-dependent CMSIS instances (CHF/ALPF/
+     * NFM_CHF biquads, SSB decimate/Hilbert/interpolate, NR's own
+     * decimate/interpolate) - all handled by demod_am_set_active_
+     * rate(), called here with the default (96kHz, is_48k=0) so cold
+     * boot ends up in exactly the state this function always
+     * initialized it to before 01/09/2026's 48kHz option existed. See
+     * that function's own comment for the full mechanism. */
+    demod_am_set_active_rate(0U);
 
-    /* NR (Spectral Subtraction, AM/USB/LSB only) - see this file's NR
-     * INTEGRATION comment above s_nr_decim_inst. Own instances, SAME
-     * coefficient tables as the SSB chain just above. */
-    if (arm_fir_decimate_init_f32(&s_nr_decim_inst, DECIM_COEFFS_TAPS, DECIM_FACTOR,
-                                    DECIM_COEFFS, s_nr_decim_state,
-                                    SDR_RX_BLOCK_SAMPLES) != ARM_MATH_SUCCESS) {
-        debug_print("demod_am: *** NR decimator init FAILED (blockSize %% M != 0?) ***\n");
-    }
-    if (arm_fir_interpolate_init_f32(&s_nr_interp_inst, DECIM_FACTOR, INTERP_COEFFS_TAPS,
-                                       INTERP_COEFFS, s_nr_interp_state,
-                                       DEC_BLOCK_SAMPLES) != ARM_MATH_SUCCESS) {
-        debug_print("demod_am: *** NR interpolator init FAILED (numTaps %% L != 0?) ***\n");
-    }
     nr_ss_init();
     rtty_init();
     rtty_scope_init();
@@ -1474,11 +1681,205 @@ void demod_am_init(void)
     s_dcb_x1 = 0.0f;
     s_dcb_y1 = 0.0f;
     s_agc_peak = AGC_TARGET; /* start at unity-ish gain, settles fast */
+    s_sig_peak = 0.0f; /* S-meter's own peak, separate from s_agc_peak now -
+                         * see demod_am_get_signal_peak()'s comment. Starts
+                         * at 0 rather than AGC_TARGET: instant attack means
+                         * it climbs to the real level within one block of
+                         * an actual signal, no benefit to a warm-started
+                         * guess the way the AGC's gain-control peak wants. */
     s_squelch_level_db = s_squelch_threshold_db; /* no false "signal detected" blip before the first real block */
     s_squelch_open = 1U; /* matches the OFF-by-default threshold - see demod_am.h */
 
     debug_print("demod_am: PB7 speaker enable high, CMSIS-DSP biquads + decimated "
                 "SSB chain init, state reset\n");
+}
+
+/*
+ * s_dec_block_samples/s_decim_factor: the ACTIVE rate's decimated-
+ * domain block size and decimation factor - what demod_am_process_
+ * raw() actually uses at runtime, instead of the old fixed DEC_BLOCK_
+ * SAMPLES/DECIM_FACTOR #defines. s_dcb_r: same idea for the DC
+ * blocker pole. All three are set by demod_am_set_active_rate() below,
+ * never anywhere else - default values here just match demod_am_
+ * init()'s own default rate (96kHz) so nothing's uninitialized before
+ * the first real call.
+ */
+static uint32_t s_dec_block_samples = DEC_BLOCK_SAMPLES_96K;
+static uint32_t s_decim_factor = DECIM_FACTOR_96K;
+static float s_dcb_r = DCB_R_96K;
+
+/*
+ * demod_am_active_fs_hz() - the ACTUAL current AM/USB/LSB/NFM sample
+ * rate in Hz, added 01/09/2026 alongside the 48kHz rate option. Used
+ * anywhere a function genuinely needs Fs as a plain number rather
+ * than a pre-derived coefficient (currently just sam_init()/sam_step()
+ * below - everything else in this file works off coefficient tables
+ * selected by s_active_rate_is_48k directly, never re-deriving them
+ * from a raw Fs value at runtime).
+ */
+static float demod_am_active_fs_hz(void)
+{
+    return s_active_rate_is_48k ? 48000.0f : 96000.0f;
+}
+
+/*
+ * demod_am_set_active_rate() - see its own declaration comment in
+ * demod_am.h for the full "why" (48kHz option for better SNR + CPU
+ * headroom). Called by demod_am_init() (with is_48k=0, the default)
+ * and by main.c's apply_demod_mode() whenever the codec's actual
+ * AM/USB/LSB/NFM rate changes (RATE tile, or a mode switch that keeps
+ * the previously-selected rate).
+ *
+ * Genuinely re-initializes every rate-dependent CMSIS instance with
+ * the correct coefficient table/tap count/decimation factor for the
+ * newly active rate - NOT a coefficient-pointer swap, since the SSB
+ * decimator/interpolator/NR-decimator/NR-interpolator differ in
+ * DECIM_FACTOR and tap count between the two rates (the CHF/ALPF/
+ * NFM_CHF biquads only differ in coefficient VALUES, same STAGES
+ * count either way, so those four are simpler re-inits). All the
+ * state buffers involved (s_decim_i/q_state, s_hilbert_state,
+ * s_interp_state, s_nr_decim_state, s_nr_interp_state) are already
+ * sized to DECIM_STATE_SIZE_MAX/HILBERT_STATE_SIZE_MAX/INTERP_STATE_
+ * SIZE_MAX (see their own declaration comments) - big enough for
+ * EITHER rate's real requirement, so re-init here never risks
+ * overflowing them, just uses less of an already-big-enough buffer
+ * when the 96K case (which needs less state than 48K, for the
+ * decimated-domain buffers - see DEC_BLOCK_SAMPLES_MAX's comment) is
+ * selected.
+ *
+ * Also re-derives s_agc_release for whatever AGC profile is currently
+ * selected (AGC release coefficients are rate-dependent too, quite
+ * separate from which CMSIS filter instances are active) by just
+ * calling demod_am_set_agc_profile() again with the current profile -
+ * cheap, and keeps the "which table to read" logic in exactly one
+ * place (that function) rather than duplicating the switch here.
+ *
+ * Does NOT touch anything WFM-related - WFM has always run its own
+ * separate 192kHz path regardless of this flag (see this function's
+ * own header comment in demod_am.h).
+ */
+void demod_am_set_active_rate(uint8_t is_48k)
+{
+    s_active_rate_is_48k = is_48k ? 1U : 0U;
+
+    /* arm_biquad_cascade_df1_init_f32() zeroes the state buffer it's
+     * given, so switching rates also gives every one of these a clean
+     * transient-free restart - matches how a mode switch already
+     * resets other state elsewhere in this file. */
+    if (s_active_rate_is_48k) {
+        arm_biquad_cascade_df1_init_f32(&s_chf_i_inst, CHF_STAGES, CHF_48K_COEFFS, s_chf_i_state);
+        arm_biquad_cascade_df1_init_f32(&s_chf_q_inst, CHF_STAGES, CHF_48K_COEFFS, s_chf_q_state);
+        arm_biquad_cascade_df1_init_f32(&s_alpf_inst, ALPF_STAGES, ALPF_48K_COEFFS, s_alpf_state);
+        arm_biquad_cascade_df1_init_f32(&s_alpf_4k0_inst, ALPF_4K0_STAGES, ALPF_4K0_48K_COEFFS, s_alpf_4k0_state);
+        arm_biquad_cascade_df1_init_f32(&s_alpf_2k3_inst, ALPF_2K3_STAGES, ALPF_2K3_48K_COEFFS, s_alpf_2k3_state);
+        arm_biquad_cascade_df1_init_f32(&s_alpf_1k8_inst, ALPF_1K8_STAGES, ALPF_1K8_48K_COEFFS, s_alpf_1k8_state);
+        arm_biquad_cascade_df1_init_f32(&s_nfm_chf_i_inst, NFM_CHF_STAGES, NFM_CHF_48K_COEFFS, s_nfm_chf_i_state);
+        arm_biquad_cascade_df1_init_f32(&s_nfm_chf_q_inst, NFM_CHF_STAGES, NFM_CHF_48K_COEFFS, s_nfm_chf_q_state);
+        s_dcb_r = DCB_R_48K;
+        s_decim_factor = DECIM_FACTOR_48K;
+        s_dec_block_samples = DEC_BLOCK_SAMPLES_48K;
+    } else {
+        arm_biquad_cascade_df1_init_f32(&s_chf_i_inst, CHF_STAGES, CHF_96K_COEFFS, s_chf_i_state);
+        arm_biquad_cascade_df1_init_f32(&s_chf_q_inst, CHF_STAGES, CHF_96K_COEFFS, s_chf_q_state);
+        arm_biquad_cascade_df1_init_f32(&s_alpf_inst, ALPF_STAGES, ALPF_96K_COEFFS, s_alpf_state);
+        arm_biquad_cascade_df1_init_f32(&s_alpf_4k0_inst, ALPF_4K0_STAGES, ALPF_4K0_96K_COEFFS, s_alpf_4k0_state);
+        arm_biquad_cascade_df1_init_f32(&s_alpf_2k3_inst, ALPF_2K3_STAGES, ALPF_2K3_96K_COEFFS, s_alpf_2k3_state);
+        arm_biquad_cascade_df1_init_f32(&s_alpf_1k8_inst, ALPF_1K8_STAGES, ALPF_1K8_96K_COEFFS, s_alpf_1k8_state);
+        arm_biquad_cascade_df1_init_f32(&s_nfm_chf_i_inst, NFM_CHF_STAGES, NFM_CHF_96K_COEFFS, s_nfm_chf_i_state);
+        arm_biquad_cascade_df1_init_f32(&s_nfm_chf_q_inst, NFM_CHF_STAGES, NFM_CHF_96K_COEFFS, s_nfm_chf_q_state);
+        s_dcb_r = DCB_R_96K;
+        s_decim_factor = DECIM_FACTOR_96K;
+        s_dec_block_samples = DEC_BLOCK_SAMPLES_96K;
+    }
+
+    /* SSB decimated chain. The decimate/interpolate inits VALIDATE
+     * their arguments (blockSize%M, numTaps%L) and return a status -
+     * check it and shout over UART if it ever fails, because a failed
+     * init here leaves the instance unusable and the SSB path would
+     * crash or garbage out with no other clue. The plain FIR init has
+     * no failure mode (returns void). All three zero their state
+     * buffers internally. */
+    if (s_active_rate_is_48k) {
+        if (arm_fir_decimate_init_f32(&s_decim_i_inst, DECIM_COEFFS_48K_TAPS, s_decim_factor,
+                                        DECIM_COEFFS_48K, s_decim_i_state,
+                                        SDR_RX_BLOCK_SAMPLES) != ARM_MATH_SUCCESS) {
+            debug_print("demod_am: *** decimator I init FAILED (48K, blockSize %% M != 0?) ***\n");
+        }
+        if (arm_fir_decimate_init_f32(&s_decim_q_inst, DECIM_COEFFS_48K_TAPS, s_decim_factor,
+                                        DECIM_COEFFS_48K, s_decim_q_state,
+                                        SDR_RX_BLOCK_SAMPLES) != ARM_MATH_SUCCESS) {
+            debug_print("demod_am: *** decimator Q init FAILED (48K) ***\n");
+        }
+        arm_fir_init_f32(&s_hilbert_inst, HILBERT_COEFFS_TAPS, HILBERT_COEFFS,
+                          s_hilbert_state, s_dec_block_samples);
+        if (arm_fir_interpolate_init_f32(&s_interp_inst, s_decim_factor, INTERP_COEFFS_48K_TAPS,
+                                           INTERP_COEFFS_48K, s_interp_state,
+                                           s_dec_block_samples) != ARM_MATH_SUCCESS) {
+            debug_print("demod_am: *** interpolator init FAILED (48K, numTaps %% L != 0?) ***\n");
+        }
+        if (arm_fir_decimate_init_f32(&s_nr_decim_inst, DECIM_COEFFS_48K_TAPS, s_decim_factor,
+                                        DECIM_COEFFS_48K, s_nr_decim_state,
+                                        SDR_RX_BLOCK_SAMPLES) != ARM_MATH_SUCCESS) {
+            debug_print("demod_am: *** NR decimator init FAILED (48K, blockSize %% M != 0?) ***\n");
+        }
+        if (arm_fir_interpolate_init_f32(&s_nr_interp_inst, s_decim_factor, INTERP_COEFFS_48K_TAPS,
+                                           INTERP_COEFFS_48K, s_nr_interp_state,
+                                           s_dec_block_samples) != ARM_MATH_SUCCESS) {
+            debug_print("demod_am: *** NR interpolator init FAILED (48K, numTaps %% L != 0?) ***\n");
+        }
+    } else {
+        if (arm_fir_decimate_init_f32(&s_decim_i_inst, DECIM_COEFFS_96K_TAPS, s_decim_factor,
+                                        DECIM_COEFFS_96K, s_decim_i_state,
+                                        SDR_RX_BLOCK_SAMPLES) != ARM_MATH_SUCCESS) {
+            debug_print("demod_am: *** decimator I init FAILED (96K, blockSize %% M != 0?) ***\n");
+        }
+        if (arm_fir_decimate_init_f32(&s_decim_q_inst, DECIM_COEFFS_96K_TAPS, s_decim_factor,
+                                        DECIM_COEFFS_96K, s_decim_q_state,
+                                        SDR_RX_BLOCK_SAMPLES) != ARM_MATH_SUCCESS) {
+            debug_print("demod_am: *** decimator Q init FAILED (96K) ***\n");
+        }
+        arm_fir_init_f32(&s_hilbert_inst, HILBERT_COEFFS_TAPS, HILBERT_COEFFS,
+                          s_hilbert_state, s_dec_block_samples);
+        if (arm_fir_interpolate_init_f32(&s_interp_inst, s_decim_factor, INTERP_COEFFS_96K_TAPS,
+                                           INTERP_COEFFS_96K, s_interp_state,
+                                           s_dec_block_samples) != ARM_MATH_SUCCESS) {
+            debug_print("demod_am: *** interpolator init FAILED (96K, numTaps %% L != 0?) ***\n");
+        }
+        if (arm_fir_decimate_init_f32(&s_nr_decim_inst, DECIM_COEFFS_96K_TAPS, s_decim_factor,
+                                        DECIM_COEFFS_96K, s_nr_decim_state,
+                                        SDR_RX_BLOCK_SAMPLES) != ARM_MATH_SUCCESS) {
+            debug_print("demod_am: *** NR decimator init FAILED (96K, blockSize %% M != 0?) ***\n");
+        }
+        if (arm_fir_interpolate_init_f32(&s_nr_interp_inst, s_decim_factor, INTERP_COEFFS_96K_TAPS,
+                                           INTERP_COEFFS_96K, s_nr_interp_state,
+                                           s_dec_block_samples) != ARM_MATH_SUCCESS) {
+            debug_print("demod_am: *** NR interpolator init FAILED (96K, numTaps %% L != 0?) ***\n");
+        }
+    }
+
+    /* Re-derive s_agc_release for the CURRENTLY selected profile using
+     * the newly-active rate's table - see this function's own header
+     * comment for why this just re-calls demod_am_set_agc_profile()
+     * rather than duplicating its switch. */
+    demod_am_set_agc_profile(s_agc_profile);
+
+    /* SAM's PLL bakes sample_rate_hz directly into its own loop-filter
+     * state at init time (see sam_init()'s omega_min/omega_max) - and
+     * s_sam_init_done normally gates a ONE-TIME-EVER init (SAM's PLL
+     * state is meant to persist/keep tracking across ordinary AM
+     * demod calls, not reset every block). A rate change invalidates
+     * that baked-in state just as surely as a first-ever init would
+     * need it, so force the next AM-mode call to redo sam_init() with
+     * the newly correct demod_am_active_fs_hz(). */
+    s_sam_init_done = 0u;
+
+    debug_print(s_active_rate_is_48k ? "demod_am: active rate set to 48kHz\n"
+                                       : "demod_am: active rate set to 96kHz\n");
+}
+
+uint8_t demod_am_get_active_rate_is_48k(void)
+{
+    return s_active_rate_is_48k;
 }
 
 /*
@@ -1914,6 +2315,29 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
 
     s_last_cycles_frontend = DWT->CYCCNT - cyc_start;
 
+    /* S-METER (added 05/09/2026): peak-follow the RAW |I+jQ| magnitude
+     * of the down-mixed, channel-filtered s_i_buf/s_q_buf - BEFORE any
+     * of steps 1-4 below touch it - so the reading reflects actual RF/
+     * IF level, not whatever's left of the envelope after the DC
+     * blocker strips the carrier out. See demod_am_get_signal_peak()'s
+     * comment for the full "why". Same instant-attack/s_agc_release-
+     * release ballistics the AGC's own peak follower uses (step 4,
+     * below), just a separate peak/tap point - this one is display-
+     * only and never feeds the audio gain path. Runs for every mode
+     * that reaches this function (AM/USB/LSB/NFM alike), same as the
+     * squelch metric right below it does for AM/NFM - unlike squelch,
+     * this isn't restricted to those two modes, since a signal-strength
+     * reading is just as meaningful for SSB. */
+    {
+        float sp = s_sig_peak;
+        for (n = 0; n < SDR_RX_BLOCK_SAMPLES; n++) {
+            float mag = sqrtf(s_i_buf[n] * s_i_buf[n] + s_q_buf[n] * s_q_buf[n]);
+            sp *= s_agc_release;
+            if (mag > sp) { sp = mag; }
+        }
+        s_sig_peak = sp;
+    }
+
     /* 1. Audio extraction - branches by mode. All paths write into
      * s_env[], which steps 2-5 below (DC blocker, audio LPF, AGC,
      * output) consume - WFM's LPF sub-step differs, see step 3. */
@@ -1937,11 +2361,11 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
         {
         uint32_t k;
         if (!s_sam_init_done) {
-            sam_init(&s_sam, 96000.0f, 4000.0f, 200.0f, 65.0f / 75.0f);
+            sam_init(&s_sam, demod_am_active_fs_hz(), 4000.0f, 200.0f, 65.0f / 75.0f);
             s_sam_init_done = 1u;
         }
         for (k = 0; k < SDR_RX_BLOCK_SAMPLES; k++) {
-            s_env[k] = sam_step(&s_sam, s_i_buf[k], s_q_buf[k], 96000.0f);
+            s_env[k] = sam_step(&s_sam, s_i_buf[k], s_q_buf[k], demod_am_active_fs_hz());
         }
         }
     } else if (s_mode == (uint8_t)DEMOD_MODE_NFM) {
@@ -1969,7 +2393,7 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
         /* 2a. Hilbert-shift the decimated Q (90 degrees across the
          * audio band, now with proper coverage down to ~300Hz - see
          * the design numbers above HILBERT_COEFFS). */
-        arm_fir_f32(&s_hilbert_inst, s_q_dec, s_q_hilbert_out, DEC_BLOCK_SAMPLES);
+        arm_fir_f32(&s_hilbert_inst, s_q_dec, s_q_hilbert_out, s_dec_block_samples);
 
         /* 2b. Delay-match the decimated I by the Hilbert's group
          * delay: history (previous block's tail) followed by the
@@ -1979,15 +2403,38 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
         for (k = 0; k < HILBERT_GROUP_DELAY_DEC; k++) {
             s_i_delayed[k] = s_i_delay_hist[k];
         }
-        for (k = 0; k < DEC_BLOCK_SAMPLES; k++) {
+        for (k = 0; k < s_dec_block_samples; k++) {
             s_i_delayed[HILBERT_GROUP_DELAY_DEC + k] = s_i_dec[k];
         }
-        for (k = 0; k < HILBERT_GROUP_DELAY_DEC; k++) {
-            s_i_delay_hist[k] = s_i_dec[DEC_BLOCK_SAMPLES - HILBERT_GROUP_DELAY_DEC + k];
+        /* GCC's -Warray-bounds flags the line below at -O2 (a false
+         * positive, exhaustively checked: s_dec_block_samples only
+         * ever takes two real values, DEC_BLOCK_SAMPLES_96K(32) or
+         * DEC_BLOCK_SAMPLES_48K(64), set exclusively by demod_am_set_
+         * active_rate() - for k=0..HILBERT_GROUP_DELAY_DEC-1(30), the
+         * index range is [1..31] @ 32, or [33..63] @ 64, always inside
+         * s_i_dec[DEC_BLOCK_SAMPLES_MAX=64]'s real bounds. GCC can't
+         * track that invariant across the demod_am_set_active_rate()/
+         * demod_am_process_raw() function boundary at this
+         * optimization level - the local `base` here doesn't change
+         * the actual computed indices at all, just gives the compiler
+         * a narrower expression to range-analyze in one place instead
+         * of inside the subscript itself, which happens to suppress
+         * the warning in practice for this specific access pattern. */
+        {
+            uint32_t base = s_dec_block_samples - HILBERT_GROUP_DELAY_DEC;
+            if (base > DEC_BLOCK_SAMPLES_MAX) { base = 0U; } /* unreachable in practice (see
+                                                                 * comment above) - just gives
+                                                                 * GCC's range analysis an
+                                                                 * explicit upper bound so it
+                                                                 * stops flagging the access
+                                                                 * below as possibly underflowed */
+            for (k = 0; k < HILBERT_GROUP_DELAY_DEC; k++) {
+                s_i_delay_hist[k] = s_i_dec[base + k];
+            }
         }
 
         /* 2c. Combine: one sideband adds, the other cancels. */
-        for (k = 0; k < DEC_BLOCK_SAMPLES; k++) {
+        for (k = 0; k < s_dec_block_samples; k++) {
             s_ssb_dec[k] = s_i_delayed[k] + sign * s_q_hilbert_out[k];
         }
 
@@ -2016,7 +2463,7 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * what NR sees afterward.
          */
         if (rtty_get_enabled()) {
-            rtty_process(s_ssb_dec, DEC_BLOCK_SAMPLES);
+            rtty_process_chunks(s_ssb_dec, s_dec_block_samples);
             /* Same buffer, same reasoning as rtty_process() just above
              * (raw pre-NR audio) - feeds the tuning scope's own
              * accumulator. See rtty_scope.h for why this is a
@@ -2024,7 +2471,7 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
              * rtty.c's own Goertzel detectors. Cheap: just an
              * accumulate-into-a-ring, the actual FFT runs later from
              * the main loop (rtty_scope_poll()), never here. */
-            rtty_scope_feed(s_ssb_dec, DEC_BLOCK_SAMPLES);
+            rtty_scope_feed(s_ssb_dec, s_dec_block_samples);
         }
 
         /* 2d. NR (Spectral Subtraction), USB/LSB - IN PLACE on
@@ -2044,7 +2491,7 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * see the 3b. NR block below. */
         if (nr_ss_get_enabled()) {
             uint32_t nr_t0 = DWT->CYCCNT;
-            nr_ss_process(s_ssb_dec, DEC_BLOCK_SAMPLES);
+            nr_ss_process_chunks(s_ssb_dec, s_dec_block_samples);
             nr_ssb_cycles = DWT->CYCCNT - nr_t0;
         }
 
@@ -2055,7 +2502,7 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * gain that compensates the zero-stuffing loss (see the
          * PIPELINE comment - without it this comes out at 1/16
          * volume). */
-        arm_fir_interpolate_f32(&s_interp_inst, s_ssb_dec, s_env, DEC_BLOCK_SAMPLES);
+        arm_fir_interpolate_f32(&s_interp_inst, s_ssb_dec, s_env, s_dec_block_samples);
     }
 
     /*
@@ -2132,7 +2579,7 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
      * small-DC-bias cleanup in SSB, which has no carrier). Scalar -
      * cheap, stateful single-pole HPF, not worth a CMSIS block call. */
     for (n = 0; n < SDR_RX_BLOCK_SAMPLES; n++) {
-        float y = s_env[n] - dcb_x1 + DCB_R * dcb_y1;
+        float y = s_env[n] - dcb_x1 + s_dcb_r * dcb_y1;
         dcb_x1 = s_env[n];
         dcb_y1 = y;
         s_env[n] = y;
@@ -2199,8 +2646,8 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
      * adaptive threshold). */
     if (s_mode == (uint8_t)DEMOD_MODE_AM && nr_ss_get_enabled()) {
         arm_fir_decimate_f32(&s_nr_decim_inst, s_env, s_nr_buf, SDR_RX_BLOCK_SAMPLES);
-        nr_ss_process(s_nr_buf, NR_SS_BLOCK_SAMPLES);
-        arm_fir_interpolate_f32(&s_nr_interp_inst, s_nr_buf, s_env, DEC_BLOCK_SAMPLES);
+        nr_ss_process_chunks(s_nr_buf, s_dec_block_samples);
+        arm_fir_interpolate_f32(&s_nr_interp_inst, s_nr_buf, s_env, s_dec_block_samples);
 
         {
             uint32_t cyc_now = DWT->CYCCNT;
