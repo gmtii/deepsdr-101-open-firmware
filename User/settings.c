@@ -25,7 +25,7 @@ static uint32_t s_dirty_since_ms = 0U;
  * spi_flash_async_save_start() only references it, doesn't copy it -
  * see spi_flash.h's comment. A stack-local buffer would be gone the
  * instant settings_poll() returns, so this has to be static. */
-static uint8_t s_async_csv_buf[256];
+static uint8_t s_async_csv_buf[384]; /* 01/09/2026: bumped from 256 - see settings_load()'s own buffer comment for the worst-case math that made 256 too tight once nonwfm_use_48k was added */
 static uint8_t s_async_save_in_progress = 0U;
 
 /* --- manual CSV building/parsing - no sprintf/strtol, same policy as
@@ -96,7 +96,8 @@ static const char *audio_bw_to_str(audio_bw_t bw)
  * flash file content, not a C string). */
 static uint32_t build_csv(uint8_t *buf, uint32_t buf_size,
                            const touch_calibration_t *cal, uint32_t vfo_hz, demod_mode_t mode,
-                           uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2)
+                           uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2,
+                           uint8_t nonwfm_use_48k)
 {
     uint32_t p = 0U;
 
@@ -113,6 +114,12 @@ static uint32_t build_csv(uint8_t *buf, uint32_t buf_size,
     p = append_str(buf, p, buf_size, "tune_step_hz,");    p = append_u32(buf, p, buf_size, tune_step_hz);   p = append_str(buf, p, buf_size, "\n");
     p = append_str(buf, p, buf_size, "audio_bw,");        p = append_str(buf, p, buf_size, audio_bw_to_str(audio_bw)); p = append_str(buf, p, buf_size, "\n");
     p = append_str(buf, p, buf_size, "volume_db_x2,");    p = append_i32(buf, p, buf_size, volume_db_x2);   p = append_str(buf, p, buf_size, "\n");
+    /* AM/USB/LSB/NFM sample rate (01/09/2026) - plain 0/1, same shape
+     * as the touch_* boolean flags above (0=96kHz, the firmware
+     * default; 1=48kHz). WFM is unaffected either way (always
+     * 192kHz) - see s_nonwfm_use_48k's own declaration comment in
+     * main.c. */
+    p = append_str(buf, p, buf_size, "nonwfm_use_48k,");  p = append_u32(buf, p, buf_size, nonwfm_use_48k); p = append_str(buf, p, buf_size, "\n");
     /* MS5351 crystal reference (26/08/2026) - read directly from
      * ms5351.c, same "not threaded through every settings_poll()/
      * settings_save_now() call site" pattern as touch_get_calibration()
@@ -178,7 +185,7 @@ static uint8_t key_is(const uint8_t *key, uint32_t key_len, const char *literal)
 
 uint8_t settings_load(settings_loaded_t *out)
 {
-    uint8_t buf[256]; /* current schema needs well under 200 bytes - see build_csv() - generous headroom for future keys */
+    uint8_t buf[384]; /* 01/09/2026: bumped from 256 - the REALISTIC worst case (every touch corner at 4095, vfo_hz at TUNE_MAX_HZ=180000000, tune_step_hz at 1000000, ms5351_xtal_hz near 26000000, mode="USB"/"WFM", audio_bw="1K8", volume_db_x2 negative) came out to 246 bytes even BEFORE nonwfm_use_48k existed - only 10 bytes of headroom, and adding that one new short line ("nonwfm_use_48k,1\n", 18 bytes) already pushed it OVER 256. append_str()/append_u32()/append_i32() all respect buf_size and would have silently truncated rather than corrupted memory, but a truncated CONFIG.CSV losing its last field(s) is still a real, if rare, data-loss bug worth avoiding outright rather than accepting - 384 gives comfortable headroom for this field and future ones. */
     uint32_t n;
     uint32_t pos = 0U;
     uint8_t got_any = 0U;
@@ -190,6 +197,7 @@ uint8_t settings_load(settings_loaded_t *out)
     out->have_tune_step_hz = 0U;
     out->have_audio_bw = 0U;
     out->have_volume_db_x2 = 0U;
+    out->have_nonwfm_use_48k = 0U;
 
     n = spi_flash_read_file_by_name(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3, buf, sizeof(buf));
     if (n == 0U) {
@@ -240,6 +248,7 @@ uint8_t settings_load(settings_loaded_t *out)
             else if (key_is(key, key_len, "vfo_hz")) { out->vfo_hz = manual_atou32(val, val_len); out->have_vfo_hz = 1U; got_any = 1U; }
             else if (key_is(key, key_len, "tune_step_hz")) { out->tune_step_hz = manual_atou32(val, val_len); out->have_tune_step_hz = 1U; got_any = 1U; }
             else if (key_is(key, key_len, "volume_db_x2")) { out->volume_db_x2 = (int16_t)manual_atoi32(val, val_len); out->have_volume_db_x2 = 1U; got_any = 1U; }
+            else if (key_is(key, key_len, "nonwfm_use_48k")) { out->nonwfm_use_48k = (uint8_t)manual_atou32(val, val_len); out->have_nonwfm_use_48k = 1U; got_any = 1U; }
             else if (key_is(key, key_len, "ms5351_xtal_hz")) {
                 /* Applied directly, same as touch_set_calibration()
                  * just below - no ordering dependency on the rest of
@@ -291,14 +300,14 @@ void settings_mark_dirty(void)
     s_dirty_since_ms = g_msticks;
 }
 
-void settings_save_now(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2)
+void settings_save_now(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k)
 {
     touch_calibration_t cal;
-    uint8_t csv[256];
+    uint8_t csv[384]; /* see settings_load()'s buffer comment for why 256 stopped being safe */
     uint32_t len;
 
     touch_get_calibration(&cal);
-    len = build_csv(csv, sizeof(csv), &cal, vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2);
+    len = build_csv(csv, sizeof(csv), &cal, vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2, nonwfm_use_48k);
 
     if (spi_flash_write_or_update_file(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3, csv, len)) {
         debug_print("settings_save_now: CONFIG.CSV saved\n");
@@ -308,7 +317,7 @@ void settings_save_now(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz
     s_dirty = 0U;
 }
 
-void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2)
+void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k)
 {
     if (s_async_save_in_progress) {
         spi_flash_async_status_t st = spi_flash_async_save_poll();
@@ -353,14 +362,14 @@ void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, au
         uint32_t len;
 
         touch_get_calibration(&cal);
-        len = build_csv(s_async_csv_buf, sizeof(s_async_csv_buf), &cal, vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2);
+        len = build_csv(s_async_csv_buf, sizeof(s_async_csv_buf), &cal, vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2, nonwfm_use_48k);
 
         if (spi_flash_async_save_start(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3, s_async_csv_buf, len)) {
             s_async_save_in_progress = 1U;
             s_dirty = 0U;
         } else {
             debug_print("settings_poll: async fast path unavailable (first save?) - falling back to a blocking save\n");
-            settings_save_now(vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2);
+            settings_save_now(vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2, nonwfm_use_48k);
         }
     }
 }

@@ -113,14 +113,31 @@ uint8_t ms5351_init(void);
 uint8_t ms5351_tune_captured(void);
 
 /*
- * General quadrature tune: puts freq_hz on CLK0 and CLK1, CLK1 leading
- * by 90 degrees (corrected 01/09/2026 - this used to say "CLK0
- * leading", which was backwards: the Si5351/MS5351 datasheet defines
- * CLKx_PHOFF as a time DELAY, and the register-offset scheme below
- * writes its nonzero value to CLK0 - so CLK0 LAGS, CLK1 leads. Real
- * hardware (SSB sideband sense) confirms this). TWO different
- * techniques under the hood, picked automatically by frequency - see
- * ms5351.c for both:
+ * General quadrature tune: puts freq_hz on CLK0 and CLK1. TWO
+ * different techniques under the hood, picked automatically by
+ * frequency, and - as of 01/09/2026 - they do NOT share the same
+ * "which clock leads" convention, so don't assume one from the other:
+ *
+ *   >= 4.8MHz (the register-offset scheme below): CLK1 leads, CLK0
+ *   lags - the Si5351/MS5351 datasheet defines CLKx_PHOFF as a time
+ *   DELAY, and this scheme writes its nonzero value to CLK0, so CLK0
+ *   is the one being delayed. Confirmed working on real hardware
+ *   (correct SSB sideband sense, e.g. at 4.9MHz) - this path itself
+ *   was never actually changed, only its OWN documentation was
+ *   corrected (it used to wrongly claim "CLK0 leads" here too).
+ *
+ *   < 4.8MHz (the low-band phase-timing trick, see ms5351_set_lo_
+ *   freq_lowband()): CLK0 leads, CLK1 lags - its OWN, unrelated
+ *   mechanism (a timed divider-speedup race, not a phase-offset
+ *   register), which briefly got swapped to match the high-band
+ *   path's "CLK1 leads" convention above, then swapped BACK after
+ *   the project owner found (via a real external generator, on a
+ *   separate but analogous module - see lo_gen_gd32.c's own history)
+ *   that assuming the two techniques must share one convention was
+ *   itself the mistake. See ms5351_set_lo_freq_lowband()'s own
+ *   step-3 comment for the fuller back-and-forth.
+ *
+ * See ms5351.c for both implementations:
  *
  *   >= 4.8MHz: the ORIGINAL phase-offset-register scheme (unchanged
  *   from before 31/07/2026) - PLLB fractional feedback + an EVEN

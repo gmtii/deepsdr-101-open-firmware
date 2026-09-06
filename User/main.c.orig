@@ -46,29 +46,8 @@ static void battery_display_draw(void);
 static void badges_draw(void);
 static void smeter_draw(uint8_t segs);
 static uint8_t smeter_segments_from_peak(float peak);
-static void smeter_dbm_update_and_draw(float peak);
+static void snr_update_and_draw(const float *db_frame);
 static void spec_agc_apply(const float *db_frame);
-
-/* spec_zoom_t / s_spec_zoom - moved up from their original spot further
- * down (see spec_zoom_t's own design-comment block, still down there,
- * right before spec_zoom_full_span_hz()) - originally done so the old
- * snr_update_and_draw() (defined earlier in the file than that block)
- * could see s_spec_zoom for its own low-IF center-bin correction; that
- * function was replaced 01/09/2026 by smeter_dbm_update_and_draw()
- * (see its own comment), which doesn't need s_spec_zoom at all - left
- * moved up anyway since spec_zoom_full_span_hz() and others still need
- * it here regardless, and moving it back down would be pure churn for
- * no behavior change. Same SPEC_ZOOM_1X-only
- * condition center_mark_offset_px already uses. No behavior change,
- * just an earlier declaration point for the same single definition. */
-typedef enum {
-    SPEC_ZOOM_1X = 0,
-    SPEC_ZOOM_2X,
-    SPEC_ZOOM_4X,
-    SPEC_ZOOM_8X
-} spec_zoom_t;
-
-static spec_zoom_t s_spec_zoom = SPEC_ZOOM_1X;
 static void tune_encoder_poll(void);
 static void menu_screen_open(void);
 static void menu_screen_close(void);
@@ -268,15 +247,12 @@ volatile uint32_t g_system_clock_snapshot = 0; /* copy of SystemCoreClock, to ve
  * project's own historical 48kHz values before they were overwritten
  * by the 96kHz migration).
  *
- * *** 01/09/2026: now PERSISTED to CONFIG.CSV *** - per the project
- * owner, once 48kHz settled into being an everyday preference rather
- * than just a bench A/B toggle against the birdie above (see
- * settings.h's own schema comment and settings.c's "nonwfm_use_48k"
- * key). Applied at boot from s_loaded_settings, right before the
- * loaded mode is applied (see main()'s own boot sequence) so
- * apply_demod_mode()'s rate-selection logic already sees the right
- * value on its very first real call - same ordering main() already
- * uses for every other loaded setting with a dependency like this.
+ * Not persisted to CONFIG.CSV (yet) - this started as a diagnostic
+ * toggle for bench A/B testing against the birdie, not a settled
+ * daily preference; every cold boot starts at s_nonwfm_use_48k=0
+ * (96kHz), matching this project's existing default. Revisit adding
+ * it to settings.c's schema if 48kHz turns out to be the preferred
+ * everyday choice.
  *
  * s_current_rate tracks whatever rate is ACTUALLY configured on the
  * codec right now (starts matching cold boot's own default, 96K - see
@@ -655,9 +631,6 @@ int main(void)
      * found (e.g. a CONFIG.CSV saved by a build with a different step
      * table).
      */
-    if (s_loaded_settings.have_nonwfm_use_48k) {
-        s_nonwfm_use_48k = s_loaded_settings.nonwfm_use_48k;
-    }
     if (s_loaded_settings.have_mode) {
         apply_demod_mode(s_loaded_settings.mode);
     }
@@ -840,7 +813,7 @@ int main(void)
         }
         rf_agc_poll(); /* RF-level (analog PGA) auto-AGC - see its own comment */
         rtty_poll(); /* drains rtty.c's decoded text to debug UART - see its own comment */
-        settings_poll(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2, s_nonwfm_use_48k); /* debounced CONFIG.CSV autosave - see settings.h's comment; cheap no-op most iterations */
+        settings_poll(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2); /* debounced CONFIG.CSV autosave - see settings.h's comment; cheap no-op most iterations */
 #if TOUCH_EDGE_DEBUG
         touch_debug_stream_poll(); /* see TOUCH_EDGE_DEBUG's comment */
 #endif
@@ -2441,26 +2414,16 @@ static float smeter_log2_approx(float x)
     return y - 126.94269504f;
 }
 
-/*
- * smeter_dbfs_from_peak() - factored out 01/09/2026 so the raw,
- * unrounded dBFS value (before quantizing into the 12-segment meter)
- * is available on its own - see smeter_dbfs_uart_report()'s comment
- * for why (S-meter/SNR calibration against a real signal generator).
- */
-static float smeter_dbfs_from_peak(float peak)
+static uint8_t smeter_segments_from_peak(float peak)
 {
+    float dbfs;
+    int32_t segs;
+
     if (peak < 1.0f) {
         peak = 1.0f;
     }
     /* 20*log10(x) = 6.0206*log2(x); dBFS relative to int16 full scale. */
-    return 6.0206f * (smeter_log2_approx(peak) - smeter_log2_approx(32767.0f));
-}
-
-static uint8_t smeter_segments_from_peak(float peak)
-{
-    float dbfs = smeter_dbfs_from_peak(peak);
-    int32_t segs;
-
+    dbfs = 6.0206f * (smeter_log2_approx(peak) - smeter_log2_approx(32767.0f));
     /* -90dBFS -> 0 segs, 7dB per segment, saturating at 12. */
     segs = (int32_t)((dbfs + 90.0f) / 7.0f);
     if (segs < 0)  { segs = 0; }
@@ -2469,181 +2432,118 @@ static uint8_t smeter_segments_from_peak(float peak)
 }
 
 /*
- * smeter_dbfs_uart_report() - added 01/09/2026, per the project owner:
- * they now have a signal generator with a KNOWN, calibrated dBm
- * output, resolving the earlier objection to calibrating the S-meter/
- * SNR (too many uncontrolled variables chained together with no real
- * reference point - see the conversation this was discussed in). This
- * prints the RAW, unrounded dBFS value the 12-segment meter itself is
- * quantized from, throttled to 1Hz so it's readable on a terminal
- * without flooding it - the 12-segment display alone is far too
- * coarse (7dB per segment) for a real calibration procedure.
+ * --- SNR readout, added 01/09/2026 ------------------------------------
  *
- * Calibration procedure this enables: with AGC OFF (a genuine unity-
- * gain bypass, not just a slow setting - see AGC_PROFILE_MANUAL's own
- * comment) and ATT/PGA fixed at a known, noted setting, feed a clean
- * CW/AM tone at a known dBm from the generator into the antenna port,
- * read the settled dBFS value here, and compute offset_db = known_dBm
- * - dbfs. Repeat at a few different levels/frequencies within the
- * same band to check linearity before trusting a single offset value
- * project-wide - do NOT assume linearity holds from one data point.
- * Always called from the same place smeter_draw() already reads
- * demod_am_get_signal_peak() from - the exact same peak value both
- * the visible S-meter and this printout are computed from, so what
- * shows on screen and what's printed here are asking about the
- * identical measurement.
+ * *** 01/09/2026, repositioned same day - moved from the old vertical
+ * right-hand column into the new horizontal status strip alongside
+ * the S-meter and badges, per the project owner's layout redesign -
+ * see STATUS_STRIP_Y/H's declaration comment for the full "why". Now
+ * sits immediately to the right of the S-meter, vertically centered
+ * in the strip, rather than in the gap below it. ***
+ *
+ * DELIBERATELY LABELED "dB", NOT "dBm" - same reasoning as the
+ * S-meter's own comment just above: without a calibrated antenna/
+ * frontend gain figure, there's no real zero-dBm reference to measure
+ * against, so a "dBm" label would be an invented number, same as an
+ * invented S-unit would be. An SNR figure sidesteps that problem in a
+ * way a standalone level reading can't: it's the DIFFERENCE of two
+ * readings taken from the exact same uncalibrated dB-relative scale
+ * (sdr_spectrum_waterfall_tick()'s own s_db_frame[], already computed
+ * every frame for the panadapter/waterfall - no new signal chain
+ * added), so whatever fixed calibration offset that scale is missing
+ * cancels out in the subtraction. The RESULT is a genuinely meaningful
+ * dB figure even though neither of the two numbers that produced it
+ * would be, on its own.
+ *
+ * Signal estimate: the peak bin within SNR_SIGNAL_HALF_WIN bins either
+ * side of center (FFT_BINS_IQ/2 - the VFO/tuned point, fftshift order,
+ * same convention spectrum_draw()'s center_mark uses).
+ * Noise estimate: the plain mean (not median - cheap, no sort needed,
+ * and this project's existing dB-domain approximations already accept
+ * this kind of looseness elsewhere, e.g. smeter_log2_approx()) of
+ * every bin OUTSIDE SNR_GUARD_HALF_WIN bins of center - wide enough to
+ * exclude the signal's own filter skirts from polluting the noise
+ * floor estimate, at the cost of also excluding some genuinely-quiet
+ * spectrum right next to a wide signal (WFM especially - acceptable,
+ * given plenty of bins remain either way at FFT_BINS_IQ=256).
+ * Both window sizes are bin counts, not Hz - since Hz/bin varies with
+ * mode/zoom, the true "channel width in bins" this should track also
+ * varies; fixed windows are a first-pass approximation only, same
+ * spirit as the S-meter's own un-calibrated honesty above.
+ *
+ * Like the rest of the status strip, this only gets fresh data while
+ * the settings menu is closed - s_db_frame itself stops updating while
+ * the menu covers the spectrum panel (see sdr_spectrum_waterfall_tick()'s
+ * own "!s_menu_open" comment) - so unlike the S-meter (driven by
+ * demod_am_get_signal_peak(), independent of s_db_frame), this reading
+ * visibly freezes while the menu is open rather than going stale
+ * silently. Acceptable: there's no fresher spectrum data being
+ * computed during that window anyway.
  */
-static void smeter_dbfs_uart_report(float peak)
+#define SNR_X (uint16_t)(SMETER_X + SMETER_SEGS * (SMETER_SEG_W + 1) + 12) /* right after the meter, plus a gap */
+#define SNR_Y (uint16_t)(STATUS_STRIP_Y + (STATUS_STRIP_H - 14U) / 2U) /* vertically centered - 01/09/2026: 14px = one scale-2 text line (GFX_FONT_HEIGHT=7 * scale 2), matching the badges' own font scale - was scale-1 (9px, "SNR +14dB") before the project owner asked for it bigger and without the "SNR" prefix ("muy pequeño") */
+#define SNR_SIGNAL_HALF_WIN 3U  /* bins each side of center counted as "signal" */
+#define SNR_GUARD_HALF_WIN  8U  /* bins each side of center excluded from the noise average */
+
+static int32_t s_snr_db_last_drawn = 0x7FFFFFFF; /* force first draw */
+
+static void snr_update_and_draw(const float *db_frame)
 {
-    static uint32_t s_next_report_ms = 0U;
-    float dbfs;
-
-    if ((int32_t)(g_msticks - s_next_report_ms) < 0) {
-        return;
-    }
-    s_next_report_ms = g_msticks + 1000U;
-
-    dbfs = smeter_dbfs_from_peak(peak);
-    /* debug_print_dec() takes uint32_t, no sign handling - and dBFS is
-     * essentially always negative for a real signal, so a naive cast
-     * would print a huge bogus positive number instead. Sign folded
-     * into the label text itself, magnitude via debug_print_dec()'s
-     * own "label = value" format - reads as e.g.
-     * "smeter dBFS x100 (-, /100 for real dBFS) = 3456". */
-    if (dbfs < 0.0f) {
-        debug_print_dec("smeter dBFS x100 (-, /100 for real dBFS)", (uint32_t)(-(dbfs * 100.0f)));
-    } else {
-        debug_print_dec("smeter dBFS x100 (+, /100 for real dBFS)", (uint32_t)(dbfs * 100.0f));
-    }
-}
-
-/*
- * SMETER_CAL_OFFSET_DB - added 01/09/2026, per the project owner:
- * derived from a real calibration session against an external signal
- * generator with a KNOWN, calibrated dBm output (see the conversation
- * this was worked out in for the full data table). Procedure: AGC
- * OFF (genuine unity-gain bypass), ATT=0dB, PGA=20 (see aic3204_
- * set_input_impedance()/PGA gain settings - THIS OFFSET ONLY APPLIES
- * AT THOSE EXACT SETTINGS, not verified or expected to hold at any
- * other ATT/PGA combination, or with AGC on), fed a clean CW/AM tone
- * at a known dBm across several frequencies and levels, read the raw
- * dBFS via smeter_dbfs_uart_report(), computed offset = dBm - dBFS
- * per point.
- *
- * Result: 6 of 11 tested points clustered tightly around -38.2dB
- * (range -37.62 to -39.60, i.e. within about 1dB of each other) -
- * spanning very different conditions (both LO generation mechanisms
- * below 5MHz, high-band above it, -80/-60dBm input levels) - good
- * evidence this figure is genuinely representative, not a one-off
- * coincidence. -38.2 (the rounded, documented value) is the average
- * of that consistent cluster.
- *
- * KNOWN GAPS, not covered by this single offset - readings in these
- * ranges will be WRONG by a large, inconsistent amount, not just
- * imprecise:
- *   - Above ~-50dBm input (roughly): the receiver visibly compresses
- *     at this PGA/ATT setting (a -40dBm point in the same calibration
- *     session read barely different from the -60dBm point - a 20dB
- *     input change producing ~1dB of output change is saturation, not
- *     signal). This offset assumes small-signal linear behavior.
- *   - 37-60MHz (rf_lpf.c's own "range 2" filter band): both edges
- *     tested (37MHz, 59MHz) read roughly 30dB worse than the general
- *     cluster - a real, still-uninvestigated loss (or a relay/filter
- *     fault) specific to that filter path, not something this offset
- *     can paper over.
- *   - Right at the low-band/high-band LO handoff (~4.8MHz): 4.5MHz
- *     (low-band) matched the good cluster, but 5.5MHz (high-band, only
- *     1MHz higher) read about 20dB worse - suggests a real LO-level
- *     difference between the two generation methods that hasn't been
- *     tracked down yet, independent of this offset.
- * Applied UNCONDITIONALLY anyway ("adelante con el resto lo mas
- * simple", per the project owner) rather than trying to detect and
- * special-case any of the above - the tradeoff being: expect this
- * reading to be genuinely wrong (not just imprecise) in those specific
- * conditions, until each is separately investigated and, if needed,
- * given its own correction.
- */
-#define SMETER_CAL_OFFSET_DB (-38.2f)
-#define SMETER_CAL_ATT_DB     0.0f  /* Rin=10k (index 0 of k_att_labels) - the ATT setting active during calibration */
-#define SMETER_CAL_PGA_DB    20.0f  /* the PGA setting active during calibration - see SMETER_CAL_OFFSET_DB's own comment */
-
-/* Same 0/-6/-12dB values as k_att_labels' own indices (AIC3204_RIN_10K/
- * 20K/40K) - duplicated here rather than derived from k_att_labels
- * itself (a display STRING, not a number) since this needs the actual
- * dB value to compute with, not just a label to print. */
-static const float k_att_db_values[3] = { 0.0f, -6.0f, -12.0f };
-
-#define SNR_X (uint16_t)(SMETER_X + SMETER_SEGS * (SMETER_SEG_W + 1) + 12) /* right after the meter, plus a gap - name kept as "SNR_X/Y" even though this slot no longer shows SNR, since BADGE_ROW_X0 and others already reference it by this name */
-#define SNR_Y (uint16_t)(STATUS_STRIP_Y + (STATUS_STRIP_H - 14U) / 2U) /* vertically centered, scale-2 text line (GFX_FONT_HEIGHT=7 * scale 2) */
-
-static int32_t s_smeter_dbm_last_drawn = 0x7FFFFFFF; /* force first draw */
-
-/*
- * smeter_dbm_update_and_draw() - added 01/09/2026, per the project
- * owner, REPLACING the earlier SNR readout that used to live in this
- * exact screen spot (SNR_X/SNR_Y, in the status strip next to the
- * S-meter bar) - "ponemos el valor numerico del smeter al lado en
- * lugar del SNR actual". The 12-segment S-meter bar is coarse (7dB/
- * segment); this gives the same underlying peak reading (demod_am_
- * get_signal_peak(), the exact same value smeter_draw() and smeter_
- * dbfs_uart_report() already use) as a precise, calibrated dBm number
- * instead. See SMETER_CAL_OFFSET_DB's own comment for the calibration
- * this is based on and its real, documented limitations.
- *
- * *** 01/09/2026: dynamically compensated for the CURRENT ATT/PGA
- * setting, not just valid at the one exact combination calibrated
- * against *** - per the project owner ("no una relacion lineal entre
- * el valor PGA y esta medida de dbm?"). Both ATT (the Rin selector,
- * k_att_db_values - a real, physics-derived 0/-6/-12dB signal drop,
- * not an approximation) and PGA (aic3204_set_pga_gain_db(), a real
- * 0.5dB-precision hardware gain stage per the AIC3204 datasheet) are
- * genuine, precisely-known linear gain elements - so unlike AGC (a
- * DYNAMIC, not-simply-trackable gain the calibration explicitly
- * required OFF), their effect on the reading can be computed and
- * subtracted out exactly, rather than requiring the exact calibrated
- * setting to still be active. Uses the EFFECTIVE PGA (s_pga_gain_db_x2
- * - s_rf_agc_backoff_x2, matching what rf_agc_apply_pga() actually
- * pushes to the codec - see its own comment), so RF-AGC's own
- * automatic backoff is compensated too, not just the user's PGA
- * target. NOT compensated for: the MAIN receive AGC (AGC_PROFILE_*) -
- * still must be OFF for this reading to mean anything, exactly as
- * before, since that gain is genuinely dynamic and not a simple
- * trackable number the way ATT/PGA are. Also assumes RF-AGC's own
- * backoff was truly 0 during the original calibration session (not
- * independently re-verified - the calibration levels used were modest
- * enough that RF-AGC likely never triggered, but this is an
- * assumption, not a confirmed fact).
- */
-static void smeter_dbm_update_and_draw(float peak)
-{
-    float dbfs = smeter_dbfs_from_peak(peak);
-    float current_att_db = k_att_db_values[s_rf_agc_rin_level];
-    float current_pga_db = (float)((int32_t)s_pga_gain_db_x2 - (int32_t)s_rf_agc_backoff_x2) * 0.5f;
-    float current_gain_db = current_att_db + current_pga_db;
-    float cal_gain_db = SMETER_CAL_ATT_DB + SMETER_CAL_PGA_DB;
-    float dbm_f = dbfs + SMETER_CAL_OFFSET_DB - (current_gain_db - cal_gain_db);
-    int32_t dbm_rounded;
+    uint32_t center = 3 * FFT_BINS_IQ / 4U ;
+    uint32_t lo_sig = (center > SNR_SIGNAL_HALF_WIN) ? (center - SNR_SIGNAL_HALF_WIN) : 0U;
+    uint32_t hi_sig = center + SNR_SIGNAL_HALF_WIN;
+    uint32_t lo_guard = (center > SNR_GUARD_HALF_WIN) ? (center - SNR_GUARD_HALF_WIN) : 0U;
+    uint32_t hi_guard = center + SNR_GUARD_HALF_WIN;
+    float sig_peak;
+    float noise_sum = 0.0f;
+    uint32_t noise_n = 0U;
+    uint32_t k;
+    float snr_db;
+    int32_t snr_rounded;
     uint8_t negative;
     uint32_t mag;
     char buf[16];
     int8_t pos = 15;
 
-    /* Round to the nearest whole dBm - same "skip the blit if nothing
+    if (hi_sig >= FFT_BINS_IQ) { hi_sig = FFT_BINS_IQ - 1U; }
+    if (hi_guard >= FFT_BINS_IQ) { hi_guard = FFT_BINS_IQ - 1U; }
+
+    sig_peak = db_frame[lo_sig];
+    for (k = lo_sig; k <= hi_sig; k++) {
+        if (db_frame[k] > sig_peak) { sig_peak = db_frame[k]; }
+    }
+    for (k = 0U; k < FFT_BINS_IQ; k++) {
+        if (k >= lo_guard && k <= hi_guard) {
+            continue; /* skip the guard band around the signal */
+        }
+        noise_sum += db_frame[k];
+        noise_n++;
+    }
+    if (noise_n == 0U) {
+        return; /* guard band somehow covers the whole span - nothing to compute against */
+    }
+    snr_db = sig_peak - (noise_sum / (float)noise_n);
+
+    /* Round to the nearest whole dB - same "skip the blit if nothing
      * visibly changed" discipline as smeter_draw()'s segment check. */
-    dbm_rounded = (dbm_f >= 0.0f) ? (int32_t)(dbm_f + 0.5f) : (int32_t)(dbm_f - 0.5f);
-    if (dbm_rounded == s_smeter_dbm_last_drawn) {
+    snr_rounded = (snr_db >= 0.0f) ? (int32_t)(snr_db + 0.5f) : (int32_t)(snr_db - 0.5f);
+    if (snr_rounded == s_snr_db_last_drawn) {
         return;
     }
-    s_smeter_dbm_last_drawn = dbm_rounded;
+    s_snr_db_last_drawn = snr_rounded;
 
-    negative = (dbm_rounded < 0) ? 1U : 0U;
-    mag = negative ? (uint32_t)(-dbm_rounded) : (uint32_t)dbm_rounded;
+    negative = (snr_rounded < 0) ? 1U : 0U;
+    mag = negative ? (uint32_t)(-snr_rounded) : (uint32_t)snr_rounded;
 
-    /* Same buffer-building approach the old SNR readout used: sign +
-     * digits + unit, built back-to-front. "dBm" now, not "dB" - a
-     * real (if imperfectly calibrated) absolute level, not a ratio. */
+    /* *** 01/09/2026, per the project owner: dropped the "SNR " prefix
+     * and bumped the font to scale 2 (matching the badges' own scale -
+     * see badge_draw()'s gfx_text() call) *** - "sale en texto muy
+     * pequeño y fondo gris [...] igual se puede quitar SNR y subir el
+     * tipo de letra a la medida en dB con el tamaño de los badgets".
+     * Just the sign+digits+"dB" now (e.g. "+14dB", "-3dB") - context
+     * (right next to the S-meter, in the status strip) already makes
+     * clear what this number means without spelling out "SNR". */
     buf[pos] = '\0';
-    buf[--pos] = 'm';
     buf[--pos] = 'B';
     buf[--pos] = 'd';
     do {
@@ -2656,9 +2556,9 @@ static void smeter_dbm_update_and_draw(float peak)
         buf[--pos] = negative ? '-' : '+';
     }
 
-    gfx_fill_rect((uint16_t)SNR_X, (uint16_t)SNR_Y, 90U, 14U,
+    gfx_fill_rect((uint16_t)SNR_X, (uint16_t)SNR_Y, 80U, 14U,
                    GFX_COLOR_BLACK);
-    gfx_text((uint16_t)SNR_X, (uint16_t)SNR_Y, &buf[pos], GFX_COLOR_YELLOW, GFX_COLOR_BLACK, 2);
+    gfx_text((uint16_t)SNR_X, (uint16_t)SNR_Y, &buf[pos], GFX_COLOR_YELLOW, GFX_COLOR_DARKGRAY, 2);
 }
 
 /*
@@ -2778,7 +2678,7 @@ static void spec_agc_apply(const float *db_frame)
  * everything's on one row now. Starts right after the SNR text with a
  * clear gap, vertically centered in the strip like every other
  * element in it. */
-#define BADGE_ROW_X0 (uint16_t)(SNR_X + 100U) /* 01/09/2026: widened from +90 to +100 - the dBm readout that replaced SNR here can reach 3-digit magnitudes ("-128dBm", 7 chars, 84px at this font/scale) wider than SNR's old 2-digit-typical range ever needed */
+#define BADGE_ROW_X0 (uint16_t)(SNR_X + 90U)
 #define BADGE_COL(n) (uint16_t)(BADGE_ROW_X0 + (n) * (BADGE_W + BADGE_GAP))
 #define BADGE_Y0 (uint16_t)(STATUS_STRIP_Y + (STATUS_STRIP_H - BADGE_H) / 2U)
 
@@ -3221,13 +3121,15 @@ static void badges_draw(void)
  * waterfall update less often - see sdr_spectrum_waterfall_tick()'s
  * comment for exactly how that's handled (skip drawing, don't block,
  * when a window isn't ready yet).
- *
- * spec_zoom_t itself and s_spec_zoom's definition now live earlier in
- * this file (right after the forward-declarations block) - see the
- * comment there for why (originally for the old snr_update_and_draw(),
- * replaced 01/09/2026, but still needed there today by other users of
- * s_spec_zoom). Nothing below this point changed behavior.
  */
+typedef enum {
+    SPEC_ZOOM_1X = 0,
+    SPEC_ZOOM_2X,
+    SPEC_ZOOM_4X,
+    SPEC_ZOOM_8X
+} spec_zoom_t;
+
+static spec_zoom_t s_spec_zoom = SPEC_ZOOM_1X;
 
 /*
  * spec_zoom_full_span_hz() - added 01/09/2026 alongside the 48kHz
@@ -4813,7 +4715,7 @@ static void touch_calib_done_callback(const touch_calibration_t *cal)
      * SETTINGS_SAVE_DEBOUNCE_MS on top of that would just be a
      * pointless delay before something the user explicitly just did
      * gets persisted. */
-    settings_save_now(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2, s_nonwfm_use_48k);
+    settings_save_now(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2);
 }
 
 /*
@@ -4933,7 +4835,7 @@ static void menu_tile_cal_ppm_callback(void *widget, ui_event_t event, void *use
             debug_print_dec("cal_ppm: old MS5351 xtal Hz", old_xtal_hz);
             debug_print_dec("cal_ppm: new MS5351 xtal Hz", new_xtal_hz);
 
-            settings_save_now(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2, s_nonwfm_use_48k);
+            settings_save_now(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2);
 
             /* Show the applied correction (not the post-correction
              * residual, which would read ~0 and tell the user
@@ -8189,18 +8091,6 @@ static void sdr_spectrum_waterfall_tick(void)
      * the whole time the menu is showing, only the spectrum/waterfall
      * panel underneath the menu gets skipped below. */
     smeter_draw(smeter_segments_from_peak(demod_am_get_signal_peak()));
-    smeter_dbfs_uart_report(demod_am_get_signal_peak()); /* see its own comment - S-meter calibration aid */
-    /* *** 01/09/2026: replaces the old snr_update_and_draw(), moved
-     * HERE specifically (not left inside the s_db_frame/!s_menu_open
-     * gated block below, where the old SNR readout used to live) -
-     * this reads demod_am_get_signal_peak() directly, same as the
-     * S-meter bar right above it, so it should stay live exactly like
-     * the S-meter does (never freezing while the menu is open) rather
-     * than inheriting the old SNR readout's "freezes with s_db_frame"
-     * behavior, which no longer applies now that this doesn't touch
-     * s_db_frame at all. See smeter_dbm_update_and_draw()'s own
-     * comment for the full "why" of this replacement. */
-    smeter_dbm_update_and_draw(demod_am_get_signal_peak());
     sam_calib_display_draw(); /* MS5351 PPM calibration readout, 21/08/2026 - see its own comment; needs to update live as the PLL converges, same cadence as the S-meter above, not just on mode-change events */
     {
         static uint32_t s_last_time_min = 0xFFFFFFFFUL;
@@ -8284,6 +8174,7 @@ static void sdr_spectrum_waterfall_tick(void)
     if (s_spec_agc_enabled) {
         spec_agc_apply(s_db_frame);
     }
+    snr_update_and_draw(s_db_frame);
 
     t_spec0 = DWT->CYCCNT;
     /* Spectrum trace inside its panel (see the RADIO UI LAYOUT block):

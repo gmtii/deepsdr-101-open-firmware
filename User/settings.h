@@ -23,7 +23,10 @@
  *
  * Currently covers: touch calibration (the 7 touch_calibration_t
  * fields - see touch.h), VFO frequency, demod mode, tune step, the
- * AM/SSB audio filter width, speaker volume, and the MS5351 crystal
+ * AM/SSB audio filter width, speaker volume, the AM/USB/LSB/NFM
+ * sample rate choice (96kHz/48kHz - see main.c's s_nonwfm_use_48k,
+ * persisted 01/09/2026 once it became a settled everyday preference
+ * rather than just a bench A/B toggle), and the MS5351 crystal
  * reference frequency (ms5351_xtal_hz - see ms5351_get_xtal_hz()'s
  * comment; applied directly from settings_load(), same "no boot-order
  * dependency" reasoning as touch calibration). Does NOT currently cover memory
@@ -60,6 +63,8 @@ typedef struct {
     audio_bw_t   audio_bw;
     uint8_t      have_volume_db_x2;
     int16_t      volume_db_x2;
+    uint8_t      have_nonwfm_use_48k;
+    uint8_t      nonwfm_use_48k;
 } settings_loaded_t;
 
 /* Reads CONFIG.CSV (if present) and:
@@ -102,13 +107,13 @@ void settings_mark_dirty(void);
  * session of continuous tuning results in ONE save once you stop, not
  * one per encoder detent. Pass the CURRENT live value of everything
  * this module persists - it has no other way to know them. */
-void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2);
+void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k);
 
 /* Saves immediately, no debounce - for events that are already
  * naturally rare/deliberate (the touch calibration wizard finishing
  * is the current use, see main.c's touch_calib_done_callback()) where
  * waiting for the debounce window would just be a pointless delay
  * before the thing the user just did for its own sake gets persisted. */
-void settings_save_now(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2);
+void settings_save_now(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k);
 
 #endif /* SETTINGS_H */

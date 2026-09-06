@@ -236,19 +236,19 @@ uint8_t ms5351_tune_captured(void)
  *      few Hz below the real target (LOWF_PHASE_DF_HZ) - then reset
  *      PLLB. Both channels start out perfectly IN PHASE (0 degrees
  *      apart), running slightly slow.
- *   3. Immediately retune MS1 (CLK1 only) up to the CORRECT divider
- *      for the real freq - CLK1 jumps to the right frequency, CLK0
+ *   3. Immediately retune MS0 (CLK0 only) up to the CORRECT divider
+ *      for the real freq - CLK0 jumps to the right frequency, CLK1
  *      keeps running df Hz slow.
- *   4. Wait exactly LOWF_PHASE_SHIFT_US - during this window CLK0
- *      keeps falling behind CLK1 at a rate of df cycles/second. The
+ *   4. Wait exactly LOWF_PHASE_SHIFT_US - during this window CLK1
+ *      keeps falling behind CLK0 at a rate of df cycles/second. The
  *      wait time is chosen so the accumulated lag comes out to EXACTLY
  *      90 degrees: phase_lag = 2*pi*df*t, solved for t at phase_lag=
  *      pi/2 (90 degrees) gives t = 1/(4*df) - note the pi cancels
  *      completely, so this works out to a clean constant (62500us for
  *      df=4Hz) that DOESN'T depend on the target frequency at all.
- *   5. Retune MS0 (CLK0) up to the same correct divider CLK1 already
- *      has. CLK0 jumps to the right frequency too, but by now carries
- *      exactly 90 degrees of lag relative to CLK1 - and since both
+ *   5. Retune MS1 (CLK1) up to the same correct divider CLK0 already
+ *      has. CLK1 jumps to the right frequency too, but by now carries
+ *      exactly 90 degrees of lag relative to CLK0 - and since both
  *      channels share the IDENTICAL, unchanging divider ratio from
  *      here on, that 90-degree relationship survives any further
  *      retuning THAT ONLY MOVES PLLB'S FEEDBACK (fVCO) - which is
@@ -256,64 +256,91 @@ uint8_t ms5351_tune_captured(void)
  *      block below, and why steps 1-5 only run when the ZONE changes,
  *      not on every retune).
  *
- *   *** 01/09/2026: steps 3+5 SWAPPED (CLK1 sped up first now, not
- *   CLK0) - real hardware bug fix, confirmed by the project owner:
- *   SSB sidebands came out correct above 5MHz (the register-offset
- *   trick, ms5351_set_lo_freq()'s main path) but swapped below it
- *   (this function, before the fix). The two techniques were meant to
- *   agree on which clock leads, but didn't: the register-offset trick
- *   writes its nonzero CLKx_PHOFF value to CLK0, and the Si5351/MS5351
- *   datasheet defines PHOFF as a time DELAY - so CLK0 actually LAGS
- *   over there, meaning CLK1 leads in the (already-working) high-band
- *   path, not CLK0 as this function's own steps used to assume.
- *   Speeding up CLK1 first here (instead of CLK0) makes this function
- *   agree with that real, empirically-confirmed convention instead of
- *   its own previous (wrong) assumption.
+ *   *** 01/09/2026: steps 3+5 SWAPPED to CLK1-leads, THEN SWAPPED BACK
+ *   to CLK0-leads later the same day *** - briefly changed to speeding
+ *   up CLK1/MS1 first (based on re-decoding the Si5351/MS5351 CLKx_
+ *   PHOFF register as a time DELAY, which would make CLK1 lead in the
+ *   high-band path instead of CLK0 as originally assumed) - but that
+ *   exact deduction was later found backwards for lo_gen_gd32.c's own
+ *   PA6/PA7 quadrature generator (below 300kHz), confirmed by the
+ *   project owner with a real external signal generator: CLK0 needed
+ *   to lead there after all. Since both swaps came from the identical
+ *   reasoning, this one was reverted too - back to ITS original
+ *   convention (CLK0 leads, as written below: MS0/CLK0 sped up first
+ *   in step 3, MS1/CLK1 catches up in step 5). NOT yet independently
+ *   re-confirmed with a generator on this specific low-band path -
+ *   see ms5351_set_lo_freq_lowband()'s own step-3 comment for the
+ *   fuller caveat.
  *
- * PLL FEEDBACK MULTIPLIER WARNING: the SI5351 datasheet's nominal
- * range for the PLL feedback multiplier (fVCO/fXTAL) is roughly
- * 15-90. At our 26MHz crystal, the low end of this scheme's own
- * frequency range dips BELOW that: ~11.5 at the bottom of zone B
- * (500kHz) and ~6.9 at LOWF_FLOOR_HZ (100kHz, zone C) - see the
- * project owner's own numeric verification. This project's existing
- * high-band code already runs this MS5351 clone's VCO past its
- * datasheet ceiling (908MHz vs a nominal 900MHz max) without
- * complaint, so under-range operation isn't automatically fatal
- * either - but unlike that precedent, THIS specific out-of-range
- * condition has NOT been bench-confirmed on this board. Verify
- * incrementally on real hardware, starting from a comfortably in-
- * range frequency (~1MHz) and working down, watching for PLL lock
- * loss or a garbled/unstable LO, rather than jumping straight to
- * 100kHz.
+ * PLL FEEDBACK MULTIPLIER: the SI5351 datasheet's nominal range for
+ * the PLL feedback multiplier (fVCO/fXTAL) is roughly 15-90. At our
+ * 26MHz crystal, every one of the 10 zones below keeps this between
+ * ~23 and ~35 across its own range - comfortably nominal, verified
+ * numerically for all 10 zones (see LOWF_ZONE_01_HZ..LOWF_ZONE_10_HZ's
+ * own derivation history). This used to be a real WARNING here - the
+ * OLD 3-zone table (mult=300/600/1800) let the multiplier dip as low
+ * as ~6.9 at LOWF_FLOOR_HZ, and - more seriously, found by the project
+ * owner via real hardware testing 01/09/2026 - let fVCO itself run
+ * completely outside this MS5351 clone's actual VCO range (600-
+ * 908MHz, see VCO_MIN_HZ/VCO_MAX_HZ) for large stretches of the
+ * claimed zone ranges (e.g. zone A's own mult=300 only kept fVCO in
+ * range for roughly 2.0-3.02MHz, NOT the whole 1.5MHz-4.8MHz it
+ * claimed to cover) - with NO bounds checking anywhere catching this,
+ * so the PLL just got fed a bogus fVCO and produced no usable output.
+ * Symptom on real hardware: a generator tone at 4.5MHz (squarely in
+ * the old zone A's broken range) showed no signal at all, while
+ * nearby 2MHz (in zone A's own narrow actually-valid slice) worked
+ * fine. Rederived from scratch as 10 zones, each with its OWN
+ * multiplier chosen so fVCO stays in [VCO_MIN_HZ, VCO_MAX_HZ] across
+ * that zone's entire range, tiling LOWF_FLOOR_HZ..LOWF_HANDOFF_HZ
+ * (100kHz-4.8MHz) with no gaps.
  *
  * BLOCKING DELAY: LOWF_PHASE_SHIFT_US (62.5ms) blocks the whole
  * system - main loop, touch, encoder polling, everything - since this
  * driver has no interrupt-driven timing. This ONLY happens when
- * crossing a zone boundary (1.5MHz or 500kHz), not on every retune
- * within a zone - tuning around inside one zone is exactly as
- * responsive as the existing high-band path. Still, a ~62ms freeze is
- * long enough to notice (as a brief stutter) right at those two
- * specific crossing points - flagging this now rather than leaving it
- * as a surprise.
+ * crossing a zone boundary, not on every retune within a zone -
+ * tuning around inside one zone is exactly as responsive as the
+ * existing high-band path. With 10 zones now (up from 3), there are
+ * proportionally more crossing points where a ~62ms stutter can be
+ * noticed - still only right at those specific boundaries, never
+ * mid-zone, but flagging that this happens more often now than it
+ * used to.
  */
-#define LOWF_ZONE_A_HZ    1500000UL /* freq >= this: fVCO = freq*300 */
-#define LOWF_ZONE_B_HZ     500000UL /* freq >= this: fVCO = freq*600 */
+#define LOWF_ZONE_01_HZ    100000UL /* floor - see LOWF_FLOOR_HZ below */
+#define LOWF_ZONE_02_HZ    115831UL
+#define LOWF_ZONE_03_HZ    175285UL
+#define LOWF_ZONE_04_HZ    265252UL
+#define LOWF_ZONE_05_HZ    401338UL
+#define LOWF_ZONE_06_HZ    607288UL
+#define LOWF_ZONE_07_HZ    918837UL
+#define LOWF_ZONE_08_HZ   1388889UL
+#define LOWF_ZONE_09_HZ   2097903UL
+#define LOWF_ZONE_10_HZ   3174604UL /* up to LOWF_HANDOFF_HZ (4.8MHz) */
 #define LOWF_FLOOR_HZ      100000UL /* below this, refuse - see the PLL
                                       * FEEDBACK MULTIPLIER WARNING above */
-#define LOWF_ZONE_A_MULT      300UL
-#define LOWF_ZONE_B_MULT      600UL
-#define LOWF_ZONE_C_MULT     1800UL
+#define LOWF_ZONE_01_MULT     7839UL
+#define LOWF_ZONE_02_MULT     5180UL
+#define LOWF_ZONE_03_MULT     3423UL
+#define LOWF_ZONE_04_MULT     2262UL
+#define LOWF_ZONE_05_MULT     1495UL
+#define LOWF_ZONE_06_MULT      988UL
+#define LOWF_ZONE_07_MULT      653UL
+#define LOWF_ZONE_08_MULT      432UL
+#define LOWF_ZONE_09_MULT      286UL
+#define LOWF_ZONE_10_MULT      189UL
 #define LOWF_PHASE_DF_HZ         4UL /* Hz - matches the reference's df */
 /* = 1e6 / (4*LOWF_PHASE_DF_HZ), see step 4 above for the derivation
  * (the pi cancels out - this is exact, not a trig approximation). */
 #define LOWF_PHASE_SHIFT_US  62500UL
 
 /* 0 = no low-band zone established yet (forces the phase-alignment
- * maneuver on the next low-band call); 1/2/3 = zone A/B/C, matching
- * LOWF_ZONE_A_HZ/LOWF_ZONE_B_HZ's ordering. Deliberately invalidated
- * (set to 0) by the HIGH-band path too - see ms5351_set_lo_freq() -
- * so crossing back down after having been in high-band always redoes
- * the maneuver rather than trusting stale state. */
+ * maneuver on the next low-band call); 1-10 = one of the 10 zones,
+ * matching LOWF_ZONE_01_HZ..LOWF_ZONE_10_HZ's ordering (zone 1 =
+ * lowest frequencies, zone 10 = just below LOWF_HANDOFF_HZ).
+ * Deliberately invalidated (set to 0) by the HIGH-band path too - see
+ * ms5351_set_lo_freq() - so crossing back down after having been in
+ * high-band always redoes the maneuver rather than trusting stale
+ * state. */
 static uint8_t s_last_lowf_zone = 0U;
 
 /* DWT-cycle-counter busy-wait - genuine hardware-timer precision (this
@@ -370,12 +397,26 @@ static uint8_t ms5351_set_lo_freq_lowband(uint32_t freq_hz)
         return 0;
     }
 
-    if (freq_hz >= LOWF_ZONE_A_HZ) {
-        zone = 1U; mult = LOWF_ZONE_A_MULT;
-    } else if (freq_hz >= LOWF_ZONE_B_HZ) {
-        zone = 2U; mult = LOWF_ZONE_B_MULT;
+    if (freq_hz >= LOWF_ZONE_10_HZ) {
+        zone = 10U; mult = LOWF_ZONE_10_MULT;
+    } else if (freq_hz >= LOWF_ZONE_09_HZ) {
+        zone = 9U; mult = LOWF_ZONE_09_MULT;
+    } else if (freq_hz >= LOWF_ZONE_08_HZ) {
+        zone = 8U; mult = LOWF_ZONE_08_MULT;
+    } else if (freq_hz >= LOWF_ZONE_07_HZ) {
+        zone = 7U; mult = LOWF_ZONE_07_MULT;
+    } else if (freq_hz >= LOWF_ZONE_06_HZ) {
+        zone = 6U; mult = LOWF_ZONE_06_MULT;
+    } else if (freq_hz >= LOWF_ZONE_05_HZ) {
+        zone = 5U; mult = LOWF_ZONE_05_MULT;
+    } else if (freq_hz >= LOWF_ZONE_04_HZ) {
+        zone = 4U; mult = LOWF_ZONE_04_MULT;
+    } else if (freq_hz >= LOWF_ZONE_03_HZ) {
+        zone = 3U; mult = LOWF_ZONE_03_MULT;
+    } else if (freq_hz >= LOWF_ZONE_02_HZ) {
+        zone = 2U; mult = LOWF_ZONE_02_MULT;
     } else {
-        zone = 3U; mult = LOWF_ZONE_C_MULT;
+        zone = 1U; mult = LOWF_ZONE_01_MULT;
     }
 
     fvco = (uint64_t)freq_hz * mult;
@@ -421,28 +462,30 @@ static uint8_t ms5351_set_lo_freq_lowband(uint32_t freq_hz)
         /* Step 3: MS1 (CLK1 only) up to the real freq - CLK1 jumps,
          * CLK0 keeps running slow.
          *
-         * *** 01/09/2026, SWAPPED from MS0/CLK0 - real hardware bug
-         * fix *** - this maneuver's own comment (and this file's
-         * general "CLK0 leads CLK1 by 90 degrees" framing) always
-         * described CLK0 as the one that should end up leading, and
-         * this used to speed up MS0/CLK0 first to make that happen.
-         * But the HIGH-band path (ms5351_set_lo_freq()'s main branch)
-         * achieves its OWN 90-degree relationship a completely
-         * different way - via CLKx_PHOFF, which the Si5351/MS5351
-         * datasheet defines as a time DELAY (not an advance): whichever
-         * clock gets the nonzero PHOFF value LAGS, not leads. That
-         * path writes the nonzero value to CLK0 and leaves CLK1 at 0 -
-         * meaning CLK1 actually leads CLK0 in the ALREADY-WORKING
-         * high-band path, the opposite of what this file's comments
-         * claimed. The project owner confirmed this exactly on real
-         * hardware: SSB sidebands came out correct above 5MHz (high-
-         * band) but swapped below it (low-band, this function) - two
-         * DIFFERENT techniques that were meant to agree ended up
-         * producing opposite conventions instead. Swapping which
-         * MultiSynth gets sped up first here (CLK1, not CLK0) makes
-         * this function ALSO produce "CLK1 leads CLK0", matching the
-         * high-band path's real, empirically-correct behavior instead
-         * of its own comment's (wrong) description of itself. */
+         * *** 01/09/2026, SWAPPED BACK to MS1/CLK1 AGAIN, same day -
+         * real hardware A/B test, per the project owner *** - this
+         * function has now been swapped THREE times in one day; see
+         * its own header comment for the fuller history. Short
+         * version: it was swapped to CLK1-leads (this state) based on
+         * the PHOFF-register deduction; then swapped BACK to CLK0-
+         * leads by analogy with lo_gen_gd32.c's own real-generator
+         * finding (a DIFFERENT, unrelated mechanism - a register-
+         * offset scheme there, a timed divider-speedup race here);
+         * then swapped back to THIS (CLK1-leads) a second time after
+         * the project owner directly A/B-tested both at 2MHz and
+         * found CLK0-leads produced a STRONGER wrong-sideband image
+         * than CLK1-leads did. The analogy with lo_gen_gd32.c was the
+         * mistake, not the original PHOFF-based reasoning - two
+         * genuinely different physical mechanisms (a register write
+         * vs. a timing race between two independent MultiSynths) have
+         * no real reason to share one "which clock leads" convention,
+         * and assuming they must was what caused this back-and-forth.
+         * NOT a fully confirmed fix even now - the project owner's
+         * own A/B test was at 2MHz only; still investigating a
+         * SEPARATE, likely unrelated issue where 4.5MHz shows no
+         * signal at all (not a sideband problem - see this function's
+         * own notes elsewhere, or ask before assuming this phase
+         * relationship explains that too). */
         frac_divide(fvco, freq_hz, &ms_p1, &ms_p2);
         ok &= wr_ms(REG_MS1_BASE, ms_p1, ms_p2, FRAC_C, "MS1 -> freq (low-band align)");
 

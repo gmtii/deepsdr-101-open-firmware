@@ -80,7 +80,8 @@ uint16_t spectrum_colormap(float db, float db_min, float db_max)
 #define SPEC_COLOR_TRACE  GFX_COLOR_WHITE
 #define SPEC_COLOR_PEAK   GFX_COLOR_ORANGE
 #define SPEC_COLOR_GRID   0x2104 /* very dark gray, under everything */
-#define SPEC_COLOR_CENTER 0x7800 /* dim red: VFO center line */
+#define SPEC_COLOR_CENTER GFX_COLOR_RED /* 01/09/2026: bumped from 0x7800 ("dim red") to full-bright red, per the project owner ("la linea de demodulacion... mas ancho y un color mas visible") - see SPEC_CENTER_HALF_WIDTH_PX below for the width half */
+#define SPEC_CENTER_HALF_WIDTH_PX 1U /* 01/09/2026: was implicitly 0 (a single exact-column pixel) - now +/-1, i.e. 3px total */
 
 /* SPECTRUM_STYLE_LINE's palette - see spectrum_set_style()'s comment
  * in spectrum.h. Computed offline for a dark-navy-background,
@@ -102,8 +103,8 @@ uint16_t spectrum_colormap(float db, float db_min, float db_max)
  * never accidentally read as "this is the tint", or vice versa.
  * HEATMAP: RGB (40,0,60). LINE: RGB (34,0,52), slightly dimmer since
  * SPEC_LINE_BG is already non-black. */
-#define SPEC_COLOR_BAND_TINT      0x2807
-#define SPEC_LINE_BAND_TINT       0x2006
+#define SPEC_COLOR_BAND_TINT      0x9240 /* 01/09/2026: bumped from the old 0x2807 (dim, blue-family - blended into the heatmap's own blue/cyan palette) to a warm amber, per the project owner ("el ancho de banda de demodulacion... el actual asi no se ve") - a warm hue contrasts against this style's cool palette instead of just being a brighter shade of the same family */
+#define SPEC_LINE_BAND_TINT       0x71C0 /* same reasoning as SPEC_COLOR_BAND_TINT just above, dimmed slightly to match LINE style's own generally darker palette (see SPEC_LINE_BG/GRID/TRACE) */
 
 /* *** 01/09/2026: moved to TCM RAM *** - pure spectrum-rendering
  * working buffers, never DMA targets (only this file's own drawing
@@ -157,6 +158,7 @@ void spectrum_draw(const float *db, uint32_t n_bins,
     uint16_t col, row;
     float scale_t;
     uint16_t center_mark_col;
+    uint16_t center_mark_col_lo, center_mark_col_hi; /* see SPEC_CENTER_HALF_WIDTH_PX below */
     uint16_t band_col_lo = 0, band_col_hi = 0; /* only meaningful when band_active */
 
     if (db_max <= db_min || w == 0U || h == 0U ||
@@ -175,6 +177,24 @@ void spectrum_draw(const float *db, uint32_t n_bins,
         if (c < 0) { c = 0; }
         if (c > (int32_t)(w - 1U)) { c = (int32_t)(w - 1U); }
         center_mark_col = (uint16_t)c;
+    }
+
+    /* SPEC_CENTER_HALF_WIDTH_PX: half-width, in pixels, of the demod
+     * center marker - 01/09/2026, bumped from a single pixel to 3px
+     * total, per the project owner ("la linea de demodulacion...
+     * mas ancho"). Computed with signed math and re-clamped into
+     * [0, w-1] independently (not just center_mark_col +/- 1 as
+     * uint16_t, which would underflow to a huge value if center_
+     * mark_col is 0) so the marker never walks off either edge of
+     * s_row_buf even when the demod point itself is clamped right at
+     * the panel's edge. */
+    {
+        int32_t lo = (int32_t)center_mark_col - (int32_t)SPEC_CENTER_HALF_WIDTH_PX;
+        int32_t hi = (int32_t)center_mark_col + (int32_t)SPEC_CENTER_HALF_WIDTH_PX;
+        if (lo < 0) { lo = 0; }
+        if (hi > (int32_t)(w - 1U)) { hi = (int32_t)(w - 1U); }
+        center_mark_col_lo = (uint16_t)lo;
+        center_mark_col_hi = (uint16_t)hi;
     }
 
     /* Same clamp, applied to both band edges independently, then
@@ -415,7 +435,7 @@ void spectrum_draw(const float *db, uint32_t n_bins,
                     px = SPEC_COLOR_PEAK;             /* floating peak dot */
 #endif
 #if SPECTRUM_CENTER_MARK
-                } else if (col == center_mark_col) {
+                } else if (col >= center_mark_col_lo && col <= center_mark_col_hi) {
                     px = SPEC_COLOR_CENTER;           /* demod point marker, under signals */
 #endif
                 } else if (band_active && col >= band_col_lo && col <= band_col_hi) {

@@ -25,6 +25,26 @@
  * distinta (bucle abierto por abajo a la derecha en vez de cerrado).
  * Si alguna otra letra resulta dificil de leer en pantalla real,
  * este es el sitio a tocar (no gfx_char(), que no cambia).
+ *
+ * *** 01/09/2026: LINEA BASE corregida en las 21 minusculas sin
+ * descendente (a,b,c,d,e,f,h,i,k,l,m,n,o,r,s,t,u,v,w,x,z) - bug real
+ * detectado por el project owner en pantalla real ("d y m arriba, y B
+ * abajo... muy raro") *** - el rasterizado automatico de estas 21
+ * letras las habia dejado ocupando las filas 2-5 (o 0/1-5 segun la
+ * altura de cada trazo), es decir, UNA FILA por encima de donde
+ * deberian - mayusculas y digitos ocupan 0-6, con la fila 6 como
+ * linea base comun. Las 5 minusculas CON descendente real en este
+ * formato (g,j,p,q,y - ver el parrafo anterior sobre por que "descienden"
+ * solo hasta la fila 6, no mas abajo) ya estaban bien alineadas por
+ * casualidad (su propio trazo inferior ya llegaba a la fila 6) - por
+ * eso solo hacian falta las otras 21. Arreglo: cada byte de columna
+ * de esas 21 letras desplazado un bit a la izquierda (multiplicado
+ * por 2) para que su propia fila inferior tambien llegue a la fila 6,
+ * verificado uno a uno (ninguna de las 21 usaba ya el bit 6 antes del
+ * desplazamiento, así que no hay desbordamiento/perdida de datos en
+ * ninguna). 'm' llevaba ademas su propio arreglo de forma (ver mas
+ * abajo) el mismo dia, hecho ANTES de este desplazamiento - por eso
+ * su comentario propio no menciona la linea base.
  */
 #ifndef GFX_FONT_H
 #define GFX_FONT_H
@@ -105,32 +125,40 @@ static const uint8_t gfx_font5x7[][5] = {
     {0x00, 0x00, 0x00, 0x00, 0x00}, /* sin definir '^' */
     {0x00, 0x00, 0x00, 0x00, 0x00}, /* sin definir '_' */
     {0x00, 0x00, 0x00, 0x00, 0x00}, /* sin definir '`' */
-    {0x00, 0x3C, 0x2C, 0x3C, 0x00}, /* 'a' */
-    {0x00, 0x3E, 0x24, 0x3C, 0x00}, /* 'b' */
-    {0x00, 0x3C, 0x24, 0x24, 0x00}, /* 'c' */
-    {0x00, 0x3C, 0x24, 0x3E, 0x00}, /* 'd' */
-    {0x00, 0x3C, 0x14, 0x04, 0x00}, /* 'e' - corregida a mano, ver comentario de cabecera */
-    {0x00, 0x04, 0x3E, 0x06, 0x00}, /* 'f' */
+    {0x00, 0x78, 0x58, 0x78, 0x00}, /* 'a' */
+    {0x00, 0x7C, 0x48, 0x78, 0x00}, /* 'b' */
+    {0x00, 0x78, 0x48, 0x48, 0x00}, /* 'c' */
+    {0x00, 0x78, 0x48, 0x7C, 0x00}, /* 'd' */
+    {0x00, 0x78, 0x28, 0x08, 0x00}, /* 'e' - corregida a mano, ver comentario de cabecera */
+    {0x00, 0x08, 0x7C, 0x0C, 0x00}, /* 'f' */
     {0x00, 0x7C, 0x64, 0x7C, 0x00}, /* 'g' - sin gancho de descendente real, ver comentario de cabecera */
-    {0x00, 0x3E, 0x04, 0x3C, 0x00}, /* 'h' */
-    {0x00, 0x24, 0x3F, 0x20, 0x00}, /* 'i' */
+    {0x00, 0x7C, 0x08, 0x78, 0x00}, /* 'h' */
+    {0x00, 0x48, 0x7E, 0x40, 0x00}, /* 'i' */
     {0x00, 0x44, 0x7F, 0x00, 0x00}, /* 'j' - sin gancho de descendente real */
-    {0x00, 0x3E, 0x18, 0x34, 0x00}, /* 'k' */
-    {0x00, 0x02, 0x3E, 0x20, 0x00}, /* 'l' */
-    {0x00, 0x3C, 0x3C, 0x3C, 0x00}, /* 'm' */
-    {0x00, 0x3C, 0x04, 0x3C, 0x00}, /* 'n' */
-    {0x00, 0x3C, 0x24, 0x3C, 0x00}, /* 'o' */
+    {0x00, 0x7C, 0x30, 0x68, 0x00}, /* 'k' */
+    {0x00, 0x04, 0x7C, 0x40, 0x00}, /* 'l' */
+    {0x78, 0x08, 0x78, 0x08, 0x78}, /* 'm' - corregida 01/09/2026, per the project owner:
+                                      * salía como {0x00,0x3C,0x3C,0x3C,0x00}, tres columnas
+                                      * llenas SEGUIDAS sin ningun hueco entre ellas - un
+                                      * bloque solido, indistinguible de un caracter no
+                                      * soportado. Rediseñada con el mismo patron de 3 patas
+                                      * que ya usa 'n' en esta fuente (pata llena, hueco con
+                                      * solo el arco superior, pata llena, hueco con arco,
+                                      * pata llena) - la unica forma de sugerir 3 trazos
+                                      * verticales distintos en solo 5 columnas de ancho. */
+    {0x00, 0x78, 0x08, 0x78, 0x00}, /* 'n' */
+    {0x00, 0x78, 0x48, 0x78, 0x00}, /* 'o' */
     {0x00, 0x7C, 0x24, 0x3C, 0x00}, /* 'p' - sin gancho de descendente real */
     {0x00, 0x3C, 0x24, 0x7C, 0x00}, /* 'q' - sin gancho de descendente real */
-    {0x00, 0x3C, 0x1C, 0x04, 0x00}, /* 'r' */
-    {0x00, 0x2C, 0x3C, 0x34, 0x00}, /* 's' */
-    {0x00, 0x04, 0x3E, 0x24, 0x00}, /* 't' */
-    {0x00, 0x3C, 0x20, 0x3C, 0x00}, /* 'u' */
-    {0x00, 0x1C, 0x30, 0x1C, 0x00}, /* 'v' */
-    {0x04, 0x38, 0x18, 0x3C, 0x00}, /* 'w' */
-    {0x00, 0x3C, 0x18, 0x34, 0x00}, /* 'x' */
+    {0x00, 0x78, 0x38, 0x08, 0x00}, /* 'r' */
+    {0x00, 0x58, 0x78, 0x68, 0x00}, /* 's' */
+    {0x00, 0x08, 0x7C, 0x48, 0x00}, /* 't' */
+    {0x00, 0x78, 0x40, 0x78, 0x00}, /* 'u' */
+    {0x00, 0x38, 0x60, 0x38, 0x00}, /* 'v' */
+    {0x08, 0x70, 0x30, 0x78, 0x00}, /* 'w' */
+    {0x00, 0x78, 0x30, 0x68, 0x00}, /* 'x' */
     {0x00, 0x5C, 0x78, 0x1C, 0x00}, /* 'y' - sin gancho de descendente real */
-    {0x00, 0x34, 0x3C, 0x2C, 0x00}, /* 'z' */
+    {0x00, 0x68, 0x78, 0x58, 0x00}, /* 'z' */
 };
 
 #endif /* GFX_FONT_H */
