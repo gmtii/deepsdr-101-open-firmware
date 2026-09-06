@@ -75,13 +75,15 @@ the source consistently documents what was actually confirmed on the
 bench versus what's still an assumption.
 
 It currently supports AM, USB, LSB, NFM, and WFM reception, a
-touch-driven panadapter/waterfall display, a paged settings menu
-covering RF/audio/display/digital-mode options, RTTY decoding, and a
-growing set of diagnostic and quality-of-life tools (manual/auto AGC,
-selectable audio and channel filter widths, spectrum auto-scaling, a
-relative S-meter and SNR readout, and a GD32-generated quadrature LO
-path for the lowest tuning range where the board's MS5351 clock
-generator can't reliably hold quadrature).
+touch-driven panadapter/waterfall display with drag- and tap-to-tune
+gestures, a paged settings menu covering RF/audio/display/digital-mode
+options, RTTY decoding, a selectable AM/USB/LSB/NFM sample rate
+(96kHz/48kHz — see 3.9), and a growing set of diagnostic and
+quality-of-life tools (manual/auto AGC, selectable audio and channel
+filter widths, spectrum auto-scaling, a calibrated S-meter dBm readout
+(see 3.8), and a GD32-generated quadrature LO path for the lowest
+tuning range where the board's MS5351 clock generator can't reliably
+hold quadrature).
 
 ## 2. Building and Flashing
 
@@ -165,36 +167,51 @@ the board's own vendor documentation.
 
 ### 3.1 Screen layout
 
-Landscape 800x480 touchscreen, confirmed on real hardware:
+Landscape 800x480 touchscreen, confirmed on real hardware. Reworked
+01/09/2026 from an earlier 3-column layout (676px spectrum + a
+vertical right-hand column) to a full-width layout — spectrum and
+waterfall now span the whole screen, with S-meter/badges moved into a
+horizontal strip under the top bar:
 
 ```
 +--------------------------------------------------------------+
 | TOP BAR (h=64): freq (big) | mode | step+vol | time | batt   |
-+---------------------------------------------------+----------+
-| SPECTRUM (676 wide, 280 tall)                     | RIGHT    |
-+---------------------------------------------------+ COLUMN   |
-| WATERFALL (672 x 72 rows)                         | S-meter  |
-|                                                    | SNR      |
-|                                                    | + badges |
-+---------------------------------------------------+----------+
++--------------------------------------------------------------+
+| STATUS STRIP (h=40): S-meter | dBm | NR SPT AGC [profile] [BW] OVR RATE |
++--------------------------------------------------------------+
+| SPECTRUM (796 wide, 240 tall)                                |
++--------------------------------------------------------------+
+| WATERFALL (796 wide)                                         |
++--------------------------------------------------------------+
 | BOTTOM BAR: 6 buttons (MODE VOL STEP NR BANDS MENU)          |
 +--------------------------------------------------------------+
 ```
 
 - **Frequency display** (top bar): tapping it opens a numeric keypad
   for direct frequency entry (see 3.5).
-- **Spectrum panel**: dragging left/right on it tunes directly,
-  quantized to 1kHz steps.
-- **Right-hand column**: an S-meter (12-segment, relative/uncalibrated
-  dBFS — not a referenced measurement), an SNR readout underneath it
-  (derived from the same per-frame FFT data as the panadapter — peak
-  bin near the tuned center minus the mean of the rest of the
-  spectrum, labeled in dB, not dBm, since the calibration offset a
-  real dBm figure would need cancels out in that subtraction), and a
-  2x3 grid of status badges below that (AGC profile, BW/audio filter
-  width, and other live, at-a-glance state — several of these badges
-  are themselves tappable shortcuts to the same setting the matching
-  menu tile controls).
+- **Spectrum panel gestures**:
+  - **Drag** left/right tunes relatively, quantized to the currently
+    selected tune STEP (100Hz-1MHz, see 3.4) rather than a fixed
+    1kHz — dragging respects whatever step is dialed in, and changing
+    STEP mid-drag takes effect on the very next movement.
+  - **Tap** (as opposed to a drag — told apart by total finger travel
+    since the press started, not by speed) tunes DIRECTLY to whatever
+    frequency that point on the panadapter represents, using the
+    exact same pixel-to-Hz mapping the panadapter's own tick labels
+    use — so tapping precisely on a labeled tick tunes to precisely
+    that frequency. Unlike the drag, a tap is not snapped to the
+    current tune step, since the point is landing exactly where a
+    signal's peak visually is.
+- **Status strip** (below the top bar, above the spectrum): an
+  S-meter (12-segment bar, driven by the same peak reading as the
+  numeric readout beside it), a calibrated **dBm** numeric readout
+  (see 3.8 for how it's calibrated and its real limitations — this
+  replaced an earlier, uncalibrated SNR readout that used to live in
+  the same spot), and a row of status badges (NR, SPT, AGC — plus two
+  real tappable buttons showing the current AGC profile and audio
+  filter width in the same row — OVR, and RATE showing 96K/48K/192K).
+  Several of these are themselves tappable shortcuts to the same
+  setting the matching menu tile controls.
 
 ### 3.2 Bottom bar
 
@@ -310,7 +327,7 @@ BACK tile returns to the grid.
 | SPK | toggle | Speaker PA enable/mute |
 | IFBW | toggle | WFM's **pre-discriminator** channel filter width: WIDE (96K, i.e. no filter — the full ±96kHz complex Nyquist bandwidth, unfiltered, the original/default behavior) vs NARROW (80K — a real channel filter ahead of the FM discriminator, for adjacent-channel/wideband-noise rejection on a crowded band or a weak station). This is a completely separate control from the BW tile above (which shapes the *demodulated audio*, after the discriminator) — IFBW filters the raw baseband I/Q *before* it. |
 | SAGC | toggle | Spectrum/waterfall auto-scale: tracks the display's dB range from the actual incoming spectrum instead of only manual SCALE adjustment. On by default. |
-| RATE | toggle | AM/USB/LSB/NFM sample rate: 96K (default) vs 48K. Added as a diagnostic/escape-hatch control for a birdie tied to a harmonic of the sample rate; tapping it forces an immediate live reconfigure if a non-WFM mode is already active, not just on the next mode change. WFM is unaffected either way (always 192kHz). Not persisted across power cycles yet. |
+| RATE | toggle | AM/USB/LSB/NFM sample rate: 96K (default) vs 48K. Added as a diagnostic/escape-hatch control for a birdie tied to a harmonic of the sample rate (see 3.9) — tapping it forces an immediate live reconfigure if a non-WFM mode is already active, not just on the next mode change. WFM is unaffected either way (always 192kHz). Persisted to CONFIG.CSV as of 01/09/2026, once 48kHz settled into being an everyday preference rather than just a bench A/B toggle. |
 | *(slot 7 free)* | — | reserved |
 
 #### DIG page (3/8 slots used)
@@ -335,3 +352,85 @@ mode-dependent relabeling, IFBW/RATE's live-reconfigure-on-tap
 behavior) — check each tile's own callback comment in `main.c` before
 moving it, since a few have non-obvious side effects tied to exactly
 when they run.
+
+### 3.8 S-meter dBm calibration
+
+The status-strip numeric readout next to the S-meter shows a
+calibrated dBm figure (`smeter_dbm_update_and_draw()` in `main.c`),
+derived from a real bench session against an external signal
+generator with a known, calibrated dBm output:
+
+- **Procedure**: AGC off (a genuine unity-gain bypass, not just a slow
+  setting), ATT and PGA fixed at a known combination, a clean CW/AM
+  tone fed at a known dBm across several frequencies and levels,
+  reading the raw dBFS via a UART diagnostic
+  (`smeter_dbfs_uart_report()`, 1Hz, unrounded — the 12-segment bar
+  alone is far too coarse, 7dB/segment, for this).
+- **Result**: a consistent `SMETER_CAL_OFFSET_DB = -38.2` dB offset
+  held across 6 of 11 tested points (within about 1dB of each other),
+  spanning both LO generation paths and several signal levels — good
+  evidence it's genuinely representative, not a coincidence.
+- **Dynamically compensated for ATT/PGA** — both are real, precisely
+  known linear gain elements (ATT: the Rin selector, an exact 0/-6/
+  -12dB signal drop per step; PGA: `aic3204_set_pga_gain_db()`, a real
+  0.5dB-precision hardware stage), so the reading stays correct across
+  ANY ATT/PGA combination, not just the one originally calibrated
+  against — confirmed by direct testing on real hardware. The MAIN
+  receive AGC still must be off for the reading to mean anything; that
+  gain is genuinely dynamic, not a simple number that can be
+  subtracted out the way ATT/PGA can.
+- **Known gaps** — the reading will be wrong by a large, inconsistent
+  amount (not just imprecise) in three situations, none of which this
+  offset can paper over: (1) above roughly -50dBm input at this
+  calibration's PGA setting, where the receiver visibly compresses;
+  (2) the 37-60MHz RF low-pass filter range (`rf_lpf.c`), where both
+  tested edges read about 30dB worse than the general cluster — a
+  real, still-uninvestigated loss or possible relay/filter fault, not
+  a calibration issue; (3) right at the low-band/high-band LO handoff
+  (~4.8MHz), where the high-band side read about 20dB worse than the
+  low-band side just below it, for a reason not yet tracked down.
+
+### 3.9 Known RF quirks: internal-clock birdies
+
+This board's own internal clock sources can and do produce birdies
+(spurious tones from digital clock harmonics leaking into the RF
+front end) — worth knowing about before chasing what looks like an
+external interference source that's actually coming from inside the
+receiver itself. Three separate clock domains are involved, each a
+potential source of its own family of harmonics:
+
+- **The MS5351/Si5351 LO generator's 26MHz reference crystal**
+  (`ms5351.c`) — this drives the receiver's own local oscillator via
+  PLLA/PLLB, so any of its own harmonics or PLL artifacts land
+  wherever the current tuning happens to put them, moving with the
+  VFO rather than sitting at one fixed spot.
+- **The audio codec's 12.288MHz crystal** (`gd32_i2s.c`/`aic3204.c`) —
+  the reference for MCLK and, downstream, the codec's own internal
+  PLL (CODEC_CLKIN, currently 86.016MHz — see `aic3204.c`'s clock-
+  chain comment) that ultimately produces the I2S bit clock and
+  sample rate.
+- **The I2S/sample-rate clock itself** — and this is the one with a
+  **confirmed, on-the-bench** birdie: at 96kHz (AM/USB/LSB/NFM's
+  previous fixed rate), the 287th harmonic of the sample rate
+  (287 × 96kHz = 27.552MHz) lands squarely in the 11m/CB band,
+  reproduced on both a modified and an unmodified board (ruling out a
+  power-rail coupling issue specific to one unit). Since this harmonic
+  number scales with whatever the sample rate actually is, switching
+  rate moves the whole comb of harmonics to different frequencies —
+  which is exactly why the **RATE tile** (HW page, 96K/48K) exists:
+  moving Fs relocates this class of birdie to a different, hopefully
+  less troublesome, spot rather than eliminating it outright. The
+  same reasoning applies to WFM's own fixed 192kHz rate, which has its
+  own comb of N×192kHz harmonics somewhere — not separately confirmed
+  on the bench the way the 96kHz case was, but expected by the same
+  mechanism, and not user-selectable the way AM/USB/LSB/NFM's rate is
+  (WFM is always 192kHz).
+
+None of these birdies are a firmware bug in the sense of something
+this project can filter or calibrate away — they're consequence of
+real clock energy on the same board as a sensitive front end. The
+practical mitigations available today are: retuning slightly (the LO
+harmonics move with the VFO), or trying the other sample rate via the
+RATE tile (the I2S-clock harmonics move with Fs). If a stronger fix
+(shielding, decoupling, a cleaner reference clock) is ever pursued,
+it belongs in the hardware document rather than here.
