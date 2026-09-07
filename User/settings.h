@@ -35,6 +35,38 @@
  * and deserves its own look before deciding whether to read/write it
  * or keep it separate; out of scope for this first pass.
  *
+ * 07/09/2026: five more fields added, split across the two existing
+ * patterns depending on who OWNS the underlying state:
+ *   - pga_gain_db_x2 (main.c's s_pga_gain_db_x2, the manual PGA
+ *     ceiling - see main.c's own comment), spectrum_smooth_pct
+ *     (main.c's s_spectrum_smooth_alpha, presented/stored as the same
+ *     0-95% "history weight" the UI already uses rather than the raw
+ *     0.0-0.95 float) and speaker_enabled (main.c's
+ *     s_speaker_pa_enabled) are all static state main.c itself owns
+ *     with no getter - same shape as vfo_hz/mode/volume_db_x2/
+ *     nonwfm_use_48k above: passed IN by the caller on save (see
+ *     settings_poll()/settings_save_now()'s new parameters) and
+ *     handed back via their own have_ flag/value pair on load, for the
+ *     caller to apply once boot ordering allows (PGA needs the codec
+ *     already up - same as volume_db_x2 - and speaker_enabled needs
+ *     speaker_pa_gpio_init() to have already run, or it would just be
+ *     overwritten by that function's own GPIO-level sync of the
+ *     compiled-in default).
+ *   - backlight_pct is backlight.c-owned state WITH a getter
+ *     (backlight_get_percent()) but, like PGA/speaker above, still
+ *     needs a have_ flag/value pair rather than being applied directly
+ *     from settings_load() - backlight_init() runs AFTER
+ *     settings_load() in main()'s boot sequence and unconditionally
+ *     calls backlight_set_percent() with the compiled-in default, so
+ *     applying here first would just be clobbered a few lines later.
+ *   - spectrum_style is spectrum.c-owned state (spectrum_get_style()/
+ *     spectrum_set_style()) with NO such ordering hazard -
+ *     spectrum_init() (called after settings_load() too) only builds
+ *     the palette LUT and never touches the style - so this one IS
+ *     applied directly from settings_load(), same as touch
+ *     calibration and ms5351_xtal_hz, and needs no struct field at
+ *     all.
+ *
  * Tune step is stored as its Hz VALUE ("tune_step_hz"), not a raw
  * index into main.c's k_tune_steps[] - main.c looks up which index
  * matches on load, so a future reordering/insertion in that array
@@ -65,6 +97,14 @@ typedef struct {
     int16_t      volume_db_x2;
     uint8_t      have_nonwfm_use_48k;
     uint8_t      nonwfm_use_48k;
+    uint8_t      have_pga_gain_db_x2;
+    int16_t      pga_gain_db_x2;      /* 0-95, 0.5dB units - see main.c's PGA_MIN_X2/PGA_MAX_X2 */
+    uint8_t      have_spectrum_smooth_pct;
+    uint8_t      spectrum_smooth_pct; /* 0-95 percent - see main.c's SPECTRUM_SMOOTH_MIN/MAX */
+    uint8_t      have_speaker_enabled;
+    uint8_t      speaker_enabled;     /* 0/1 */
+    uint8_t      have_backlight_pct;
+    uint8_t      backlight_pct;       /* 0-100, see backlight.h - backlight_set_percent() clamps up to its own floor */
 } settings_loaded_t;
 
 /* Reads CONFIG.CSV (if present) and:
@@ -86,6 +126,12 @@ typedef struct {
  * spi_flash_init(). */
 uint8_t settings_load(settings_loaded_t *out);
 
+/* spectrum_style is applied directly against spectrum.c inside
+ * settings_load() itself (see this file's header comment on why it
+ * has no ordering hazard) - unlike everything else in
+ * settings_loaded_t, there is no have_/value pair for it because the
+ * caller never needs to touch it. */
+
 /* Marks settings as changed - does NOT write to flash immediately,
  * see this file's header comment on write-cycle wear.
  * settings_poll() is what actually saves, debounced. Safe/cheap to
@@ -106,14 +152,22 @@ void settings_mark_dirty(void);
  * committing" idea as a text editor's autosave either way, so a
  * session of continuous tuning results in ONE save once you stop, not
  * one per encoder detent. Pass the CURRENT live value of everything
- * this module persists - it has no other way to know them. */
-void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k);
+ * this module persists - it has no other way to know them.
+ * pga_gain_db_x2/spectrum_smooth_pct/speaker_enabled are the three
+ * NEW main.c-owned values (07/09/2026) - backlight_pct and
+ * spectrum_style are NOT parameters here, since settings.c reads
+ * those two straight from backlight_get_percent()/
+ * spectrum_get_style() itself (see this file's header comment). */
+void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k,
+                    int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled);
 
 /* Saves immediately, no debounce - for events that are already
  * naturally rare/deliberate (the touch calibration wizard finishing
  * is the current use, see main.c's touch_calib_done_callback()) where
  * waiting for the debounce window would just be a pointless delay
- * before the thing the user just did for its own sake gets persisted. */
-void settings_save_now(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k);
+ * before the thing the user just did for its own sake gets persisted.
+ * Same three new trailing parameters as settings_poll() above. */
+void settings_save_now(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k,
+                        int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled);
 
 #endif /* SETTINGS_H */

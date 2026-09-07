@@ -82,6 +82,25 @@ static void menu_mode_list_show(void);
 static void menu_freq_keypad_show(void);
 static void menu_tile_rfagc_refresh(void);
 static void rf_agc_apply_pga(void);
+/* Forward declarations for main.c-owned CONFIG.CSV fields added
+ * 07/09/2026 (PGA/spectrum smoothing/speaker) - their real
+ * declarations/definitions sit later in the file, in the same
+ * variable-plus-#define blocks as before (s_pga_gain_db_x2 next to
+ * PGA_MIN_X2/PGA_MAX_X2, etc.), but main()'s settings-apply block
+ * (see settings_load()'s call site) needs to reference them earlier
+ * in the file than that. Tentative static declarations here (no
+ * initializer) plus identical macro values, merged by the compiler
+ * with the real ones further down - same idea as this file's existing
+ * forward-declared static FUNCTIONS just above, applied to statics/
+ * macros instead. */
+static int16_t s_pga_gain_db_x2;
+#define PGA_MIN_X2  0   /* 0.0dB - kept identical to the canonical #define next to s_pga_gain_db_x2's real declaration */
+#define PGA_MAX_X2  95  /* 47.5dB - see aic3204_set_pga_gain_db()'s field-range note */
+static float s_spectrum_smooth_alpha;
+#define SPECTRUM_SMOOTH_MIN 0.0f
+#define SPECTRUM_SMOOTH_MAX 0.95f
+static uint8_t s_speaker_pa_enabled;
+static uint8_t spectrum_smooth_pct_for_save(void);
 static void rf_agc_poll(void);
 static void rtty_poll(void);
 static uint8_t rtty_scope_active(void);
@@ -671,6 +690,35 @@ int main(void)
         if (v > VOLUME_MAX_X2) { v = VOLUME_MAX_X2; }
         set_volume_db_x2((int16_t)v); /* codec already up by this point in the boot sequence - see AIC3204 phase 1/2 further up - safe to apply here */
     }
+    /* PGA/spectrum smoothing/speaker/backlight (07/09/2026) - same
+     * "wait for the caller, don't apply straight from settings_load()"
+     * shape as volume_db_x2 just above, for the reasons in settings.h's
+     * header comment. This point in main()'s boot sequence is already
+     * past both backlight_init() and speaker_pa_gpio_init() (see their
+     * own call sites further up), and the codec is already up (same
+     * "safe to apply here" reasoning as volume_db_x2), so all four are
+     * safe to apply right here. */
+    if (s_loaded_settings.have_pga_gain_db_x2) {
+        int32_t v = s_loaded_settings.pga_gain_db_x2;
+
+        if (v < PGA_MIN_X2) { v = PGA_MIN_X2; }
+        if (v > PGA_MAX_X2) { v = PGA_MAX_X2; }
+        s_pga_gain_db_x2 = (int16_t)v;
+        rf_agc_apply_pga(); /* the only allowed call site for aic3204_set_pga_gain_db() - see its own comment */
+    }
+    if (s_loaded_settings.have_spectrum_smooth_pct) {
+        float alpha = (float)s_loaded_settings.spectrum_smooth_pct * 0.01f; /* inverse of spectrum_smooth_pct_for_save()'s rounding */
+
+        if (alpha < SPECTRUM_SMOOTH_MIN) { alpha = SPECTRUM_SMOOTH_MIN; }
+        if (alpha > SPECTRUM_SMOOTH_MAX) { alpha = SPECTRUM_SMOOTH_MAX; }
+        s_spectrum_smooth_alpha = alpha;
+    }
+    if (s_loaded_settings.have_speaker_enabled) {
+        speaker_pa_set_enabled(s_loaded_settings.speaker_enabled);
+    }
+    if (s_loaded_settings.have_backlight_pct) {
+        backlight_set_percent(s_loaded_settings.backlight_pct); /* clamps both ends itself, see backlight.h's comment */
+    }
     if (s_loaded_settings.have_tune_step_hz) {
         uint32_t i;
         for (i = 0U; i < TUNE_STEP_COUNT; i++) {
@@ -840,7 +888,8 @@ int main(void)
         }
         rf_agc_poll(); /* RF-level (analog PGA) auto-AGC - see its own comment */
         rtty_poll(); /* drains rtty.c's decoded text to debug UART - see its own comment */
-        settings_poll(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2, s_nonwfm_use_48k); /* debounced CONFIG.CSV autosave - see settings.h's comment; cheap no-op most iterations */
+        settings_poll(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2, s_nonwfm_use_48k,
+                      s_pga_gain_db_x2, spectrum_smooth_pct_for_save(), s_speaker_pa_enabled); /* debounced CONFIG.CSV autosave - see settings.h's comment; cheap no-op most iterations */
 #if TOUCH_EDGE_DEBUG
         touch_debug_stream_poll(); /* see TOUCH_EDGE_DEBUG's comment */
 #endif
@@ -1858,6 +1907,16 @@ static float s_spectrum_smooth_alpha = 0.75f; /* same default the #define always
 #define SPECTRUM_SMOOTH_STEP 0.05f /* 5 percentage points per encoder detent */
 #define SPECTRUM_SMOOTH_MIN 0.0f
 #define SPECTRUM_SMOOTH_MAX 0.95f
+
+/* CONFIG.CSV's spectrum_smooth_pct field (07/09/2026, settings.c)
+ * stores the same 0-95% "history weight" already shown to the user,
+ * not the raw 0.0-0.95 float - this is the one conversion point both
+ * settings_poll()/settings_save_now() call sites and the boot-time
+ * apply block use, so the rounding rule only lives in one place. */
+static uint8_t spectrum_smooth_pct_for_save(void)
+{
+    return (uint8_t)((s_spectrum_smooth_alpha * 100.0f) + 0.5f);
+}
 
 /* TOP BAR readout placement (see the RADIO UI LAYOUT block). The
  * frequency is the star: scale 5 (30px wide x 35px tall per char),
@@ -3352,6 +3411,25 @@ static void spec_span_labels_draw(void)
               (uint16_t)(MAIN_W - 2), (uint16_t)(SPEC_Y + SPEC_H - 20),
               GFX_COLOR_DARKGRAY);
 
+    /* Same condition/derivation as sdr_spectrum_waterfall_tick()'s
+     * center_mark_offset_px (see this function's PANEL-CENTER
+     * FREQUENCY comment above): when low-IF down-mix is active, the
+     * ACTUAL demod point sits at +DEMOD_IF_OFFSET_HZ = +full_span_hz/4
+     * relative to the true FFT/panel center - i.e. exactly the k=+1
+     * grid point below (off_hz = k*half_span_hz/2 = full_span_hz/4 at
+     * k=1), the same "right-quarter" pixel column the red marker line
+     * and the demodulated-bandwidth tint already use on the spectrum
+     * itself. Marking k=0 (dead panel center) red there was wrong -
+     * that column shows the LO's own frequency, not the demodulated
+     * station - see "el punto de demodulacion en 3/4", 07/09/2026.
+     * Without low-IF (WFM, or any zoom other than 1X - zoom_process_
+     * block() already re-centers on s_tune_hz before decimating, same
+     * as center_mark_offset_px's own ZOOM case), panel_center_hz IS
+     * s_tune_hz and the true center (k=0) is the right one to mark,
+     * unchanged from before. */
+    {
+        int32_t demod_k = (s_spec_zoom == SPEC_ZOOM_1X && demod_am_get_if_offset_active()) ? 1 : 0;
+
     for (i = 0; i < 5U; i++) {
         /* i=0..4 -> k=-2..+2 -> off_hz = k * half_span_hz/2, i.e. left
          * edge, left-quarter, center, right-quarter, right edge -
@@ -3369,7 +3447,7 @@ static void spec_span_labels_draw(void)
         int64_t khz_i64;
         char buf[FREQ_FIELD_CHARS + 1];
         const char *label;
-        uint16_t label_color = (k == 0) ? GFX_COLOR_RED : GFX_COLOR_WHITE;
+        uint16_t label_color = (k == demod_k) ? GFX_COLOR_RED : GFX_COLOR_WHITE;
         uint16_t tw;
         int32_t tx;
         uint8_t s;
@@ -3396,6 +3474,7 @@ static void spec_span_labels_draw(void)
         if (tx > (int32_t)(MAIN_W - tw)) { tx = (int32_t)(MAIN_W - tw); }
         gfx_text((uint16_t)tx, (uint16_t)(SPEC_Y + SPEC_H - 18), label,
                   label_color, GFX_COLOR_BLACK, SPEC_SCALE_TEXT_SIZE);
+    }
     }
 }
 
@@ -3795,6 +3874,7 @@ static void menu_tile_spec_style_callback(void *widget, ui_event_t event, void *
         debug_print("spectrum: style now ");
         debug_print(name);
         menu_tile_spec_style_refresh();
+        if (s_settings_ready_for_autosave) { settings_mark_dirty(); } /* 07/09/2026 - was missing, see settings.h's comment */
     }
 }
 
@@ -4764,6 +4844,7 @@ static void menu_tile_speaker_pa_callback(void *widget, ui_event_t event, void *
         debug_print("speaker PA: now ");
         debug_print(s_speaker_pa_enabled ? "ON\n" : "OFF (headphones only)\n");
         menu_tile_speaker_pa_refresh();
+        if (s_settings_ready_for_autosave) { settings_mark_dirty(); } /* 07/09/2026 - was missing, see settings.h's comment */
     }
 }
 
@@ -4813,7 +4894,8 @@ static void touch_calib_done_callback(const touch_calibration_t *cal)
      * SETTINGS_SAVE_DEBOUNCE_MS on top of that would just be a
      * pointless delay before something the user explicitly just did
      * gets persisted. */
-    settings_save_now(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2, s_nonwfm_use_48k);
+    settings_save_now(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2, s_nonwfm_use_48k,
+                       s_pga_gain_db_x2, spectrum_smooth_pct_for_save(), s_speaker_pa_enabled);
 }
 
 /*
@@ -4933,7 +5015,8 @@ static void menu_tile_cal_ppm_callback(void *widget, ui_event_t event, void *use
             debug_print_dec("cal_ppm: old MS5351 xtal Hz", old_xtal_hz);
             debug_print_dec("cal_ppm: new MS5351 xtal Hz", new_xtal_hz);
 
-            settings_save_now(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2, s_nonwfm_use_48k);
+            settings_save_now(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2, s_nonwfm_use_48k,
+                       s_pga_gain_db_x2, spectrum_smooth_pct_for_save(), s_speaker_pa_enabled);
 
             /* Show the applied correction (not the post-correction
              * residual, which would read ~0 and tell the user
@@ -6976,6 +7059,7 @@ static void tune_encoder_poll(void)
                  * see s_rf_agc_enabled's declaration comment. */
                 rf_agc_apply_pga();
                 settings_value_redraw();
+                if (s_settings_ready_for_autosave) { settings_mark_dirty(); } /* 07/09/2026 - was missing, so PGA changes never actually reached CONFIG.CSV, see settings.h's comment */
             }
         }
         return;
@@ -7019,6 +7103,7 @@ static void tune_encoder_poll(void)
             if ((uint8_t)pct != backlight_get_percent()) {
                 backlight_set_percent((uint8_t)pct);
                 settings_value_redraw();
+                if (s_settings_ready_for_autosave) { settings_mark_dirty(); } /* 07/09/2026 - was missing, see settings.h's comment */
             }
         }
         return;
@@ -7111,6 +7196,7 @@ static void tune_encoder_poll(void)
             if (v != s_spectrum_smooth_alpha) {
                 s_spectrum_smooth_alpha = v;
                 settings_value_redraw();
+                if (s_settings_ready_for_autosave) { settings_mark_dirty(); } /* 07/09/2026 - was missing, see settings.h's comment */
             }
         }
         return;

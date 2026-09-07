@@ -3,6 +3,8 @@
 #include "spi_flash.h"
 #include "debug_uart.h"
 #include "ms5351.h"
+#include "backlight.h"  /* backlight_pct - read/applied directly, see settings.h's header comment */
+#include "spectrum.h"   /* spectrum_style - read/applied directly, see settings.h's header comment */
 
 extern volatile uint32_t g_msticks; /* same free-running ms counter touch.c/touch_calib.c/spi_flash.c already use */
 
@@ -25,7 +27,7 @@ static uint32_t s_dirty_since_ms = 0U;
  * spi_flash_async_save_start() only references it, doesn't copy it -
  * see spi_flash.h's comment. A stack-local buffer would be gone the
  * instant settings_poll() returns, so this has to be static. */
-static uint8_t s_async_csv_buf[384]; /* 01/09/2026: bumped from 256 - see settings_load()'s own buffer comment for the worst-case math that made 256 too tight once nonwfm_use_48k was added */
+static uint8_t s_async_csv_buf[512]; /* 01/09/2026: bumped from 256 to 384 - see settings_load()'s own buffer comment for the worst-case math that made 256 too tight once nonwfm_use_48k was added. 07/09/2026: bumped again to 512 for the same reason, now that pga_gain_db_x2/spectrum_smooth_pct/speaker_enabled/backlight_pct/spectrum_style add roughly another 100 bytes worst-case. */
 static uint8_t s_async_save_in_progress = 0U;
 
 /* --- manual CSV building/parsing - no sprintf/strtol, same policy as
@@ -92,12 +94,23 @@ static const char *audio_bw_to_str(audio_bw_t bw)
     }
 }
 
+static const char *spectrum_style_to_str(spectrum_style_t style)
+{
+    switch (style) {
+    case SPECTRUM_STYLE_LINE:    return "LINE";
+    case SPECTRUM_STYLE_OUTLINE: return "OUTLINE";
+    case SPECTRUM_STYLE_HEATMAP:
+    default:                     return "HEATMAP"; /* unreachable in practice, same policy as mode_to_str() */
+    }
+}
+
 /* Returns the byte length written (does NOT null-terminate - this is
  * flash file content, not a C string). */
 static uint32_t build_csv(uint8_t *buf, uint32_t buf_size,
                            const touch_calibration_t *cal, uint32_t vfo_hz, demod_mode_t mode,
                            uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2,
-                           uint8_t nonwfm_use_48k)
+                           uint8_t nonwfm_use_48k, int16_t pga_gain_db_x2,
+                           uint8_t spectrum_smooth_pct, uint8_t speaker_enabled)
 {
     uint32_t p = 0U;
 
@@ -125,6 +138,34 @@ static uint32_t build_csv(uint8_t *buf, uint32_t buf_size,
      * settings_save_now() call site" pattern as touch_get_calibration()
      * just above - see ms5351_get_xtal_hz()'s comment. */
     p = append_str(buf, p, buf_size, "ms5351_xtal_hz,");  p = append_u32(buf, p, buf_size, ms5351_get_xtal_hz()); p = append_str(buf, p, buf_size, "\n");
+    /* PGA analog input gain ceiling (07/09/2026) - 0.5dB units, same
+     * shape as volume_db_x2, but unsigned (0-95, no cut direction) -
+     * see main.c's s_pga_gain_db_x2 declaration comment. main.c-owned,
+     * so passed in like volume_db_x2/nonwfm_use_48k rather than read
+     * via a getter. */
+    p = append_str(buf, p, buf_size, "pga_gain_db_x2,");  p = append_i32(buf, p, buf_size, pga_gain_db_x2); p = append_str(buf, p, buf_size, "\n");
+    /* Spectrum temporal smoothing (07/09/2026) - stored as the same
+     * 0-95% "history weight" the UI already shows (see main.c's
+     * s_spectrum_smooth_alpha comment), not the raw 0.0-0.95 float -
+     * the caller converts on both ends so this file never needs to
+     * know main.c's float representation. main.c-owned, passed in. */
+    p = append_str(buf, p, buf_size, "spectrum_smooth_pct,"); p = append_u32(buf, p, buf_size, spectrum_smooth_pct); p = append_str(buf, p, buf_size, "\n");
+    /* Speaker PA enable/mute (07/09/2026) - plain 0/1, same shape as
+     * the touch_* / nonwfm_use_48k boolean flags. main.c-owned
+     * (s_speaker_pa_enabled), passed in. */
+    p = append_str(buf, p, buf_size, "speaker_enabled,"); p = append_u32(buf, p, buf_size, speaker_enabled); p = append_str(buf, p, buf_size, "\n");
+    /* Backlight brightness (07/09/2026) - 0-100%, read straight from
+     * backlight.c's own getter (backlight_get_percent()), same
+     * "no threading through every call site" pattern as
+     * ms5351_get_xtal_hz()/touch_get_calibration() above - see
+     * settings.h's header comment for why this one is NOT a
+     * build_csv() parameter despite main.c owning s_pga_gain_db_x2/
+     * s_spectrum_smooth_alpha/s_speaker_pa_enabled above. */
+    p = append_str(buf, p, buf_size, "backlight_pct,"); p = append_u32(buf, p, buf_size, backlight_get_percent()); p = append_str(buf, p, buf_size, "\n");
+    /* Spectrum trace style (07/09/2026) - HEATMAP/LINE/OUTLINE, read
+     * straight from spectrum.c's own getter, same reasoning as
+     * backlight_pct just above. */
+    p = append_str(buf, p, buf_size, "spectrum_style,"); p = append_str(buf, p, buf_size, spectrum_style_to_str(spectrum_get_style())); p = append_str(buf, p, buf_size, "\n");
     return p;
 }
 
@@ -185,7 +226,7 @@ static uint8_t key_is(const uint8_t *key, uint32_t key_len, const char *literal)
 
 uint8_t settings_load(settings_loaded_t *out)
 {
-    uint8_t buf[384]; /* 01/09/2026: bumped from 256 - the REALISTIC worst case (every touch corner at 4095, vfo_hz at TUNE_MAX_HZ=180000000, tune_step_hz at 1000000, ms5351_xtal_hz near 26000000, mode="USB"/"WFM", audio_bw="1K8", volume_db_x2 negative) came out to 246 bytes even BEFORE nonwfm_use_48k existed - only 10 bytes of headroom, and adding that one new short line ("nonwfm_use_48k,1\n", 18 bytes) already pushed it OVER 256. append_str()/append_u32()/append_i32() all respect buf_size and would have silently truncated rather than corrupted memory, but a truncated CONFIG.CSV losing its last field(s) is still a real, if rare, data-loss bug worth avoiding outright rather than accepting - 384 gives comfortable headroom for this field and future ones. */
+    uint8_t buf[512]; /* 01/09/2026: bumped from 256 to 384 - the REALISTIC worst case (every touch corner at 4095, vfo_hz at TUNE_MAX_HZ=180000000, tune_step_hz at 1000000, ms5351_xtal_hz near 26000000, mode="USB"/"WFM", audio_bw="1K8", volume_db_x2 negative) came out to 246 bytes even BEFORE nonwfm_use_48k existed - only 10 bytes of headroom, and adding that one new short line ("nonwfm_use_48k,1\n", 18 bytes) already pushed it OVER 256. append_str()/append_u32()/append_i32() all respect buf_size and would have silently truncated rather than corrupted memory, but a truncated CONFIG.CSV losing its last field(s) is still a real, if rare, data-loss bug worth avoiding outright rather than accepting - 384 gives comfortable headroom for this field and future ones. 07/09/2026: bumped again to 512 - pga_gain_db_x2/spectrum_smooth_pct/speaker_enabled/backlight_pct/spectrum_style ("spectrum_style,HEATMAP\n" alone is 23 bytes) add roughly another 100 bytes worst-case, and 384 no longer leaves the same comfortable margin. */
     uint32_t n;
     uint32_t pos = 0U;
     uint8_t got_any = 0U;
@@ -198,6 +239,10 @@ uint8_t settings_load(settings_loaded_t *out)
     out->have_audio_bw = 0U;
     out->have_volume_db_x2 = 0U;
     out->have_nonwfm_use_48k = 0U;
+    out->have_pga_gain_db_x2 = 0U;
+    out->have_spectrum_smooth_pct = 0U;
+    out->have_speaker_enabled = 0U;
+    out->have_backlight_pct = 0U;
 
     n = spi_flash_read_file_by_name(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3, buf, sizeof(buf));
     if (n == 0U) {
@@ -249,6 +294,42 @@ uint8_t settings_load(settings_loaded_t *out)
             else if (key_is(key, key_len, "tune_step_hz")) { out->tune_step_hz = manual_atou32(val, val_len); out->have_tune_step_hz = 1U; got_any = 1U; }
             else if (key_is(key, key_len, "volume_db_x2")) { out->volume_db_x2 = (int16_t)manual_atoi32(val, val_len); out->have_volume_db_x2 = 1U; got_any = 1U; }
             else if (key_is(key, key_len, "nonwfm_use_48k")) { out->nonwfm_use_48k = (uint8_t)manual_atou32(val, val_len); out->have_nonwfm_use_48k = 1U; got_any = 1U; }
+            /* pga_gain_db_x2/spectrum_smooth_pct/speaker_enabled
+             * (07/09/2026): main.c-owned, so - same as vfo_hz/mode/
+             * volume_db_x2/nonwfm_use_48k above - just stashed into
+             * *out with their own have_* flag for the CALLER to apply
+             * once boot ordering allows (see settings.h's header
+             * comment). No range clamping here - that is main.c's job
+             * when it applies these, same as it already does for
+             * volume_db_x2 (VOLUME_MIN_X2/MAX_X2) rather than settings.c
+             * guessing at limits that live in main.c. */
+            else if (key_is(key, key_len, "pga_gain_db_x2")) { out->pga_gain_db_x2 = (int16_t)manual_atoi32(val, val_len); out->have_pga_gain_db_x2 = 1U; got_any = 1U; }
+            else if (key_is(key, key_len, "spectrum_smooth_pct")) { out->spectrum_smooth_pct = (uint8_t)manual_atou32(val, val_len); out->have_spectrum_smooth_pct = 1U; got_any = 1U; }
+            else if (key_is(key, key_len, "speaker_enabled")) { out->speaker_enabled = (uint8_t)manual_atou32(val, val_len); out->have_speaker_enabled = 1U; got_any = 1U; }
+            /* backlight_pct (07/09/2026): backlight.c-owned WITH a
+             * getter, but still stashed into *out rather than applied
+             * directly here - backlight_init() runs AFTER
+             * settings_load() in main()'s boot sequence and would
+             * just overwrite a direct apply with its own compiled-in
+             * default (see settings.h's header comment). No clamping
+             * needed on the caller's side either - backlight_set_percent()
+             * already clamps both ends itself. */
+            else if (key_is(key, key_len, "backlight_pct")) { out->backlight_pct = (uint8_t)manual_atou32(val, val_len); out->have_backlight_pct = 1U; got_any = 1U; }
+            /* spectrum_style (07/09/2026): applied DIRECTLY here, no
+             * have_ flag/value pair at all - unlike backlight_pct just
+             * above, spectrum_init() (also called after
+             * settings_load()) never touches spectrum.c's style state,
+             * so there is no ordering hazard to defer around - same
+             * reasoning as touch_set_calibration()/ms5351_set_xtal_hz()
+             * below. Unrecognized value: silently ignored, leaves
+             * whatever spectrum_init()/the s_style initializer already
+             * set (SPECTRUM_STYLE_HEATMAP). */
+            else if (key_is(key, key_len, "spectrum_style")) {
+                if      ((val_len >= 4U) && mem_eq(val, (const uint8_t *)"LINE", 4U))    { spectrum_set_style(SPECTRUM_STYLE_LINE); got_any = 1U; }
+                else if ((val_len >= 7U) && mem_eq(val, (const uint8_t *)"OUTLINE", 7U)) { spectrum_set_style(SPECTRUM_STYLE_OUTLINE); got_any = 1U; }
+                else if ((val_len >= 7U) && mem_eq(val, (const uint8_t *)"HEATMAP", 7U)) { spectrum_set_style(SPECTRUM_STYLE_HEATMAP); got_any = 1U; }
+                /* else: unrecognized value - leave the current style alone */
+            }
             else if (key_is(key, key_len, "ms5351_xtal_hz")) {
                 /* Applied directly, same as touch_set_calibration()
                  * just below - no ordering dependency on the rest of
@@ -300,14 +381,16 @@ void settings_mark_dirty(void)
     s_dirty_since_ms = g_msticks;
 }
 
-void settings_save_now(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k)
+void settings_save_now(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k,
+                        int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled)
 {
     touch_calibration_t cal;
-    uint8_t csv[384]; /* see settings_load()'s buffer comment for why 256 stopped being safe */
+    uint8_t csv[512]; /* see settings_load()'s buffer comment for why 256, then 384, stopped being safe */
     uint32_t len;
 
     touch_get_calibration(&cal);
-    len = build_csv(csv, sizeof(csv), &cal, vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2, nonwfm_use_48k);
+    len = build_csv(csv, sizeof(csv), &cal, vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2, nonwfm_use_48k,
+                     pga_gain_db_x2, spectrum_smooth_pct, speaker_enabled);
 
     if (spi_flash_write_or_update_file(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3, csv, len)) {
         debug_print("settings_save_now: CONFIG.CSV saved\n");
@@ -317,7 +400,8 @@ void settings_save_now(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz
     s_dirty = 0U;
 }
 
-void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k)
+void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k,
+                    int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled)
 {
     if (s_async_save_in_progress) {
         spi_flash_async_status_t st = spi_flash_async_save_poll();
@@ -362,14 +446,16 @@ void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, au
         uint32_t len;
 
         touch_get_calibration(&cal);
-        len = build_csv(s_async_csv_buf, sizeof(s_async_csv_buf), &cal, vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2, nonwfm_use_48k);
+        len = build_csv(s_async_csv_buf, sizeof(s_async_csv_buf), &cal, vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2, nonwfm_use_48k,
+                         pga_gain_db_x2, spectrum_smooth_pct, speaker_enabled);
 
         if (spi_flash_async_save_start(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3, s_async_csv_buf, len)) {
             s_async_save_in_progress = 1U;
             s_dirty = 0U;
         } else {
             debug_print("settings_poll: async fast path unavailable (first save?) - falling back to a blocking save\n");
-            settings_save_now(vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2, nonwfm_use_48k);
+            settings_save_now(vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2, nonwfm_use_48k,
+                               pga_gain_db_x2, spectrum_smooth_pct, speaker_enabled);
         }
     }
 }
