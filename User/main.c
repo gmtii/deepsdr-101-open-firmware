@@ -134,6 +134,16 @@ static void calib_height_ruler_draw(void);
  * 0 for normal use once that's been confirmed on real hardware. */
 #define SPI_FLASH_PROBE_TEST 1
 
+/* Set to 1 to override the ADC's M-terminal (negative input) routing
+ * to common-mode right after aic3204_phase2_init(), for HFDL bench
+ * testing with the RF front-end (QSD) disconnected and a single-ended
+ * line-level jack feeding the codec directly instead - see
+ * aic3204_set_input_single_ended_test()'s comment in aic3204.h for
+ * the full "why" and its own hardware-validation caveat. Back to 0
+ * for normal QSD-fed operation - same "opt-in bench diagnostic, off
+ * by default" shape as SPI_FLASH_PROBE_TEST just above. */
+#define AIC3204_SINGLE_ENDED_TEST 0
+
 /*
  * TUNE_START_HZ moved to config.h (CONFIG_TUNE_START_HZ) 07/08/2026,
  * per the project owner - kept as a local alias so the many
@@ -603,6 +613,16 @@ int main(void)
 
     debug_print("\n--- AIC3204: phase 2 (clock + single-ended ADC baseline + power-up) ---\n");
     aic3204_phase2_init(s_current_rate);
+
+#if AIC3204_SINGLE_ENDED_TEST
+    /* Bench test ONLY - see AIC3204_SINGLE_ENDED_TEST's and
+     * aic3204_set_input_single_ended_test()'s comments. Must run
+     * AFTER aic3204_phase2_init() (which sets up the normal
+     * differential baseline this call then partially overrides), and
+     * before anything starts actually reading real audio through the
+     * ADC. */
+    aic3204_set_input_single_ended_test();
+#endif
 
     /*
      * Audio out: switch DMA0/CH4 from the bring-up test tone to the
@@ -1938,14 +1958,33 @@ static uint8_t spectrum_smooth_pct_for_save(void)
 #define TIME_Y 8
 #define BATT_X 690
 #define BATT_Y 40
-#define BATT_W 70 /* narrowed from 80 on 31/07/2026 to make room for the
-                    * voltage readout to its right - see
-                    * battery_display_draw()'s comment. Screen is 800px
-                    * wide (GFX_SCREEN_WIDTH) and the icon's right edge
-                    * sits at BATT_X+BATT_W-1, so this leaves
-                    * 799-(690+70-1)=40px for the "XX.XV" text (30px at
-                    * scale 1) plus a safety margin. */
+#define BATT_W 48 /* shortened from 70 on 08/09/2026, per the project
+                    * owner ("la bateria la puedes hacer algo mas
+                    * corta") - narrows the bar itself, not the icon
+                    * height or the voltage text next to it. Was
+                    * narrowed from 80->70 on 31/07/2026 for the same
+                    * voltage-readout-clearance reasoning as this
+                    * comment always had; 799-(690+48-1)=62px now free
+                    * for the "XX.XV" text (30px at scale 1), even more
+                    * margin than the old 70-wide version had. */
 #define BATT_H 16
+
+/* Speaker-enabled indicator (07/09/2026, per the project owner) -
+ * sits in the gap between the badge row (ends at BADGE_COL(6)+BADGE_W
+ * = 649, see BADGE_COL's own comment) and the battery gauge (BATT_X =
+ * 690) - 41px available. Proportions (width:height, box width:box
+ * height:horn width) match the real, widely-used "speaker/volume"
+ * glyph (e.g. Feather icons' "volume-1": box 4x6, horn 5 wide, full
+ * height 14, all in a 24-tall viewBox - a 9:14 width:height ratio,
+ * TALLER than wide) rather than an invented shape - see
+ * speaker_icon_draw()'s own comment for why that matters. Vertically
+ * centered in the status strip (like BADGE_Y0), not pinned to the
+ * battery's shorter BATT_Y/H, since this icon is taller than the
+ * battery gauge by design. */
+#define SPK_ICON_W 16
+#define SPK_ICON_H 24
+#define SPK_ICON_X 661
+#define SPK_ICON_Y (uint16_t)(STATUS_STRIP_Y + (STATUS_STRIP_H - SPK_ICON_H) / 2U)
 
 /*
  * Renders `hz` as a fixed 11-char field "XXX.XXX.XXX" with thousands
@@ -2442,6 +2481,88 @@ static void battery_display_draw(void)
          * is 7px tall, (16-7)/2 = 4 (rounds down, close enough). */
         gfx_text((uint16_t)(BATT_X + BATT_W + 2), (uint16_t)(BATT_Y + 4), vbuf,
                  color, GFX_COLOR_DARKGRAY, 1);
+    }
+}
+
+/*
+ * Simple speaker glyph - box (the driver) + a flat-right-edge
+ * trapezoid "horn", no sound-wave arcs (per the project owner:
+ * "hazlo mas facil" after seeing a fancier waves version).
+ *
+ * Proportions (box_w=7, box_h=10, full W=16, full H=24) are scaled
+ * from the real, standard "speaker/volume" glyph most icon sets use
+ * (e.g. Feather icons' "volume-1": box 4x6, horn width 5, full height
+ * 14 in a 24-tall viewBox - a 9:14, TALLER-than-wide silhouette) -
+ * NOT an invented shape. An earlier version of this icon used a
+ * wider-than-tall box+horn of its own invention and looked wrong for
+ * exactly that reason: matching a real icon's proportions is what
+ * makes this read as "speaker" rather than an arbitrary polygon.
+ *
+ * gfx.h has no filled-triangle/polygon primitive, only
+ * rect/line/hline/vline (see gfx_line()'s comment for the one
+ * arbitrary-diagonal primitive that DOES exist, unused here), so the
+ * horn is built one row at a time via gfx_hline(): each row's LEFT
+ * edge is computed from its distance off vertical center, rounded to
+ * the nearest pixel (not truncated) to keep the staircase as even as
+ * possible - rows within the box's own height sit at the horn's
+ * widest point (flush with the box); rows further out taper the LEFT
+ * edge rightward the closer they get to the icon's very top/bottom
+ * row, closing completely there. Some staircase-stepping on the
+ * diagonal is unavoidable without an anti-aliased fill (this display
+ * only takes solid RGB565 colors - no alpha blending in gfx.c) - the
+ * same stepping any small bitmap icon has; it reads fine at actual
+ * screen size and viewing distance even though it looks rough
+ * zoomed-in.
+ *
+ * Lit GFX_COLOR_WHITE when the speaker PA is enabled
+ * (s_speaker_pa_enabled - see speaker_pa_set_enabled()), dim
+ * GFX_COLOR_DARKGRAY when muted (headphones-only) - white rather than
+ * badge_draw()'s usual on-color-per-badge convention, to read as part
+ * of the same neutral white-icon language as the battery gauge right
+ * next to it, not as a third distinct status color competing with the
+ * badge row's green/red/yellow.
+ *
+ * Fully repaints its own shape (box + every horn row) each call, so
+ * toggling states needs no separate background clear first.
+ */
+static void speaker_icon_draw(void)
+{
+    uint16_t color = s_speaker_pa_enabled ? GFX_COLOR_WHITE : GFX_COLOR_DARKGRAY;
+    const uint8_t  box_w = 7U;
+    const uint8_t  box_h = 10U; /* centered - the horn's widest opening; see this function's comment for the 7/10/16/24 proportions' origin */
+    const uint16_t box_y = (uint16_t)(SPK_ICON_Y + (SPK_ICON_H - box_h) / 2U);
+    const uint8_t  horn_w = (uint8_t)(SPK_ICON_W - box_w);
+    const float    half_full = (float)SPK_ICON_H * 0.5f;
+    const float    half_box  = (float)box_h * 0.5f;
+    uint8_t row;
+
+    gfx_fill_rect(SPK_ICON_X, box_y, box_w, box_h, color);
+
+    for (row = 0; row < SPK_ICON_H; row++) {
+        /* Signed distance of this row's midpoint from vertical
+         * center, folded to unsigned (top and bottom halves mirror
+         * each other). */
+        float d = ((float)row + 0.5f) - half_full;
+        uint16_t left_x;
+        uint16_t row_w;
+
+        if (d < 0.0f) { d = -d; }
+
+        if (d <= half_box) {
+            left_x = (uint16_t)(SPK_ICON_X + box_w); /* flush with the box - horn's widest point */
+        } else {
+            float frac = (d - half_box) / (half_full - half_box); /* 0 at the box edge, 1 at the very top/bottom row */
+
+            /* +0.5f before truncating = round-to-nearest, not floor -
+             * keeps the staircase steps as even as possible instead
+             * of every step being biased one direction. */
+            left_x = (uint16_t)((uint16_t)(SPK_ICON_X + box_w) + (uint16_t)((frac * (float)horn_w) + 0.5f));
+        }
+
+        row_w = (uint16_t)((uint16_t)(SPK_ICON_X + SPK_ICON_W) - left_x);
+        if (row_w > 0U) {
+            gfx_hline(left_x, (uint16_t)(SPK_ICON_Y + row), row_w, color);
+        }
     }
 }
 
@@ -2984,12 +3105,26 @@ static void badges_draw(void)
     }
 
     badge_draw(BADGE_COL(0), BADGE_Y0, "NR",  s_nr_on, GFX_COLOR_GREEN);
-    /* SPT badge: lit whenever line smoothing is active (passes > 0),
-     * same "on = colored" convention as the other badges - see
-     * s_spec_smooth_passes' comment for the repurposing story. The
-     * actual pass count only shows on the menu tile (badge_draw() has
-     * no room for "SPT 3" at this width). */
-    badge_draw(BADGE_COL(1), BADGE_Y0, "SPT", (uint8_t)(s_spec_smooth_passes > 0U), GFX_COLOR_GREEN);
+    /* ATT badge (07/09/2026, per the project owner - replaces the old
+     * SPT badge in this slot; SPT's own menu tile/feature is
+     * untouched, only this top-strip slot was repurposed since there
+     * was no room left elsewhere) - shows the ACTIVE front-end
+     * attenuation (s_rf_agc_rin_level, shared by the manual ATT tile
+     * and the RF-level auto-AGC's own Rin escalation - see
+     * menu_tile_att_callback()'s and rf_agc_escalate_rin()'s
+     * comments, both drive the SAME variable so this one badge always
+     * reflects whichever of the two last changed it). Three states:
+     * gray at 10k/0dB (off, matches every other badge's "nothing
+     * active" convention), YELLOW at 20k/-6dB, ORANGE at 40k/-12dB -
+     * a deliberately stronger color for the deeper cut, and distinct
+     * from OVR's RED (reserved for "actively reducing gain right
+     * now") since attenuation staying engaged isn't itself an
+     * urgent/acting state the way OVR's red is. */
+    {
+        uint16_t att_color = (s_rf_agc_rin_level >= (uint8_t)AIC3204_RIN_40K) ? GFX_COLOR_ORANGE : GFX_COLOR_YELLOW;
+
+        badge_draw(BADGE_COL(1), BADGE_Y0, "ATT", (uint8_t)(s_rf_agc_rin_level != 0U), att_color);
+    }
     badge_draw(BADGE_COL(2), BADGE_Y0, "AGC", 1U, GFX_COLOR_GREEN);
     /* s_btn_agc_profile is a real ui_button_t (see its declaration),
      * not a badge_draw() call - keep its label in sync with the
@@ -3010,7 +3145,23 @@ static void badges_draw(void)
     s_btn_audio_bw.bg = bw_interactive ? GFX_COLOR_CYAN : GFX_COLOR_DARKGRAY;
     s_btn_audio_bw.fg = bw_interactive ? GFX_COLOR_BLACK : GFX_COLOR_GRAY;
     ui_button_draw(&s_btn_audio_bw);
-    badge_draw(BADGE_COL(5), BADGE_Y0, "OVR", (uint8_t)(s_rf_agc_backoff_x2 > 0), GFX_COLOR_RED);
+    /* OVR badge: three states via badge_draw()'s existing on/on_bg
+     * API, no changes needed there - "on" (bright vs. gray) now
+     * tracks s_rf_agc_enabled itself (the master switch) rather than
+     * just the backoff amount, so RF-AGC being ON reads as a color
+     * even while it isn't currently reducing anything; the COLOR then
+     * tells the two enabled sub-states apart: GREEN while enabled and
+     * not currently backing off gain, RED while it's actively
+     * reducing PGA/Rin against a strong signal (same red-when-acting
+     * behavior this badge always had) - per the project owner
+     * (07/09/2026: "OVR en verde cuando este activado el RFAGC, y OVR
+     * [en rojo] cuando actue como esta ahora"). Disabled (gray) is
+     * unchanged from before. */
+    {
+        uint16_t ovr_color = (s_rf_agc_backoff_x2 > 0) ? GFX_COLOR_RED : GFX_COLOR_GREEN;
+
+        badge_draw(BADGE_COL(5), BADGE_Y0, "OVR", s_rf_agc_enabled, ovr_color);
+    }
     /* RATE badge, added 01/09/2026 per the project owner - shows the
      * ACTUAL active sample rate at a glance, display-only (the actual
      * control for the non-WFM case is the RATE tile on the HW
@@ -3035,6 +3186,7 @@ static void badges_draw(void)
         badge_draw(BADGE_COL(6), BADGE_Y0, s_nonwfm_use_48k ? "48K" : "96K",
                    1U, s_nonwfm_use_48k ? GFX_COLOR_YELLOW : GFX_COLOR_GREEN);
     }
+    speaker_icon_draw(); /* 07/09/2026 - piggybacks on every existing badges_draw() call site, see its own comment */
 }
 
 /*
@@ -4637,6 +4789,7 @@ static void menu_tile_att_callback(void *widget, ui_event_t event, void *user_da
         rf_agc_mute_for_transition();
         debug_print_dec("att: manual Rin now (0=10k/1=20k/2=40k)", (uint32_t)s_rf_agc_rin_level);
         menu_tile_att_refresh();
+        badges_draw(); /* 07/09/2026 - keeps the new top-strip ATT badge in sync with manual changes too, not just rf_agc_escalate_rin()/deescalate_rin()'s automatic ones */
     }
 }
 
@@ -4844,6 +4997,7 @@ static void menu_tile_speaker_pa_callback(void *widget, ui_event_t event, void *
         debug_print("speaker PA: now ");
         debug_print(s_speaker_pa_enabled ? "ON\n" : "OFF (headphones only)\n");
         menu_tile_speaker_pa_refresh();
+        speaker_icon_draw(); /* 07/09/2026 - instant feedback, don't wait for some unrelated badges_draw() call elsewhere */
         if (s_settings_ready_for_autosave) { settings_mark_dirty(); } /* 07/09/2026 - was missing, see settings.h's comment */
     }
 }
@@ -7557,12 +7711,18 @@ static void radio_screen_draw(void)
  * panel_center_hz sits where it does (the IF-offset correction at
  * zoom 1x) and why full_span_hz comes from spec_zoom_full_span_hz().
  *
- * Deliberately NOT quantized to the current tune step (unlike
- * spec_drag_tune_apply()'s relative panning) - the whole point is
- * landing exactly on whatever the finger pointed at, not the nearest
- * round step, since a real signal's peak has no reason to fall on
- * one. TUNE_MIN_HZ/MAX_HZ still clamp the result, same as every other
- * tuning path.
+ * Rounded to the NEAREST active tune step (07/09/2026, per the
+ * project owner - "interesa que se redondeen al step activo... asi
+ * 7.123.531 pasaria a ser 7.124 si el step esta a 1k") - this used to
+ * be deliberately UNQUANTIZED (landing exactly on whatever pixel the
+ * finger hit, on the reasoning that a real signal's peak has no
+ * reason to fall on a round step), but that leaves ugly, hard-to-read
+ * frequencies most of the time in practice, so a tap now lands on the
+ * nearest multiple of k_tune_steps[s_tune_step_idx] instead - same
+ * step the encoder and spec_drag_tune_apply()'s relative panning
+ * already move in, so a tap and a subsequent encoder nudge stay on
+ * the same frequency grid. TUNE_MIN_HZ/MAX_HZ still clamp the
+ * (rounded) result, same as every other tuning path.
  */
 static void spec_tap_tune_to_x(uint16_t x)
 {
@@ -7571,6 +7731,7 @@ static void spec_tap_tune_to_x(uint16_t x)
     int32_t px = (int32_t)x - (int32_t)(MAIN_W / 2);
     int64_t off_hz;
     int64_t f;
+    int64_t step_hz = (int64_t)k_tune_steps[s_tune_step_idx];
 
     if (s_spec_zoom == SPEC_ZOOM_1X && demod_am_get_if_offset_active()) {
         panel_center_hz = s_tune_hz - demod_if_offset_hz();
@@ -7578,6 +7739,19 @@ static void spec_tap_tune_to_x(uint16_t x)
 
     off_hz = ((int64_t)px * (int64_t)full_span_hz) / (int64_t)SPEC_TRACE_W;
     f = (int64_t)panel_center_hz + off_hz;
+
+    if (step_hz > 0) {
+        /* Round to nearest multiple of step_hz - not truncate - so a
+         * tap just past the halfway point to the next step rounds UP
+         * to it rather than always landing short. f is always >= 0 in
+         * practice (TUNE_MIN_HZ is well above zero), but the rem<0
+         * fixup keeps this correct even if that ever changed. */
+        int64_t rem = f % step_hz;
+
+        if (rem < 0) { rem += step_hz; }
+        f -= rem;
+        if (rem * 2 >= step_hz) { f += step_hz; }
+    }
 
     if (f < (int64_t)TUNE_MIN_HZ) { f = (int64_t)TUNE_MIN_HZ; }
     if (f > (int64_t)TUNE_MAX_HZ) { f = (int64_t)TUNE_MAX_HZ; }

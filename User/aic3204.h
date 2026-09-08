@@ -216,6 +216,62 @@ typedef enum {
 uint8_t aic3204_set_input_impedance(aic3204_rin_t level);
 
 /*
+ * *** BENCH-TEST ONLY, single-ended override *** - 07/09/2026, per
+ * the project owner: for HFDL testing with the analog RF front-end
+ * (QSD) fully disconnected and a line-level audio jack feeding IN2L/
+ * IN3x directly instead, the source is NOT differential like the
+ * QSD's I/Q outputs are, so aic3204_phase2_init()'s captured
+ * differential wiring (IN2L(P)/IN2R(M) for the left/I channel,
+ * IN3x(P)/IN3x(M) for the right/Q channel - see that function's own
+ * register-by-register comment) would short/cancel a single-ended
+ * source fed onto only one side of each pair.
+ *
+ * This function re-routes ONLY the M-terminal (negative input) of
+ * each channel from its paired IN2R/IN3x pin to the codec's internal
+ * common-mode reference (CM1L/CM1R) - the datasheet-standard way to
+ * accept a single-ended source on a MicPGA designed around
+ * differential pairs (TI SLAA404C "Design and Configuration Guide for
+ * the TLV320AIC3204", Appendix D.1 "Configure the ADC Channel for
+ * Single-ended Stereo Operation"). The P-terminal (hot) pins and the
+ * 10k input impedance are left EXACTLY as aic3204_phase2_init() set
+ * them - only the M-terminal routing changes, so this is additive:
+ * call it right after aic3204_phase2_init(), never instead of it.
+ *
+ * *** IMPORTANT UNVERIFIED ASSUMPTION, same caveat class as
+ * aic3204_set_input_impedance()'s *** - unlike THAT function (which
+ * reuses the exact captured bit POSITIONS, just varying the 2-bit
+ * impedance code within them), this one writes a DIFFERENT bit
+ * position (bits[7:6] of P1R54/P1R57, the CM1L/CM1R field) that has
+ * never been captured from real I2C traffic on this board - it comes
+ * straight from TI's own appendix example (which uses IN1L/IN1R at
+ * 20k: P1R52/54/55/57 = 0x80/0x80/0x80/0x80), algebraically re-scaled
+ * here to the SAME field position at 10k (0x40) to match this
+ * driver's existing 10k baseline everywhere else, rather than
+ * following TI's own example exactly and switching to 20k. Confirm
+ * on real hardware before trusting this blind: inject a known tone
+ * into the jack and check for a clean, correctly-leveled signal on
+ * BOTH channels (not silence, not double amplitude, not one channel
+ * only) before relying on it for HFDL capture. If a real I2C capture
+ * or a datasheet register table ever turns up different CM1L/CM1R
+ * byte values, THAT's the ground truth - fix this function to match,
+ * not the other way around.
+ *
+ * Single-ended vs. differential at the SAME nominal source level is
+ * ~6dB quieter into the ADC (a differential pair doubles the swing a
+ * single-ended source doesn't have) - if HFDL capture levels look low
+ * against s_pga_gain_db_x2's usual differential-QSD range, that 6dB
+ * is the first thing to compensate for via the PGA tile, not a sign
+ * something else is wrong.
+ *
+ * Gated behind AIC3204_SINGLE_ENDED_TEST (see main.c, default OFF) -
+ * same "off by default, opt-in bring-up/bench diagnostic" shape as
+ * SPI_FLASH_PROBE_TEST, so normal QSD-fed operation is never affected
+ * by code that only exists for this one bench-test scenario. Returns
+ * 1 if both writes were ACKed.
+ */
+uint8_t aic3204_set_input_single_ended_test(void);
+
+/*
  * TEMPORARY DIAGNOSTIC (28/07/2026): TI documents a digital "Audio Bus
  * Loopback" mode (Page 0 / Register 29, bit D5) that reflects
  * whatever comes in on DIN straight back out on DOUT, entirely

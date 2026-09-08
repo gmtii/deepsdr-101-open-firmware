@@ -988,3 +988,23 @@ uint8_t aic3204_set_input_impedance(aic3204_rin_t level)
     return ok;
 }
 
+/* See this function's own comment in aic3204.h for the full "why" -
+ * BENCH-TEST ONLY, single-ended override for HFDL testing with the
+ * RF front-end disconnected. Only the M-terminal registers change;
+ * P1R52/P1R55 (the P-terminal/hot-pin routing) are left untouched,
+ * whatever aic3204_phase2_init() (or aic3204_set_input_impedance())
+ * most recently set them to. */
+uint8_t aic3204_set_input_single_ended_test(void)
+{
+    uint8_t ok;
+
+    ok  = aic3204_write_reg(1, 0x36U, 0x40U); /* P1R54 CM1L -> LADC_M, 10k (was IN2R) */
+    ok &= aic3204_write_reg(1, 0x39U, 0x40U); /* P1R57 CM1R -> RADC_M, 10k (was IN3x) */
+
+    debug_print("aic3204: *** BENCH TEST *** single-ended M-terminal override applied (CM1L/CM1R at 10k)\n");
+    if (!ok) {
+        debug_print("aic3204: *** single-ended override write with NO ACK ***\n");
+    }
+    return ok;
+}
+
