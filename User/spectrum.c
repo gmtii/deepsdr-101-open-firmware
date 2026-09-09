@@ -538,8 +538,8 @@ uint16_t spectrum_colormap(float db, float db_min, float db_max)
 /* Extra colors not taken from the palette. */
 #define SPEC_COLOR_TRACE  GFX_COLOR_WHITE
 #define SPEC_COLOR_PEAK   GFX_COLOR_ORANGE
-#define SPEC_COLOR_GRID   0x2104 /* very dark gray, under everything */
-#define SPEC_COLOR_CENTER GFX_COLOR_RED /* 01/09/2026: bumped from 0x7800 ("dim red") to full-bright red, per the project owner ("la linea de demodulacion... mas ancho y un color mas visible") - see SPEC_CENTER_HALF_WIDTH_PX below for the width half */
+#define SPEC_COLOR_GRID   0x4A49U /* very dark gray, under everything */
+#define SPEC_COLOR_CENTER 0xCE59U /* 08/09/2026: changed from full-bright red to a light gray (~200,200,200), per the project owner ("el rojo queda mal con los nuevos colores") - red was fine against the old fixed palette but clashes with several of the new selectable ones (FIRE/INFERNO/TURBO all have red/orange near the hot end of their own gradient, so a red demod line stopped standing out and started looking like part of the signal). Gray is neutral against every palette instead of matching or clashing with any one hue. */
 #define SPEC_CENTER_HALF_WIDTH_PX 1U /* 01/09/2026: was implicitly 0 (a single exact-column pixel) - now +/-1, i.e. 3px total */
 
 /* SPECTRUM_STYLE_LINE's palette - see spectrum_set_style()'s comment
@@ -562,8 +562,8 @@ uint16_t spectrum_colormap(float db, float db_min, float db_max)
  * never accidentally read as "this is the tint", or vice versa.
  * HEATMAP: RGB (40,0,60). LINE: RGB (34,0,52), slightly dimmer since
  * SPEC_LINE_BG is already non-black. */
-#define SPEC_COLOR_BAND_TINT      0x9240 /* 01/09/2026: bumped from the old 0x2807 (dim, blue-family - blended into the heatmap's own blue/cyan palette) to a warm amber, per the project owner ("el ancho de banda de demodulacion... el actual asi no se ve") - a warm hue contrasts against this style's cool palette instead of just being a brighter shade of the same family */
-#define SPEC_LINE_BAND_TINT       0x71C0 /* same reasoning as SPEC_COLOR_BAND_TINT just above, dimmed slightly to match LINE style's own generally darker palette (see SPEC_LINE_BG/GRID/TRACE) */
+#define SPEC_COLOR_BAND_TINT      0x632CU /* 08/09/2026: changed from a warm amber to a medium gray (~150,150,150), per the project owner - same "red/warm clashes with the new palettes" reasoning as SPEC_COLOR_CENTER just above (amber sits close to several of the new hot-end palette colors too, e.g. FIRE/INFERNO/TURBO/GQRX). Gray stays neutral against all of them. */
+#define SPEC_LINE_BAND_TINT       0x5ACBU /* same reasoning as SPEC_COLOR_BAND_TINT just above, dimmed further (~90,90,90) to match LINE style's own generally darker palette (see SPEC_LINE_BG/GRID/TRACE) */
 
 /* *** 01/09/2026: moved to TCM RAM *** - pure spectrum-rendering
  * working buffers, never DMA targets (only this file's own drawing
@@ -584,7 +584,8 @@ static uint16_t s_peak_h[SPEC_MAX_W] TCMRAM_BSS;    /* peak marker height       
 static uint16_t s_bar_lo[SPEC_MAX_W] TCMRAM_BSS;    /* vertical trace bridge to the left neighbor, low end - see Pass 1.6 */
 static uint16_t s_bar_hi[SPEC_MAX_W] TCMRAM_BSS;    /* vertical trace bridge to the left neighbor, high end - see Pass 1.6 */
 static uint16_t s_row_color[SPEC_MAX_H] TCMRAM_BSS; /* gradient fill color per row */
-static uint8_t  s_row_grid[SPEC_MAX_H] TCMRAM_BSS;  /* 1 = gridline on this row    */
+static uint8_t  s_row_grid[SPEC_MAX_H] TCMRAM_BSS;  /* 1 = horizontal gridline on this row */
+static uint8_t  s_col_grid[SPEC_MAX_W] TCMRAM_BSS;  /* 1 = vertical gridline on this column - added 08/09/2026, see SPECTRUM_GRID_ROWS/COLS's comment in spectrum.h */
 static uint16_t s_row_buf[SPEC_MAX_W] TCMRAM_BSS;   /* stripe assembled in RAM     */
 static uint16_t s_prev_w = 0;            /* detect geometry change      */
 
@@ -831,15 +832,37 @@ void spectrum_draw(const float *db, uint32_t n_bins,
         }
         s_row_grid[row] = 0;
     }
-#if defined(SPECTRUM_GRID_DB)
-    if (SPECTRUM_GRID_DB > 0.0f) {
-        float g;
-        for (g = db_min; g <= db_max; g += SPECTRUM_GRID_DB) {
-            float t = (g - db_min) * scale_t;
-            uint32_t level = (uint32_t)(t * (float)h);
-            if (level >= 1U && level <= h) {
-                s_row_grid[h - level] = 1;
-            }
+    /*
+     * Fixed-pixel reference grid (08/09/2026) - see SPECTRUM_GRID_ROWS/
+     * COLS's comment in spectrum.h for why these no longer track
+     * db_min/db_max or the frequency span. Horizontal: SPECTRUM_GRID_ROWS
+     * lines evenly dividing the panel height into that many+1 bands.
+     * Vertical: SPECTRUM_GRID_COLS lines evenly dividing the width -
+     * with the default of 3, this lands exactly on the panel's
+     * quarter/half/three-quarter columns, matching
+     * spec_span_labels_draw()'s own tick positions below the panel.
+     * Both are cheap fixed-count loops (a handful of iterations each,
+     * not per-row/per-column work), safe to redo every draw call even
+     * though the panel width can change with zoom.
+     */
+#if SPECTRUM_GRID_ROWS > 0
+    {
+        uint8_t gi;
+        for (gi = 1U; gi <= SPECTRUM_GRID_ROWS; gi++) {
+            uint16_t row_pos = (uint16_t)(((uint32_t)h * gi) / (SPECTRUM_GRID_ROWS + 1U));
+            if (row_pos < h) { s_row_grid[row_pos] = 1U; }
+        }
+    }
+#endif
+    for (col = 0; col < w; col++) {
+        s_col_grid[col] = 0U;
+    }
+#if SPECTRUM_GRID_COLS > 0
+    {
+        uint8_t gi;
+        for (gi = 1U; gi <= SPECTRUM_GRID_COLS; gi++) {
+            uint16_t col_pos = (uint16_t)(((uint32_t)w * gi) / (SPECTRUM_GRID_COLS + 1U));
+            if (col_pos < w) { s_col_grid[col_pos] = 1U; }
         }
     }
 #endif
@@ -872,7 +895,7 @@ void spectrum_draw(const float *db, uint32_t n_bins,
         for (row = 0; row < h; row++) {
             uint16_t level_from_bottom = (uint16_t)(h - row);
             uint16_t fill  = s_row_color[row];
-            uint16_t empty = s_row_grid[row] ? grid_color : bg_color;
+            uint8_t  row_has_grid = s_row_grid[row];
 
             for (col = 0; col < w; col++) {
                 uint16_t bh = s_bar_h[col];
@@ -923,7 +946,12 @@ void spectrum_draw(const float *db, uint32_t n_bins,
                 } else if (band_active && col >= band_col_lo && col <= band_col_hi) {
                     px = band_color;                  /* demodulated-bandwidth tint, under everything else */
                 } else {
-                    px = empty;
+                    /* Fixed reference grid (see SPECTRUM_GRID_ROWS/COLS's
+                     * comment in spectrum.h) - either axis lights this
+                     * pixel, same grid_color either way (a row/column
+                     * crossing doesn't need to look any different from
+                     * a plain row or column line). */
+                    px = (row_has_grid || s_col_grid[col]) ? grid_color : bg_color;
                 }
                 s_row_buf[col] = px;
             }

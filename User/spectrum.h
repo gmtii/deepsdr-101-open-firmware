@@ -32,13 +32,36 @@
  *   - Asymmetric exponential smoothing per column: fast attack, slow
  *     decay - signals pop instantly, the floor calms down.
  *   - Optional decaying peak-hold markers.
- *   - Horizontal gridline every SPECTRUM_GRID_DB dB, drawn dim under
- *     the trace.
+ *   - A FIXED reference grid, dim under the trace: horizontal lines at
+ *     even pixel fractions of the panel height, vertical lines at the
+ *     panel's quarter/half/three-quarter columns (matching
+ *     spec_span_labels_draw()'s own tick positions, so the grid lines
+ *     up with the frequency labels underneath it). Pixel-fixed, NOT
+ *     tied to the current dB scale or frequency span - see
+ *     SPECTRUM_GRID_ROWS/COLS's own comment for why that distinction
+ *     matters.
  *   - 1px bright trace on top of each bar.
  */
 
-/* Grid spacing in dB (set 0 to disable gridlines). */
-#define SPECTRUM_GRID_DB 20.0f
+/*
+ * Reference grid density - set either to 0 to disable that axis.
+ *
+ * *** 08/09/2026 - changed from a dB-value grid to a fixed-PIXEL grid
+ * ***, per the project owner: horizontal lines used to be drawn every
+ * SPECTRUM_GRID_DB dB (mapped through the CURRENT db_min/db_max), so
+ * with SAGC (spectrum auto-gain, see main.c's s_spec_agc_enabled)
+ * continuously nudging db_min/db_max frame to frame, every gridline's
+ * PIXEL position drifted up and down right along with it - constant,
+ * distracting jitter on lines that are supposed to be a stable
+ * reference. Evenly-spaced pixel rows/columns, computed straight from
+ * the panel's own width/height, can't drift with anything that
+ * changes per frame (the dB scale, the frequency span, AGC, zoom) -
+ * they're just static reference lines dividing the panel into equal
+ * bands, same visual role a sheet of graph paper plays, not a
+ * calibrated readout of any particular dB or Hz value.
+ */
+#define SPECTRUM_GRID_ROWS 4 /* horizontal lines - N lines divide the panel into N+1 equal vertical bands */
+#define SPECTRUM_GRID_COLS 3 /* vertical lines - matches spec_span_labels_draw()'s quarter/half/three-quarter tick columns */
 
 /* Smoothing factors (0..1): applied per displayed frame, not per FFT
  * block. Attack is how fast the trace RISES toward a stronger value,
