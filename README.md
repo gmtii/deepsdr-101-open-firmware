@@ -1,3 +1,5 @@
+In memory of Carlos EB4DYL
+
 # DEEPSDR 101 / HTOOL/ BAJEI SDR V5 GD32F450 Open Source Firmware
 
 This project is a collaboration between EA8DGL Esteban, UA6YKK Alexandr and 

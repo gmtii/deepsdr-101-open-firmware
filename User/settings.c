@@ -104,13 +104,36 @@ static const char *spectrum_style_to_str(spectrum_style_t style)
     }
 }
 
+static const char *spectrum_palette_to_str(spectrum_palette_t palette)
+{
+    switch (palette) {
+    case SPECTRUM_PALETTE_FIRE:          return "FIRE";
+    case SPECTRUM_PALETTE_VIRIDIS:       return "VIRIDIS";
+    case SPECTRUM_PALETTE_GRAYSCALE:     return "GRAYSCALE";
+    case SPECTRUM_PALETTE_TURBO:         return "TURBO";
+    case SPECTRUM_PALETTE_INFERNO:       return "INFERNO";
+    case SPECTRUM_PALETTE_MAGMA:         return "MAGMA";
+    case SPECTRUM_PALETTE_PLASMA:        return "PLASMA";
+    case SPECTRUM_PALETTE_GQRX:          return "GQRX";
+    case SPECTRUM_PALETTE_ELECTRIC:      return "ELECTRIC";
+    case SPECTRUM_PALETTE_CLASSIC_GREEN: return "CLASSIC_GREEN";
+    case SPECTRUM_PALETTE_SMOKE:         return "SMOKE";
+    case SPECTRUM_PALETTE_TEMPER_COLORS: return "TEMPER_COLORS";
+    case SPECTRUM_PALETTE_VIVID:         return "VIVID";
+    case SPECTRUM_PALETTE_WEBSDR:        return "WEBSDR";
+    case SPECTRUM_PALETTE_CLASSIC:
+    default:                             return "CLASSIC"; /* unreachable in practice, same policy as mode_to_str() */
+    }
+}
+
 /* Returns the byte length written (does NOT null-terminate - this is
  * flash file content, not a C string). */
 static uint32_t build_csv(uint8_t *buf, uint32_t buf_size,
                            const touch_calibration_t *cal, uint32_t vfo_hz, demod_mode_t mode,
                            uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2,
                            uint8_t nonwfm_use_48k, int16_t pga_gain_db_x2,
-                           uint8_t spectrum_smooth_pct, uint8_t speaker_enabled)
+                           uint8_t spectrum_smooth_pct, uint8_t speaker_enabled,
+                           uint8_t att_rin_level)
 {
     uint32_t p = 0U;
 
@@ -166,6 +189,27 @@ static uint32_t build_csv(uint8_t *buf, uint32_t buf_size,
      * straight from spectrum.c's own getter, same reasoning as
      * backlight_pct just above. */
     p = append_str(buf, p, buf_size, "spectrum_style,"); p = append_str(buf, p, buf_size, spectrum_style_to_str(spectrum_get_style())); p = append_str(buf, p, buf_size, "\n");
+    /* Spectrum/waterfall color palette (08/09/2026) - read straight
+     * from spectrum.c's own getter, same "no ordering hazard, no
+     * threading through call sites" reasoning as spectrum_style just
+     * above (spectrum_init() only rebuilds the LUT from whatever
+     * palette is ALREADY set - it doesn't reset the palette choice
+     * itself - so applying this directly from settings_load(), before
+     * spectrum_init() runs, is safe; see settings.h's header comment). */
+    p = append_str(buf, p, buf_size, "spectrum_palette,"); p = append_str(buf, p, buf_size, spectrum_palette_to_str(spectrum_get_palette())); p = append_str(buf, p, buf_size, "\n");
+    /* HEATMAP trace white/color-matched toggle (08/09/2026) - read
+     * straight from spectrum.c's own getter, same "no ordering
+     * hazard, no threading through call sites" reasoning as
+     * spectrum_style/spectrum_palette above (spectrum_init() doesn't
+     * touch this flag either). */
+    p = append_str(buf, p, buf_size, "spec_trace_white,"); p = append_u32(buf, p, buf_size, spectrum_get_heatmap_trace_white()); p = append_str(buf, p, buf_size, "\n");
+    /* ATT / front-end input impedance level (08/09/2026) - 0=10k/
+     * 1=20k/2=40k (aic3204_rin_t), shared by the manual ATT tile and
+     * the RF-level auto-AGC's own Rin escalation - see main.c's
+     * s_rf_agc_rin_level declaration comment. main.c-owned, no
+     * getter, so passed in like pga_gain_db_x2/spectrum_smooth_pct/
+     * speaker_enabled above rather than read directly here. */
+    p = append_str(buf, p, buf_size, "att_rin_level,"); p = append_u32(buf, p, buf_size, att_rin_level); p = append_str(buf, p, buf_size, "\n");
     return p;
 }
 
@@ -243,6 +287,7 @@ uint8_t settings_load(settings_loaded_t *out)
     out->have_spectrum_smooth_pct = 0U;
     out->have_speaker_enabled = 0U;
     out->have_backlight_pct = 0U;
+    out->have_att_rin_level = 0U;
 
     n = spi_flash_read_file_by_name(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3, buf, sizeof(buf));
     if (n == 0U) {
@@ -315,6 +360,17 @@ uint8_t settings_load(settings_loaded_t *out)
              * needed on the caller's side either - backlight_set_percent()
              * already clamps both ends itself. */
             else if (key_is(key, key_len, "backlight_pct")) { out->backlight_pct = (uint8_t)manual_atou32(val, val_len); out->have_backlight_pct = 1U; got_any = 1U; }
+            /* att_rin_level (08/09/2026): main.c-owned
+             * (s_rf_agc_rin_level), no getter, so - same as
+             * pga_gain_db_x2/spectrum_smooth_pct/speaker_enabled above
+             * - just stashed into *out with its own have_* flag for
+             * the caller to apply once the codec is up (needs
+             * aic3204_set_input_impedance(), same boot-ordering
+             * requirement as pga_gain_db_x2's rf_agc_apply_pga() call
+             * - see settings.h's header comment). No clamping here -
+             * that's the caller's job, same reasoning as the other
+             * three main.c-owned fields. */
+            else if (key_is(key, key_len, "att_rin_level")) { out->att_rin_level = (uint8_t)manual_atou32(val, val_len); out->have_att_rin_level = 1U; got_any = 1U; }
             /* spectrum_style (07/09/2026): applied DIRECTLY here, no
              * have_ flag/value pair at all - unlike backlight_pct just
              * above, spectrum_init() (also called after
@@ -330,6 +386,41 @@ uint8_t settings_load(settings_loaded_t *out)
                 else if ((val_len >= 7U) && mem_eq(val, (const uint8_t *)"HEATMAP", 7U)) { spectrum_set_style(SPECTRUM_STYLE_HEATMAP); got_any = 1U; }
                 /* else: unrecognized value - leave the current style alone */
             }
+            /* spectrum_palette (08/09/2026): applied DIRECTLY here,
+             * same shape/reasoning as spectrum_style just above - see
+             * this file's build_csv() comment for why there's no
+             * ordering hazard. Unrecognized value: silently ignored,
+             * leaves whatever build_lut()/the s_palette initializer
+             * already set (SPECTRUM_PALETTE_CLASSIC). Checked longest-
+             * name-first - REQUIRED for CLASSIC_GREEN/CLASSIC (the
+             * former genuinely starts with the latter) and
+             * TEMPER_COLORS (same length as CLASSIC_GREEN, no actual
+             * collision with anything, kept in the same length-order
+             * position for consistency). Every other name is checked
+             * longest-first too, purely as a defensive habit - none
+             * of the rest actually collide. */
+            else if (key_is(key, key_len, "spectrum_palette")) {
+                if      ((val_len >= 13U) && mem_eq(val, (const uint8_t *)"CLASSIC_GREEN", 13U)) { spectrum_set_palette(SPECTRUM_PALETTE_CLASSIC_GREEN); got_any = 1U; }
+                else if ((val_len >= 13U) && mem_eq(val, (const uint8_t *)"TEMPER_COLORS", 13U)) { spectrum_set_palette(SPECTRUM_PALETTE_TEMPER_COLORS); got_any = 1U; }
+                else if ((val_len >= 9U) && mem_eq(val, (const uint8_t *)"GRAYSCALE", 9U))        { spectrum_set_palette(SPECTRUM_PALETTE_GRAYSCALE); got_any = 1U; }
+                else if ((val_len >= 8U) && mem_eq(val, (const uint8_t *)"ELECTRIC", 8U))         { spectrum_set_palette(SPECTRUM_PALETTE_ELECTRIC); got_any = 1U; }
+                else if ((val_len >= 7U) && mem_eq(val, (const uint8_t *)"VIRIDIS", 7U))          { spectrum_set_palette(SPECTRUM_PALETTE_VIRIDIS); got_any = 1U; }
+                else if ((val_len >= 7U) && mem_eq(val, (const uint8_t *)"INFERNO", 7U))          { spectrum_set_palette(SPECTRUM_PALETTE_INFERNO); got_any = 1U; }
+                else if ((val_len >= 7U) && mem_eq(val, (const uint8_t *)"CLASSIC", 7U))          { spectrum_set_palette(SPECTRUM_PALETTE_CLASSIC); got_any = 1U; }
+                else if ((val_len >= 6U) && mem_eq(val, (const uint8_t *)"PLASMA", 6U))           { spectrum_set_palette(SPECTRUM_PALETTE_PLASMA); got_any = 1U; }
+                else if ((val_len >= 6U) && mem_eq(val, (const uint8_t *)"WEBSDR", 6U))           { spectrum_set_palette(SPECTRUM_PALETTE_WEBSDR); got_any = 1U; }
+                else if ((val_len >= 5U) && mem_eq(val, (const uint8_t *)"MAGMA", 5U))            { spectrum_set_palette(SPECTRUM_PALETTE_MAGMA); got_any = 1U; }
+                else if ((val_len >= 5U) && mem_eq(val, (const uint8_t *)"TURBO", 5U))            { spectrum_set_palette(SPECTRUM_PALETTE_TURBO); got_any = 1U; }
+                else if ((val_len >= 5U) && mem_eq(val, (const uint8_t *)"SMOKE", 5U))            { spectrum_set_palette(SPECTRUM_PALETTE_SMOKE); got_any = 1U; }
+                else if ((val_len >= 5U) && mem_eq(val, (const uint8_t *)"VIVID", 5U))            { spectrum_set_palette(SPECTRUM_PALETTE_VIVID); got_any = 1U; }
+                else if ((val_len >= 4U) && mem_eq(val, (const uint8_t *)"FIRE", 4U))             { spectrum_set_palette(SPECTRUM_PALETTE_FIRE); got_any = 1U; }
+                else if ((val_len >= 4U) && mem_eq(val, (const uint8_t *)"GQRX", 4U))             { spectrum_set_palette(SPECTRUM_PALETTE_GQRX); got_any = 1U; }
+                /* else: unrecognized value - leave the current palette alone */
+            }
+            /* spec_trace_white (08/09/2026): applied DIRECTLY here,
+             * same shape/reasoning as spectrum_style/spectrum_palette
+             * above - no ordering hazard. */
+            else if (key_is(key, key_len, "spec_trace_white")) { spectrum_set_heatmap_trace_white((uint8_t)manual_atou32(val, val_len)); got_any = 1U; }
             else if (key_is(key, key_len, "ms5351_xtal_hz")) {
                 /* Applied directly, same as touch_set_calibration()
                  * just below - no ordering dependency on the rest of
@@ -382,7 +473,7 @@ void settings_mark_dirty(void)
 }
 
 void settings_save_now(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k,
-                        int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled)
+                        int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled, uint8_t att_rin_level)
 {
     touch_calibration_t cal;
     uint8_t csv[512]; /* see settings_load()'s buffer comment for why 256, then 384, stopped being safe */
@@ -390,7 +481,7 @@ void settings_save_now(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz
 
     touch_get_calibration(&cal);
     len = build_csv(csv, sizeof(csv), &cal, vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2, nonwfm_use_48k,
-                     pga_gain_db_x2, spectrum_smooth_pct, speaker_enabled);
+                     pga_gain_db_x2, spectrum_smooth_pct, speaker_enabled, att_rin_level);
 
     if (spi_flash_write_or_update_file(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3, csv, len)) {
         debug_print("settings_save_now: CONFIG.CSV saved\n");
@@ -401,7 +492,7 @@ void settings_save_now(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz
 }
 
 void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k,
-                    int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled)
+                    int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled, uint8_t att_rin_level)
 {
     if (s_async_save_in_progress) {
         spi_flash_async_status_t st = spi_flash_async_save_poll();
@@ -447,7 +538,7 @@ void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, au
 
         touch_get_calibration(&cal);
         len = build_csv(s_async_csv_buf, sizeof(s_async_csv_buf), &cal, vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2, nonwfm_use_48k,
-                         pga_gain_db_x2, spectrum_smooth_pct, speaker_enabled);
+                         pga_gain_db_x2, spectrum_smooth_pct, speaker_enabled, att_rin_level);
 
         if (spi_flash_async_save_start(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3, s_async_csv_buf, len)) {
             s_async_save_in_progress = 1U;
@@ -455,7 +546,7 @@ void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, au
         } else {
             debug_print("settings_poll: async fast path unavailable (first save?) - falling back to a blocking save\n");
             settings_save_now(vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2, nonwfm_use_48k,
-                               pga_gain_db_x2, spectrum_smooth_pct, speaker_enabled);
+                               pga_gain_db_x2, spectrum_smooth_pct, speaker_enabled, att_rin_level);
         }
     }
 }

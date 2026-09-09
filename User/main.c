@@ -80,8 +80,10 @@ static void menu_bands_show(void);
 static void menu_step_list_show(void);
 static void menu_mode_list_show(void);
 static void menu_freq_keypad_show(void);
+static void menu_time_keypad_show(void);
 static void menu_tile_rfagc_refresh(void);
 static void rf_agc_apply_pga(void);
+static void rf_agc_mute_for_transition(void); /* forward-declared here too (08/09/2026) - main()'s new att_rin_level boot-apply block needs it before its real definition further down, same reasoning as rf_agc_apply_pga() just above */
 /* Forward declarations for main.c-owned CONFIG.CSV fields added
  * 07/09/2026 (PGA/spectrum smoothing/speaker) - their real
  * declarations/definitions sit later in the file, in the same
@@ -100,6 +102,13 @@ static float s_spectrum_smooth_alpha;
 #define SPECTRUM_SMOOTH_MIN 0.0f
 #define SPECTRUM_SMOOTH_MAX 0.95f
 static uint8_t s_speaker_pa_enabled;
+/* s_rf_agc_rin_level (ATT/Rin level, 0=10k/1=20k/2=40k) - same
+ * tentative-forward-declaration treatment as the three statics just
+ * above, for the exact same reason (real declaration sits after
+ * main() in the file, at line ~1770, but main()'s settings-apply
+ * block needs it earlier - see this block's own header comment).
+ * Added 08/09/2026 alongside CONFIG.CSV's new att_rin_level field. */
+static uint8_t s_rf_agc_rin_level;
 static uint8_t spectrum_smooth_pct_for_save(void);
 static void rf_agc_poll(void);
 static void rtty_poll(void);
@@ -739,6 +748,14 @@ int main(void)
     if (s_loaded_settings.have_backlight_pct) {
         backlight_set_percent(s_loaded_settings.backlight_pct); /* clamps both ends itself, see backlight.h's comment */
     }
+    if (s_loaded_settings.have_att_rin_level) {
+        uint8_t v = s_loaded_settings.att_rin_level;
+
+        if (v > (uint8_t)AIC3204_RIN_40K) { v = (uint8_t)AIC3204_RIN_40K; }
+        s_rf_agc_rin_level = v;
+        aic3204_set_input_impedance((aic3204_rin_t)s_rf_agc_rin_level); /* same call the manual ATT tile and rf_agc_escalate_rin()/deescalate_rin() make */
+        rf_agc_mute_for_transition(); /* Rin isn't soft-stepped, unlike PGA - see this function's own comment; harmless/no-op this early in boot, kept for consistency with every other Rin-changing call site */
+    }
     if (s_loaded_settings.have_tune_step_hz) {
         uint32_t i;
         for (i = 0U; i < TUNE_STEP_COUNT; i++) {
@@ -909,7 +926,7 @@ int main(void)
         rf_agc_poll(); /* RF-level (analog PGA) auto-AGC - see its own comment */
         rtty_poll(); /* drains rtty.c's decoded text to debug UART - see its own comment */
         settings_poll(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2, s_nonwfm_use_48k,
-                      s_pga_gain_db_x2, spectrum_smooth_pct_for_save(), s_speaker_pa_enabled); /* debounced CONFIG.CSV autosave - see settings.h's comment; cheap no-op most iterations */
+                      s_pga_gain_db_x2, spectrum_smooth_pct_for_save(), s_speaker_pa_enabled, s_rf_agc_rin_level); /* debounced CONFIG.CSV autosave - see settings.h's comment; cheap no-op most iterations */
 #if TOUCH_EDGE_DEBUG
         touch_debug_stream_poll(); /* see TOUCH_EDGE_DEBUG's comment */
 #endif
@@ -1245,6 +1262,11 @@ static uint8_t s_menu_mode_active = 0U;
  * demo_touch_poll()'s top-bar tap check, not from the settings grid -
  * same "no parent grid" situation as STEP/MODE. */
 static uint8_t s_menu_freq_active = 0U;
+/* s_menu_time_active: same bookkeeping idea, for the clock-setting
+ * keypad (added 08/09/2026 - see menu_time_keypad_show()'s comment).
+ * Opened straight from demo_touch_poll()'s top-bar TIME_TAP zone
+ * check, same "no parent grid" situation as FREQ. */
+static uint8_t s_menu_time_active = 0U;
 /*
  * s_freq_entry_value/s_freq_entry_digits: the digits typed so far on
  * the keypad, plain integer accumulation (value = value*10 + digit),
@@ -1331,6 +1353,8 @@ static ui_button_t s_menu_tile_volume;
 static ui_button_t s_menu_tile_nb;
 static ui_button_t s_menu_tile_smooth; /* was the reserved/empty slot - see menu_grid_show() */
 static ui_button_t s_menu_tile_spec_style; /* spectrum trace style toggle, added 31/07/2026 alongside the region resize */
+static ui_button_t s_menu_tile_palette; /* spectrum/waterfall color palette cycle, added 08/09/2026 - see spectrum_set_palette()'s comment in spectrum.h */
+static ui_button_t s_menu_tile_trace; /* HEATMAP trace white/color-matched toggle, added 08/09/2026 - see spectrum_set_heatmap_trace_white()'s comment in spectrum.h */
 static ui_button_t s_menu_tile_zoom; /* spectrum/waterfall zoom, see spec_zoom_t below */
 static ui_button_t s_menu_tile_bw; /* AM/SSB audio filter width selector (4K0/2K3/1K8) - repurposed 02/08/2026 from the grid's BANDS tile, see menu_tile_bw_callback()'s comment */
 static ui_button_t s_menu_tile_pga; /* AIC3204 MIC_PGA analog input gain - fills the grid's last spare slot */
@@ -1377,6 +1401,7 @@ static char s_menu_tile_rtty_baud_buf[16];
 static char s_menu_tile_nb_buf[16];
 static char s_menu_tile_smooth_buf[16];
 static char s_menu_tile_spec_style_buf[16];
+static char s_menu_tile_palette_buf[16];
 static char s_menu_tile_bw_buf[16];
 static char s_menu_tile_zoom_buf[16];
 static char s_menu_tile_att_buf[16];
@@ -1777,7 +1802,7 @@ static uint32_t s_rf_agc_last_clip_ms = 0U;   /* g_msticks at the last DETECTED 
  * once the on/off switch moved to its own separate control (s_nr_on)
  * and this value no longer needed to double as an implicit bypass at
  * its minimum). Starts at 0 - matches nr_ss_init()'s own default. */
-static uint16_t s_nr_strength = 0U;
+static uint16_t s_nr_strength = 50U;
 #define NR_STRENGTH_STEP 10U /* per encoder detent - ~32 detents edge
                                  * to edge across the full 0-4095 range,
                                  * similar turn-count feel to PGA/VOLUME's
@@ -2372,17 +2397,35 @@ static void aux_row_display_draw(void)
 
 /*
  * Time-of-day slot. There is NO RTC configured in this project (and
- * no battery-backed clock domain has been brought up), so this shows
- * UPTIME since power-on (from g_msticks, the 1ms SysTick counter) in
- * HH:MM form - honest and still useful on a bench. When/if the
- * GD32F450's RTC gets configured (needs LXTAL bring-up + calendar
- * init), swap the source here and nothing else changes.
+ * no battery-backed clock domain has been brought up) - see
+ * s_time_offset_min's own comment for exactly what this shows instead
+ * and its one real limitation (doesn't survive a power cycle). When/
+ * if the GD32F450's RTC gets configured (needs LXTAL bring-up +
+ * calendar init), swap the source here for the real one and drop
+ * s_time_offset_min/the SET keypad entirely - nothing else about this
+ * function's shape needs to change.
+ *
+ * s_time_offset_min: minutes added to uptime (g_msticks/60000) before
+ * wrapping to a 24h wall-clock read, i.e. displayed = (uptime_min +
+ * s_time_offset_min) % 1440 - added 08/09/2026, per the project
+ * owner: tap the clock readout to type in the actual HH:MM (see
+ * menu_time_keypad_show()) instead of only ever showing raw uptime.
+ * This is a SOFTWARE offset only, not a real clock - it does not tick
+ * while powered off and is NOT persisted to CONFIG.CSV (persisting it
+ * would just silently show the wrong time after any real-world delay
+ * across a power cycle, which is worse than plainly resetting to
+ * uptime=0's offset and needing a re-set - see the project's own
+ * settings.h precedent for "don't persist something that would be
+ * actively misleading"). Starts at 0 (matches the old raw-uptime
+ * behavior) until the first SET.
  */
+static uint32_t s_time_offset_min = 0U;
+
 static void time_display_draw(void)
 {
     extern volatile uint32_t g_msticks;
-    uint32_t total_min = g_msticks / 60000UL;
-    uint32_t hh = (total_min / 60UL) % 100UL;
+    uint32_t total_min = ((g_msticks / 60000UL) + s_time_offset_min) % 1440UL; /* 1440 = minutes/day - wraps the wall-clock read at 24h */
+    uint32_t hh = total_min / 60UL;
     uint32_t mm = total_min % 60UL;
     char buf[6];
 
@@ -3381,6 +3424,22 @@ static void badges_draw(void)
 #define FREQ_TAP_Y1 TOP_H
 
 /*
+ * Top-bar tap zone for the clock-setting keypad (08/09/2026) - the
+ * clock readout's own small area (TIME_X/Y, scale-3 "HH:MM" text),
+ * NOT reusing FREQ_TAP's generous "whole left portion of the bar"
+ * shape: TIME_X/Y sits in the SAME top bar but in its own column,
+ * directly ABOVE the battery gauge/speaker icon (BATT_Y=40,
+ * SPK_ICON_Y) which live lower in this same bar - so unlike FREQ_TAP,
+ * this needs a real Y ceiling (TIME_TAP_Y2) to stay clear of them,
+ * not just TOP_H. X1 has a small left margin past TIME_X itself for
+ * a forgivable resistive-panel tap; X2 runs to the screen edge since
+ * nothing else sits right of the clock in this bar.
+ */
+#define TIME_TAP_X1 (uint16_t)(TIME_X - 10)
+#define TIME_TAP_Y2 36 /* clock text bottom (~TIME_Y+21 at scale 3) plus a few px margin, still short of BATT_Y(40) */
+
+
+/*
  * Option-slot geometry helpers: slot 0-8 -> (row, col) within the
  * RIGHT-hand 3x3 area (columns 1-3, since column 0 is the page
  * selector). Row-major: slot / 3 = row, slot % 3 = column-within-3,
@@ -3980,6 +4039,68 @@ static void menu_tile_spec_style_refresh(void)
     ui_button_draw(&s_menu_tile_spec_style);
 }
 
+static void menu_tile_palette_refresh(void)
+{
+    const char *v;
+    uint8_t j = 4U;
+    uint8_t i;
+
+    switch (spectrum_get_palette()) {
+    case SPECTRUM_PALETTE_FIRE:          v = "FIRE"; break;
+    case SPECTRUM_PALETTE_VIRIDIS:       v = "VIRI"; break;
+    case SPECTRUM_PALETTE_GRAYSCALE:     v = "GRAY"; break;
+    case SPECTRUM_PALETTE_TURBO:         v = "TURB"; break;
+    case SPECTRUM_PALETTE_INFERNO:       v = "INFR"; break;
+    case SPECTRUM_PALETTE_MAGMA:         v = "MAGM"; break;
+    case SPECTRUM_PALETTE_PLASMA:        v = "PLAS"; break;
+    case SPECTRUM_PALETTE_GQRX:          v = "GQRX"; break;
+    case SPECTRUM_PALETTE_ELECTRIC:      v = "ELEC"; break;
+    case SPECTRUM_PALETTE_CLASSIC_GREEN: v = "CLGR"; break;
+    case SPECTRUM_PALETTE_SMOKE:         v = "SMOK"; break;
+    case SPECTRUM_PALETTE_TEMPER_COLORS: v = "TEMP"; break;
+    case SPECTRUM_PALETTE_VIVID:         v = "VIVD"; break;
+    case SPECTRUM_PALETTE_WEBSDR:        v = "WEB"; break;
+    case SPECTRUM_PALETTE_CLASSIC:
+    default:                             v = "CLAS"; break;
+    }
+
+    s_menu_tile_palette_buf[0] = 'P'; s_menu_tile_palette_buf[1] = 'A';
+    s_menu_tile_palette_buf[2] = 'L'; s_menu_tile_palette_buf[3] = ' ';
+    for (i = 0; v[i] != '\0'; i++) {
+        s_menu_tile_palette_buf[j++] = v[i];
+    }
+    s_menu_tile_palette_buf[j] = '\0';
+
+    s_menu_tile_palette.label = s_menu_tile_palette_buf;
+    ui_button_draw(&s_menu_tile_palette);
+}
+
+/* TRC - HEATMAP trace white/color-matched toggle (08/09/2026) - plain
+ * ON/OFF label, same shape as SPK's - see
+ * spectrum_set_heatmap_trace_white()'s comment in spectrum.h. "OFF"
+ * is the DEFAULT and means color-matched (no separate highlight at
+ * all, reads as ON meaning "the white highlight is on"). */
+static void menu_tile_trace_refresh(void)
+{
+    s_menu_tile_trace.label = spectrum_get_heatmap_trace_white() ? "TRC WHT" : "TRC CLR";
+    ui_button_draw(&s_menu_tile_trace);
+}
+
+static void menu_tile_trace_callback(void *widget, ui_event_t event, void *user_data)
+{
+    (void)widget;
+    (void)user_data;
+    if (event == UI_EVENT_RELEASE) {
+        uint8_t next = spectrum_get_heatmap_trace_white() ? 0U : 1U;
+
+        spectrum_set_heatmap_trace_white(next);
+        debug_print("spectrum: heatmap trace now ");
+        debug_print(next ? "WHITE\n" : "color-matched\n");
+        menu_tile_trace_refresh();
+        if (s_settings_ready_for_autosave) { settings_mark_dirty(); }
+    }
+}
+
 static void menu_tile_agc_callback(void *widget, ui_event_t event, void *user_data)
 {
     (void)widget;
@@ -4027,6 +4148,51 @@ static void menu_tile_spec_style_callback(void *widget, ui_event_t event, void *
         debug_print(name);
         menu_tile_spec_style_refresh();
         if (s_settings_ready_for_autosave) { settings_mark_dirty(); } /* 07/09/2026 - was missing, see settings.h's comment */
+    }
+}
+
+/* PALETTE - same "plain cycle, stay on the grid" shape as SPC just
+ * above (15 states now (08/09/2026, after the project owner uploaded
+ * SDR++'s real colormap JSON files - see spectrum_palette_t's own
+ * comment in spectrum.h) - still a plain cycle rather than a detail
+ * view: there's nothing to DIAL IN, just a fixed list to step
+ * through, same reasoning that applied at 4 states). */
+static void menu_tile_palette_callback(void *widget, ui_event_t event, void *user_data)
+{
+    (void)widget;
+    (void)user_data;
+    if (event == UI_EVENT_RELEASE) {
+        spectrum_palette_t next;
+        const char *name;
+
+        /* Order matches spectrum_palette_t's own declaration order in
+         * spectrum.h - CLASSIC/FIRE/VIRIDIS/GRAYSCALE first (unchanged
+         * from before), then the rest of SDR++'s named set in the
+         * order their JSON files were uploaded, ending back at
+         * CLASSIC. */
+        switch (spectrum_get_palette()) {
+        case SPECTRUM_PALETTE_CLASSIC:       next = SPECTRUM_PALETTE_FIRE;          name = "FIRE\n";          break;
+        case SPECTRUM_PALETTE_FIRE:          next = SPECTRUM_PALETTE_VIRIDIS;       name = "VIRIDIS\n";       break;
+        case SPECTRUM_PALETTE_VIRIDIS:       next = SPECTRUM_PALETTE_GRAYSCALE;     name = "GRAYSCALE\n";     break;
+        case SPECTRUM_PALETTE_GRAYSCALE:     next = SPECTRUM_PALETTE_TURBO;         name = "TURBO\n";         break;
+        case SPECTRUM_PALETTE_TURBO:         next = SPECTRUM_PALETTE_INFERNO;       name = "INFERNO\n";       break;
+        case SPECTRUM_PALETTE_INFERNO:       next = SPECTRUM_PALETTE_MAGMA;         name = "MAGMA\n";         break;
+        case SPECTRUM_PALETTE_MAGMA:         next = SPECTRUM_PALETTE_PLASMA;        name = "PLASMA\n";        break;
+        case SPECTRUM_PALETTE_PLASMA:        next = SPECTRUM_PALETTE_GQRX;          name = "GQRX\n";          break;
+        case SPECTRUM_PALETTE_GQRX:          next = SPECTRUM_PALETTE_ELECTRIC;      name = "ELECTRIC\n";      break;
+        case SPECTRUM_PALETTE_ELECTRIC:      next = SPECTRUM_PALETTE_CLASSIC_GREEN; name = "CLASSIC_GREEN\n"; break;
+        case SPECTRUM_PALETTE_CLASSIC_GREEN: next = SPECTRUM_PALETTE_SMOKE;         name = "SMOKE\n";         break;
+        case SPECTRUM_PALETTE_SMOKE:         next = SPECTRUM_PALETTE_TEMPER_COLORS; name = "TEMPER_COLORS\n"; break;
+        case SPECTRUM_PALETTE_TEMPER_COLORS: next = SPECTRUM_PALETTE_VIVID;         name = "VIVID\n";         break;
+        case SPECTRUM_PALETTE_VIVID:         next = SPECTRUM_PALETTE_WEBSDR;        name = "WEBSDR\n";        break;
+        case SPECTRUM_PALETTE_WEBSDR:
+        default:                             next = SPECTRUM_PALETTE_CLASSIC;       name = "CLASSIC\n";       break;
+        }
+        spectrum_set_palette(next);
+        debug_print("spectrum: palette now ");
+        debug_print(name);
+        menu_tile_palette_refresh();
+        if (s_settings_ready_for_autosave) { settings_mark_dirty(); }
     }
 }
 
@@ -5049,7 +5215,7 @@ static void touch_calib_done_callback(const touch_calibration_t *cal)
      * pointless delay before something the user explicitly just did
      * gets persisted. */
     settings_save_now(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2, s_nonwfm_use_48k,
-                       s_pga_gain_db_x2, spectrum_smooth_pct_for_save(), s_speaker_pa_enabled);
+                       s_pga_gain_db_x2, spectrum_smooth_pct_for_save(), s_speaker_pa_enabled, s_rf_agc_rin_level);
 }
 
 /*
@@ -5170,7 +5336,7 @@ static void menu_tile_cal_ppm_callback(void *widget, ui_event_t event, void *use
             debug_print_dec("cal_ppm: new MS5351 xtal Hz", new_xtal_hz);
 
             settings_save_now(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2, s_nonwfm_use_48k,
-                       s_pga_gain_db_x2, spectrum_smooth_pct_for_save(), s_speaker_pa_enabled);
+                       s_pga_gain_db_x2, spectrum_smooth_pct_for_save(), s_speaker_pa_enabled, s_rf_agc_rin_level);
 
             /* Show the applied correction (not the post-correction
              * residual, which would read ~0 and tell the user
@@ -5301,6 +5467,7 @@ static void menu_bands_show(void)
     s_menu_step_active = 0U;
     s_menu_mode_active = 0U;
     s_menu_freq_active = 0U;
+    s_menu_time_active = 0U;
     s_menu_open = 1U; /* harmless if already 1 (opened from the grid); required when opened straight from s_btn_bands, same reasoning as menu_step_list_show()'s comment */
 }
 
@@ -5430,6 +5597,7 @@ static void menu_step_list_show(void)
     s_menu_mode_active = 0U;
     s_menu_step_active = 1U;
     s_menu_freq_active = 0U;
+    s_menu_time_active = 0U;
     s_menu_open = 1U; /* opened straight from the bottom bar, not the grid - unlike BANDS, nothing else sets this first */
     debug_print("menu: step picker opened\n");
 }
@@ -5471,6 +5639,7 @@ static void menu_mode_list_show(void)
     s_menu_step_active = 0U;
     s_menu_mode_active = 1U;
     s_menu_freq_active = 0U;
+    s_menu_time_active = 0U;
     s_menu_open = 1U;
     debug_print("menu: mode picker opened\n");
 }
@@ -5755,8 +5924,254 @@ static void menu_freq_keypad_show(void)
     s_menu_step_active = 0U;
     s_menu_mode_active = 0U;
     s_menu_freq_active = 1U;
+    s_menu_time_active = 0U;
     s_menu_open = 1U; /* opened straight from the top bar, not the grid - same as STEP/MODE */
     debug_print("menu: frequency keypad opened\n");
+}
+
+/*
+ * --- Clock-setting keypad (08/09/2026, per the project owner) -----------
+ *
+ * "podemos poner un tile para ajustar el reloj... hora y minutos" -
+ * tap the clock readout (TIME_TAP_X1/Y2's zone, checked in
+ * demo_touch_poll()) to type in HH:MM as 4 digits, same "reuse
+ * s_menu_screen/MENU_AREA, opened straight from the top bar" shape as
+ * menu_freq_keypad_show() just above (and its own comment covers why
+ * this isn't a real ui_button_t either - same reasoning, this is a
+ * plain gfx_text() readout too). Deliberately much simpler than the
+ * frequency keypad: exactly 4 digits (HHMM, e.g. "0830" for 8:30,
+ * "1430" for 14:30), no decimal point, one single SET accept button
+ * instead of separate kHz/MHz ones - a clock only ever has one unit.
+ *
+ * s_time_entry_value/digits: identical accumulation shape to
+ * s_freq_entry_value/digits (value = value*10+digit) - see that pair's
+ * own comment for why (no float parsing needed, matches this whole
+ * file's existing integer-accumulation keypad pattern). Capped at
+ * TIME_ENTRY_MAX_DIGITS(4) - HHMM never needs a 5th digit. Reset to
+ * 0/0 every time this keypad opens, never pre-filled with the current
+ * time, same "typing a fresh number is the point" reasoning as the
+ * frequency keypad.
+ */
+#define TIME_ENTRY_MAX_DIGITS 4U
+static uint16_t s_time_entry_value = 0U;
+static uint8_t  s_time_entry_digits = 0U;
+static ui_button_t s_menu_time_tiles[13];
+
+/*
+ * Readout draw - same fixed-field-repaint shape as
+ * freq_keypad_readout_draw() (always blank+redraw the whole strip so
+ * a shorter new value can't leave a ghost digit behind).
+ *
+ * *** 08/09/2026 - rewritten to fix a real confusion (reported by the
+ * project owner: typing "0424" only seemed to "capture" 00:42) ***
+ * Each already-typed digit is now shown in ITS OWN fixed slot
+ * (H-tens, H-ones, M-tens, M-ones), with a '-' placeholder for slots
+ * not yet typed - replacing the old "re-derive HH=value/100,
+ * MM=value%100 after every keypress" display. That old approach was
+ * numerically correct as SOON as all 4 digits had landed, but every
+ * INTERMEDIATE frame re-split the partial value differently: typing
+ * "0" then "4" then "2" showed "00:00" -> "00:04" -> "00:42", not
+ * "0-:--" -> "04:--" -> "04:2-" the way any real digital-clock entry
+ * field fills in - easy to glance at "00:42" mid-typing, mistake it
+ * for the finished result, and hit SET one digit early (exactly what
+ * happened: "0","4","2" alone already reads as 00:42 under the old
+ * scheme). menu_time_keypad_accept_callback() also now requires all
+ * 4 digits before it will act at all, so an incomplete entry like
+ * that can no longer be accepted even by mistake.
+ *
+ * Extracts each typed digit straight from s_time_entry_value/digits
+ * (position i's digit, counting from the FIRST digit typed, is
+ * (value / 10^(digits-1-i)) % 10) rather than keeping a separate
+ * digit buffer - the accumulated value already records exactly what
+ * was typed, in order; this just reads it back out per-slot instead
+ * of re-splitting the whole number as if it were already complete.
+ */
+static void time_keypad_readout_draw(void)
+{
+    static const uint16_t k_pow10[TIME_ENTRY_MAX_DIGITS] = {1U, 10U, 100U, 1000U};
+    char buf[6];
+    uint8_t i;
+
+    gfx_fill_rect(MENU_AREA_X, (uint16_t)(MENU_AREA_Y + 8),
+                  MENU_AREA_W, FREQ_KEYPAD_READOUT_H, GFX_COLOR_BLACK);
+
+    if (s_time_entry_digits == 0U) {
+        gfx_text((uint16_t)(MENU_AREA_X + 16), (uint16_t)(MENU_AREA_Y + 16),
+                 "--:--", GFX_COLOR_GRAY, GFX_COLOR_BLACK, 5);
+        return;
+    }
+
+    for (i = 0U; i < TIME_ENTRY_MAX_DIGITS; i++) {
+        uint8_t slot = (i < 2U) ? i : (uint8_t)(i + 1U); /* skip buf[2], reserved for ':' */
+
+        if (i < s_time_entry_digits) {
+            uint16_t divisor = k_pow10[s_time_entry_digits - 1U - i];
+            uint16_t digit = (s_time_entry_value / divisor) % 10U;
+
+            buf[slot] = (char)('0' + digit);
+        } else {
+            buf[slot] = '-'; /* not typed yet */
+        }
+    }
+    buf[2] = ':';
+    buf[5] = '\0';
+    gfx_text((uint16_t)(MENU_AREA_X + 16), (uint16_t)(MENU_AREA_Y + 16),
+             buf, GFX_COLOR_CYAN, GFX_COLOR_BLACK, 5);
+}
+
+static void menu_time_keypad_digit_callback(void *widget, ui_event_t event, void *user_data)
+{
+    uintptr_t digit = (uintptr_t)user_data;
+
+    (void)widget;
+    if (event == UI_EVENT_RELEASE && s_time_entry_digits < TIME_ENTRY_MAX_DIGITS) {
+        s_time_entry_value = (uint16_t)(s_time_entry_value * 10U + (uint16_t)digit);
+        s_time_entry_digits++;
+        time_keypad_readout_draw();
+    }
+}
+
+static void menu_time_keypad_del_callback(void *widget, ui_event_t event, void *user_data)
+{
+    (void)widget;
+    (void)user_data;
+    if (event == UI_EVENT_RELEASE && s_time_entry_digits > 0U) {
+        s_time_entry_value /= 10U;
+        s_time_entry_digits--;
+        time_keypad_readout_draw();
+    }
+}
+
+static void menu_time_keypad_clr_callback(void *widget, ui_event_t event, void *user_data)
+{
+    (void)widget;
+    (void)user_data;
+    if (event == UI_EVENT_RELEASE) {
+        s_time_entry_value = 0U;
+        s_time_entry_digits = 0U;
+        time_keypad_readout_draw();
+    }
+}
+
+/*
+ * SET - clamps HH to 0-23 and MM to 0-59 (same "clamp rather than
+ * reject" policy as every other manual entry field in this file, e.g.
+ * the frequency keypad's TUNE_MIN_HZ/MAX_HZ clamp) then solves
+ * s_time_offset_min so time_display_draw() reads exactly this HH:MM
+ * at THIS instant - see s_time_offset_min's own declaration comment
+ * for what it means and its one limitation.
+ *
+ * *** 08/09/2026 - now requires EXACTLY 4 digits, not just "any
+ * digits" *** per the project owner's report that "0424" seemed to
+ * "capture" 00:42 - the readout fix above (time_keypad_readout_draw())
+ * addresses the visual confusion that caused it, but this is the
+ * actual backstop: a 1-3 digit entry is almost certainly an
+ * accidental early SET press (mid-typing), not a deliberately short
+ * time, so it's now ignored outright rather than silently accepted
+ * via the old "any digit is enough" rule - same spirit as the
+ * frequency keypad's "empty entry does nothing" guard, just a
+ * stricter threshold appropriate to a fixed-width HHMM field (a
+ * frequency has no fixed digit count to compare against; a clock
+ * does).
+ *
+ * int32_t intermediate for the delta because uptime_min's own modulo
+ * result (0..1439) can legitimately be LARGER than desired_min (e.g.
+ * uptime shows 23:50 and the user sets 00:10) - the raw subtraction
+ * goes negative there, and one +1440 fixup brings it back into range
+ * before the final %1440 (which cannot itself go negative once that
+ * fixup ran, since desired_min and uptime_min%1440 are each already
+ * within 0..1439).
+ */
+static void menu_time_keypad_accept_callback(void *widget, ui_event_t event, void *user_data)
+{
+    (void)widget;
+    (void)user_data;
+    if (event == UI_EVENT_RELEASE && s_time_entry_digits == TIME_ENTRY_MAX_DIGITS) {
+        extern volatile uint32_t g_msticks;
+        uint16_t hh = s_time_entry_value / 100U;
+        uint16_t mm = s_time_entry_value % 100U;
+        int32_t desired_min;
+        int32_t uptime_min_now;
+        int32_t delta;
+
+        if (hh > 23U) { hh = 23U; }
+        if (mm > 59U) { mm = 59U; }
+        desired_min = (int32_t)hh * 60 + (int32_t)mm;
+        uptime_min_now = (int32_t)((g_msticks / 60000UL) % 1440UL);
+        delta = desired_min - uptime_min_now;
+        if (delta < 0) { delta += 1440; }
+        s_time_offset_min = (uint32_t)delta;
+
+        debug_print_dec("clock: set, offset minutes now", s_time_offset_min);
+        time_display_draw(); /* top bar - instant feedback, don't wait for the next periodic tick */
+        menu_screen_close();
+    }
+}
+
+static void menu_time_keypad_show(void)
+{
+    static const struct {
+        uint8_t col, row;
+        const char *label;
+        uint16_t fg, bg;
+        ui_callback_t cb;
+        uintptr_t user_data;
+    } k_keys[13] = {
+        /* row0: 1 2 3 DEL */
+        {0, 0, "1",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback, 1},
+        {1, 0, "2",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback, 2},
+        {2, 0, "3",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback, 3},
+        {3, 0, "DEL",GFX_COLOR_BLACK, GFX_COLOR_ORANGE,   menu_time_keypad_del_callback,   0},
+        /* row1: 4 5 6 CLR */
+        {0, 1, "4",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback, 4},
+        {1, 1, "5",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback, 5},
+        {2, 1, "6",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback, 6},
+        {3, 1, "CLR",GFX_COLOR_BLACK, GFX_COLOR_ORANGE,   menu_time_keypad_clr_callback,   0},
+        /* row2: 7 8 9 (col3 = shared BACK widget, added separately below) */
+        {0, 2, "7",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback, 7},
+        {1, 2, "8",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback, 8},
+        {2, 2, "9",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback, 9},
+        /* row3: (col0 unused) 0 (col2 unused) SET */
+        {1, 3, "0",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback,  0},
+        {3, 3, "SET",GFX_COLOR_BLACK, GFX_COLOR_CYAN,     menu_time_keypad_accept_callback, 0},
+    };
+    uint8_t i;
+
+    gfx_fill_rect(MENU_AREA_X, MENU_AREA_Y, MENU_AREA_W, MENU_AREA_H, GFX_COLOR_BLACK);
+    gfx_rect(MENU_AREA_X, MENU_AREA_Y, MENU_AREA_W, MENU_AREA_H, GFX_COLOR_GRAY);
+    ui_screen_init(&s_menu_screen);
+
+    s_time_entry_value = 0U;
+    s_time_entry_digits = 0U;
+    time_keypad_readout_draw();
+
+    for (i = 0; i < 13U; i++) {
+        s_menu_time_tiles[i] = (ui_button_t){
+            FREQ_KEYPAD_COL(k_keys[i].col), FREQ_KEYPAD_ROW(k_keys[i].row),
+            FREQ_KEYPAD_TILE_W, FREQ_KEYPAD_TILE_H,
+            k_keys[i].label, k_keys[i].fg, k_keys[i].bg, GFX_COLOR_GRAY,
+            3, 0, 1, k_keys[i].cb, (void *)k_keys[i].user_data};
+        ui_screen_add_button(&s_menu_screen, &s_menu_time_tiles[i]);
+    }
+
+    /* BACK: row2, col3 - shared widget/callback, same reuse as the
+     * frequency keypad's own BACK just above. */
+    s_menu_detail_back = (ui_button_t){
+        FREQ_KEYPAD_COL(3), FREQ_KEYPAD_ROW(2), FREQ_KEYPAD_TILE_W, FREQ_KEYPAD_TILE_H,
+        "BACK", GFX_COLOR_BLACK, GFX_COLOR_YELLOW, GFX_COLOR_WHITE,
+        3, 0, 1, menu_tile_exit_callback, NULL};
+    ui_screen_add_button(&s_menu_screen, &s_menu_detail_back);
+
+    ui_screen_draw(&s_menu_screen);
+
+    s_menu_detail_active = 0U;
+    s_menu_bands_active = 0U;
+    s_menu_step_active = 0U;
+    s_menu_mode_active = 0U;
+    s_menu_freq_active = 0U;
+    s_menu_time_active = 1U;
+    s_menu_open = 1U; /* opened straight from the top bar, not the grid - same as FREQ */
+    debug_print("menu: clock keypad opened\n");
 }
 
 /*
@@ -6198,7 +6613,20 @@ static void menu_grid_show(void)
             MENU_OPT_COL(5), MENU_OPT_ROW(5), MENU_TILE_W, MENU_TILE_H,
             "ZOOM", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
             2, 0, 1, menu_tile_zoom_callback, NULL};
-        /* Slots 6-7 intentionally empty - room to grow UI further. */
+        /* PAL: spectrum/waterfall color palette cycle (15 states, see
+         * spectrum_set_palette()'s comment in spectrum.h). Takes the
+         * first of the two previously-empty slots here. */
+        s_menu_tile_palette = (ui_button_t){
+            MENU_OPT_COL(6), MENU_OPT_ROW(6), MENU_TILE_W, MENU_TILE_H,
+            "PAL", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
+            2, 0, 1, menu_tile_palette_callback, NULL};
+        /* TRC: HEATMAP trace white/color-matched toggle - see
+         * spectrum_set_heatmap_trace_white()'s comment in spectrum.h.
+         * Takes the last of the two previously-empty slots here. */
+        s_menu_tile_trace = (ui_button_t){
+            MENU_OPT_COL(7), MENU_OPT_ROW(7), MENU_TILE_W, MENU_TILE_H,
+            "TRC", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
+            2, 0, 1, menu_tile_trace_callback, NULL};
 
         ui_screen_add_button(&s_menu_screen, &s_menu_tile_backlight);
         ui_screen_add_button(&s_menu_screen, &s_menu_tile_scale);
@@ -6206,6 +6634,8 @@ static void menu_grid_show(void)
         ui_screen_add_button(&s_menu_screen, &s_menu_tile_smooth);
         ui_screen_add_button(&s_menu_screen, &s_menu_tile_spec_style);
         ui_screen_add_button(&s_menu_screen, &s_menu_tile_zoom);
+        ui_screen_add_button(&s_menu_screen, &s_menu_tile_palette);
+        ui_screen_add_button(&s_menu_screen, &s_menu_tile_trace);
 
         ui_screen_draw(&s_menu_screen);
         menu_tile_backlight_refresh();
@@ -6213,6 +6643,8 @@ static void menu_grid_show(void)
         menu_tile_smooth_refresh();
         menu_tile_spec_style_refresh();
         menu_tile_zoom_refresh();
+        menu_tile_palette_refresh();
+        menu_tile_trace_refresh();
         break;
 
     case MENU_PAGE_HW:
@@ -6342,6 +6774,7 @@ static void menu_grid_show(void)
     s_menu_step_active = 0U;
     s_menu_mode_active = 0U;
     s_menu_freq_active = 0U;
+    s_menu_time_active = 0U;
     s_menu_open = 1U;
 }
 
@@ -6359,6 +6792,7 @@ static void menu_screen_close(void)
     s_menu_step_active = 0U;
     s_menu_mode_active = 0U;
     s_menu_freq_active = 0U;
+    s_menu_time_active = 0U;
     /* Hand the knob back to TUNE unconditionally - fixes a real bug
      * (26/08/2026, reported by the project owner): closing the menu
      * via EXIT left s_encoder_target on whatever detail was open
@@ -7885,6 +8319,10 @@ static void demo_touch_poll(void)
      * comment for why that wouldn't work cleanly), same treatment as
      * the spectrum drag zone just above it. */
     static uint8_t s_freq_tap_active = 0U;
+    /* s_time_tap_active: same shape as s_freq_tap_active just above,
+     * for the clock-setting keypad (08/09/2026) - see TIME_TAP_X1/Y2's
+     * and menu_time_keypad_show()'s comments. */
+    static uint8_t s_time_tap_active = 0U;
     uint16_t x = 0, y = 0;
     uint8_t pressed = touch_read(&x, &y);
 
@@ -7926,6 +8364,16 @@ static void demo_touch_poll(void)
          * the menu or the spectrum drag, which can't happen here
          * anyway since this zone is geometrically disjoint from both. */
         s_freq_tap_active = (uint8_t)(x < FREQ_TAP_X1 && y < FREQ_TAP_Y1);
+
+        /* Clock keypad tap zone (08/09/2026) - see TIME_TAP_X1/Y2's
+         * own comment for why this needs its own tighter box rather
+         * than reusing FREQ_TAP's shape. Geometrically disjoint from
+         * FREQ_TAP (x < MODE_X vs. x >= TIME_TAP_X1, and MODE_X is
+         * far to the left of TIME_X) and from MENU_AREA/the spectrum
+         * panel (both start at SPEC_Y, well below TIME_TAP_Y2) - same
+         * "allowed even while s_menu_open" reasoning as the frequency
+         * zone just above. */
+        s_time_tap_active = (uint8_t)(x >= TIME_TAP_X1 && y < TIME_TAP_Y2);
     }
 
     if (s_touch_owner_is_menu) {
@@ -7974,6 +8422,10 @@ static void demo_touch_poll(void)
         menu_freq_keypad_show();
     }
 
+    if (s_time_tap_active && !pressed) {
+        menu_time_keypad_show();
+    }
+
     if (s_spec_drag_active && !pressed && !s_spec_drag_moved) {
         /* Released without ever crossing the drag threshold - a
          * genuine tap. See spec_tap_tune_to_x()'s own comment. Uses
@@ -7989,6 +8441,7 @@ static void demo_touch_poll(void)
         s_spec_drag_active = 0U;
         s_spec_drag_moved = 0U;
         s_freq_tap_active = 0U;
+        s_time_tap_active = 0U;
     }
 }
 

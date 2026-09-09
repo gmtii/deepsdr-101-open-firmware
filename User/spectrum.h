@@ -91,6 +91,81 @@ void spectrum_set_style(spectrum_style_t style);
 spectrum_style_t spectrum_get_style(void);
 
 /*
+ * HEATMAP-only trace treatment - added 08/09/2026, per the project
+ * owner, correcting this same feature's first pass: connecting the
+ * bar-top trace across steep edges (see spectrum_draw()'s Pass 1.6)
+ * initially kept using the fixed bright SPEC_COLOR_TRACE (white) for
+ * the connector, which reads as a stark white contour hugging the
+ * whole spectrum's silhouette - looks wrong, especially against
+ * palettes where white doesn't already appear near the top of the
+ * gradient. Default (0/OFF) now colors the trace - AND the connecting
+ * bridge - with the SAME per-row palette color the bar fill already
+ * uses at that height, so the top edge just reads as a clean,
+ * connected, correctly-colored bar chart with no separate highlight
+ * element at all. Set to 1/ON for the old explicit bright-white
+ * contour instead, for anyone who prefers that visible highlight.
+ * Only affects HEATMAP - LINE and OUTLINE keep their own fixed
+ * SPEC_LINE_TRACE color unconditionally, since for THOSE two styles
+ * the trace/contour line is the entire visual (OUTLINE draws nothing
+ * else at all), not an optional highlight on top of a fill.
+ */
+void spectrum_set_heatmap_trace_white(uint8_t white);
+uint8_t spectrum_get_heatmap_trace_white(void);
+
+/*
+ * Color palette for the shared dB->RGB565 colormap (spectrum_colormap()
+ * below) - added 08/09/2026, per the project owner ("un tile para
+ * cambiar las paletas... irnos a otras combinaciones de colores").
+ * Unlike spectrum_style_t (which only affects the SPECTRUM panel's
+ * own fill/outline look), this affects BOTH the spectrum's HEATMAP
+ * style AND the waterfall, since both read colors through the same
+ * LUT (see this header's own PERFORMANCE MODEL note above) - a
+ * palette change is visible in both places at once, and in neither
+ * when spectrum_style_t is LINE/OUTLINE (no gradient fill to color)
+ * though the waterfall below it still shows the new palette either
+ * way.
+ *
+ * CLASSIC is SDR++'s own actual "Classic" gradient now (see below) -
+ * kept first/default so the DEFAULT visual barely changes for anyone
+ * not using the new tile (SDR++'s Classic and this project's old
+ * invented default are both dark-to-hot gradients).
+ */
+typedef enum {
+    SPECTRUM_PALETTE_CLASSIC       = 0,  /* dark navy -> blues -> white -> yellow -> orange -> red -> dark red (SDR++'s own "Classic", exact) */
+    SPECTRUM_PALETTE_FIRE          = 1,  /* black -> red -> orange -> yellow -> white (this project's own addition, not from SDR++) */
+    SPECTRUM_PALETTE_VIRIDIS       = 2,  /* dark purple -> blue -> teal -> green -> yellow (exact, matplotlib/B.I.D.S.) */
+    SPECTRUM_PALETTE_GRAYSCALE     = 3,  /* black -> white, no hue at all (exact, matches SDR++'s "Grey Scale") */
+    SPECTRUM_PALETTE_TURBO         = 4,  /* dark blue -> blue -> green -> yellow -> dark red (exact, Google AI) */
+    SPECTRUM_PALETTE_INFERNO       = 5,  /* near-black -> purple -> red -> orange -> pale yellow (exact, B.I.D.S.) */
+    SPECTRUM_PALETTE_MAGMA         = 6,  /* near-black -> purple -> pink/red -> orange -> pale pink-white (exact, B.I.D.S.) */
+    SPECTRUM_PALETTE_PLASMA        = 7,  /* deep blue-purple -> magenta -> orange -> pale yellow (exact, B.I.D.S.) */
+    SPECTRUM_PALETTE_GQRX          = 8,  /* black -> blue -> cyan/green -> yellow -> red -> white (exact, csete) */
+    SPECTRUM_PALETTE_ELECTRIC      = 9,  /* black -> blue -> cyan -> white (exact, Ryzerth) */
+    SPECTRUM_PALETTE_CLASSIC_GREEN = 10, /* black -> blues -> pale green -> orange -> red -> dark red (exact, Paul PD0SWL) */
+    SPECTRUM_PALETTE_SMOKE         = 11, /* white -> grays -> black, i.e. an INVERTED grayscale (exact, Yaroslav Andrianov) */
+    SPECTRUM_PALETTE_TEMPER_COLORS = 12, /* black -> indigo -> violet -> slate blue -> dusty rose -> plum (exact, Yaroslav Andrianov) */
+    SPECTRUM_PALETTE_VIVID         = 13, /* black -> purple -> viridis-like band -> yellow -> orange -> red (exact, Yaroslav Andrianov) */
+    SPECTRUM_PALETTE_WEBSDR        = 14  /* black -> navy -> magenta -> pale yellow -> white (exact, Ryzerth) */
+} spectrum_palette_t;
+
+/*
+ * *** 08/09/2026 UPDATE *** - CLASSIC/VIRIDIS/TURBO/INFERNO/MAGMA/
+ * PLASMA/GQRX/ELECTRIC/CLASSIC_GREEN were all approximated from
+ * memory or general knowledge in this palette feature's first pass;
+ * the project owner then uploaded the ACTUAL JSON files from SDR++'s
+ * own root/res/colormaps/ (AlexandreRouma/SDRPlusPlus), so every one
+ * of those nine now uses the REAL stop colors from those files
+ * (GQRX/INFERNO/MAGMA/PLASMA/TURBO/VIRIDIS happen to already ship as
+ * full 256-entry maps, so those five plus GQRX are copied in
+ * directly, one LUT entry per source entry, no interpolation at all -
+ * see spectrum.c's k_lut_* tables). SMOKE/TEMPER_COLORS/VIVID/WEBSDR
+ * are new additions from that same upload (also exact). FIRE remains
+ * this project's own invention - it isn't in SDR++'s set.
+ */
+void spectrum_set_palette(spectrum_palette_t palette);
+spectrum_palette_t spectrum_get_palette(void);
+
+/*
  * Spatial line smoothing - added 01/08/2026, exposed live through the
  * repurposed NB tile/button/badge in main.c (see s_spec_smooth_passes'
  * comment there; the old NB noise-blanker flag never drove any real

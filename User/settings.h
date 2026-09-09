@@ -105,6 +105,8 @@ typedef struct {
     uint8_t      speaker_enabled;     /* 0/1 */
     uint8_t      have_backlight_pct;
     uint8_t      backlight_pct;       /* 0-100, see backlight.h - backlight_set_percent() clamps up to its own floor */
+    uint8_t      have_att_rin_level;
+    uint8_t      att_rin_level;       /* 0=10k/1=20k/2=40k - aic3204_rin_t, see main.c's s_rf_agc_rin_level */
 } settings_loaded_t;
 
 /* Reads CONFIG.CSV (if present) and:
@@ -153,21 +155,21 @@ void settings_mark_dirty(void);
  * session of continuous tuning results in ONE save once you stop, not
  * one per encoder detent. Pass the CURRENT live value of everything
  * this module persists - it has no other way to know them.
- * pga_gain_db_x2/spectrum_smooth_pct/speaker_enabled are the three
- * NEW main.c-owned values (07/09/2026) - backlight_pct and
- * spectrum_style are NOT parameters here, since settings.c reads
- * those two straight from backlight_get_percent()/
+ * pga_gain_db_x2/spectrum_smooth_pct/speaker_enabled/att_rin_level are
+ * the four main.c-owned values (07-08/09/2026) with no getter -
+ * backlight_pct and spectrum_style are NOT parameters here, since
+ * settings.c reads those two straight from backlight_get_percent()/
  * spectrum_get_style() itself (see this file's header comment). */
 void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k,
-                    int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled);
+                    int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled, uint8_t att_rin_level);
 
 /* Saves immediately, no debounce - for events that are already
  * naturally rare/deliberate (the touch calibration wizard finishing
  * is the current use, see main.c's touch_calib_done_callback()) where
  * waiting for the debounce window would just be a pointless delay
  * before the thing the user just did for its own sake gets persisted.
- * Same three new trailing parameters as settings_poll() above. */
+ * Same four trailing parameters as settings_poll() above. */
 void settings_save_now(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k,
-                        int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled);
+                        int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled, uint8_t att_rin_level);
 
 #endif /* SETTINGS_H */
