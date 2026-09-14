@@ -8,7 +8,7 @@ everything else (build, general hardware, other modes).
 
 ### Current limitation: 1600 kHz window, not the full passband
 
-FT8 detection currently searches a **1600 kHz-wide window** around the tuned
+FT8 detection currently searches a **1600 Hz-wide window** around the tuned
 frequency, not the receiver's full instantaneous bandwidth. This was a
 deliberate trade-off (`ft8_waterfall_adapter.h`, `time_osr=1`) to fit the
 1024-point FFT, the cascade history buffer, and the resampler in available

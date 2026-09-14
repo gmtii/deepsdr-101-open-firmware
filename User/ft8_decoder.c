@@ -98,30 +98,6 @@ static int append_str(char *dst, int pos, int max, const char *src)
     return pos;
 }
 
-static int append_int(char *dst, int pos, int max, int value)
-{
-    char tmp[8];
-    int n = 0;
-    int neg = 0;
-    unsigned int v;
-
-    if (value < 0) { neg = 1; v = (unsigned int)(-value); } else { v = (unsigned int)value; }
-    if (v == 0U) { tmp[n++] = '0'; }
-    while (v > 0U && n < (int)sizeof(tmp))
-    {
-        tmp[n++] = (char)('0' + (v % 10U));
-        v /= 10U;
-    }
-    if (neg && pos < max - 1) { dst[pos++] = '-'; }
-    while (n > 0 && pos < max - 1)
-    {
-        n--;
-        dst[pos++] = tmp[n];
-    }
-    dst[pos] = '\0';
-    return pos;
-}
-
 /* Zero-padded 2-digit decimal (00-99) - for the HH:MM timestamp
  * prefix (09/2026, per the project owner's request to help tune
  * real-world performance over time: seeing WHEN a decode happened,
@@ -132,6 +108,59 @@ static int append_u2(char *dst, int pos, int max, uint8_t value)
 {
     if (pos < max - 1) { dst[pos++] = (char)('0' + (value / 10U) % 10U); }
     if (pos < max - 1) { dst[pos++] = (char)('0' + value % 10U); }
+    dst[pos] = '\0';
+    return pos;
+}
+
+/* Zero-padded 4-digit decimal (0000-9999) - same "keep the column
+ * aligned" reasoning as append_u2() above, for the frequency-offset
+ * field (09/2026, per the project owner: this window's 0-1600Hz audio
+ * passband means freq_hz_i naturally varies between 3 and 4 digits
+ * decode to decode, which without padding shifts every field after it
+ * out of alignment - e.g. "169Hz" one line, "1169Hz" the next). Only
+ * ever fed a non-negative value in practice (a frequency location
+ * within the passband can't be negative) - no sign handling, unlike
+ * append_int(). Values above 9999 (shouldn't happen at a 1600Hz
+ * passband width) are clamped rather than silently truncating a
+ * digit off the front, which would misalign in the exact same way
+ * this exists to prevent. */
+static int append_u4(char *dst, int pos, int max, int value)
+{
+    unsigned int v = (value < 0) ? 0U : (unsigned int)value;
+    if (v > 9999U) { v = 9999U; }
+    if (pos < max - 1) { dst[pos++] = (char)('0' + (v / 1000U) % 10U); }
+    if (pos < max - 1) { dst[pos++] = (char)('0' + (v / 100U) % 10U); }
+    if (pos < max - 1) { dst[pos++] = (char)('0' + (v / 10U) % 10U); }
+    if (pos < max - 1) { dst[pos++] = (char)('0' + v % 10U); }
+    dst[pos] = '\0';
+    return pos;
+}
+
+/* Signed, zero-padded, ALWAYS-explicit-sign 2-digit decimal
+ * ("+00".."+99" / "-00".."-99") - same "keep the column aligned"
+ * reasoning as append_u2()/append_u4() above, for the SNR field
+ * (09/2026 #3, per the project owner: "-5dB" one line, "-12dB" the
+ * next shifts everything after it out of alignment exactly like the
+ * frequency field did). Unlike append_u4(), this value genuinely can
+ * be (and usually is) negative - FT8's whole point is decoding well
+ * below the noise floor, so cand->score-derived SNR estimates
+ * typically run negative (roughly -24 to +10dB in practice) - so the
+ * sign is always printed explicitly (even for 0 or positive values)
+ * rather than only prepending "-" for negatives the way append_int()
+ * does: printing the sign only sometimes would itself reintroduce a
+ * 1-character alignment shift between negative and non-negative
+ * lines, which is exactly what this exists to avoid. Magnitude
+ * clamped to 99 (SNR estimates this project produces shouldn't
+ * realistically reach that) for the same "clamp, don't silently
+ * misalign" reasoning as append_u4(). */
+static int append_s2(char *dst, int pos, int max, int value)
+{
+    int neg = (value < 0);
+    unsigned int v = neg ? (unsigned int)(-value) : (unsigned int)value;
+    if (v > 99U) { v = 99U; }
+    if (pos < max - 1) { dst[pos++] = neg ? '-' : '+'; }
+    if (pos < max - 1) { dst[pos++] = (char)('0' + (v / 10U) % 10U); }
+    if (pos < max - 1) { dst[pos++] = (char)('0' + v % 10U); }
     dst[pos] = '\0';
     return pos;
 }
@@ -213,14 +242,20 @@ void ft8_decoder_process_slot(void)
         if (dup) { continue; }
         if (num_seen < FT8_DECODER_MAX_CANDIDATES) { seen_hash[num_seen++] = (uint32_t)message.hash; }
 
-        /* Format: "08:14 +169Hz -05dB CQ IU8DMZ JN70" - HH:MM
+        /* Format: "08:14 0169Hz -05dB CQ IU8DMZ JN70" - HH:MM
          * timestamp (UTC, from the RTC - see rtc_hw.h) first, per the
          * project owner's request to correlate decodes against time
          * of day/band conditions while tuning; freq rounded to the
-         * nearest Hz, SNR from cand->score * 0.5 (ft8_lib's own demo
-         * uses this exact placeholder formula, marked there as a TODO
-         * for "compute better approximation" - carried over as-is,
-         * not improved on here). */
+         * nearest Hz and zero-padded to 4 digits (append_u4() above,
+         * 09/2026 #2 - keeps this column aligned across the 3-vs-4-
+         * digit range this passband actually produces); SNR from
+         * cand->score * 0.5 (ft8_lib's own demo uses this exact
+         * placeholder formula, marked there as a TODO for "compute
+         * better approximation" - carried over as-is, not improved on
+         * here), explicit-sign zero-padded to 2 digits (append_s2()
+         * above, 09/2026 #3 - same alignment reasoning, and SNR is
+         * usually negative in real use: FT8 is designed to decode
+         * well below the noise floor). */
         freq_hz_i = (int)((FT8_ADAPTER_MIN_RAW_BIN + cand->freq_offset + (float)cand->freq_sub / wf->freq_osr) / FT8_SYMBOL_PERIOD + 0.5f);
         snr_i = (int)(cand->score * 0.5f);
 
@@ -229,9 +264,9 @@ void ft8_decoder_process_slot(void)
         pos = append_str(line, pos, FT8_DECODER_LINE_LEN, ":");
         pos = append_u2(line, pos, FT8_DECODER_LINE_LEN, slot_time.minute);
         pos = append_str(line, pos, FT8_DECODER_LINE_LEN, " ");
-        pos = append_int(line, pos, FT8_DECODER_LINE_LEN, freq_hz_i);
+        pos = append_u4(line, pos, FT8_DECODER_LINE_LEN, freq_hz_i);
         pos = append_str(line, pos, FT8_DECODER_LINE_LEN, "Hz ");
-        pos = append_int(line, pos, FT8_DECODER_LINE_LEN, snr_i);
+        pos = append_s2(line, pos, FT8_DECODER_LINE_LEN, snr_i);
         pos = append_str(line, pos, FT8_DECODER_LINE_LEN, "dB ~ ");
         pos = append_str(line, pos, FT8_DECODER_LINE_LEN, text);
         (void)pos;
