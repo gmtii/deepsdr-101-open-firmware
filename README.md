@@ -4,6 +4,8 @@ This file only covers the FT8-specific pieces added on this branch and the
 time-sync tooling that keeps the RTC accurate. See the main README for
 everything else (build, general hardware, other modes).
 
+Thanks to Karlis Goba, YL3JG for his great https://github.com/kgoba/ft8_lib
+
 ## FT8 mode
 
 ### Current limitation: 1600 kHz window, not the full passband
