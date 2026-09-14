@@ -1,4 +1,5 @@
 #include "demod_am.h"
+#include "ft8_decimator.h" /* minimal bring-up hook, 09/2026 - see demod_am_ft8_capture_set_active() */
 #include "sam.h" /* DEMOD_MODE_SAM - 21/08/2026 */
 #include "config.h"
 #include "sdr_rx.h"
@@ -19,6 +20,42 @@
                     * WFM note on why this uses libm instead of
                     * arm_atan2_f32() (not present in this project's
                     * pruned CMSIS-DSP tree). */
+
+/* Minimal bring-up hook only (09/2026) - gates whether this file's
+ * final audio output also feeds the FT8 decimator. No slot-timing
+ * state machine yet (see ft8_waterfall_adapter.h) - this just lets
+ * main.c arm a single capture for bench testing on real hardware/real
+ * RF, since the synthetic-tone tests already proved the DSP chain
+ * (decimator+adapter+fft.c) logically correct on their own - real-
+ * world validation (noise, ADC, ISR timing) is what's actually left
+ * unverified, and a WAV-based test can't tell us anything about that. */
+static bool s_ft8_capture_active = false;
+void demod_am_ft8_capture_set_active(bool active)
+{
+    s_ft8_capture_active = active;
+}
+
+/*
+ * Raw ISR invocation counter (09/2026) - completely independent of
+ * FT8/decimation/anything else in this file, added to definitively
+ * settle where a measured ~7-14% audio-clock-rate discrepancy
+ * actually originates (see ft8_decimator_get_raw_sample_count()'s
+ * comment for the full investigation - a "capms"/"ins" measurement
+ * downstream of demod_am.c's own decimation showed an effective rate
+ * suspiciously close to front_end_rate/7 instead of the intended /8,
+ * varying between the 48K/96K modes in a way inconsistent with a
+ * flat hardware clock error). If THIS counter, measured over a known
+ * real elapsed time, ALSO shows the ISR firing at other than the
+ * expected front_end_rate/SDR_RX_BLOCK_SAMPLES rate, the problem is
+ * upstream of all decimation math entirely (DMA/I2S/codec) - if it
+ * matches expectations exactly, the bug is somewhere in this file's
+ * own decimation bookkeeping instead.
+ */
+static uint32_t s_isr_call_count;
+uint32_t demod_am_get_isr_call_count(void)
+{
+    return s_isr_call_count;
+}
 
 #define SPK_EN_PORT GPIOB
 #define SPK_EN_PIN  GPIO_PIN_7
@@ -2194,6 +2231,8 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
     uint8_t muted;
     uint32_t nr_ssb_cycles = 0U;
 
+    s_isr_call_count++; /* see demod_am_get_isr_call_count()'s comment - totally independent of FT8/decimation, added to measure the RAW ISR firing rate directly */
+
     /*
      * *** 05/08/2026, mitigation - see demod_wfm_process_raw()'s
      * identical guard and sdr_rx_last_block_corrupted()'s comment for
@@ -2436,6 +2475,27 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
         /* 2c. Combine: one sideband adds, the other cancels. */
         for (k = 0; k < s_dec_block_samples; k++) {
             s_ssb_dec[k] = s_i_delayed[k] + sign * s_q_hilbert_out[k];
+        }
+
+        /* FT8 tap (09/2026, corrected from an earlier version that
+         * wrongly read s_audio_out - see ft8_decimator.h's
+         * FT8_DECIM_INPUT_RATE_HZ comment) - s_ssb_dec is genuinely at
+         * 12kHz right here ("combined SSB audio @ 12kHz" a few lines
+         * up), unlike s_audio_out which is back at the front-end's own
+         * rate (96k/48k) after the later interpolate-back-up stage.
+         * Deliberately OUTSIDE the rtty_get_enabled() gate below - FT8
+         * mode never enables RTTY (see k_demod_modes[] in main.c), so
+         * nesting it in there would silently never run at all. Only
+         * relevant here at all since FT8 mode always selects USB, so
+         * this SSB-only code path is the only place it's ever needed. */
+        if (s_ft8_capture_active) {
+            uint32_t k2;
+            for (k2 = 0U; k2 < s_dec_block_samples; k2++) {
+                float32_t v = s_ssb_dec[k2];
+                if (v > 32767.0f) { v = 32767.0f; }
+                if (v < -32768.0f) { v = -32768.0f; }
+                ft8_decimator_feed_sample((int16_t)v);
+            }
         }
 
         /*

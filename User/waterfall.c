@@ -1,6 +1,7 @@
 #include <string.h>
 #include "waterfall.h"
 #include "gfx.h"
+#include "ft8_shared_ram.h"
 
 /* .bss, RAM principal (0x20000000). WATERFALL_WIDTH*WATERFALL_ROWS*2 bytes,
  * ver presupuesto documentado en waterfall.h antes de subir WATERFALL_ROWS.
@@ -12,8 +13,18 @@
  * indice y copia la fila nueva (1.6KB) - el "scroll" es contabilidad,
  * no movimiento de memoria. El coste se paga (barato) en el blit, que
  * vuelca el anillo en dos tramos contiguos.
+ *
+ * UNION REAL CON FT8 (09/2026) - este buffer ya NO es una declaracion
+ * privada: es el miembro que le da tamano a g_ft8_shared_ram (ver
+ * ft8_shared_ram.h para el porque completo). La definicion (el
+ * almacenamiento real, no un extern) vive aqui porque este es
+ * historicamente el buffer mas grande y el motivo original de todo
+ * esto - ningun otro cambio en este fichero fue necesario, s_buf sigue
+ * siendo el mismo nombre en el mismo sitio para el resto del codigo de
+ * abajo.
  */
-static uint16_t s_buf[WATERFALL_ROWS][WATERFALL_WIDTH];
+ft8_shared_ram_t g_ft8_shared_ram;
+#define s_buf (g_ft8_shared_ram.waterfall_buf)
 static uint16_t s_head = 0; /* indice fisico de la fila logica 0 */
 
 void waterfall_init(void)
