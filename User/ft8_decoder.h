@@ -22,7 +22,7 @@
 #define FT8_DECODER_MIN_SCORE      10  /* matches ft8_lib's own demo default (kMin_score) */
 #define FT8_DECODER_LDPC_ITERATIONS 25 /* matches ft8_lib's own demo default (kLDPC_iterations) */
 #define FT8_DECODER_MSG_QUEUE_SIZE 20  /* generous for our 400Hz search window - a busy full-band capture might see more, ours won't */
-#define FT8_DECODER_LINE_LEN       56  /* "HH:MM " (6) + "+168.8Hz -16dB " (15) + message (up to 35) + NUL, rounded up */
+#define FT8_DECODER_LINE_LEN       64  /* "HH:MM " (6) + "0169Hz -05dB ~ " (15) + message (up to 35) + " 1234km" (7) + NUL, rounded up (09/2026 #2: was 56, before the distance-to-grid suffix) */
 
 /* One decoded message, already formatted as a display-ready line
  * ("freq snr ~ message") - see ft8_decoder_process_slot()'s comment
@@ -35,6 +35,16 @@ typedef struct
 /* Call once, at startup (alongside ft8_decimator_reset()/
  * ft8_waterfall_reset()) - clears the message queue. */
 void ft8_decoder_init(void);
+
+/* Sets/reads the QTH grid used for the distance-to-grid field on
+ * decoded CQ lines - see their own comments in ft8_decoder.c.
+ * ft8_decoder_init() above already seeds this from the compiled-in
+ * FT8_OWN_GRID default; settings.c's settings_load() calls
+ * ft8_decoder_set_own_grid() again afterward if CONFIG.CSV has its
+ * own "grid" key, and its build_csv() calls
+ * ft8_decoder_get_own_grid() to persist whatever is currently set. */
+void ft8_decoder_set_own_grid(const char *grid, int len);
+const char *ft8_decoder_get_own_grid(void);
 
 /* Runs ftx_find_candidates() + ftx_decode_candidate() +
  * ftx_message_decode() over whatever ft8_waterfall_get() currently
