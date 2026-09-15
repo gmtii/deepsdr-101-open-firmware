@@ -35,7 +35,7 @@ void splash_screen_draw(void)
     static const char *line2 = "WFM / NFM / AM / SSB";
     static const char *line3 = "EA8DGL ESTEBAN - UA6YKK ALEXANDR - EA7GIB BLAS";
     static const char *line4 = "CREATIVE COMMONS NC";
-    static const char *version = "V0.4 18/8/2026 ";
+    static const char *version = "V0.6dev 15/9/2026 ";
 
     const uint8_t scale1 = 4; /* linea 1, grande */
     const uint8_t scale2 = 2; /* lineas 2-3, mas pequenas */
