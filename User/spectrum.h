@@ -216,6 +216,22 @@ uint8_t spectrum_get_line_smooth(void);
  * never call it per pixel). */
 uint16_t spectrum_colormap(float db, float db_min, float db_max);
 
+/* Same quantization as spectrum_colormap() (bin value -> [0,255] palette
+ * index), but returns the raw index instead of doing the LUT lookup itself.
+ * Added for the IPA-accelerated waterfall path (see ipa_waterfall.h): the
+ * IPA does the index->RGB565 lookup in hardware, so callers on that path
+ * need the index, not the color. spectrum_colormap() is implemented in
+ * terms of this function, so both paths stay bit-identical. */
+uint8_t spectrum_colormap_index(float db, float db_min, float db_max);
+
+/* The same 256-entry palette as the internal (RGB565) s_lut, kept as a
+ * parallel ARGB8888 table for the IPA's foreground LUT (which only accepts
+ * ARGB8888 or RGB888 entries - see IPA_LUT_PF_* in gd32f4xx_ipa.h). Rebuilt
+ * by build_lut() every time the palette changes; ipa_waterfall.c consumes
+ * this directly via ipa_waterfall_load_palette(), it is not meant to be
+ * copied. Valid only after spectrum_init() has run. */
+const uint32_t *spectrum_get_lut_argb8888(void);
+
 /*
  * Draws `n_bins` dB values into the rectangle (x,y,w,h). Columns
  * average their bins; smoothing/peak state is kept internally per

@@ -22,7 +22,27 @@
  * square's width, ~110km at the equator for a 4-character grid).
  * Accepts 4 or 6 characters; anything else is rejected (returns
  * false) rather than guessing. Case-insensitive on the letter pairs,
- * matching how grids are conventionally written either way. */
+ * matching how grids are conventionally written either way.
+ *
+ * EXPLICIT "RR73" GUARD (09/2026 #6, per the project owner: this was
+ * still showing a distance on plain "...RR73" sign-off lines, which
+ * are NOT a grid square - RR73 is a QSO-ending acknowledgment). This
+ * is defense in depth: ft8_lib's own message.c already tags RR73 (and
+ * RRR/73) as FTX_FIELD_TOKEN, never FTX_FIELD_GRID, in every decode
+ * path checked (ftx_message_decode_std()/_nonstd()) - so the caller's
+ * own offsets.types[] scan should already exclude it before this
+ * function is ever reached with it. But "RR73" is ALSO, purely by
+ * coincidence, a syntactically valid-LOOKING 4-character grid by the
+ * plain letter-letter-digit-digit pattern checked below (R and R are
+ * both in A-R, 7 and 3 are both digits) - so if that upstream
+ * filtering is ever bypassed, changes, or a future caller is added
+ * that doesn't do the same offsets.types[] check first, this
+ * rejects it right at the source rather than relying solely on every
+ * caller getting the filtering right. Checked case-insensitively, same
+ * as the rest of this function; only excludes the literal 4-character
+ * token, not e.g. a genuine "RR" field square (R,R is a real, valid
+ * square in the far Pacific/Antarctic region - only the FULL "RR73"
+ * combination is a reserved protocol token). */
 static bool grid_to_latlon(const char *grid, int len, float *lat, float *lon)
 {
     char c0, c1;
@@ -33,6 +53,7 @@ static bool grid_to_latlon(const char *grid, int len, float *lat, float *lon)
     c1 = (char)((grid[1] >= 'a' && grid[1] <= 'z') ? (grid[1] - 'a' + 'A') : grid[1]);
     if (c0 < 'A' || c0 > 'R' || c1 < 'A' || c1 > 'R') { return false; }
     if (grid[2] < '0' || grid[2] > '9' || grid[3] < '0' || grid[3] > '9') { return false; }
+    if (len == 4 && c0 == 'R' && c1 == 'R' && grid[2] == '7' && grid[3] == '3') { return false; } /* see this function's own "RR73" guard comment above */
 
     *lon = (float)(c0 - 'A') * 20.0f - 180.0f + (float)(grid[2] - '0') * 2.0f;
     *lat = (float)(c1 - 'A') * 10.0f - 90.0f + (float)(grid[3] - '0') * 1.0f;

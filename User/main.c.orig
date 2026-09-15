@@ -13,7 +13,6 @@
 #include "gfx_vfo_font.h"
 #include "ui.h"
 #include "waterfall.h"
-#include "ipa_waterfall.h"
 #include "touch.h"
 #include "touch_calib.h"
 #include "spi_flash.h"
@@ -381,11 +380,6 @@ static uint32_t demod_if_offset_hz(void)
 
 int main(void)
 {
-    /* *** TEMPORARY - see ipa_waterfall_lut_size_selftest()'s comment and
-     * this variable's two use sites (assignment further down, re-print
-     * near "waterfall ticks") - remove once acted on. */
-    static uint8_t g_ipa_lut_selftest_pass;
-
     /* Critical when chained after a bootloader: our vector table is no
      * longer at 0x08000000 (that's the bootloader's), but at
      * 0x08020000. Without this, any interrupt (including our own
@@ -490,27 +484,6 @@ int main(void)
     waterfall_init();
     touch_init();
     debug_print_hex32("RCU_PLLI2S after touch_init", RCU_PLLI2S);
-
-    /* Must run before settings_load() below: that function can call
-     * spectrum_set_palette() for a saved palette from CONFIG.CSV, which
-     * chains into build_lut() -> ipa_waterfall_load_palette() - if the IPA's
-     * clock isn't enabled yet at that point, the LUT load silently times
-     * out (see ipa_waterfall_load_palette()'s bounded wait). Originally
-     * this call sat right next to spectrum_init() further down, which
-     * turned out to be too late - moved here after hardware bring-up
-     * confirmed the timeout with real UART logs. */
-    ipa_waterfall_init();
-
-    /* *** TEMPORARY - remove once the LUT-size PASS/FAIL has been seen and
-     * acted on *** - see ipa_waterfall_lut_size_selftest()'s comment. Must
-     * run before spi_flash_init()/spectrum_init() below, same reasoning
-     * as ipa_waterfall_init() itself: this needs the IPA clocked, and it
-     * needs to run on its OWN test LUT before anything real is loaded.
-     * Result stashed here and re-printed periodically further down (see
-     * the "waterfall ticks" debug block) rather than only here, because
-     * this project's UART capture has repeatedly missed everything
-     * printed this early after reset. */
-    g_ipa_lut_selftest_pass = ipa_waterfall_lut_size_selftest();
 
     spi_flash_init(); /* unconditional - settings_load()/settings_poll() need this every boot, not just under the SPI_FLASH_PROBE_TEST diagnostics below */
 
@@ -693,7 +666,7 @@ int main(void)
      */
     fft_init();
     ft8_fft1024_init(); /* Harmless to also do this once at boot, but NOT sufficient by itself - see the REAL fix at the FT8 mode-entry call site (menu_mode_preset_callback()'s is_ft8 branch) for why this table gets overwritten by the waterfall's own legitimate use of the same union memory before FT8 mode is ever entered. */
-    spectrum_init(); /* palette LUT for spectrum + waterfall - IPA already brought up earlier, right before settings_load(), see that call site's comment */
+    spectrum_init(); /* palette LUT for spectrum + waterfall */
     zoom_decimators_init(); /* spectrum ZOOM cascaded decimators - see spec_zoom_t's comment */
     sdr_rx_init();
 
@@ -1312,14 +1285,6 @@ int main(void)
             && !rtty_scope_active()
            ) {
             debug_print_dec("waterfall ticks", g_fill_count);
-            /* *** TEMPORARY - remove alongside the selftest call and the
-             * variable's declaration once acted on *** - piggybacks on
-             * this already-periodic, already-reliably-captured debug
-             * block so the LUT-size result isn't lost the way the
-             * one-shot print right after boot has repeatedly been. */
-            debug_print(g_ipa_lut_selftest_pass ?
-                         "ipa lut size selftest: PASS\n" :
-                         "ipa lut size selftest: FAIL (see boot-time message for details)\n");
             /* ISR timing check (see demod_am.h's comment above
              * demod_am_get_last_cycles()): one block's real-time
              * budget is SDR_RX_BLOCK_SAMPLES samples at 96kHz (was
@@ -2514,36 +2479,14 @@ static void mode_display_draw(void)
     const char *label;
     uint16_t color;
 
-    /* RTTY/FT8 take priority over the underlying demod mode (09/2026,
-     * per the project owner) - both actually run on top of a real SSB
-     * demod mode under the hood (see demod_am_get_mode()'s own value
-     * while either is active), but showing "USB"/"LSB" here while
-     * decoding RTTY or FT8 buries the more useful fact ("I'm in FT8
-     * mode") under an implementation detail nobody's asking about in
-     * the moment - the underlying SSB side is still visible/settable
-     * from the mode menu itself if it's ever needed. All labels
-     * (including the pre-existing USB/LSB/etc. below) are kept at a
-     * FIXED 4 characters, padded with a trailing space where needed
-     * (e.g. "USB " not "USB") - RTTY is the one genuinely 4-character
-     * label, and without padding the others to match, switching
-     * between a 4-char and a 3-char label would leave a ghost 4th
-     * character on screen from whichever was drawn immediately
-     * before (this field is redrawn as a fixed-width block, not
-     * cleared separately first). */
-    if (s_ft8_mode_enabled) {
-        label = "FT8 "; color = GFX_COLOR_CYAN;
-    } else if (rtty_scope_active()) {
-        label = "RTTY"; color = GFX_COLOR_CYAN;
-    } else {
-        switch (demod_am_get_mode()) {
-        case DEMOD_MODE_USB: label = "USB "; color = GFX_COLOR_GREEN; break;
-        case DEMOD_MODE_LSB: label = "LSB "; color = GFX_COLOR_GREEN; break;
-        case DEMOD_MODE_NFM: label = "NFM "; color = GFX_COLOR_ORANGE; break;
-        case DEMOD_MODE_WFM: label = "WFM "; color = GFX_COLOR_CYAN; break;
-        case DEMOD_MODE_SAM: label = "SAM "; color = GFX_COLOR_YELLOW; break;
-        case DEMOD_MODE_AM:
-        default:             label = "AM  "; color = GFX_COLOR_YELLOW; break;
-        }
+    switch (demod_am_get_mode()) {
+    case DEMOD_MODE_USB: label = "USB"; color = GFX_COLOR_GREEN; break;
+    case DEMOD_MODE_LSB: label = "LSB"; color = GFX_COLOR_GREEN; break;
+    case DEMOD_MODE_NFM: label = "NFM"; color = GFX_COLOR_ORANGE; break;
+    case DEMOD_MODE_WFM: label = "WFM"; color = GFX_COLOR_CYAN; break;
+    case DEMOD_MODE_SAM: label = "SAM"; color = GFX_COLOR_YELLOW; break;
+    case DEMOD_MODE_AM:
+    default:             label = "AM "; color = GFX_COLOR_YELLOW; break;
     }
     gfx_text((uint16_t)MODE_X, MODE_Y, label, color, GFX_COLOR_DARKGRAY, 3);
 }
@@ -9875,9 +9818,8 @@ static void sdr_spectrum_waterfall_tick(void)
     static uint32_t s_db_count = 0U;
     static uint32_t s_next_frame_ms = 0U;
     static uint16_t line[WATERFALL_WIDTH];
-    static uint8_t s_wf_idx[WATERFALL_WIDTH]; /* per-column palette index, fed to the IPA - see the loop below */
     static uint32_t s_frame_count = 0U;
-    uint32_t t_fft0, t_fft1, t_spec0, t_spec1, t_wf0, t_wf1, t_wfidx0, t_wfidx1, t_colormap0, t_colormap1;
+    uint32_t t_fft0, t_fft1, t_spec0, t_spec1, t_wf0, t_wf1;
     uint32_t fft_us = 0U;
     uint16_t x, n;
     int16_t i_min, i_max, q_min, q_max;
@@ -10179,24 +10121,11 @@ static void sdr_spectrum_waterfall_tick(void)
      * Uses the frame-averaged dB, so the waterfall inherits the same
      * noise smoothing as the trace. Blitted just inside the panel
      * border, same x origin as the spectrum trace so columns line up
-     * vertically between the two views.
-     *
-     * *** IPA-accelerated colormap (09/2026) *** - this loop only computes
-     * the bin-to-index mapping now (bin selection + float normalization,
-     * which the IPA can't do); the index->RGB565 LUT lookup that used to
-     * happen inline via spectrum_colormap() is done by the IPA in
-     * ipa_waterfall_colormap_line() below instead - see ipa_waterfall.h for
-     * the full division of labor and why. s_wf_idx is a plain byte per
-     * column, reused across frames like `line` already was. */
-    t_wfidx0 = DWT->CYCCNT;
+     * vertically between the two views. */
     for (x = 0; x < WATERFALL_WIDTH; x++) {
         uint32_t bin = ((uint32_t)x * FFT_BINS_IQ) / WATERFALL_WIDTH;
-        s_wf_idx[x] = spectrum_colormap_index(s_db_frame[bin], s_db_min, s_db_max);
+        line[x] = spectrum_colormap(s_db_frame[bin], s_db_min, s_db_max);
     }
-    t_wfidx1 = DWT->CYCCNT;
-    t_colormap0 = DWT->CYCCNT;
-    ipa_waterfall_colormap_line(s_wf_idx, line, WATERFALL_WIDTH);
-    t_colormap1 = DWT->CYCCNT;
     waterfall_push_line(line);
     waterfall_blit(SPEC_TRACE_X, WF_Y);
     t_wf1 = DWT->CYCCNT;
@@ -10210,28 +10139,9 @@ static void sdr_spectrum_waterfall_tick(void)
     if (!s_menu_open && (s_frame_count % 30U) == 0U) {
         uint32_t spec_us = (uint32_t)(((uint64_t)(t_spec1 - t_spec0)) * 1000000U / SystemCoreClock);
         uint32_t wf_us   = (uint32_t)(((uint64_t)(t_wf1 - t_wf0)) * 1000000U / SystemCoreClock);
-        uint32_t wfidx_us     = (uint32_t)(((uint64_t)(t_wfidx1 - t_wfidx0)) * 1000000U / SystemCoreClock);
-        uint32_t colormap_us  = (uint32_t)(((uint64_t)(t_colormap1 - t_colormap0)) * 1000000U / SystemCoreClock);
-        /* pushblit computed from raw cycles (t_wf1 - t_colormap1), not by
-         * subtracting the already-rounded *_us values above - each *_us
-         * truncates independently, so subtracting rounded microseconds
-         * could in principle underflow this unsigned value by a cycle or
-         * two's worth of rounding error; raw cycles between two points on
-         * the same monotonic counter can't go negative. */
-        uint32_t pushblit_us  = (uint32_t)(((uint64_t)(t_wf1 - t_colormap1)) * 1000000U / SystemCoreClock);
         debug_print_dec("sdr_tick: last fft (us)", fft_us);
         debug_print_dec("sdr_tick: spectrum_draw (us)", spec_us);
         debug_print_dec("sdr_tick: waterfall push+blit (us)", wf_us);
-        /* *** TEMPORARY breakdown (09/2026) *** - isolates the IPA
-         * colormap call from the rest of the waterfall block (index-build
-         * loop on one side, waterfall_push_line()+waterfall_blit() on the
-         * other) to measure the actual saving from ipa_waterfall_colormap_line()
-         * vs. the old inline spectrum_colormap() CPU loop it replaced.
-         * wfidx_us + colormap_us + pushblit_us == wf_us (modulo rounding);
-         * remove once you have the number you need. */
-        debug_print_dec("  wf breakdown: idx-build (us)", wfidx_us);
-        debug_print_dec("  wf breakdown: IPA colormap (us)", colormap_us);
-        debug_print_dec("  wf breakdown: push+blit (us)", pushblit_us);
         debug_print_dec("sdr_tick: frame TOTAL (us)", fft_us + spec_us + wf_us);
         debug_print_dec_signed("sdr_tick: I(left) min", i_min);
         debug_print_dec_signed("sdr_tick: I(left) max", i_max);
