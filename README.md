@@ -150,6 +150,8 @@ Options:
 | `--ntp-server` | `pool.ntp.org` | NTP server queried for UTC |
 | `--interval` | `7200` (2h) | Seconds between resyncs |
 | `--once` | off | Send one `MSG_FULL_SET` and exit |
+| `--grid` | 'IL18' | Send own QTH-grid and save to spi flash  |
+
 
 Time comes from a real NTP query (raw UDP, RFC 5905), **not the PC's own
 clock** — the PC's clock can carry its own unnoticed drift. The payload is
