@@ -45,6 +45,7 @@ static void systick_delay_init(void);
 static void radio_screen_draw(void);
 static void sdr_spectrum_waterfall_tick(void);
 static void status_bar_tick(void);
+static bool sync_warning_active(void); /* forward-declared here too - ft8_text_panel_draw() (defined earlier in the file than sync_warning_active() itself) needs it for its own bottom-right badge - see both functions' own comments */
 static void demo_touch_poll(void);
 static void freq_display_draw(void);
 static void step_display_draw(void);
@@ -2387,21 +2388,23 @@ static uint8_t spectrum_smooth_pct_for_save(void)
 #define BATT_H 16
 
 /* Speaker-enabled indicator (07/09/2026, per the project owner) -
- * sits in the gap between the badge row (ends at BADGE_COL(6)+BADGE_W
- * = 649, see BADGE_COL's own comment) and the battery gauge (BATT_X =
- * 690) - 41px available. Proportions (width:height, box width:box
- * height:horn width) match the real, widely-used "speaker/volume"
- * glyph (e.g. Feather icons' "volume-1": box 4x6, horn 5 wide, full
- * height 14, all in a 24-tall viewBox - a 9:14 width:height ratio,
- * TALLER than wide) rather than an invented shape - see
- * speaker_icon_draw()'s own comment for why that matters. Vertically
- * centered in the status strip (like BADGE_Y0), not pinned to the
- * battery's shorter BATT_Y/H, since this icon is taller than the
- * battery gauge by design. */
+ * moved (09/2026 #2, per the project owner) to sit just left of the
+ * clock (TIME_X/Y) instead of down in the status strip next to the
+ * badge row - same top-bar row as the clock now, vertically centered
+ * on its scale-2 text height (14px) rather than the status strip's
+ * own height. Right edge kept comfortably clear of TIME_TAP_X1 (=
+ * TIME_X-10, the clock-keypad tap zone's own left boundary) so a tap
+ * meant for this icon can't also register as a tap on the clock.
+ * Proportions (width:height, box width:box height:horn width) match
+ * the real, widely-used "speaker/volume" glyph (e.g. Feather icons'
+ * "volume-1": box 4x6, horn 5 wide, full height 14, all in a 24-tall
+ * viewBox - a 9:14 width:height ratio, TALLER than wide) rather than
+ * an invented shape - see speaker_icon_draw()'s own comment for why
+ * that matters. */
 #define SPK_ICON_W 16
 #define SPK_ICON_H 24
-#define SPK_ICON_X 661
-#define SPK_ICON_Y (uint16_t)(STATUS_STRIP_Y + (STATUS_STRIP_H - SPK_ICON_H) / 2U)
+#define SPK_ICON_X (uint16_t)(TIME_X - 28U) /* icon right edge lands at TIME_X-12, 2px clear of TIME_TAP_X1 (TIME_X-10) - see this block's own comment */
+#define SPK_ICON_Y (uint16_t)(TIME_Y + 7U - SPK_ICON_H / 2U) /* 7 = half the clock's own scale-2 text height (14px) - centers this icon on the clock's row, now that it lives there */
 
 /*
  * Renders `hz` as a fixed 11-char field "XXX.XXX.XXX" with thousands
@@ -2978,7 +2981,17 @@ static void battery_display_draw(void)
  */
 static void speaker_icon_draw(void)
 {
-    uint16_t color = s_speaker_pa_enabled ? GFX_COLOR_WHITE : GFX_COLOR_DARKGRAY;
+    /* GFX_COLOR_GRAY, not GFX_COLOR_DARKGRAY (09/2026 #2, per the
+     * project owner): this icon now sits right next to the clock
+     * (SPK_ICON_X/Y - see their own comment), whose text background is
+     * GFX_COLOR_DARKGRAY - drawing a disabled/muted icon in that exact
+     * same color would make it functionally invisible against the
+     * clock's own background the moment the two sit side by side.
+     * GFX_COLOR_GRAY is still clearly dimmer than the enabled state's
+     * WHITE (matching how mode_display_draw()'s own disabled/inactive
+     * states already use GRAY as the "off" shade elsewhere in this
+     * file), just not identical to anything it now sits next to. */
+    uint16_t color = s_speaker_pa_enabled ? GFX_COLOR_WHITE : GFX_COLOR_GRAY;
     const uint8_t  box_w = 7U;
     const uint8_t  box_h = 10U; /* centered - the horn's widest opening; see this function's comment for the 7/10/16/24 proportions' origin */
     const uint16_t box_y = (uint16_t)(SPK_ICON_Y + (SPK_ICON_H - box_h) / 2U);
@@ -8173,19 +8186,43 @@ static void ft8_text_panel_draw(void)
      * whichever region was just cleared above, own reserved row (see
      * the comment on shown_rows-- above), right-aligned. Built by hand
      * (no snprintf on this target) the same way every other on-screen
-     * counter in this file is. Grid comes from
+     * counter in this file is. Labels "GRID:"/"CNT:" added (09/2026 #2,
+     * per the project owner) since two bare numbers/strings side by
+     * side read ambiguously at a glance - grid comes from
      * ft8_decoder_get_own_grid() - empty if nothing valid is currently
-     * set (see its own comment), in which case this just shows the
-     * count alone rather than an awkward blank space. */
+     * set (see its own comment), in which case "GRID:" is skipped
+     * entirely rather than shown with nothing after it.
+     *
+     * Folds in the "no recent time sync" warning too (09/2026) - see
+     * sync_warning_active()'s own comment for the full "why" and the
+     * shared 6-hour threshold. FT8 alignment depends entirely on the
+     * RTC being correct (see this whole file's RTC-driven scheduling
+     * above), so this is exactly the mode where an unnoticed stale
+     * clock matters most - shown HERE, FT8-only (see
+     * sync_warning_active()'s own comment on why this is no longer
+     * shown in any other mode), and kept fresh even with no other FT8
+     * activity happening by sync_status_poll()'s own edge-detection. */
     {
-        char badge[24];
+        char badge[48];
         int p = 0;
         const char *grid = ft8_decoder_get_own_grid();
         uint32_t count = ft8_decoder_get_total_count();
         uint16_t badge_x, badge_y;
+        uint16_t badge_color = GFX_COLOR_CYAN;
 
-        while (*grid != '\0' && p < (int)sizeof(badge) - 1) { badge[p++] = *grid++; }
-        if (p > 0) { badge[p++] = ' '; badge[p++] = ' '; }
+        if (*grid != '\0') {
+            static const char label[] = "GRID:";
+            int i;
+            for (i = 0; label[i] != '\0' && p < (int)sizeof(badge) - 1; i++) { badge[p++] = label[i]; }
+            while (*grid != '\0' && p < (int)sizeof(badge) - 1) { badge[p++] = *grid++; }
+            if (p < (int)sizeof(badge) - 1) { badge[p++] = ' '; }
+            if (p < (int)sizeof(badge) - 1) { badge[p++] = ' '; }
+        }
+        {
+            static const char label[] = "CNT:";
+            int i;
+            for (i = 0; label[i] != '\0' && p < (int)sizeof(badge) - 1; i++) { badge[p++] = label[i]; }
+        }
         {
             char digits[10];
             int nd = 0;
@@ -8194,11 +8231,17 @@ static void ft8_text_panel_draw(void)
             while (v > 0U && nd < (int)sizeof(digits)) { digits[nd++] = (char)('0' + (v % 10U)); v /= 10U; }
             while (nd > 0 && p < (int)sizeof(badge) - 1) { badge[p++] = digits[--nd]; }
         }
+        if (sync_warning_active()) {
+            static const char suffix[] = "  NO TIME SYNC";
+            int i;
+            for (i = 0; suffix[i] != '\0' && p < (int)sizeof(badge) - 1; i++) { badge[p++] = suffix[i]; }
+            badge_color = GFX_COLOR_RED;
+        }
         badge[p] = '\0';
 
         badge_x = (uint16_t)(MAIN_W - 4U - (uint16_t)(p * ((5 + 1) * RTTY_TEXT_SCALE))); /* 5 = GFX_FONT_WIDTH (gfx_font.h, not visible from here - see gfx_char()'s own step calc for where this exact "+1, *scale" shape comes from) */
         badge_y = (uint16_t)(region_y + region_h - RTTY_TEXT_LINE_H + 4U);
-        gfx_text(badge_x, badge_y, badge, GFX_COLOR_CYAN, GFX_COLOR_BLACK, RTTY_TEXT_SCALE);
+        gfx_text(badge_x, badge_y, badge, badge_color, GFX_COLOR_BLACK, RTTY_TEXT_SCALE);
     }
 
     s_ft8_text_full_redraw = false;
@@ -9810,6 +9853,67 @@ static uint8_t zoom_process_block(void)
  * FFT accumulation (which doesn't exist as a concept in FT8/RTTY
  * mode) the way the original inline block was.
  */
+
+/* "Is the clock trustworthy right now" check (09/2026), per the
+ * project owner: feeds FT8's own bottom-right badge (see
+ * ft8_text_panel_draw()'s own use of this) and sync_status_poll()
+ * below, which forces that badge to refresh promptly when this value
+ * changes. Backed by rtc_hw_has_ever_synced()/rtc_hw_get_seconds_
+ * since_sync() (09/2026 #3, moved from a RAM/g_msticks-based version
+ * in time_sync.c per the project owner's report: that version
+ * reported "never synced" after EVERY reboot, even when the RTC
+ * itself - kept ticking correctly the whole time by VBAT - never
+ * actually lost sync; see rtc_hw_mark_synced()'s own comment in
+ * rtc_hw.c for the battery-backed register this now persists into
+ * instead). See those two functions' own comments for why "never
+ * synced" has to be checked first rather than folded into the
+ * elapsed-time comparison.
+ *
+ * FT8-ONLY (09/2026 #2), per the project owner: this used to also
+ * drive a general corner badge shown in every mode - dropped, since a
+ * "NO TIME SYNC" warning while just listening to AM/FM broadcast (no
+ * feature on this board actually NEEDS the RTC outside FT8's own
+ * RTC-driven scheduling) read as confusing rather than useful. FT8 is
+ * the one mode where an unnoticed stale clock silently breaks
+ * something real. */
+#define SYNC_WARNING_MAX_S (6UL * 60UL * 60UL) /* 6 hours, per the project owner's own request */
+static bool sync_warning_active(void)
+{
+    if (!rtc_hw_has_ever_synced()) {
+        return true;
+    }
+    return rtc_hw_get_seconds_since_sync() > SYNC_WARNING_MAX_S;
+}
+
+/* Forces FT8's own badge to repaint the moment sync_warning_active()'s
+ * value actually CHANGES (09/2026, fixing the project owner's report
+ * that the "NO TIME SYNC" text stayed on screen after a real sync
+ * landed, until something else - a mode change - happened to force a
+ * redraw anyway). ft8_text_panel_draw() only repaints when
+ * s_ft8_text_full_redraw is set (see its own comment - a new decoded
+ * line, a cascade toggle, or entering FT8 mode all set it), so a sync
+ * event arriving with no OTHER FT8 activity around it left the badge
+ * showing whatever sync_warning_active() returned the last time
+ * something else triggered a redraw - stale, exactly like the report
+ * describes. Called from status_bar_tick(), which already runs every
+ * ~33ms regardless of mode, so this edge-detects the transition
+ * promptly without needing its own separate polling cadence. Only
+ * forces the redraw while FT8 is actually showing right now - a
+ * transition that happens while in some OTHER mode doesn't need to do
+ * anything here, since entering FT8 mode already forces its own fresh
+ * redraw (see the mode-transition block's own ft8_text_force_redraw()
+ * call), which reads sync_warning_active() live at that point anyway. */
+static void sync_status_poll(void)
+{
+    static bool s_last_sync_warning = true; /* matches sync_warning_active()'s own "assume the worst until proven otherwise" default */
+    bool active = sync_warning_active();
+
+    if (active != s_last_sync_warning && s_ft8_mode_enabled) {
+        ft8_text_force_redraw();
+    }
+    s_last_sync_warning = active;
+}
+
 static void status_bar_tick(void)
 {
     static uint32_t s_next_status_ms = 0U;
@@ -9824,6 +9928,7 @@ static void status_bar_tick(void)
     smeter_dbfs_uart_report(demod_am_get_signal_peak()); /* see its own comment - S-meter calibration aid */
     smeter_dbm_update_and_draw(demod_am_get_signal_peak());
     sam_calib_display_draw(); /* MS5351 PPM calibration readout, 21/08/2026 - see its own comment; needs to update live as the PLL converges */
+    sync_status_poll();
     {
         /* Was minute-granularity (now_min = g_msticks/60000) back when
          * the clock only showed HH:MM - correct then, since the

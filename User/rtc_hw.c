@@ -44,6 +44,69 @@ static volatile uint32_t s_rtc_set_seq;
  * event marker. */
 static volatile int32_t s_rtc_cumulative_shift_ms;
 
+/* Civil calendar -> days since 1970-01-01 (the well-known Howard
+ * Hinnant "days_from_civil" algorithm - correct for the whole
+ * proleptic Gregorian calendar, leap years included, no lookup
+ * tables). Used only by rtc_hw_get_epoch_seconds() below - see its own
+ * comment for why this exists at all. */
+static int32_t days_from_civil(int32_t y, uint32_t m, uint32_t d)
+{
+    int32_t era;
+    uint32_t yoe, doy, doe;
+
+    y -= (m <= 2U) ? 1 : 0;
+    era = (y >= 0 ? y : y - 399) / 400;
+    yoe = (uint32_t)(y - era * 400);
+    doy = (153U * (m + ((m > 2U) ? 0xFFFFFFFDU /* -3 as uint32_t wraparound */ : 9U)) + 2U) / 5U + d - 1U;
+    doe = yoe * 365U + yoe / 4U - yoe / 100U + doy;
+    return era * 146097 + (int32_t)doe - 719468;
+}
+
+/* Plain seconds-since-1970-01-01-UTC for the CURRENT RTC reading - NOT
+ * used anywhere in this project's actual scheduling (everything else
+ * still works off the BCD calendar fields directly, per
+ * rtc_hw_datetime_t - this is purpose-built for ONE thing:
+ * rtc_hw_mark_synced() below needs a single, monotonically comparable
+ * number it can stash in a battery-backed register and diff against
+ * later, possibly across a firmware reset that never touched VBAT (so
+ * the RTC calendar itself kept ticking correctly the whole time) -
+ * "hours since the two BCD calendars differ" isn't something you can
+ * subtract directly without doing real calendar arithmetic somewhere,
+ * so this does it once, properly (leap years, month lengths, year
+ * rollovers), rather than reinventing a shakier version of it at each
+ * call site that needs an elapsed-time comparison. */
+static uint32_t rtc_hw_get_epoch_seconds(void)
+{
+    rtc_hw_datetime_t dt;
+    int32_t days;
+
+    rtc_hw_get(&dt);
+    days = days_from_civil((int32_t)dt.year, dt.month, dt.day);
+    return (uint32_t)days * 86400U + (uint32_t)dt.hour * 3600U + (uint32_t)dt.minute * 60U + dt.second;
+}
+
+/* Stamps "right now" as the last time this RTC was genuinely corrected
+ * - see rtc_hw_set()'s and rtc_hw_apply_shift()'s own call sites
+ * below, and rtc_hw_has_ever_synced()/rtc_hw_get_seconds_since_sync()'s
+ * own comments in the header for the full "why" (09/2026, per the
+ * project owner: a "no time sync" warning based on RAM/g_msticks alone
+ * re-triggered on every single reboot, even when the RTC itself - kept
+ * ticking correctly the whole time by VBAT - never actually lost
+ * sync). RTC_BKP1 (a second, previously-unused backup register,
+ * distinct from RTC_BKP0's own "has this RTC ever been brought up at
+ * all" marker) survives exactly the same power domain RTC_BKP0 and the
+ * calendar itself do - a real VBAT loss resets this right along with
+ * the calendar going back to its default epoch, which is the correct
+ * behavior: if the calendar itself isn't trustworthy any more, neither
+ * is "when was it last synced". 0 is used as the "never synced"
+ * sentinel (rtc_hw_get_epoch_seconds() can't return exactly 0 for any
+ * real-world date this board will ever see - that's 1970-01-01
+ * 00:00:00 UTC). */
+static void rtc_hw_mark_synced(void)
+{
+    RTC_BKP1 = rtc_hw_get_epoch_seconds();
+}
+
 /* Set once in rtc_hw_init() - see its own comment for the full "why".
  * true means LXTAL never confirmed stable within the timeout, so the
  * RTC's clock source (and therefore every second/minute/hour reading
@@ -207,6 +270,7 @@ void rtc_hw_set(const rtc_hw_datetime_t *dt)
     RTC_BKP0 = RTC_HW_INIT_MARKER; /* in case this is also serving as the very first sync after a cold boot */
     s_rtc_dirty = true;
     s_rtc_set_seq++; /* see rtc_hw_get_set_seq()'s comment - independent of s_rtc_dirty above */
+    rtc_hw_mark_synced(); /* see its own comment - AFTER rtc_hw_write_calendar() so this stamps the NEW, just-set time, not whatever the calendar held a moment ago */
 }
 
 bool rtc_hw_consume_dirty(void)
@@ -235,6 +299,7 @@ bool rtc_hw_apply_shift(bool add_one_second, uint16_t subsecond_fraction)
         int32_t delta_ms = add_one_second ? 1000 : 0;
         delta_ms -= (int32_t)((subsecond_fraction * 1000U) / (RTC_HW_FACTOR_SYN + 1U));
         s_rtc_cumulative_shift_ms += delta_ms;
+        rtc_hw_mark_synced(); /* see its own comment - a routine fine shift is just as real a sync event as a hard set */
     }
 
     return ok;
@@ -243,4 +308,22 @@ bool rtc_hw_apply_shift(bool add_one_second, uint16_t subsecond_fraction)
 int32_t rtc_hw_get_cumulative_shift_ms(void)
 {
     return s_rtc_cumulative_shift_ms;
+}
+
+bool rtc_hw_has_ever_synced(void)
+{
+    return RTC_BKP1 != 0U;
+}
+
+uint32_t rtc_hw_get_seconds_since_sync(void)
+{
+    /* Both sides of this subtraction come from the same
+     * rtc_hw_get_epoch_seconds() clock, unaffected by any firmware
+     * reset in between (see rtc_hw_mark_synced()'s own comment) - a
+     * real elapsed-seconds value as long as rtc_hw_has_ever_synced()
+     * is true, which callers must check first (see this function's
+     * own header comment - with RTC_BKP1 still at its power-on-reset
+     * 0, this would otherwise return the current epoch itself,
+     * billions of seconds, not a genuine "since last sync" figure). */
+    return rtc_hw_get_epoch_seconds() - RTC_BKP1;
 }

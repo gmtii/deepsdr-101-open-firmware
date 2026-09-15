@@ -119,4 +119,33 @@ bool rtc_hw_consume_dirty(void);
  * FT8's RTC-seeded slot grid) ever got a chance to see it. */
 uint32_t rtc_hw_get_set_seq(void);
 
+/* Running total, in milliseconds, of every successful
+ * rtc_hw_apply_shift() call so far - positive means the clock has been
+ * moved forward overall, negative backward. Read-only instrumentation;
+ * nothing in this project currently consumes it, kept for whatever
+ * future diagnostic needs a precise, cumulative view of how much
+ * fine-shift correction has actually been applied over time (as
+ * opposed to rtc_hw_get_seconds_since_sync() below, which only cares
+ * about WHEN the last correction landed, not how big any of them
+ * were). */
+int32_t rtc_hw_get_cumulative_shift_ms(void);
+
+/* "Has this RTC ever been genuinely corrected" and "how long ago,
+ * in real seconds" (09/2026) - both survive a firmware reset that
+ * doesn't also take VBAT down with it (see rtc_hw_mark_synced()'s own
+ * comment in rtc_hw.c), unlike tracking this in RAM/g_msticks, which
+ * would report "never synced" after every single reboot even though
+ * the RTC itself never actually lost its correct time. Set by BOTH
+ * rtc_hw_set() and rtc_hw_apply_shift() succeeding - a hard set and a
+ * routine fine shift both count as a genuine sync event equally.
+ *
+ * Check rtc_hw_has_ever_synced() FIRST: with no sync ever recorded (a
+ * true first boot, or VBAT was actually lost), there is no meaningful
+ * "seconds since" value to report at all - rtc_hw_get_seconds_since_
+ * sync() will just return the current epoch itself (billions of
+ * seconds) in that case, not a real elapsed time, since it has
+ * nothing else to subtract from. */
+bool rtc_hw_has_ever_synced(void);
+uint32_t rtc_hw_get_seconds_since_sync(void);
+
 #endif /* RTC_HW_H */

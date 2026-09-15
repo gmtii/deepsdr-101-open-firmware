@@ -3,6 +3,8 @@
 #include "gd32f4xx.h"
 #include "rtc_hw.h"
 #include "usb_serial.h"
+#include "ft8_decoder.h" /* ft8_decoder_set_own_grid() - MSG_SET_GRID, see its own comment below */
+#include "settings.h"    /* settings_mark_dirty() - persists the grid to CONFIG.CSV once set via MSG_SET_GRID */
 
 /*
  * Frame format (little-endian multi-byte fields), sent by the ESP32 -
@@ -12,7 +14,7 @@
  *
  *   [0]      0xA5              start marker
  *   [1]      length            payload length in bytes (MSG_*_LEN below)
- *   [2]      msg_type          MSG_FULL_SET or MSG_SHIFT
+ *   [2]      msg_type          MSG_FULL_SET, MSG_SHIFT, or MSG_SET_GRID
  *   [3..]    payload           see per-type layout below
  *   [3+len]  crc8              CRC8-CCITT (poly 0x07, init 0x00) over
  *                               msg_type + payload only (not the
@@ -29,14 +31,32 @@
  * resyncs once the calendar is already close - goes through
  * rtc_hw_apply_shift(), which does NOT disturb the running calendar.
  * See rtc_hw.h for the +/-1s range this covers per call.
+ *
+ * MSG_SET_GRID (0x03, 09/2026) - payload = 4 or 6 bytes: the Maidenhead
+ * grid locator itself as ASCII, NOT NUL-terminated (length comes from
+ * the frame's own [1] byte, same as every other message type here) -
+ * e.g. "IL18" or "IL18vl". Added per the project owner's request to
+ * set/update FT8's distance-to-grid own-QTH square from the same PC-
+ * side tool used for time sync (time_sync_sdr101.py), rather than
+ * needing a recompile or a separate on-screen keypad for a value that
+ * only ever changes if the operator physically moves - see
+ * ft8_decoder_set_own_grid()'s own comment for the validation this
+ * goes through (a malformed grid is rejected there, not here) and
+ * grid_to_latlon()'s own explicit "RR73" guard. Persisted immediately
+ * via settings_mark_dirty() (debounced, same as every other CONFIG.CSV
+ * field) rather than waiting for some unrelated setting to also
+ * change and drag this one along as a side effect.
  */
 #define FRAME_START   0xA5U
 #define FRAME_END     0x5AU
 #define MSG_FULL_SET  0x01U
 #define MSG_SHIFT     0x02U
+#define MSG_SET_GRID  0x03U
 #define MSG_FULL_SET_LEN 7U
 #define MSG_SHIFT_LEN    3U
-#define MSG_PAYLOAD_MAX  MSG_FULL_SET_LEN /* largest of the two */
+#define MSG_SET_GRID_LEN_4 4U
+#define MSG_SET_GRID_LEN_6 6U
+#define MSG_PAYLOAD_MAX  MSG_FULL_SET_LEN /* largest of all three (7 >= 6 >= 4 >= 3) */
 
 /* Small RX ring buffer, filled from usb_serial_read() at the top of
  * time_sync_poll() instead of an ISR - USB reception is already
@@ -134,7 +154,17 @@ static void handle_shift(const uint8_t *payload)
     bool add_one_second = (payload[0] != 0U);
     uint16_t subsecond_fraction = (uint16_t)(payload[1] | ((uint16_t)payload[2] << 8));
 
-    (void)rtc_hw_apply_shift(add_one_second, subsecond_fraction);
+    (void)rtc_hw_apply_shift(add_one_second, subsecond_fraction); /* "since last sync" tracking now lives in rtc_hw.c itself (rtc_hw_has_ever_synced()/rtc_hw_get_seconds_since_sync()) - see rtc_hw_set()'s and rtc_hw_apply_shift()'s own comments there for why that's the right place for it (persists across a firmware reset that doesn't also take VBAT down, unlike anything tracked here in RAM) */
+}
+
+/* See this file's own header comment on MSG_SET_GRID for the full
+ * "why". Deliberately does not touch anything RTC-related - setting
+ * the grid says nothing about whether the CLOCK is currently
+ * trustworthy. */
+static void handle_set_grid(const uint8_t *payload, uint8_t len)
+{
+    ft8_decoder_set_own_grid((const char *)payload, (int)len);
+    settings_mark_dirty(); /* persist to CONFIG.CSV - debounced, same as every other settings field */
 }
 
 void time_sync_init(void)
@@ -221,6 +251,12 @@ void time_sync_poll(void)
         if (len == MSG_SHIFT_LEN)
         {
             handle_shift(payload);
+        }
+        break;
+    case MSG_SET_GRID:
+        if (len == MSG_SET_GRID_LEN_4 || len == MSG_SET_GRID_LEN_6)
+        {
+            handle_set_grid(payload, len);
         }
         break;
     default:

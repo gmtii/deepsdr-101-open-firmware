@@ -15,7 +15,7 @@
  * negligible next to typical HF distances, but free precision if you
  * already know your 6-character square. grid_to_latlon() below
  * accepts either length. */
-#define FT8_OWN_GRID "IL18vl"
+#define FT8_OWN_GRID "IL18"
 
 /* Maidenhead grid locator -> latitude/longitude of the CELL CENTER
  * (not a corner - a corner would bias distance by up to half a

@@ -2,6 +2,7 @@
 #define TIME_SYNC_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /*
  * ESP32 -> GD32 time sync link, now carried over the USB CDC-ACM
