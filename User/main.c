@@ -2317,23 +2317,28 @@ static uint8_t spectrum_smooth_pct_for_save(void)
 #define STEP_Y 8
 #define VOL_X  478
 #define VOL_Y  38
-#define TIME_X 672 /* moved again (09/2026 #2), per the project owner:
-                     * the previous value (636, at scale 3) collided
-                     * with sam_calib_display_draw()'s own field, which
-                     * shares this same y=8 row and was missed the
-                     * first time - SAM_CALIB_X(594) + its own 70px
-                     * width reaches x=664, not the ~586 STEP alone
-                     * ends at. Also dropped the clock's scale from 3
-                     * to 2 (see time_display_draw()'s own gfx_text
-                     * call) - at scale 3, "HH:MM:SS" needs 144px,
-                     * which no longer fits between 664 and the 800px
-                     * screen edge with any margin at all; at scale 2
-                     * it needs only 96px, landing at 672+96=768 with
-                     * genuine room to spare. TIME_TAP_X1 (below) is
+#define TIME_X 700 /* moved again (09/2026 #3), per the project owner:
+                     * align to the right margin alongside the battery
+                     * indicator - "HH:MM:SS" (8 chars) at scale 2 is
+                     * 96px wide, so 700+96=796, a 4px margin from the
+                     * 800px screen edge, matching the left-hand 4px
+                     * margin convention used everywhere else in this
+                     * file (e.g. gfx_text(4, ...)). Confirmed clear of
+                     * SAM_CALIB (594-664) and STEP (ends ~586) on this
+                     * same y=8 row - more margin than the previous
+                     * position (672), not less. TIME_TAP_X1 (below) is
                      * defined relative to this so the tap-to-set-clock
-                     * zone moves with it automatically either way. */
+                     * zone moves with it automatically. */
 #define TIME_Y 8
-#define BATT_X 690
+#define BATT_X 716 /* moved again (09/2026 #3), per the project owner:
+                     * same right-margin alignment as TIME_X above, on
+                     * BATT_Y's own row. Icon (BATT_W=48) + 2px gap +
+                     * voltage text (always exactly 5 chars at scale 1,
+                     * see battery_voltage_format() - fixed width, no
+                     * need to measure it here) = 80px total, so
+                     * 716+80=796, the same 4px right margin TIME_X
+                     * lands on. Confirmed clear of SPK_ICON_X(661) +
+                     * its own ~16px width on this same row. */
 #define BATT_Y 40
 #define BATT_W 48 /* shortened from 70 on 08/09/2026, per the project
                     * owner ("la bateria la puedes hacer algo mas
@@ -7765,11 +7770,22 @@ static void ft8_cascade_draw(void)
     for (r = 0; r < rows; r++) {
         for (c = 0; c < cols; c++) {
             uint8_t v = hist[(r * cols) + c];
-            /* Byte value directly as a 6-bit green intensity (0-255
-             * >> 2 = 0-63, an exact fit for RGB565's green field) -
-             * same solid-green look as ft8_spectrum_draw()'s bars,
-             * just as a heat-mapped cell instead of a bar height. */
-            uint16_t color = (uint16_t)((v >> 2) << 5);
+            /* Follows the MAIN spectrum/waterfall's own selected
+             * palette (09/2026 #6, per the project owner) via
+             * spectrum_colormap() - the same public LUT lookup
+             * spectrum_draw() itself uses, so switching palettes from
+             * the settings menu (VIRIDIS/INFERNO/TURBO/GRAYSCALE/...)
+             * now re-colors this cascade too, automatically, with no
+             * separate palette state of its own to keep in sync.
+             * Passing (v, 0, 255) rather than a real dB range: v is
+             * ALREADY a 0-255 intensity byte (see
+             * ft8_waterfall_adapter.c), and spectrum_colormap()'s own
+             * normalization ((db-db_min)/(db_max-db_min)*255) reduces
+             * to the identity for exactly that range - v goes straight
+             * to s_lut[v], the same direct index the raw stored byte
+             * always was, just through the shared LUT instead of a
+             * hardcoded green-only mapping. */
+            uint16_t color = spectrum_colormap((float)v, 0.0f, 255.0f);
             gfx_fill_rect((uint16_t)(c * cell_w), (uint16_t)(FT8_CASCADE_AREA_Y + (r * cell_h)),
                           cell_w, cell_h, color);
         }
@@ -8070,6 +8086,17 @@ static void ft8_text_panel_draw(void)
     if (shown_rows > FT8_TEXT_ROWS) {
         shown_rows = FT8_TEXT_ROWS; /* can't show more than is actually stored - only matters if the region ever grows past FT8_TEXT_ROWS*LINE_H, not the case today but a cheap guard against s_ft8_text_grid overrun if it ever does */
     }
+    /* Reserve the LAST row for the own-grid/decode-count badge below,
+     * in BOTH layouts (09/2026 #7, per the project owner's request to
+     * bring back an always-visible reception count, plus which grid
+     * this is all being measured from) - drawn separately from the
+     * scrolling decode lines rather than sharing a row with the most
+     * recent one, so a long decoded line can never run into it. Costs
+     * exactly one line of history each layout (7 instead of 8 compact,
+     * 16 instead of 17 expanded) - negligible against what it buys:
+     * a fixed, predictable corner readout that's never pushed off
+     * screen or overwritten by scrolling content. */
+    if (shown_rows > 0U) { shown_rows--; }
 
     gfx_fill_rect(0, region_y, MAIN_W, region_h, GFX_COLOR_BLACK);
 
@@ -8084,6 +8111,39 @@ static void ft8_text_panel_draw(void)
             gfx_text(4, y, s_ft8_text_grid[src], GFX_COLOR_GREEN, GFX_COLOR_BLACK, RTTY_TEXT_SCALE);
         }
     }
+
+    /* Own-grid + total-decoded-count badge - bottom-right corner of
+     * whichever region was just cleared above, own reserved row (see
+     * the comment on shown_rows-- above), right-aligned. Built by hand
+     * (no snprintf on this target) the same way every other on-screen
+     * counter in this file is. Grid comes from
+     * ft8_decoder_get_own_grid() - empty if nothing valid is currently
+     * set (see its own comment), in which case this just shows the
+     * count alone rather than an awkward blank space. */
+    {
+        char badge[24];
+        int p = 0;
+        const char *grid = ft8_decoder_get_own_grid();
+        uint32_t count = ft8_decoder_get_total_count();
+        uint16_t badge_x, badge_y;
+
+        while (*grid != '\0' && p < (int)sizeof(badge) - 1) { badge[p++] = *grid++; }
+        if (p > 0) { badge[p++] = ' '; badge[p++] = ' '; }
+        {
+            char digits[10];
+            int nd = 0;
+            uint32_t v = count;
+            if (v == 0U) { digits[nd++] = '0'; }
+            while (v > 0U && nd < (int)sizeof(digits)) { digits[nd++] = (char)('0' + (v % 10U)); v /= 10U; }
+            while (nd > 0 && p < (int)sizeof(badge) - 1) { badge[p++] = digits[--nd]; }
+        }
+        badge[p] = '\0';
+
+        badge_x = (uint16_t)(MAIN_W - 4U - (uint16_t)(p * ((5 + 1) * RTTY_TEXT_SCALE))); /* 5 = GFX_FONT_WIDTH (gfx_font.h, not visible from here - see gfx_char()'s own step calc for where this exact "+1, *scale" shape comes from) */
+        badge_y = (uint16_t)(region_y + region_h - RTTY_TEXT_LINE_H + 4U);
+        gfx_text(badge_x, badge_y, badge, GFX_COLOR_CYAN, GFX_COLOR_BLACK, RTTY_TEXT_SCALE);
+    }
+
     s_ft8_text_full_redraw = false;
 }
 
