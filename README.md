@@ -8,7 +8,7 @@ Thanks to Karlis Goba, YL3JG for his great https://github.com/kgoba/ft8_lib
 
 ## FT8 mode
 
-### Current limitation: 1600 kHz window, not the full passband
+### Current limitation: 1600 Hz window, not the full passband
 
 FT8 detection currently searches a **1600 Hz-wide window** around the tuned
 frequency, not the receiver's full instantaneous bandwidth. This was a
