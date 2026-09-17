@@ -74,4 +74,52 @@ void waterfall_blit(uint16_t x, uint16_t y);
  * sin pasar por waterfall_push_line(). NULL si row fuera de rango. */
 uint16_t *waterfall_row(uint16_t row);
 
+/*
+ * PRESTAMO PARA HFDL (16/09/2026 - primera pieza de la incorporacion del
+ * modulo HFDL a este arbol, ver /areas/deepsdr-hfdl-decoder.md): mismo
+ * contrato que ya usaba la rama HFDL por separado - g_ft8_shared_ram
+ * (ft8_shared_ram.h) gana un tercer miembro `hfdl_scratch` ademas de
+ * `waterfall_buf` y `ft8`, y estas dos funciones son el unico punto de
+ * entrada para pedirlo/devolverlo. hfdl_scope.c/hfdl_payload_decode.c
+ * (traidos tal cual de la rama HFDL, sin tocar) ya llaman a estas dos
+ * funciones exactamente con este nombre - por eso se mantiene aqui,
+ * en vez de renombrarlas, aunque el buffer subyacente ya no sea
+ * "solo del waterfall".
+ *   - Solo pedir el prestamo despues de que el modo HFDL este activo y
+ *     antes de que waterfall_push_line()/waterfall_blit() puedan volver
+ *     a ejecutarse.
+ *   - Devolverlo al salir de modo HFDL, antes de que el modo normal
+ *     pueda volver a dibujar waterfall.
+ *   - Mientras esta prestado, el contenido se considera basura;
+ *     waterfall_ram_return_from_hfdl() deja el waterfall en negro al
+ *     recuperarlo (no hace falta hacerlo a mano).
+ *   - Guarda de seguridad en tiempo de ejecucion, siempre activa (no
+ *     solo bajo DEBUG_UART_ENABLED): waterfall_push_line()/_blit()
+ *     ignoran la llamada (en vez de corromper los datos de HFDL) si se
+ *     invocan mientras esta prestado. */
+#define WATERFALL_RAM_BORROW_CAPACITY 43008u /* mismo techo que ya se
+                                                 valido en real hardware
+                                                 en la rama HFDL por
+                                                 separado (era el 100%
+                                                 del waterfall de
+                                                 entonces, 672x32x2) -
+                                                 aqui es solo ~37% del
+                                                 waterfall actual
+                                                 (796x72x2=114624), con
+                                                 margen de sobra sobre
+                                                 el peor caso real de
+                                                 hfdl_payload_decode.c
+                                                 (tabla 378x40=15120B +
+                                                 estado + 2x metricas
+                                                 Viterbi + decisiones -
+                                                 begin_segment_ex() ya
+                                                 rechaza limpio (caso
+                                                 M1=6/7) si algun
+                                                 segmento real no
+                                                 cupiera, asi que este
+                                                 numero no necesita ser
+                                                 exacto). */
+uint8_t *waterfall_ram_borrow_for_hfdl(uint32_t needed_bytes);
+void waterfall_ram_return_from_hfdl(void);
+
 #endif /* WATERFALL_H */

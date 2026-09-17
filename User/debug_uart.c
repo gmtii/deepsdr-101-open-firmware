@@ -161,4 +161,99 @@ void debug_print_dec(const char *label, uint32_t val)
     debug_print("\n");
 }
 
+/* _always() variants - see debug_uart.h's comment on why these are
+ * plain aliases here. */
+void debug_print_always(const char *s) { debug_print(s); }
+void debug_print_hex32_always(const char *label, uint32_t val) { debug_print_hex32(label, val); }
+void debug_print_dec_always(const char *label, uint32_t val) { debug_print_dec(label, val); }
+
+/* Fixed-point float print (ported 16/09/2026 with the HFDL module,
+ * verbatim from the HFDL branch's debug_uart.c - see debug_uart.h's
+ * comment). uart_print_udec() is a local helper, same shape as
+ * debug_print_dec()'s own digit loop but returning through
+ * debug_print_always() so it composes with the sign/decimal-point
+ * pieces below without an extra buffer. */
+static void uart_print_udec(uint32_t val)
+{
+    char buf[11];
+    int i = 10;
+    buf[10] = '\0';
+
+    if (val == 0) {
+        buf[--i] = '0';
+    } else {
+        while (val > 0 && i > 0) {
+            buf[--i] = (char)('0' + (val % 10));
+            val /= 10;
+        }
+    }
+    debug_print_always(&buf[i]);
+}
+
+void debug_print_float_always(const char *label, float val)
+{
+    uint8_t negative = 0U;
+    uint32_t frac_digits;
+    float scale;
+    uint32_t scaled, divisor, int_part, frac_part, pad, d;
+
+    if (val != val) { /* portable NaN check - NaN never equals itself */
+        debug_print_always(label);
+        debug_print_always(" = NaN\n");
+        return;
+    }
+    if (val > 3.0e38f) {
+        debug_print_always(label);
+        debug_print_always(" = +Inf (or huge)\n");
+        return;
+    }
+    if (val < -3.0e38f) {
+        debug_print_always(label);
+        debug_print_always(" = -Inf (or huge negative)\n");
+        return;
+    }
+
+    if (val < 0.0f) {
+        negative = 1U;
+        val = -val;
+    }
+
+    /* Adaptive fractional-digit count: a fixed 1e6 scale silently
+     * saturates the uint32_t cast below for any val >= ~4294.967296 -
+     * drop fractional digits as needed (down to a floor of 0) so the
+     * integer part stays correct, trading decimal precision only when
+     * the magnitude actually needs the headroom. */
+    frac_digits = 6u;
+    scale = 1000000.0f;
+    while (frac_digits > 0u && val > (4290000000.0f / scale)) {
+        frac_digits--;
+        scale *= 0.1f;
+    }
+
+    scaled = (uint32_t)(val * scale + 0.5f);
+    divisor = 1u;
+    for (d = 0u; d < frac_digits; d++) {
+        divisor *= 10u;
+    }
+    int_part = scaled / divisor;
+    frac_part = scaled % divisor;
+
+    debug_print_always(label);
+    debug_print_always(" = ");
+    if (negative) {
+        debug_print_always("-");
+    }
+    uart_print_udec(int_part);
+    if (frac_digits > 0u) {
+        debug_print_always(".");
+        pad = divisor / 10u;
+        while (pad > 1u && frac_part < pad) {
+            debug_print_always("0");
+            pad /= 10u;
+        }
+        uart_print_udec(frac_part);
+    }
+    debug_print_always("\n");
+}
+
 #endif /* DEBUG_UART_ENABLED */

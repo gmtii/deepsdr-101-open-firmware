@@ -42,6 +42,24 @@ void debug_print_hex32(const char *label, uint32_t val);
 void debug_print_hex16(const char *label, uint16_t val);
 void debug_print_dec(const char *label, uint32_t val);
 
+/*
+ * _always() variants (16/09/2026, brought in with the HFDL module -
+ * see hfdl_payload_decode.c - from the HFDL branch's separate
+ * debug_uart.h, where they existed to bypass a "quiet mode" this
+ * project doesn't have. Here they're plain aliases for the base
+ * functions - the name is kept only so hfdl_payload_decode.c didn't
+ * need touching. If quiet mode is ever added to this branch too,
+ * these are the three call sites that would need to start actually
+ * bypassing it. */
+void debug_print_always(const char *s);
+void debug_print_hex32_always(const char *label, uint32_t val);
+void debug_print_dec_always(const char *label, uint32_t val);
+/* Human-readable float print (ported 16/09/2026 with the HFDL module -
+ * see hfdl_scope_tuning_diag_tick(). Fixed-point, adaptive fractional
+ * digits, built from plain integer math - no libc float printf on
+ * this link/no-syscalls target. */
+void debug_print_float_always(const char *label, float val);
+
 #else
 
 #define debug_uart_init()             ((void)0)
@@ -49,6 +67,11 @@ void debug_print_dec(const char *label, uint32_t val);
 #define debug_print_hex32(label, val) ((void)0)
 #define debug_print_hex16(label, val) ((void)0)
 #define debug_print_dec(label, val)   ((void)0)
+
+#define debug_print_always(s)                ((void)0)
+#define debug_print_hex32_always(label, val) ((void)0)
+#define debug_print_dec_always(label, val)   ((void)0)
+#define debug_print_float_always(label, val) ((void)0)
 
 #endif /* DEBUG_UART_ENABLED */
 

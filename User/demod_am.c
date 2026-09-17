@@ -1,5 +1,8 @@
 #include "demod_am.h"
 #include "ft8_decimator.h" /* minimal bring-up hook, 09/2026 - see demod_am_ft8_capture_set_active() */
+#include "hfdl_scope.h" /* hfdl_scope_feed() - burst-detector tap, 16/09/2026, see the call site below */
+#include "hfdl_demod_chain.h" /* hfdl_demod_chain_t/_init/_process - LOCKED detection, sub-pieza 1, 16/09/2026 */
+#include "hfdl_preamble_sync.h" /* hfdl_preamble_sync_t/_init/_reset/_process_symbol - ditto */
 #include "sam.h" /* DEMOD_MODE_SAM - 21/08/2026 */
 #include "config.h"
 #include "sdr_rx.h"
@@ -1566,6 +1569,61 @@ static volatile uint32_t s_last_cycles_audio    = 0U;
 static volatile uint32_t s_last_cycles_nr       = 0U;
 static volatile uint32_t s_last_cycles_agc_out  = 0U;
 
+/* HFDL probe UART-deferral state (16/09/2026 - see the ISR block's own
+ * comment on why these exist: debug_print*() must never be called
+ * directly from the audio ISR, only from demod_am_hfdl_probe_debug_poll()
+ * below, called from the main loop). Plain flags/snapshots, no locking -
+ * same informal style as this file's other ISR-to-main-loop flags
+ * (e.g. the DIAG capture trace's s_hfdl_diag_trace_ready) - a flag
+ * going stale by one main-loop iteration is harmless for a debug print. */
+static volatile uint8_t s_hfdl_dbg_armed_pending = 0u;
+static volatile uint8_t s_hfdl_dbg_burst_start_pending = 0u;
+static volatile float s_hfdl_dbg_burst_start_snr = 0.0f;
+static volatile uint8_t s_hfdl_dbg_burst_end_pending = 0u;
+static volatile uint32_t s_hfdl_dbg_burst_end_symbols = 0u;
+static volatile float s_hfdl_dbg_burst_end_snr = 0.0f;
+static volatile float s_hfdl_dbg_burst_end_snr_peak = 0.0f;
+static volatile uint32_t s_hfdl_dbg_burst_end_best_state = 0u;
+static volatile float s_hfdl_dbg_burst_end_best_a_score = 0.0f;
+static volatile uint8_t s_hfdl_dbg_a2_pending = 0u;
+static volatile uint8_t s_hfdl_dbg_locked_pending = 0u;
+
+/* Drains the flags above from the MAIN LOOP - see their declaration
+ * comment for why this must never be called from ISR context. Call
+ * this unconditionally, alongside hfdl_scope_poll(), same as
+ * hfdl_scope_tuning_diag_tick(). */
+void demod_am_hfdl_probe_debug_poll(void)
+{
+    if (s_hfdl_dbg_armed_pending) {
+        s_hfdl_dbg_armed_pending = 0u;
+        debug_print_always("HFDL probe: armed, waiting for burst\n");
+    }
+    if (s_hfdl_dbg_burst_start_pending) {
+        s_hfdl_dbg_burst_start_pending = 0u;
+        debug_print_always("\n>>> HFDL burst START <<<\n");
+        debug_print_float_always("  signal/floor ratio at start (ON threshold ~3.16)", s_hfdl_dbg_burst_start_snr);
+    }
+    if (s_hfdl_dbg_burst_end_pending) {
+        s_hfdl_dbg_burst_end_pending = 0u;
+        debug_print_dec_always("<<< HFDL burst END - symbols this burst", s_hfdl_dbg_burst_end_symbols);
+        debug_print_float_always("  signal/floor ratio at end", s_hfdl_dbg_burst_end_snr);
+        debug_print_float_always("  signal/floor ratio PEAK this burst", s_hfdl_dbg_burst_end_snr_peak);
+        debug_print_dec_always("  best preamble state reached (0=A1 1=A2 2=M1 3=LOCKED)", s_hfdl_dbg_burst_end_best_state);
+        debug_print_float_always("  best A-score seen this burst", s_hfdl_dbg_burst_end_best_a_score);
+    }
+    if (s_hfdl_dbg_a2_pending) {
+        s_hfdl_dbg_a2_pending = 0u;
+        debug_print_always("  HFDL A2_SEARCH entered\n");
+    }
+    if (s_hfdl_dbg_locked_pending) {
+        s_hfdl_dbg_locked_pending = 0u;
+        /* SUB-PIEZA 2 (pendiente): aqui es donde arrancara el segmento
+         * de datos real + ecualizador + payload decode - ver el
+         * comentario en el bloque de la ISR. */
+        debug_print_always("\n*** HFDL LOCKED *** (segmento de datos aun no enganchado - sub-pieza 2)\n");
+    }
+}
+
 demod_am_cycles_breakdown_t demod_am_get_last_cycles_breakdown(void)
 {
     demod_am_cycles_breakdown_t b;
@@ -2491,6 +2549,173 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * inside the same call. */
         arm_fir_decimate_f32(&s_decim_i_inst, s_i_buf, s_i_dec, SDR_RX_BLOCK_SAMPLES);
         arm_fir_decimate_f32(&s_decim_q_inst, s_q_buf, s_q_dec, SDR_RX_BLOCK_SAMPLES);
+
+        /* HFDL burst-detector feed (16/09/2026, primera pieza de la
+         * incorporacion del modulo HFDL - ver
+         * /areas/deepsdr-hfdl-decoder.md) - tap DELIBERADAMENTE aqui,
+         * sobre s_i_dec/s_q_dec (I/Q complejo real, ambas bandas
+         * laterales), y NO mas abajo sobre s_ssb_dec (audio mono ya
+         * combinado) como hace el tap de FT8 justo debajo. Esto no es
+         * una eleccion arbitraria: la rama HFDL por separado tuvo
+         * exactamente el bug contrario (tap post-combine) como punto
+         * ciego confirmado - un "no hay deteccion nunca sintonizado
+         * en frecuencia nominal, solo recupera con +-2kHz de detune
+         * manual" causado por perder la polaridad I/Q real al combinar
+         * a mono demasiado pronto. hfdl_scope_feed() es un no-op
+         * barato si !hfdl_scope_get_enabled(), asi que esto no cuesta
+         * nada fuera de modo HFDL. NOTA (16/09/2026): usa
+         * s_dec_block_samples (variable en tiempo de ejecucion, 32 o
+         * 64 segun la tasa RATE de 96K/48K activa - ver su propio
+         * comentario mas abajo), NO la constante DEC_BLOCK_SAMPLES que
+         * usaba la rama HFDL por separado, porque esta rama anadio el
+         * cambio de tasa en vivo despues de que aquella se separase;
+         * en aquella rama la tasa era fija y esa constante bastaba. */
+        hfdl_scope_feed(s_i_dec, s_q_dec, s_dec_block_samples);
+
+        /* SUB-PIEZA 1 (16/09/2026) - cadena de demodulacion HFDL real
+         * (mixer -> resampler -> AGC -> filtro adaptado -> symsync ->
+         * Costas) + deteccion de preambulo real (A1_SEARCH ->
+         * A2_SEARCH -> M1_SEARCH -> LOCKED), portado de la rama HFDL
+         * por separado - ver /areas/deepsdr-hfdl-decoder.md. Igual que
+         * hfdl_scope_feed() arriba, gateado en hfdl_scope_get_enabled()
+         * asi que no cuesta nada fuera de modo HFDL. Excluido
+         * deliberadamente de este porte: todo el HFDL_CAPTURE_MODE
+         * (RAW_IQ/RAW_DEC_IQ/DIAG, con su escritura a SPI flash) y el
+         * modo de prueba HFDL_TEST_FORCE_ALWAYS_ACTIVE - ver la
+         * conversacion de porte de este modulo.
+         *
+         * Termina justo ANTES de la transicion a LOCKED (segmento de
+         * datos + ecualizador + payload decode - sub-pieza 2) - por
+         * ahora, LOCKED solo se registra con un print, sin arrancar el
+         * segmento de datos todavia. */
+        if (hfdl_scope_get_enabled()) {
+            /* TCM (16/09/2026, real-hardware RAM overflow - see the
+             * HFDL module port conversation): estos dos structs son
+             * los mas grandes que anadio la sub-pieza 1 (1232 +
+             * 2684 = 3916 bytes) y son puro calculo de CPU (Costas/
+             * symsync/AGC el primero, correlador de preambulo el
+             * segundo) - nunca tocados por DMA - exactamente el mismo
+             * criterio que ya uso este fichero para
+             * s_decim_i_state/s_hilbert_state/etc. mas arriba. */
+            static hfdl_demod_chain_t s_hfdl_probe_chain TCMRAM_BSS;
+            static hfdl_preamble_sync_t s_hfdl_preamble TCMRAM_BSS;
+            static uint8_t s_hfdl_probe_init_done = 0u;
+            static uint8_t s_hfdl_probe_was_active = 0u;
+            static uint8_t s_hfdl_was_locked = 0u;
+            static uint8_t s_hfdl_was_a2_search = 0u;
+            static uint32_t s_hfdl_probe_symbol_count = 0u;
+            static uint32_t s_hfdl_probe_burst_symbol_count = 0u;
+            static float s_hfdl_probe_burst_snr_peak = 0.0f;
+            static hfdl_preamble_state_t s_hfdl_probe_burst_best_state = HFDL_PREAMBLE_A1_SEARCH;
+            static float s_hfdl_probe_burst_best_a_score = -1.0f;
+            uint8_t burst_now;
+
+            if (!s_hfdl_probe_init_done) {
+                s_hfdl_probe_init_done = 1u;
+                hfdl_preamble_sync_init(&s_hfdl_preamble);
+                s_hfdl_dbg_armed_pending = 1u; /* drained by demod_am_hfdl_probe_debug_poll(), see its comment */
+            }
+
+            burst_now = hfdl_scope_burst_active();
+
+            if (burst_now && !s_hfdl_probe_was_active) {
+                /* Flanco de subida: burst nuevo - reinicia el estado de
+                 * la cadena para que los numeros de este burst no
+                 * arrastren lo que hubiera durante el silencio/ruido
+                 * anterior. */
+                hfdl_demod_chain_init(&s_hfdl_probe_chain);
+                hfdl_preamble_sync_reset(&s_hfdl_preamble);
+                s_hfdl_was_locked = 0u;
+                s_hfdl_was_a2_search = 0u;
+                s_hfdl_probe_burst_symbol_count = 0u;
+                s_hfdl_probe_burst_snr_peak = hfdl_scope_get_snr_ratio();
+                s_hfdl_probe_burst_best_state = HFDL_PREAMBLE_A1_SEARCH;
+                s_hfdl_probe_burst_best_a_score = -1.0f;
+                /* UART DEFERRAL (16/09/2026, real-hardware regression -
+                 * see the HFDL module port conversation): debug_print()
+                 * was called DIRECTLY from here in the first version of
+                 * this sub-pieza, i.e. from inside the audio DMA ISR.
+                 * uart_putc() (debug_uart.c) is a plain
+                 * "while (TBE==RESET) {}" busy-wait with NO reentrancy
+                 * protection - the ISR firing mid-transmission of a
+                 * byte the main loop was already sending could leave
+                 * USART0 in a state where TBE never sets again, hanging
+                 * the main loop's NEXT debug_print() forever (while the
+                 * ISR-driven radio itself keeps working fine, since it
+                 * doesn't depend on the main loop - exactly the
+                 * symptom reported: "debug output eventually stops,
+                 * receiver still alive"). Same deferral pattern this
+                 * project already uses for the (much heavier) DIAG
+                 * capture trace - "main.c drains this - never from
+                 * here (ISR context)" - just applied to these lighter
+                 * burst/state-transition announcements too. Only a
+                 * flag + a snapshot of the numbers, set here; the
+                 * actual debug_print*() calls happen in
+                 * demod_am_hfdl_probe_debug_poll(), from the main loop. */
+                s_hfdl_dbg_burst_start_pending = 1u;
+                s_hfdl_dbg_burst_start_snr = hfdl_scope_get_snr_ratio();
+            } else if (!burst_now && s_hfdl_probe_was_active) {
+                /* Flanco de bajada: burst terminado - resumen (ver
+                 * comentario de deferral justo arriba - misma razon). */
+                s_hfdl_dbg_burst_end_pending = 1u;
+                s_hfdl_dbg_burst_end_symbols = s_hfdl_probe_burst_symbol_count;
+                s_hfdl_dbg_burst_end_snr = hfdl_scope_get_snr_ratio();
+                s_hfdl_dbg_burst_end_snr_peak = s_hfdl_probe_burst_snr_peak;
+                s_hfdl_dbg_burst_end_best_state = (uint32_t)s_hfdl_probe_burst_best_state;
+                s_hfdl_dbg_burst_end_best_a_score = s_hfdl_probe_burst_best_a_score;
+            }
+            s_hfdl_probe_was_active = burst_now;
+
+            if (burst_now) {
+                float32_t probe_i_out[HFDL_DEMOD_CHAIN_MAX_SYMBOLS_OUT];
+                float32_t probe_q_out[HFDL_DEMOD_CHAIN_MAX_SYMBOLS_OUT];
+                float32_t probe_i_half_out[HFDL_DEMOD_CHAIN_MAX_SYMBOLS_OUT];
+                float32_t probe_q_half_out[HFDL_DEMOD_CHAIN_MAX_SYMBOLS_OUT];
+                uint32_t probe_n_out;
+                uint32_t p;
+
+                hfdl_demod_chain_process(&s_hfdl_probe_chain, s_i_dec, s_q_dec, s_dec_block_samples,
+                        probe_i_out, probe_q_out, probe_i_half_out, probe_q_half_out, &probe_n_out);
+
+                for (p = 0; p < probe_n_out; p++) {
+                    hfdl_preamble_state_t pre_state;
+                    float snr_now;
+                    float32_t a_score_now;
+
+                    s_hfdl_probe_symbol_count++;
+                    s_hfdl_probe_burst_symbol_count++;
+
+                    pre_state = hfdl_preamble_sync_process_symbol(&s_hfdl_preamble, probe_i_out[p], probe_q_out[p]);
+
+                    snr_now = hfdl_scope_get_snr_ratio();
+                    if (snr_now > s_hfdl_probe_burst_snr_peak) {
+                        s_hfdl_probe_burst_snr_peak = snr_now;
+                    }
+                    if ((uint32_t)pre_state > (uint32_t)s_hfdl_probe_burst_best_state) {
+                        s_hfdl_probe_burst_best_state = pre_state;
+                    }
+                    a_score_now = hfdl_preamble_sync_peek_a_score(&s_hfdl_preamble);
+                    if (a_score_now > s_hfdl_probe_burst_best_a_score) {
+                        s_hfdl_probe_burst_best_a_score = a_score_now;
+                    }
+
+                    if (pre_state == HFDL_PREAMBLE_A2_SEARCH && !s_hfdl_was_a2_search) {
+                        s_hfdl_dbg_a2_pending = 1u; /* deferred - see burst-start comment above */
+                    }
+                    s_hfdl_was_a2_search = (pre_state == HFDL_PREAMBLE_A2_SEARCH);
+
+                    if (pre_state == HFDL_PREAMBLE_LOCKED && !s_hfdl_was_locked) {
+                        /* SUB-PIEZA 2 (pendiente): aqui es donde arranca
+                         * el segmento de datos real + ecualizador +
+                         * hfdl_payload_decode_begin_segment_ex(). Por
+                         * ahora solo se registra el LOCKED en si
+                         * (deferred - ver comentario de burst-start). */
+                        s_hfdl_dbg_locked_pending = 1u;
+                    }
+                    s_hfdl_was_locked = (pre_state == HFDL_PREAMBLE_LOCKED);
+                }
+            }
+        }
 
         /* 2a. Hilbert-shift the decimated Q (90 degrees across the
          * audio band, now with proper coverage down to ~300Hz - see

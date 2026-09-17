@@ -9,6 +9,8 @@
 #include "ft8_fft1024.h"
 #include "ft8_waterfall_adapter.h"
 #include "ft8_decoder.h"
+#include "hfdl_scope.h" /* hfdl_scope_set_enabled()/hfdl_scope_panel_draw() - HFDL mode, 16/09/2026 */
+#include "hfdl_payload_decode.h" /* hfdl_payload_decode_get_crc_status() - on-screen CRC badge, see hfdl_scope_panel_draw() */
 #include "gfx.h"
 #include "gfx_vfo_font.h"
 #include "ui.h"
@@ -148,6 +150,10 @@ static bool s_ft8_mode_enabled = false; /* moved up from beside k_demod_modes[] 
 static bool s_ft8_cascade_visible = true;
 static bool s_ft8_force_reseed_slot = false; /* set by the FT8 mode-entry callback, consumed by the main loop's slot-index check below - see both comments for the full "why" (09/2026 fix: entering FT8 mode was starting a misaligned capture immediately instead of waiting for a real boundary) */
 static void rtty_scope_draw(void);
+static void hfdl_scope_panel_reset(void);
+static uint8_t hfdl_scope_is_active(void);
+static void hfdl_scope_tuning_diag_tick(void);
+static void hfdl_scope_panel_draw(void);
 static void apply_lo_tune(uint32_t freq_hz);
 static void apply_demod_mode(demod_mode_t mode);
 static void menu_detail_value_redraw(void);
@@ -934,7 +940,9 @@ int main(void)
             static uint8_t s_rtty_scope_was_active = 0U;
             static uint8_t s_rtty_mode_was_active = 0U; /* tracks active_now, NOT drawing_now - see below */
             static uint8_t s_ft8_showing_was_active = 0U;
+            static uint8_t s_hfdl_scope_was_active = 0U; /* ported 16/09/2026 from the HFDL branch */
             uint8_t active_now = rtty_scope_active();
+            uint8_t hfdl_active_now = hfdl_scope_is_active(); /* mutually exclusive with active_now/s_ft8_mode_enabled by construction - see k_demod_modes[]'s is_hfdl field comment */
             /* Only actually DRAW the scope when the settings menu
              * isn't covering the panel - added 08/08/2026, per the
              * project owner: the scope never checked s_menu_open at
@@ -947,11 +955,30 @@ int main(void)
              * which occupies the identical screen region. */
             uint8_t rtty_showing = (uint8_t)(active_now && !s_menu_open);
             uint8_t ft8_showing = (uint8_t)(s_ft8_mode_enabled && !s_menu_open);
-            uint8_t drawing_now = (uint8_t)(rtty_showing || ft8_showing); /* still used below by demo_touch_poll()/tune_encoder_poll() gating */
+            uint8_t hfdl_showing = (uint8_t)(hfdl_active_now && !s_menu_open); /* ported 16/09/2026, same guard shape as rtty_showing/ft8_showing */
+            uint8_t drawing_now = (uint8_t)(rtty_showing || ft8_showing || hfdl_showing); /* still used below by demo_touch_poll()/tune_encoder_poll() gating */
 
             rtty_scope_poll(); /* keep the FFT data fresh regardless - cheap, and matches
                                  * sdr_spectrum_waterfall_tick()'s own "accumulate even while
                                  * hidden" behavior, so there's no stale-data jolt on reopen. */
+            hfdl_scope_poll(); /* MUST always run, unconditionally - MISSING from the initial
+                                 * port (16/09/2026), found via real-hardware testing (SNR/floor
+                                 * stuck at their seed values forever). hfdl_scope_poll() is NOT
+                                 * just a draw helper: it runs the FFT and updates the burst
+                                 * detector (s_burst_active) that demod_am.c's probe reads via
+                                 * hfdl_scope_burst_active() - skip it and burst_now can never
+                                 * become true, so the probe's chain never even starts, not
+                                 * because of a real signal/tuning issue but because the
+                                 * detector itself never gets a chance to run. Same lesson the
+                                 * separate HFDL branch already learned once, see its own
+                                 * comment at this exact call site (this is a straight copy of
+                                 * that reasoning, just missed in the initial port here). Cheap
+                                 * regardless (one 256-point FFT roughly every 21ms). */
+            demod_am_hfdl_probe_debug_poll(); /* drains burst/A2/LOCKED debug prints deferred
+                                                 * from the audio ISR (16/09/2026, real-hardware
+                                                 * regression - see demod_am.c's comment) - must
+                                                 * run every iteration, same reasoning as
+                                                 * hfdl_scope_poll() just above. */
             if (rtty_showing && !s_rtty_scope_was_active) {
                 rtty_scope_panel_reset();
                 if (active_now && !s_rtty_mode_was_active) {
@@ -977,6 +1004,16 @@ int main(void)
             s_rtty_scope_was_active = rtty_showing;
             s_rtty_mode_was_active = active_now;
             s_ft8_showing_was_active = ft8_showing;
+
+            if (hfdl_showing && !s_hfdl_scope_was_active) {
+                /* Same "either transition" reasoning as RTTY/FT8's
+                 * resets above - PHASE 1 (see hfdl_scope.h) has no
+                 * scrollback/decoded content to protect from a mere
+                 * menu open/close, so a full reset either way is
+                 * correct and simplest. */
+                hfdl_scope_panel_reset();
+            }
+            s_hfdl_scope_was_active = hfdl_showing;
 
             if (rtty_showing) {
                 rtty_scope_draw();
@@ -1260,11 +1297,14 @@ int main(void)
                 (void)s_ft8_last_isr_calls;
 #endif
                 ft8_text_panel_draw();
+            } else if (hfdl_showing) {
+                hfdl_scope_panel_draw(); /* ported 16/09/2026 - draws the burst-detector strip + spectrum, see its own comment */
+                hfdl_scope_tuning_diag_tick(); /* cheap no-op unless hfdl_scope_get_enabled(), see its own comment */
             } else {
-                /* Covers "neither RTTY nor FT8 showing" (plain mode,
-                 * or the menu is open) - sdr_spectrum_waterfall_tick()
-                 * already skips its own drawing internally while
-                 * s_menu_open. */
+                /* Covers "neither RTTY, FT8 nor HFDL showing" (plain
+                 * mode, or the menu is open) - sdr_spectrum_waterfall_
+                 * tick() already skips its own drawing internally
+                 * while s_menu_open. */
                 sdr_spectrum_waterfall_tick();
             }
             status_bar_tick(); /* clock + S-meter/dBm + PPM calib - see its own comment: now runs regardless of rtty_showing/ft8_showing, unlike before */
@@ -1923,6 +1963,7 @@ typedef struct {
     demod_mode_t mode;
     rtty_variant_t rtty_variant;
     bool is_ft8; /* added 09/2026 - see the FT8 entry below. Omitted (defaults to false via C's "fewer initializers than members" zero-fill) on every other row, so none of the existing rows needed touching. */
+    bool is_hfdl; /* added 16/09/2026, with the HFDL module port - see /areas/deepsdr-hfdl-decoder.md. Same "separate flag, unconditional every-row set" shape as is_ft8 above: HFDL has no NORMAL/INVERTED polarity question the way RTTY does (always plain USB per ARINC 635-3), so a single on/off bit is the whole story. Also omitted (defaults false) on every other row. */
 } demod_mode_entry_t;
 
 static const demod_mode_entry_t k_demod_modes[] = {
@@ -1934,7 +1975,14 @@ static const demod_mode_entry_t k_demod_modes[] = {
     { "WFM",    DEMOD_MODE_WFM, RTTY_VARIANT_NONE },
     { "RTTY-L", DEMOD_MODE_LSB, RTTY_VARIANT_NORMAL   }, /* confirmed correct polarity on LSB, 08/08/2026 */
     { "RTTY-U", DEMOD_MODE_USB, RTTY_VARIANT_INVERTED }, /* USB mirrors LSB - see this block's comment */
-    { "FT8",    DEMOD_MODE_USB, RTTY_VARIANT_NONE, true } /* added 09/2026 - USB dial-frequency convention, same as WSJT-X/real FT8 operators expect; see ft8_decoder.h/ft8_waterfall_adapter.h for the decode chain this arms */
+    { "FT8",    DEMOD_MODE_USB, RTTY_VARIANT_NONE, true }, /* added 09/2026 - USB dial-frequency convention, same as WSJT-X/real FT8 operators expect; see ft8_decoder.h/ft8_waterfall_adapter.h for the decode chain this arms */
+    /* HFDL - ported 16/09/2026 from the separate HFDL branch: always
+     * plain USB (ARINC 635-3 specifies USB with a 1440Hz PSK
+     * subcarrier, no LSB/USB polarity ambiguity the way RTTY has).
+     * Mutually exclusive with FT8/RTTY by construction, same
+     * "unconditional every-row set" reasoning as those two - see
+     * menu_mode_preset_callback()'s hfdl handling. */
+    { "HFDL",   DEMOD_MODE_USB, RTTY_VARIANT_NONE, false, true }
 };
 #define DEMOD_MODE_ENTRY_COUNT (sizeof(k_demod_modes) / sizeof(k_demod_modes[0]))
 static ui_button_t s_menu_mode_tiles[DEMOD_MODE_ENTRY_COUNT];
@@ -5952,6 +6000,19 @@ static void menu_mode_preset_callback(void *widget, ui_event_t event, void *user
          * apply_lo_tune()'s comment. */
         apply_lo_tune(s_tune_hz);
 
+        /* HFDL on/off (16/09/2026, ported from the separate HFDL
+         * branch) - MUST run before the RTTY/FT8 handling below, not
+         * after (see hfdl_scope_set_enabled()'s own comment on the
+         * no-transition guard): if this ran after ft8_fft1024_init()
+         * populated the shared union's FT8 tables, an ACTUAL HFDL->off
+         * transition (e.g. picking FT8 while HFDL was the previous
+         * mode) would call waterfall_ram_return_from_hfdl() AFTER
+         * those tables were written, wiping them again via its
+         * waterfall_init(). Running this first means any real
+         * borrow/return of the union happens BEFORE FT8/RTTY populate
+         * or use it this same call, never after. */
+        hfdl_scope_set_enabled(k_demod_modes[idx].is_hfdl ? 1U : 0U);
+
         /* RTTY on/off + polarity - see k_demod_modes[]'s comment for
          * the RTTY_VARIANT_NORMAL/INVERTED story. Picking a PLAIN
          * mode (RTTY_VARIANT_NONE) always turns RTTY off, even if it
@@ -6098,15 +6159,20 @@ static void menu_mode_list_show(void)
     }
 
     s_menu_detail_back = (ui_button_t){
-        /* col 1, not col 0 (09/2026) - with 8 entries this used to sit
-         * on its own free row-2, but the 9th entry (FT8) now lands
-         * exactly at row=2/col=0 (i/4, i%4 - see the loop above), same
-         * cell BACK used to claim, hiding the tile underneath it.
+        /* col 2, not col 0 or 1 (16/09/2026, HFDL port) - with 8
+         * entries this sat on its own free row-2 at col 0; the 9th
+         * entry (FT8) moved it to col 1 (09/2026, see git history);
+         * now the 10th entry (HFDL, index 9 -> row=9/4=2, col=9%4=1 -
+         * see the loop above) lands EXACTLY on col 1 too, hiding the
+         * HFDL tile the same way FT8 once hid BACK at col 0. Moving to
+         * col 2 - still free (only cols 0-1 of row 2 are occupied,
+         * by FT8 and HFDL respectively) - same "just move BACK
+         * somewhere free" fix as last time, one column further along.
          * s_menu_detail_back is repositioned independently by every
          * picker screen that uses it (see the other 4 call sites in
          * this file) - moving it only here doesn't affect any of
          * those. */
-        MENU_TILE_COL(1), MENU_TILE_ROW(2), MENU_TILE_W, MENU_TILE_H,
+        MENU_TILE_COL(2), MENU_TILE_ROW(2), MENU_TILE_W, MENU_TILE_H,
         "BACK", GFX_COLOR_BLACK, GFX_COLOR_YELLOW, GFX_COLOR_WHITE,
         3, 0, 1, menu_tile_exit_callback, NULL};
     ui_screen_add_button(&s_menu_screen, &s_menu_detail_back);
@@ -8485,6 +8551,132 @@ static void rtty_scope_draw(void)
     if (space_x < MAIN_W) { gfx_vline(space_x, bar_y, bar_area_h, GFX_COLOR_ORANGE); }
 
     rtty_text_panel_draw();
+}
+
+/*
+ * HFDL burst scope - PHASE 1, ported 16/09/2026 from the separate
+ * HFDL branch (see hfdl_scope.h's top comment): draws into the SPEC_Y/
+ * SPEC_H area, plus a small strip at the top for the burst/CRC badge
+ * and two dim vertical markers at hfdl_scope.h's HFDL_BAND_LO_HZ/HI_HZ
+ * (informational only, not live-adjustable - unlike RTTY's mark/space
+ * lines, there's no per-signal tuning to do here).
+ */
+static uint8_t s_hfdl_badge_was_active = 0xFFU; /* sentinel - neither 0 nor 1, forces the first draw after a reset to actually paint the strip */
+
+static void hfdl_scope_panel_reset(void)
+{
+    gfx_fill_rect(0, SPEC_Y, MAIN_W, SPEC_H, GFX_COLOR_BLACK);
+    s_hfdl_badge_was_active = 0xFFU;
+}
+
+static uint8_t hfdl_scope_is_active(void)
+{
+    demod_mode_t m = demod_am_get_mode();
+    return (uint8_t)(m == DEMOD_MODE_USB && hfdl_scope_get_enabled());
+}
+
+/* DIAGNOSTIC, ported along with the panel above - see hfdl_scope.h's
+ * getter comments. Defined here (not at the call site) because it
+ * reads s_tune_hz, declared later in this file than main() itself. */
+static void hfdl_scope_tuning_diag_tick(void)
+{
+    static uint32_t s_tick_count = 0u;
+    #define HFDL_DIAG_TICK_PERIOD 47u /* ~1s: one hfdl_scope_poll() window is ~21.3ms (256 samples @ 12kHz) */
+
+    if (!hfdl_scope_get_enabled()) {
+        return; /* whole point is visibility while nothing is triggering, but still only while
+                  * HFDL mode is actually selected - no reason to run (or print) otherwise */
+    }
+    s_tick_count++;
+    if ((s_tick_count % HFDL_DIAG_TICK_PERIOD) != 0u) {
+        return;
+    }
+    debug_print_dec_always("HFDL tuning diag - tuned Hz", s_tune_hz);
+    debug_print_float_always("  floor_power (raw)", hfdl_scope_get_floor_power());
+    debug_print_float_always("  in_band_sum (300-2900Hz, raw)", hfdl_scope_get_last_in_band_sum());
+    debug_print_float_always("  dc_band_sum (0-300Hz guard, raw)", hfdl_scope_get_dc_band_sum());
+    debug_print_float_always("  snr_ratio (ON threshold ~3.16)", hfdl_scope_get_snr_ratio());
+    debug_print_float_always("  peak bin frequency Hz (full 0-6kHz)", hfdl_scope_get_peak_bin_hz());
+}
+
+#define HFDL_SCOPE_DB_FLOOR -60.0f
+#define HFDL_BADGE_STRIP_H  24U
+static void hfdl_scope_panel_draw(void)
+{
+    static float s_db[HFDL_SCOPE_BINS];
+    const float *mag;
+    float hz_per_bin = hfdl_scope_hz_per_bin();
+    float nyquist_hz = hz_per_bin * (float)HFDL_SCOPE_BINS;
+    uint16_t bar_y = (uint16_t)(SPEC_Y + HFDL_BADGE_STRIP_H);
+    uint16_t bar_area_h = (uint16_t)(SPEC_H - HFDL_BADGE_STRIP_H);
+    uint8_t burst_now;
+
+    if (hfdl_scope_frame_ready()) {
+        uint32_t i;
+        uint16_t lo_x, hi_x;
+
+        mag = hfdl_scope_get_frame();
+
+        for (i = 0; i < HFDL_SCOPE_BINS; i++) {
+            float p = mag[i];
+            if (p < 1.0e-6f) { p = 1.0e-6f; }
+            s_db[i] = 10.0f * smeter_log2_approx(p) * 0.30103f;
+            if (s_db[i] < HFDL_SCOPE_DB_FLOOR) { s_db[i] = HFDL_SCOPE_DB_FLOOR; }
+        }
+
+        spectrum_draw(s_db, HFDL_SCOPE_BINS, 0, bar_y, MAIN_W, bar_area_h,
+                      HFDL_SCOPE_DB_FLOOR, 0.0f,
+                      0,        /* center_mark_offset_px - no meaningful "LO" in audio-domain, same as RTTY's scope */
+                      0, 0, 0); /* band_active off - the dim boundary markers below are drawn separately */
+
+        lo_x = (uint16_t)((HFDL_BAND_LO_HZ / nyquist_hz) * (float)MAIN_W);
+        hi_x = (uint16_t)((HFDL_BAND_HI_HZ / nyquist_hz) * (float)MAIN_W);
+        if (lo_x < MAIN_W) { gfx_vline(lo_x, bar_y, bar_area_h, GFX_COLOR_DARKGRAY); }
+        if (hi_x < MAIN_W) { gfx_vline(hi_x, bar_y, bar_area_h, GFX_COLOR_DARKGRAY); }
+    }
+
+    /* Burst + CRC badge - only redrawn on a state change, same
+     * flicker-avoidance reasoning as the RTTY text panel's incremental
+     * draw. No snprintf on this target - manual digit-by-digit, same
+     * approach used elsewhere in this file. */
+    burst_now = hfdl_scope_burst_active();
+    {
+        static uint8_t s_hfdl_badge_last_attempts = 0xFFU; /* sentinel, forces first draw */
+        uint8_t crc_last_ok, crc_last_valid;
+        uint8_t crc_attempts, crc_good;
+        hfdl_payload_decode_get_crc_status(&crc_last_ok, &crc_last_valid, &crc_attempts, &crc_good);
+
+        if (burst_now != s_hfdl_badge_was_active || crc_attempts != s_hfdl_badge_last_attempts) {
+            char line[40];
+            uint32_t len = 0U;
+            const char *base = burst_now ? "HFDL: BURST DETECTED  " : "HFDL: listening...  ";
+            uint16_t base_color = burst_now ? GFX_COLOR_YELLOW : GFX_COLOR_DARKGRAY;
+            uint32_t i;
+            for (i = 0U; base[i] != '\0' && len < sizeof(line) - 1U; i++) { line[len++] = base[i]; }
+
+            if (crc_last_valid) {
+                const char *tag = crc_last_ok ? "CRC:OK " : "CRC:BAD ";
+                for (i = 0U; tag[i] != '\0' && len < sizeof(line) - 1U; i++) { line[len++] = tag[i]; }
+                {
+                    uint32_t vals[2]; vals[0] = crc_good; vals[1] = crc_attempts;
+                    uint32_t v;
+                    for (v = 0U; v < 2U; v++) {
+                        char digits[10]; uint8_t nd = 0U; uint32_t x = vals[v];
+                        if (x == 0U) { digits[nd++] = '0'; }
+                        while (x > 0U && nd < sizeof(digits)) { digits[nd++] = (char)('0' + (x % 10U)); x /= 10U; }
+                        while (nd > 0U && len < sizeof(line) - 1U) { line[len++] = digits[--nd]; }
+                        if (v == 0U && len < sizeof(line) - 1U) { line[len++] = '/'; }
+                    }
+                }
+            }
+            line[len] = '\0';
+
+            gfx_fill_rect(0, SPEC_Y, MAIN_W, HFDL_BADGE_STRIP_H, GFX_COLOR_BLACK);
+            gfx_text(4, (uint16_t)(SPEC_Y + 5), line, base_color, GFX_COLOR_BLACK, 2);
+            s_hfdl_badge_was_active = burst_now;
+            s_hfdl_badge_last_attempts = crc_attempts;
+        }
+    }
 }
 
 

@@ -27,6 +27,12 @@ ft8_shared_ram_t g_ft8_shared_ram;
 #define s_buf (g_ft8_shared_ram.waterfall_buf)
 static uint16_t s_head = 0; /* indice fisico de la fila logica 0 */
 
+/* true mientras waterfall_ram_borrow_for_hfdl() tiene el prestamo activo
+ * - misma guarda barata que ya tenia la rama HFDL por separado, ver el
+ * contrato completo en waterfall.h. Siempre activa, no solo bajo
+ * DEBUG_UART_ENABLED. */
+static uint8_t s_hfdl_borrowed = 0;
+
 void waterfall_init(void)
 {
     memset(s_buf, 0, sizeof(s_buf));
@@ -35,6 +41,14 @@ void waterfall_init(void)
 
 void waterfall_push_line(const uint16_t *line)
 {
+    if (s_hfdl_borrowed) {
+        /* La RAM esta prestada al demodulador HFDL - escribir aqui la
+         * corromperia en silencio. Ver el contrato en waterfall.h -
+         * esto no deberia dispararse nunca si el cambio de modo en
+         * main.c respeta el contrato. */
+        return;
+    }
+
     /* Retrocede el head (la fila que era la mas antigua pasa a ser la
      * nueva fila 0) y escribe encima. Solo 1 fila copiada. */
     s_head = (uint16_t)((s_head + WATERFALL_ROWS - 1U) % WATERFALL_ROWS);
@@ -43,16 +57,40 @@ void waterfall_push_line(const uint16_t *line)
 
 void waterfall_blit(uint16_t x, uint16_t y)
 {
+    uint16_t first_rows;
+
+    if (s_hfdl_borrowed) {
+        /* Mismo razonamiento que en waterfall_push_line(). */
+        return;
+    }
+
     /* Fila logica 0 (mas reciente) arriba: fisicamente es
      * s_buf[s_head..ROWS-1] seguido de s_buf[0..s_head-1]. Dos blits
      * contiguos (o uno si el anillo esta alineado). */
-    uint16_t first_rows = (uint16_t)(WATERFALL_ROWS - s_head);
+    first_rows = (uint16_t)(WATERFALL_ROWS - s_head);
 
     gfx_blit(x, y, WATERFALL_WIDTH, first_rows, &s_buf[s_head][0]);
     if (s_head != 0U) {
         gfx_blit(x, (uint16_t)(y + first_rows), WATERFALL_WIDTH, s_head,
                  &s_buf[0][0]);
     }
+}
+
+uint8_t *waterfall_ram_borrow_for_hfdl(uint32_t needed_bytes)
+{
+    if (needed_bytes > WATERFALL_RAM_BORROW_CAPACITY) {
+        return (void *)0;
+    }
+    s_hfdl_borrowed = 1u;
+    return g_ft8_shared_ram.hfdl_scratch;
+}
+
+void waterfall_ram_return_from_hfdl(void)
+{
+    s_hfdl_borrowed = 0u;
+    waterfall_init(); /* deja el waterfall en negro y el anillo reseteado -
+                        * el contenido prestado se considera basura al
+                        * devolver el prestamo, ver waterfall.h. */
 }
 
 uint16_t *waterfall_row(uint16_t row)

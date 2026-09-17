@@ -51,6 +51,17 @@ typedef union
 {
     uint16_t waterfall_buf[WATERFALL_ROWS][WATERFALL_WIDTH];
 
+    /* HFDL (16/09/2026, primera pieza de la incorporacion del modulo
+     * HFDL - ver /areas/deepsdr-hfdl-decoder.md): tercer miembro
+     * mutuamente excluyente con los dos de arriba, exactamente el
+     * mismo espacio fisico. Usado por hfdl_payload_decode.c (traido
+     * tal cual de la rama HFDL) a traves de
+     * waterfall_ram_borrow_for_hfdl()/hfdl_scope_get_hfdl_ram() - ver
+     * el contrato completo en waterfall.h. Nunca activo a la vez que
+     * `ft8` (modos mutuamente excluyentes en main.c) ni que
+     * `waterfall_buf` (por el mismo motivo que ya vale para `ft8`). */
+    uint8_t hfdl_scratch[WATERFALL_RAM_BORROW_CAPACITY];
+
     struct
     {
         uint8_t mag[FT8_ADAPTER_MAX_BLOCKS * FT8_ADAPTER_TIME_OSR * FT8_ADAPTER_FREQ_OSR * FT8_ADAPTER_NUM_BINS];

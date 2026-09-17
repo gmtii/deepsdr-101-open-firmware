@@ -630,6 +630,12 @@ typedef struct {
 
 demod_am_cycles_breakdown_t demod_am_get_last_cycles_breakdown(void);
 
+/* Drains HFDL probe debug prints deferred from the audio ISR - see
+ * demod_am.c's comment on why these can't be printed directly from
+ * there. Call unconditionally from the main loop, alongside
+ * hfdl_scope_poll(). Cheap no-op most iterations (just flag checks). */
+void demod_am_hfdl_probe_debug_poll(void);
+
 /* Pre-AGC envelope peak (int16 full-scale units, instant-attack /
  * slow-release ballistics) - the UI's S-meter source. Convert to
  * dB/S-units in the main loop, not here. Safe to poll anytime. */
