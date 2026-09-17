@@ -1,4 +1,5 @@
 #include "demod_am.h"
+#include "ft8_decimator.h" /* minimal bring-up hook, 09/2026 - see demod_am_ft8_capture_set_active() */
 #include "sam.h" /* DEMOD_MODE_SAM - 21/08/2026 */
 #include "config.h"
 #include "sdr_rx.h"
@@ -19,6 +20,42 @@
                     * WFM note on why this uses libm instead of
                     * arm_atan2_f32() (not present in this project's
                     * pruned CMSIS-DSP tree). */
+
+/* Minimal bring-up hook only (09/2026) - gates whether this file's
+ * final audio output also feeds the FT8 decimator. No slot-timing
+ * state machine yet (see ft8_waterfall_adapter.h) - this just lets
+ * main.c arm a single capture for bench testing on real hardware/real
+ * RF, since the synthetic-tone tests already proved the DSP chain
+ * (decimator+adapter+fft.c) logically correct on their own - real-
+ * world validation (noise, ADC, ISR timing) is what's actually left
+ * unverified, and a WAV-based test can't tell us anything about that. */
+static bool s_ft8_capture_active = false;
+void demod_am_ft8_capture_set_active(bool active)
+{
+    s_ft8_capture_active = active;
+}
+
+/*
+ * Raw ISR invocation counter (09/2026) - completely independent of
+ * FT8/decimation/anything else in this file, added to definitively
+ * settle where a measured ~7-14% audio-clock-rate discrepancy
+ * actually originates (see ft8_decimator_get_raw_sample_count()'s
+ * comment for the full investigation - a "capms"/"ins" measurement
+ * downstream of demod_am.c's own decimation showed an effective rate
+ * suspiciously close to front_end_rate/7 instead of the intended /8,
+ * varying between the 48K/96K modes in a way inconsistent with a
+ * flat hardware clock error). If THIS counter, measured over a known
+ * real elapsed time, ALSO shows the ISR firing at other than the
+ * expected front_end_rate/SDR_RX_BLOCK_SAMPLES rate, the problem is
+ * upstream of all decimation math entirely (DMA/I2S/codec) - if it
+ * matches expectations exactly, the bug is somewhere in this file's
+ * own decimation bookkeeping instead.
+ */
+static uint32_t s_isr_call_count;
+uint32_t demod_am_get_isr_call_count(void)
+{
+    return s_isr_call_count;
+}
 
 #define SPK_EN_PORT GPIOB
 #define SPK_EN_PIN  GPIO_PIN_7
@@ -935,6 +972,34 @@ static int16_t   s_wfm_audio_out[SDR_RX_BLOCK_SAMPLES_WFM * 2U];
 static float s_wfm_dcb_x1;
 static float s_wfm_dcb_y1;
 static float s_wfm_agc_peak = WFM_AGC_PEAK_MIN;
+/* S-meter's own peak for WFM (09/2026, fixing the S-meter/dBm readout
+ * never updating in WFM mode - reported by the project owner, since
+ * confirmed via demod_am_get_signal_peak()'s own comment: it only
+ * ever returned s_sig_peak, which only demod_am_process_raw() (AM/
+ * USB/LSB/NFM) updates - demod_wfm_process_raw() below never touched
+ * it, so the S-meter simply froze at whatever s_sig_peak last held
+ * before switching into WFM.
+ *
+ * NOT the same value as s_wfm_agc_peak just above, and deliberately
+ * so: that one peak-follows s_wfm_env[] AFTER the discriminator (plus
+ * DC blocker/de-emphasis/audio LPF) - i.e. the DEMODULATED AUDIO
+ * envelope, which drives WFM's own AGC loop correctly (FM carrier
+ * amplitude doesn't carry information, so gain has to be set from
+ * something else) but is exactly the "reads the modulation content,
+ * not the RF level" mistake s_sig_peak's own comment already
+ * describes and was created to avoid for AM/SSB/NFM - a WFM station
+ * with a quiet passage would show a falling S-meter with the actual
+ * RF signal untouched. This instead peak-follows the RAW |I+jQ|
+ * magnitude right after WFM's own IFBW filter stage (0b) - the same
+ * RF/IF tap point relative to WFM's chain that s_sig_peak uses in
+ * demod_am_process_raw(), just before the discriminator touches
+ * anything - see its own update site's comment. Same instant-attack,
+ * s_wfm_agc_release-release ballistics as s_wfm_agc_peak's own AGC
+ * loop uses (the SAME release coefficient s_agc_profile resolves to
+ * for every mode - see demod_am_set_agc_profile()'s comment) - just a
+ * separate peak/tap point, display-only, never feeds WFM's own audio
+ * gain path. */
+static float s_wfm_sig_peak;
 static volatile uint32_t s_wfm_last_cycles; /* mirrors demod_am_get_last_cycles() for WFM's own path */
 
 /* Diagnostic-only: logs min/max at 3 checkpoints (raw discriminator
@@ -1539,13 +1604,27 @@ static float s_agc_peak;
  * ~180ms at MEDIUM, matches the profile picker), just sourced from
  * the right point in the chain. Updated for every mode that reaches
  * demod_am_process_raw() (AM/USB/LSB/NFM) - WFM has its own separate
- * S-meter path (s_wfm_agc_peak) untouched by this. int16-ish full-
- * scale units, same as before; the UI converts to dB/S-units itself,
- * OUTSIDE the ISR. */
+ * S-meter path (s_wfm_sig_peak, in demod_wfm_process_raw() - see its
+ * own declaration comment) reached via demod_am_get_signal_peak()'s
+ * own mode check, since it can't share this exact variable/tap point
+ * (WFM never calls this function at all, it has its own I/Q buffers
+ * and its own IF-filter stage). int16-ish full-scale units, same as
+ * before; the UI converts to dB/S-units itself, OUTSIDE the ISR. */
 static float s_sig_peak;
 
 float demod_am_get_signal_peak(void)
 {
+    /* WFM has its own separate peak (09/2026 fix - see s_wfm_sig_peak's
+     * own declaration comment): demod_wfm_process_raw() never touches
+     * s_sig_peak, so returning it unconditionally left the S-meter/dBm
+     * readout frozen at whatever it last held before switching into
+     * WFM - reported by the project owner and confirmed against this
+     * function's own pre-existing comment above, which already
+     * documented the gap ("WFM has its own separate S-meter path...
+     * untouched by this") without anyone having wired it up yet. */
+    if (s_mode == (uint8_t)DEMOD_MODE_WFM) {
+        return s_wfm_sig_peak;
+    }
     return s_sig_peak;
 }
 
@@ -1658,6 +1737,7 @@ void demod_am_init(void)
     s_wfm_dcb_x1 = 0.0f;
     s_wfm_dcb_y1 = 0.0f;
     s_wfm_agc_peak = WFM_AGC_PEAK_MIN;
+    s_wfm_sig_peak = 0.0f; /* see its own declaration comment - boot-time init only, same "not worth a mode-switch reset" reasoning as s_wfm_agc_peak just above */
 
     /* AM/USB/LSB/NFM's own rate-dependent CMSIS instances (CHF/ALPF/
      * NFM_CHF biquads, SSB decimate/Hilbert/interpolate, NR's own
@@ -2028,6 +2108,26 @@ void demod_wfm_process_raw(const int16_t *raw_interleaved)
         arm_biquad_cascade_df1_f32(&s_wfm_ifbw_q_inst, s_wfm_q_buf, s_wfm_q_buf, SDR_RX_BLOCK_SAMPLES_WFM);
     }
 
+    /* S-METER for WFM (09/2026) - see s_wfm_sig_peak's own declaration
+     * comment for the full "why" this is separate from s_wfm_agc_peak
+     * below. Same tap point RELATIVE TO THE CHAIN as demod_am_process_
+     * raw()'s own s_sig_peak block: right after the (optional) IF-
+     * domain channel filter, before anything demodulation-specific
+     * touches the signal - here, before fm_discriminate(). Same
+     * instant-attack/release-coefficient shape, using
+     * s_wfm_agc_release (the same profile-resolved coefficient WFM's
+     * own AGC loop below uses) rather than s_agc_release, since this
+     * is WFM's own chain. */
+    {
+        float sp = s_wfm_sig_peak;
+        for (n = 0; n < SDR_RX_BLOCK_SAMPLES_WFM; n++) {
+            float mag = sqrtf(s_wfm_i_buf[n] * s_wfm_i_buf[n] + s_wfm_q_buf[n] * s_wfm_q_buf[n]);
+            sp *= s_wfm_agc_release;
+            if (mag > sp) { sp = mag; }
+        }
+        s_wfm_sig_peak = sp;
+    }
+
     /* 1. Discriminate - delay-and-conjugate-multiply, straight on the
      * RAW (unfiltered unless IFBW NARROW just applied above, un-down-
      * mixed) I/Q, at the full 192kHz rate - see demod_am.h's WFM note
@@ -2193,6 +2293,8 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
     uint8_t do_log;
     uint8_t muted;
     uint32_t nr_ssb_cycles = 0U;
+
+    s_isr_call_count++; /* see demod_am_get_isr_call_count()'s comment - totally independent of FT8/decimation, added to measure the RAW ISR firing rate directly */
 
     /*
      * *** 05/08/2026, mitigation - see demod_wfm_process_raw()'s
@@ -2436,6 +2538,27 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
         /* 2c. Combine: one sideband adds, the other cancels. */
         for (k = 0; k < s_dec_block_samples; k++) {
             s_ssb_dec[k] = s_i_delayed[k] + sign * s_q_hilbert_out[k];
+        }
+
+        /* FT8 tap (09/2026, corrected from an earlier version that
+         * wrongly read s_audio_out - see ft8_decimator.h's
+         * FT8_DECIM_INPUT_RATE_HZ comment) - s_ssb_dec is genuinely at
+         * 12kHz right here ("combined SSB audio @ 12kHz" a few lines
+         * up), unlike s_audio_out which is back at the front-end's own
+         * rate (96k/48k) after the later interpolate-back-up stage.
+         * Deliberately OUTSIDE the rtty_get_enabled() gate below - FT8
+         * mode never enables RTTY (see k_demod_modes[] in main.c), so
+         * nesting it in there would silently never run at all. Only
+         * relevant here at all since FT8 mode always selects USB, so
+         * this SSB-only code path is the only place it's ever needed. */
+        if (s_ft8_capture_active) {
+            uint32_t k2;
+            for (k2 = 0U; k2 < s_dec_block_samples; k2++) {
+                float32_t v = s_ssb_dec[k2];
+                if (v > 32767.0f) { v = 32767.0f; }
+                if (v < -32768.0f) { v = -32768.0f; }
+                ft8_decimator_feed_sample((int16_t)v);
+            }
         }
 
         /*

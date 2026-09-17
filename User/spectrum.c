@@ -1,12 +1,49 @@
 #include "spectrum.h"
 #include "gfx.h"
 #include <string.h> /* memcpy() - see build_lut()'s comment for the six palettes copied straight from a 256-entry source table */
+#include "ipa_waterfall.h" /* rebuild_argb8888_lut() hands the palette to the IPA's foreground LUT on every change - see that function's comment */
 
 /* --- palette LUT ---------------------------------------------------- */
 
 static uint16_t s_lut[256];
 static uint8_t  s_lut_ready = 0;
 static spectrum_palette_t s_palette = SPECTRUM_PALETTE_CLASSIC;
+
+/* ARGB8888 mirror of s_lut, rebuilt alongside it by build_lut() - see this
+ * pair's declaration comment in spectrum.h for why the IPA needs a separate
+ * copy instead of reusing s_lut directly. */
+static uint32_t s_lut_argb8888[256];
+
+/* RGB565 (5/6/5) -> ARGB8888, alpha forced opaque. Expands each channel by
+ * replicating its high bits into the newly-freed low bits (the standard
+ * "bit-replication" expansion - e.g. 5-bit R RRRRR becomes 8-bit RRRRRRRR
+ * with the top 5 bits repeated into the bottom 3) rather than zero- or
+ * left-padding, so pure white (0xFFFF) round-trips to true 0xFFFFFFFF
+ * instead of landing a few steps short. */
+static uint32_t rgb565_to_argb8888(uint16_t c)
+{
+    uint32_t r5 = (uint32_t)(c >> 11) & 0x1FU;
+    uint32_t g6 = (uint32_t)(c >> 5)  & 0x3FU;
+    uint32_t b5 = (uint32_t)c & 0x1FU;
+    uint32_t r8 = (r5 << 3) | (r5 >> 2);
+    uint32_t g8 = (g6 << 2) | (g6 >> 4);
+    uint32_t b8 = (b5 << 3) | (b5 >> 2);
+    return 0xFF000000U | (r8 << 16) | (g8 << 8) | b8;
+}
+
+static void rebuild_argb8888_lut(void)
+{
+    uint16_t i;
+    for (i = 0; i < 256U; i++) {
+        s_lut_argb8888[i] = rgb565_to_argb8888(s_lut[i]);
+    }
+    ipa_waterfall_load_palette(s_lut_argb8888);
+}
+
+const uint32_t *spectrum_get_lut_argb8888(void)
+{
+    return s_lut_argb8888;
+}
 
 /*
  * *** 08/09/2026 - exact palette data from SDR++'s own
@@ -441,12 +478,12 @@ static void build_lut(void)
     uint16_t (*eval)(float);
 
     switch (s_palette) {
-    case SPECTRUM_PALETTE_GQRX:    memcpy(s_lut, k_lut_gqrx,    sizeof(s_lut)); s_lut_ready = 1U; return;
-    case SPECTRUM_PALETTE_INFERNO: memcpy(s_lut, k_lut_inferno, sizeof(s_lut)); s_lut_ready = 1U; return;
-    case SPECTRUM_PALETTE_MAGMA:   memcpy(s_lut, k_lut_magma,   sizeof(s_lut)); s_lut_ready = 1U; return;
-    case SPECTRUM_PALETTE_PLASMA:  memcpy(s_lut, k_lut_plasma,  sizeof(s_lut)); s_lut_ready = 1U; return;
-    case SPECTRUM_PALETTE_TURBO:   memcpy(s_lut, k_lut_turbo,   sizeof(s_lut)); s_lut_ready = 1U; return;
-    case SPECTRUM_PALETTE_VIRIDIS: memcpy(s_lut, k_lut_viridis, sizeof(s_lut)); s_lut_ready = 1U; return;
+    case SPECTRUM_PALETTE_GQRX:    memcpy(s_lut, k_lut_gqrx,    sizeof(s_lut)); s_lut_ready = 1U; rebuild_argb8888_lut(); return;
+    case SPECTRUM_PALETTE_INFERNO: memcpy(s_lut, k_lut_inferno, sizeof(s_lut)); s_lut_ready = 1U; rebuild_argb8888_lut(); return;
+    case SPECTRUM_PALETTE_MAGMA:   memcpy(s_lut, k_lut_magma,   sizeof(s_lut)); s_lut_ready = 1U; rebuild_argb8888_lut(); return;
+    case SPECTRUM_PALETTE_PLASMA:  memcpy(s_lut, k_lut_plasma,  sizeof(s_lut)); s_lut_ready = 1U; rebuild_argb8888_lut(); return;
+    case SPECTRUM_PALETTE_TURBO:   memcpy(s_lut, k_lut_turbo,   sizeof(s_lut)); s_lut_ready = 1U; rebuild_argb8888_lut(); return;
+    case SPECTRUM_PALETTE_VIRIDIS: memcpy(s_lut, k_lut_viridis, sizeof(s_lut)); s_lut_ready = 1U; rebuild_argb8888_lut(); return;
     default: break;
     }
 
@@ -467,6 +504,7 @@ static void build_lut(void)
         s_lut[i] = eval((float)i * (1.0f / 255.0f));
     }
     s_lut_ready = 1;
+    rebuild_argb8888_lut();
 }
 
 void spectrum_init(void)
@@ -511,13 +549,13 @@ uint8_t spectrum_get_heatmap_trace_white(void)
     return s_heatmap_trace_white;
 }
 
-uint16_t spectrum_colormap(float db, float db_min, float db_max)
+uint8_t spectrum_colormap_index(float db, float db_min, float db_max)
 {
     float t;
     int32_t idx;
 
     if (db_max <= db_min) {
-        return GFX_COLOR_BLACK;
+        return 0U; /* matches spectrum_colormap()'s GFX_COLOR_BLACK special case: index 0 is black on every palette in this file */
     }
     if (!s_lut_ready) {
         spectrum_init(); /* safety net if someone draws before init */
@@ -526,7 +564,15 @@ uint16_t spectrum_colormap(float db, float db_min, float db_max)
     idx = (int32_t)(t * 255.0f);
     if (idx < 0)   { idx = 0; }
     if (idx > 255) { idx = 255; }
-    return s_lut[idx];
+    return (uint8_t)idx;
+}
+
+uint16_t spectrum_colormap(float db, float db_min, float db_max)
+{
+    if (db_max <= db_min) {
+        return GFX_COLOR_BLACK; /* kept explicit: relies on index 0 == black, spectrum_colormap_index()'s early return happens to agree but this path predates it */
+    }
+    return s_lut[spectrum_colormap_index(db, db_min, db_max)];
 }
 
 /* --- spectrum rendering --------------------------------------------- */

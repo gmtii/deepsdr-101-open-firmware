@@ -2,6 +2,7 @@
 #define DEMOD_AM_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /*
  * AM envelope demodulator, from baseband I/Q to the speaker.
@@ -745,6 +746,17 @@ uint8_t demod_am_get_active_rate_is_48k(void);
  * I2S TX stream (gd32_i2s_stream_write_half()). Intended as the
  * sdr_rx block hook - runs in DMA interrupt context. */
 void demod_am_process_raw(const int16_t *raw_interleaved);
+
+/* Minimal FT8 bring-up hook (09/2026) - see demod_am.c's own comment.
+ * Arms/disarms feeding this file's final audio output into
+ * ft8_decimator_feed_sample(). No slot-timing awareness at all yet -
+ * just a manual on/off for bench testing on real hardware. */
+void demod_am_ft8_capture_set_active(bool active);
+
+/* Total demod_am_process_raw() (ISR) invocations since boot -
+ * completely independent of FT8/decimation - see its own declaration
+ * comment in demod_am.c for the diagnostic this exists for. */
+uint32_t demod_am_get_isr_call_count(void);
 
 /*
  * WFM's OWN, separate sdr_rx block hook (05/08/2026 - see its own

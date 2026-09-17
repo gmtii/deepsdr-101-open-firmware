@@ -1,0 +1,257 @@
+#include "time_sync_uart.h"
+
+#if !DEBUG_UART_ENABLED
+
+#include "gd32f4xx.h"
+#include "rtc_hw.h"
+
+/*
+ * Frame format (little-endian multi-byte fields), sent by the ESP32:
+ *
+ *   [0]      0xA5              start marker
+ *   [1]      length            payload length in bytes (MSG_*_LEN below)
+ *   [2]      msg_type          MSG_FULL_SET or MSG_SHIFT
+ *   [3..]    payload           see per-type layout below
+ *   [3+len]  crc8              CRC8-CCITT (poly 0x07, init 0x00) over
+ *                               msg_type + payload only (not the
+ *                               marker/length/end-marker bytes)
+ *   [4+len]  0x5A              end marker
+ *
+ * MSG_FULL_SET (0x01), payload = 7 bytes: year_lo, year_hi, month, day,
+ * hour, minute, second. Used for the ESP32's first sync right after
+ * its own boot/NTP fetch, where the GD32's calendar may be off by
+ * anything (default epoch) - goes through rtc_hw_set(), a hard set.
+ *
+ * MSG_SHIFT (0x02), payload = 3 bytes: add_one_second (0/1),
+ * subsecond_fraction_lo, subsecond_fraction_hi. Used for routine
+ * resyncs once the calendar is already close - goes through
+ * rtc_hw_apply_shift(), which does NOT disturb the running calendar.
+ * See rtc_hw.h for the +/-1s range this covers per call.
+ */
+#define FRAME_START   0xA5U
+#define FRAME_END     0x5AU
+#define MSG_FULL_SET  0x01U
+#define MSG_SHIFT     0x02U
+#define MSG_FULL_SET_LEN 7U
+#define MSG_SHIFT_LEN    3U
+#define MSG_PAYLOAD_MAX  MSG_FULL_SET_LEN /* largest of the two */
+
+/* Small RX ring buffer filled from USART0_IRQHandler. Frames are short
+ * (at most 5+MSG_PAYLOAD_MAX = 12 bytes) and infrequent (see the
+ * header comment on why traffic is kept low), so 64 bytes is ample
+ * even if a couple of frames land back-to-back. */
+#define RX_RING_SIZE 64U
+static volatile uint8_t  s_rx_ring[RX_RING_SIZE];
+static volatile uint16_t s_rx_head; /* written by the ISR */
+static volatile uint16_t s_rx_tail; /* read by time_sync_uart_poll() */
+
+static uint32_t s_error_count;
+
+void USART0_IRQHandler(void)
+{
+    if (usart_interrupt_flag_get(USART0, USART_INT_FLAG_RBNE) != RESET)
+    {
+        uint8_t byte = (uint8_t)usart_data_receive(USART0);
+        uint16_t next_head = (uint16_t)((s_rx_head + 1U) % RX_RING_SIZE);
+
+        if (next_head != s_rx_tail) /* drop the byte silently if the ring is full - */
+        {                           /* the CRC check downstream will reject whatever frame this corrupts */
+            s_rx_ring[s_rx_head] = byte;
+            s_rx_head = next_head;
+        }
+
+        usart_interrupt_flag_clear(USART0, USART_INT_FLAG_RBNE);
+    }
+}
+
+static uint8_t crc8_ccitt(const uint8_t *data, uint16_t len)
+{
+    uint8_t crc = 0x00U;
+
+    for (uint16_t i = 0U; i < len; i++)
+    {
+        crc ^= data[i];
+        for (uint8_t bit = 0U; bit < 8U; bit++)
+        {
+            crc = (uint8_t)((crc & 0x80U) ? ((crc << 1) ^ 0x07U) : (crc << 1));
+        }
+    }
+
+    return crc;
+}
+
+static uint16_t rx_available(void)
+{
+    return (uint16_t)((s_rx_head + RX_RING_SIZE - s_rx_tail) % RX_RING_SIZE);
+}
+
+static uint8_t rx_peek(uint16_t offset)
+{
+    return s_rx_ring[(s_rx_tail + offset) % RX_RING_SIZE];
+}
+
+static void rx_drop(uint16_t n)
+{
+    s_rx_tail = (uint16_t)((s_rx_tail + n) % RX_RING_SIZE);
+}
+
+static void handle_full_set(const uint8_t *payload)
+{
+    rtc_hw_datetime_t dt;
+
+    dt.year   = (uint16_t)(payload[0] | ((uint16_t)payload[1] << 8));
+    dt.month  = payload[2];
+    dt.day    = payload[3];
+    dt.hour   = payload[4];
+    dt.minute = payload[5];
+    dt.second = payload[6];
+
+    rtc_hw_set(&dt);
+
+    /* Visual bring-up confirmation: PA8 (led_gpio_init() in main.c)
+     * exists but nothing else in this project ever drives it - toggle
+     * it here so a synced ESP32 link is visible without needing
+     * debug_print(), which this file's own header comment already
+     * establishes can't share PA9/PA10 with this module at the same
+     * time (this board only brings those two pins out, so there is no
+     * alternate-USART route to get both at once - see time_sync_uart.h).
+     * Toggling (not just setting) means you'll see it flip once per
+     * FULL_SET even across repeated resyncs, not just once ever. */
+    gpio_bit_write(GPIOA, GPIO_PIN_8, (bit_status)!gpio_output_bit_get(GPIOA, GPIO_PIN_8));
+}
+
+static void handle_shift(const uint8_t *payload)
+{
+    bool add_one_second = (payload[0] != 0U);
+    uint16_t subsecond_fraction = (uint16_t)(payload[1] | ((uint16_t)payload[2] << 8));
+
+    (void)rtc_hw_apply_shift(add_one_second, subsecond_fraction);
+}
+
+void time_sync_uart_init(void)
+{
+    rcu_periph_clock_enable(RCU_GPIOA);
+    rcu_periph_clock_enable(RCU_USART0);
+
+    /* PA9 = TX, PA10 = RX, both AF7 - identical GPIO setup to
+     * debug_uart_init()'s PA9 half, just adding PA10 for RX since the
+     * debug channel never needed it. These are the only two pins this
+     * board actually brings out for this link - no alternate-USART
+     * bench-test routing is possible, so PA9/PA10 has to double as
+     * both the debug channel and the ESP32 link, per this file's
+     * header comment on the two being mutually exclusive. */
+    gpio_mode_set(GPIOA, GPIO_MODE_AF, GPIO_PUPD_PULLUP, GPIO_PIN_9 | GPIO_PIN_10);
+    gpio_output_options_set(GPIOA, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, GPIO_PIN_9 | GPIO_PIN_10);
+    gpio_af_set(GPIOA, GPIO_AF_7, GPIO_PIN_9 | GPIO_PIN_10);
+
+    usart_deinit(USART0);
+    usart_baudrate_set(USART0, 115200U);
+    usart_word_length_set(USART0, USART_WL_8BIT);
+    usart_stop_bit_set(USART0, USART_STB_1BIT);
+    usart_parity_config(USART0, USART_PM_NONE);
+    usart_transmit_config(USART0, USART_TRANSMIT_ENABLE);
+    usart_receive_config(USART0, USART_RECEIVE_ENABLE);
+    usart_enable(USART0);
+
+    usart_interrupt_enable(USART0, USART_INT_RBNE);
+    /* Priority: below the touch EXTI (2) and above the audio-path DMA
+     * ISR (6) - see touch.c/sdr_rx.c. Time-sync frames are short and
+     * infrequent, not remotely latency-critical against audio, but a
+     * byte at 115200 baud only sits in RDATA for ~87us before the next
+     * one overwrites it, so this shouldn't be starved indefinitely by
+     * lower-priority work either. */
+    nvic_irq_enable(USART0_IRQn, 4U, 0U);
+
+    s_rx_head = 0U;
+    s_rx_tail = 0U;
+    s_error_count = 0U;
+}
+
+void time_sync_uart_poll(void)
+{
+    /* Look for a start marker; drop anything before it (resync after
+     * noise/framing loss). */
+    while (rx_available() > 0U && rx_peek(0) != FRAME_START)
+    {
+        rx_drop(1U);
+        s_error_count++;
+    }
+
+    if (rx_available() < 3U) /* need at least start+length+type to know how much more to wait for */
+    {
+        return;
+    }
+
+    uint8_t len  = rx_peek(1);
+    uint8_t type = rx_peek(2);
+    uint16_t frame_total = (uint16_t)(3U + len + 1U + 1U); /* start+len+type + payload + crc + end */
+
+    if (len > MSG_PAYLOAD_MAX || frame_total > RX_RING_SIZE)
+    {
+        rx_drop(1U); /* garbage length byte - resync one byte at a time */
+        s_error_count++;
+        return;
+    }
+
+    if (rx_available() < frame_total)
+    {
+        return; /* full frame hasn't arrived yet */
+    }
+
+    uint8_t payload[MSG_PAYLOAD_MAX];
+    for (uint8_t i = 0U; i < len; i++)
+    {
+        payload[i] = rx_peek((uint16_t)(3U + i));
+    }
+    uint8_t rx_crc = rx_peek((uint16_t)(3U + len));
+    uint8_t rx_end = rx_peek((uint16_t)(3U + len + 1U));
+
+    if (rx_end != FRAME_END)
+    {
+        rx_drop(1U); /* frame slipped - resync one byte at a time rather than dropping the whole thing blind */
+        s_error_count++;
+        return;
+    }
+
+    uint8_t crc_buf[1U + MSG_PAYLOAD_MAX];
+    crc_buf[0] = type;
+    for (uint8_t i = 0U; i < len; i++)
+    {
+        crc_buf[1U + i] = payload[i];
+    }
+
+    if (crc8_ccitt(crc_buf, (uint16_t)(1U + len)) != rx_crc)
+    {
+        rx_drop(1U);
+        s_error_count++;
+        return;
+    }
+
+    rx_drop(frame_total); /* consume the whole validated frame */
+
+    switch (type)
+    {
+    case MSG_FULL_SET:
+        if (len == MSG_FULL_SET_LEN)
+        {
+            handle_full_set(payload);
+        }
+        break;
+    case MSG_SHIFT:
+        if (len == MSG_SHIFT_LEN)
+        {
+            handle_shift(payload);
+        }
+        break;
+    default:
+        s_error_count++;
+        break;
+    }
+}
+
+uint32_t time_sync_uart_get_error_count(void)
+{
+    return s_error_count;
+}
+
+#endif /* !DEBUG_UART_ENABLED */

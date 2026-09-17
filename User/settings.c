@@ -5,6 +5,7 @@
 #include "ms5351.h"
 #include "backlight.h"  /* backlight_pct - read/applied directly, see settings.h's header comment */
 #include "spectrum.h"   /* spectrum_style - read/applied directly, see settings.h's header comment */
+#include "ft8_decoder.h" /* grid - read/applied directly, same pattern as spectrum_style above (09/2026 #5) */
 
 extern volatile uint32_t g_msticks; /* same free-running ms counter touch.c/touch_calib.c/spi_flash.c already use */
 
@@ -203,6 +204,16 @@ static uint32_t build_csv(uint8_t *buf, uint32_t buf_size,
      * spectrum_style/spectrum_palette above (spectrum_init() doesn't
      * touch this flag either). */
     p = append_str(buf, p, buf_size, "spec_trace_white,"); p = append_u32(buf, p, buf_size, spectrum_get_heatmap_trace_white()); p = append_str(buf, p, buf_size, "\n");
+    /* FT8 own-QTH grid locator (09/2026 #5) - read straight from
+     * ft8_decoder.c's own getter, same "no ordering hazard, no
+     * threading through call sites" reasoning as spectrum_style/
+     * spectrum_palette/spec_trace_white above. Always written, even
+     * if empty (ft8_decoder_get_own_grid() returns "" rather than
+     * NULL when nothing valid is set - see its own comment) - an
+     * empty "grid," line is itself a visible sign in CONFIG.CSV that
+     * whatever was last set there didn't validate, worth keeping
+     * rather than silently omitting the key. */
+    p = append_str(buf, p, buf_size, "grid,"); p = append_str(buf, p, buf_size, ft8_decoder_get_own_grid()); p = append_str(buf, p, buf_size, "\n");
     /* ATT / front-end input impedance level (08/09/2026) - 0=10k/
      * 1=20k/2=40k (aic3204_rin_t), shared by the manual ATT tile and
      * the RF-level auto-AGC's own Rin escalation - see main.c's
@@ -449,6 +460,21 @@ uint8_t settings_load(settings_loaded_t *out)
                 else if ((val_len >= 3U) && mem_eq(val, (const uint8_t *)"1K8", 3U)) { out->audio_bw = AUDIO_BW_1K8; }
                 else { continue; } /* unrecognized value - leave the caller's default alone */
                 out->have_audio_bw = 1U;
+                got_any = 1U;
+            }
+            /* FT8 own-QTH grid locator (09/2026 #5) - applied DIRECTLY
+             * here, same shape/reasoning as ms5351_xtal_hz/
+             * spectrum_style above (ft8_decoder_init() already ran, in
+             * main()'s boot sequence, before settings_load() - see
+             * ft8_decoder_set_own_grid()'s own comment - so there's no
+             * ordering hazard calling it from here). A malformed value
+             * is validated and rejected INSIDE
+             * ft8_decoder_set_own_grid() itself (see its own comment),
+             * not here - so this always calls it and always counts as
+             * "got_any" for a recognized key, whether or not the value
+             * actually validated. */
+            else if (key_is(key, key_len, "grid")) {
+                ft8_decoder_set_own_grid((const char *)val, (int)val_len);
                 got_any = 1U;
             }
             /* any other unrecognized key: silently ignored - see settings.h's forward-compatibility comment */

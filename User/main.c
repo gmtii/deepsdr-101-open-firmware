@@ -1,10 +1,19 @@
 #include "gd32f4xx.h"
 #include "rm68120_exmc.h"
 #include "debug_uart.h"
+#include "rtc_hw.h"
+#include "time_sync.h"
+#include "usb_serial.h"
+#include "stack_watermark.h"
+#include "ft8_decimator.h"
+#include "ft8_fft1024.h"
+#include "ft8_waterfall_adapter.h"
+#include "ft8_decoder.h"
 #include "gfx.h"
 #include "gfx_vfo_font.h"
 #include "ui.h"
 #include "waterfall.h"
+#include "ipa_waterfall.h"
 #include "touch.h"
 #include "touch_calib.h"
 #include "spi_flash.h"
@@ -35,6 +44,8 @@ static void speaker_pa_set_enabled(uint8_t on);
 static void systick_delay_init(void);
 static void radio_screen_draw(void);
 static void sdr_spectrum_waterfall_tick(void);
+static void status_bar_tick(void);
+static bool sync_warning_active(void); /* forward-declared here too - ft8_text_panel_draw() (defined earlier in the file than sync_warning_active() itself) needs it for its own bottom-right badge - see both functions' own comments */
 static void demo_touch_poll(void);
 static void freq_display_draw(void);
 static void step_display_draw(void);
@@ -116,6 +127,26 @@ static uint8_t rtty_scope_active(void);
 static void rtty_scope_panel_reset(void);
 static void rtty_text_panel_reset(void);
 static void rtty_text_force_redraw(void);
+static void rtty_text_panel_draw(void);
+static void ft8_scope_area_clear(void);
+static void ft8_cascade_draw(void);
+static void ft8_text_panel_reset(void);
+static void ft8_text_force_redraw(void);
+static void ft8_text_push_line(const char *s);
+static void ft8_text_panel_draw(void);
+#if DEBUG_UART_ENABLED
+static void ft8_status_draw(bool running, int num_blocks, uint32_t total_decoded, uint32_t last_proc_ms, uint32_t last_capture_ms, uint32_t last_raw_samples, uint32_t last_isr_calls, uint32_t arm_count, int last_num_candidates, uint32_t arm_rtc_sec);
+#endif
+static bool s_ft8_mode_enabled = false; /* moved up from beside k_demod_modes[] - main() itself reads this, and k_demod_modes[] is defined further down in the file than main(), same class of ordering issue as RTTY_SCOPE_TRACE_H's - see ft8_scope_area_clear()'s comment */
+/* Show/hide the FT8 cascade (09/2026), per the project owner: with
+ * 500+ decodes in a session, the small 8-line text panel only ever
+ * shows the last handful - tapping the cascade area (while in FT8
+ * mode) toggles it off and reclaims that whole region for a much
+ * taller, 2-column scrolling history instead (see ft8_text_panel_draw()).
+ * Session-only for now (not written to CONFIG.CSV) - starts back at
+ * "cascade visible" on every boot. */
+static bool s_ft8_cascade_visible = true;
+static bool s_ft8_force_reseed_slot = false; /* set by the FT8 mode-entry callback, consumed by the main loop's slot-index check below - see both comments for the full "why" (09/2026 fix: entering FT8 mode was starting a misaligned capture immediately instead of waiting for a real boundary) */
 static void rtty_scope_draw(void);
 static void apply_lo_tune(uint32_t freq_hz);
 static void apply_demod_mode(demod_mode_t mode);
@@ -351,12 +382,25 @@ static uint32_t demod_if_offset_hz(void)
 
 int main(void)
 {
+    /* *** TEMPORARY - see ipa_waterfall_lut_size_selftest()'s comment and
+     * this variable's two use sites (assignment further down, re-print
+     * near "waterfall ticks") - remove once acted on. */
+    static uint8_t g_ipa_lut_selftest_pass;
+
     /* Critical when chained after a bootloader: our vector table is no
      * longer at 0x08000000 (that's the bootloader's), but at
      * 0x08020000. Without this, any interrupt (including our own
      * SysTick) would look up its handler in the BOOTLOADER's vector
      * table, not ours - this must be the FIRST thing we do. */
     SCB->VTOR = 0x08020000;
+
+    /* Stack high-water-mark painting - right after VTOR (which must
+     * stay the literal first line, see its own comment) and before
+     * anything re-enables interrupts below, so nothing can have
+     * touched the stack below this call frame yet. See
+     * stack_watermark.h for why this exists (sizing the real
+     * available stack before adding ft8_lib's bp_decode() burst). */
+    stack_watermark_paint();
 
     /*
      * Clear the NVIC state inherited from the bootloader BEFORE
@@ -405,6 +449,18 @@ int main(void)
     systick_delay_init();
     led_gpio_init();
     debug_uart_init();
+    rtc_hw_init(); /* LXTAL-clocked RTC bring-up - see rtc_hw.h. Safe to call
+                     * every boot: leaves an already-ticking calendar alone,
+                     * only reseeds it on a genuine first boot / power loss. */
+    usb_serial_init(); /* USB CDC-ACM virtual COM port on PA11/PA12 - see usb_serial.h */
+    time_sync_init(); /* ESP32 link, now over the USB CDC-ACM port above - see time_sync.h */
+
+    /* FT8 module init - just clears the decoder's message queue at
+     * boot. Capture itself is armed/disarmed by mode selection now
+     * (see menu_mode_preset_callback()'s FT8 handling and the
+     * FT8-vs-RTTY render gate in the main loop), not unconditionally
+     * at startup like the original bring-up test. */
+    ft8_decoder_init();
 
     debug_print("\n\n=== STARTUP (chained after bootloader) ===\n");
     debug_print_hex32("VTOR read back", SCB->VTOR);
@@ -435,6 +491,27 @@ int main(void)
     waterfall_init();
     touch_init();
     debug_print_hex32("RCU_PLLI2S after touch_init", RCU_PLLI2S);
+
+    /* Must run before settings_load() below: that function can call
+     * spectrum_set_palette() for a saved palette from CONFIG.CSV, which
+     * chains into build_lut() -> ipa_waterfall_load_palette() - if the IPA's
+     * clock isn't enabled yet at that point, the LUT load silently times
+     * out (see ipa_waterfall_load_palette()'s bounded wait). Originally
+     * this call sat right next to spectrum_init() further down, which
+     * turned out to be too late - moved here after hardware bring-up
+     * confirmed the timeout with real UART logs. */
+    ipa_waterfall_init();
+
+    /* *** TEMPORARY - remove once the LUT-size PASS/FAIL has been seen and
+     * acted on *** - see ipa_waterfall_lut_size_selftest()'s comment. Must
+     * run before spi_flash_init()/spectrum_init() below, same reasoning
+     * as ipa_waterfall_init() itself: this needs the IPA clocked, and it
+     * needs to run on its OWN test LUT before anything real is loaded.
+     * Result stashed here and re-printed periodically further down (see
+     * the "waterfall ticks" debug block) rather than only here, because
+     * this project's UART capture has repeatedly missed everything
+     * printed this early after reset. */
+    g_ipa_lut_selftest_pass = ipa_waterfall_lut_size_selftest();
 
     spi_flash_init(); /* unconditional - settings_load()/settings_poll() need this every boot, not just under the SPI_FLASH_PROBE_TEST diagnostics below */
 
@@ -616,7 +693,8 @@ int main(void)
      * unserviced gap to just the few lines of DMA setup itself.
      */
     fft_init();
-    spectrum_init(); /* palette LUT for spectrum + waterfall */
+    ft8_fft1024_init(); /* Harmless to also do this once at boot, but NOT sufficient by itself - see the REAL fix at the FT8 mode-entry call site (menu_mode_preset_callback()'s is_ft8 branch) for why this table gets overwritten by the waterfall's own legitimate use of the same union memory before FT8 mode is ever entered. */
+    spectrum_init(); /* palette LUT for spectrum + waterfall - IPA already brought up earlier, right before settings_load(), see that call site's comment */
     zoom_decimators_init(); /* spectrum ZOOM cascaded decimators - see spec_zoom_t's comment */
     sdr_rx_init();
 
@@ -855,6 +933,7 @@ int main(void)
         {
             static uint8_t s_rtty_scope_was_active = 0U;
             static uint8_t s_rtty_mode_was_active = 0U; /* tracks active_now, NOT drawing_now - see below */
+            static uint8_t s_ft8_showing_was_active = 0U;
             uint8_t active_now = rtty_scope_active();
             /* Only actually DRAW the scope when the settings menu
              * isn't covering the panel - added 08/08/2026, per the
@@ -866,67 +945,352 @@ int main(void)
              * covers the spectrum+waterfall panel while open"
              * comment) - this mirrors it for the scope's panel,
              * which occupies the identical screen region. */
-            uint8_t drawing_now = (uint8_t)(active_now && !s_menu_open);
+            uint8_t rtty_showing = (uint8_t)(active_now && !s_menu_open);
+            uint8_t ft8_showing = (uint8_t)(s_ft8_mode_enabled && !s_menu_open);
+            uint8_t drawing_now = (uint8_t)(rtty_showing || ft8_showing); /* still used below by demo_touch_poll()/tune_encoder_poll() gating */
 
             rtty_scope_poll(); /* keep the FFT data fresh regardless - cheap, and matches
                                  * sdr_spectrum_waterfall_tick()'s own "accumulate even while
                                  * hidden" behavior, so there's no stale-data jolt on reopen. */
-            if (drawing_now && !s_rtty_scope_was_active) {
-                /* Fires on EITHER transition into showing the scope:
-                 * switching into RTTY-L/RTTY-U from elsewhere, OR the
-                 * menu just closing while RTTY was already the active
-                 * mode the whole time it was open (active_now stayed
-                 * true throughout, only drawing_now flips) - the TRACE
-                 * always gets a fresh paint either way, since whatever
-                 * was on screen right now isn't a valid diff baseline
-                 * for the bars/markers. */
+            if (rtty_showing && !s_rtty_scope_was_active) {
                 rtty_scope_panel_reset();
                 if (active_now && !s_rtty_mode_was_active) {
-                    /* Genuinely JUST switched into RTTY-L/RTTY-U from
-                     * a different mode - actually clear the text
-                     * grid's CONTENT, a fresh decode session starting
-                     * from nothing (see rtty_text_panel_reset()'s
-                     * comment), and discard any partial multi-window
-                     * average left over from before the switch (see
-                     * rtty_scope_avg_reset()'s comment) so the first
-                     * displayed trace is a clean average, not a blend
-                     * that includes windows from whatever was tuned
-                     * in before. */
                     rtty_text_panel_reset();
                     rtty_scope_avg_reset();
                 } else {
-                    /* Was already in RTTY mode the whole time the menu
-                     * was open (active_now never flipped) - the
-                     * SCROLLBACK TEXT is still exactly right, only the
-                     * physical pixels under the menu went stale.
-                     * rtty_text_panel_reset() would wrongly wipe every
-                     * decoded line just because the person checked
-                     * MODE/SHIFT/BAUD - repaint only, via
-                     * rtty_text_force_redraw() (added 10/08/2026, per
-                     * the project owner, fixing exactly this). */
                     rtty_text_force_redraw();
                 }
             }
-            s_rtty_scope_was_active = drawing_now;
+            if (ft8_showing && !s_ft8_showing_was_active) {
+                /* Just switched INTO FT8 (mode change, or the menu
+                 * just closed while FT8 was already selected). No
+                 * dedicated FT8 scope/cascade yet (see
+                 * ft8_waterfall_adapter.h's pending work) - just blank
+                 * the trace area once so it doesn't show whatever the
+                 * PREVIOUS mode's spectrum last painted there, stale.
+                 * Text panel keeps its scrollback (same "menu closing
+                 * shouldn't wipe decoded text" reasoning as RTTY
+                 * above) - only force a repaint of it. */
+                ft8_scope_area_clear();
+                ft8_text_force_redraw();
+            }
+            s_rtty_scope_was_active = rtty_showing;
             s_rtty_mode_was_active = active_now;
+            s_ft8_showing_was_active = ft8_showing;
 
-            if (drawing_now) {
+            if (rtty_showing) {
                 rtty_scope_draw();
+            } else if (ft8_showing) {
+                /* CRITICAL (09/2026): drains resampled audio and runs
+                 * the actual FFT/encode/cascade work HERE, in the main
+                 * loop - NOT inside the audio ISR that
+                 * ft8_decimator_feed_sample() runs in. See
+                 * ft8_decimator.h's own comment on the double-buffer
+                 * handoff this replaced (doing that work synchronously
+                 * inside the ISR correlated with the receiver
+                 * freezing/hanging on entering FT8 mode). Cheap when
+                 * nothing's ready - safe to call unconditionally every
+                 * iteration. */
+                ft8_decimator_poll();
+
+                /* RTC-DRIVEN slot cycle (09/2026 REWRITE) - a real FT8
+                 * transmission is a precisely-timed ~12.6s burst
+                 * starting exactly at :00/:15/:30/:45 seconds of EVERY
+                 * MINUTE. This used to be scheduled off g_msticks
+                 * (SysTick/HXTAL) alone, seeded from the RTC only once
+                 * per FT8-mode-entry or correction - a design change
+                 * made earlier this same debugging session on the
+                 * theory that g_msticks was the trustworthy clock and
+                 * the RTC (LXTAL) was the suspect one. The project
+                 * owner then DIRECTLY DISPROVED that: syncing the RTC
+                 * against NTP over the serial link showed the RTC
+                 * keeping pace with NTP correctly, while a dedicated
+                 * g_msticks-vs-RTC cross-check (see the old "gms=/rts="
+                 * fields this rewrite removes) showed g_msticks itself
+                 * falling behind the RTC by several real seconds per
+                 * minute - i.e. exactly backwards from what was
+                 * assumed: HXTAL (feeds g_msticks via SysTick, AND the
+                 * audio/PLLI2S chain - a separate crystal from the
+                 * RTC's own LXTAL) is the clock that's actually wrong
+                 * here, not LXTAL. The old "ins*1000/capms shows
+                 * exactly 12000.0Hz" audio-rate check that seemed to
+                 * vouch for g_msticks was blind to this: both sides of
+                 * that ratio are HXTAL-derived, so a real HXTAL
+                 * frequency error cancels out of it and hides itself.
+                 *
+                 * REWRITE: go back to the RTC as the scheduling
+                 * authority, but WITHOUT the original bug that started
+                 * this whole investigation (the old "second==0 &&
+                 * minute%15==0" check, which fired once per 15 MINUTES
+                 * instead of four times per minute). This polls the
+                 * live RTC second EVERY loop iteration and fires on
+                 * the EDGE where it changes to a new value that's a
+                 * multiple of 15 - not on bare equality (which a slow
+                 * or delayed loop iteration could step over and miss
+                 * entirely), and not derived from any g_msticks target
+                 * math at all. g_msticks is still used below, but only
+                 * for the proc_ms/capture_ms DIAGNOSTIC timers (whose
+                 * absolute accuracy no longer matters for correctness,
+                 * only for relative "how long did this take" reporting)
+                 * - never again for deciding WHEN a slot boundary is. */
+                static bool s_ft8_capture_running = false;
+                static uint32_t s_ft8_spectrum_last_counter = 0xFFFFFFFFU;
+                /* Edge-detector state: the last RTC second value this
+                 * code has already acted on. 0xFF is an impossible
+                 * second value (0-59), so it's a safe "never seen a
+                 * second yet" sentinel that guarantees the very first
+                 * poll after mode entry (or after a fresh
+                 * s_ft8_force_reseed_slot) is treated as a genuine new
+                 * second, not silently skipped. */
+                static uint8_t s_ft8_last_polled_second = 0xFFU;
+                static uint32_t s_ft8_arm_count = 0U; /* on-screen indicator (09/2026) - see ft8_status_draw()'s "cyc=" field: if this isn't moving at all while blk cycles, this exact code path isn't the one running */
+                /* RTC second the last arm actually happened on - IS the
+                 * scheduling trigger itself now (not a separate,
+                 * possibly-stale readback of it), so this should read
+                 * EXACTLY 0, 15, 30 or 45 every single time, with no
+                 * exceptions - see ft8_status_draw()'s "rsec=" field. */
+                static uint32_t s_ft8_arm_rtc_sec = 0U;
+                static uint32_t s_ft8_last_proc_ms = 0U;
+                static uint32_t s_ft8_capture_start_ms = 0U;
+                /* Real wall-clock ms from ft8_decimator_reset() to the
+                 * next arm (09/2026) - see ft8_status_draw()'s "capms="
+                 * field. Now that the ARM ITSELF is RTC-triggered, this
+                 * should read very close to 15000ms every time (not
+                 * 14880) - a pure diagnostic, not used for scheduling. */
+                static uint32_t s_ft8_last_capture_ms = 0U;
+                static uint32_t s_ft8_last_raw_samples = 0U; /* see its use-site comment below - independent raw-input-rate check */
+                static uint32_t s_ft8_isr_count_start = 0U;
+                static uint32_t s_ft8_last_isr_calls = 0U; /* see its use-site comment below - independent ISR-rate check */
+
+                if (s_ft8_force_reseed_slot) {
+                    /* Just entered FT8 mode - force the edge-detector
+                     * to treat the very next poll as a fresh second,
+                     * and drop any capture that might have been left
+                     * running from a previous FT8 session (its data is
+                     * simply abandoned, same as before). No RTC read
+                     * needed here at all now - the poll below handles
+                     * everything, including firing the very first arm
+                     * whenever the RTC's OWN next real :00/:15/:30/:45
+                     * boundary actually arrives. */
+                    s_ft8_last_polled_second = 0xFFU;
+                    s_ft8_capture_running = false;
+                    s_ft8_force_reseed_slot = false;
+                }
+
+                {
+                    rtc_hw_datetime_t dt_poll;
+                    rtc_hw_get(&dt_poll);
+                    if ((uint32_t)dt_poll.second != (uint32_t)s_ft8_last_polled_second) {
+                        s_ft8_last_polled_second = dt_poll.second;
+                        if ((dt_poll.second % 15U) == 0U) {
+                            /* Genuine, RTC-verified 15s boundary - this
+                             * IS the ground truth now, not a readback
+                             * of some separately-computed target. */
+                            s_ft8_arm_count++;
+                            s_ft8_arm_rtc_sec = dt_poll.second;
+
+                            if (!s_ft8_capture_running) {
+                                /* Very first arm since mode entry (or
+                                 * since the edge-detector was reset
+                                 * above) - just start capturing, there
+                                 * is nothing yet to decode. */
+                                ft8_decimator_reset();
+                                ft8_waterfall_reset();
+                                s_ft8_capture_running = true;
+                                s_ft8_capture_start_ms = g_msticks; /* diagnostic only - see s_ft8_last_capture_ms's own comment */
+                                s_ft8_isr_count_start = demod_am_get_isr_call_count();
+                            } else if (ft8_waterfall_is_full()) {
+                                /* REAL FIX (09/2026, carried over
+                                 * unchanged from the g_msticks-based
+                                 * design) - see mag_snapshot's own
+                                 * declaration comment in
+                                 * ft8_shared_ram.h for the full "why":
+                                 * snapshot everything the OLD slot's
+                                 * decode needs FIRST, then reset+rearm
+                                 * the REAL capture IMMEDIATELY (audio
+                                 * starts counting toward the next slot
+                                 * with zero delay), and only THEN spend
+                                 * the ~277ms+ on ftx_find_candidates()/
+                                 * decode - reading the frozen snapshot,
+                                 * not the live structure the new
+                                 * capture is already overwriting by
+                                 * that point. This decoupling remains
+                                 * correct and necessary regardless of
+                                 * WHAT triggers the arm (RTC edge now,
+                                 * g_msticks target before) - decode
+                                 * time is still real, variable CPU
+                                 * cost that must never delay the next
+                                 * capture's start. */
+                                uint32_t proc_start_ms;
+                                float db_min, db_max;
+
+                                ft8_waterfall_snapshot_mag();
+                                ft8_waterfall_get_db_range(&db_min, &db_max); /* for the "(no decodes this slot)" diagnostic below - MUST happen before ft8_waterfall_reset() clears s_db_min/s_db_max */
+                                s_ft8_last_capture_ms = g_msticks - s_ft8_capture_start_ms; /* see its own declaration comment - measured BEFORE process_slot's own cost, since that's a separate, already-tracked number (proc_ms) */
+                                s_ft8_last_raw_samples = ft8_decimator_get_raw_sample_count(); /* see its own static's declaration comment above - raw_samples*1000/capture_ms should read ~12000 if the audio pipeline genuinely runs at the rate assumed throughout - NOTE (09/2026): if HXTAL is confirmed wrong, this and capms both inherit that same error and shouldn't be trusted as absolute Hz figures any more than g_msticks itself can be; kept for relative round-to-round comparison only until the real crystal frequency is confirmed and the Makefile/PLL config is corrected at the root */
+                                s_ft8_last_isr_calls = demod_am_get_isr_call_count() - s_ft8_isr_count_start; /* see its own declaration comment - independent ISR-rate check, same HXTAL caveat as above */
+
+                                ft8_decimator_reset();
+                                ft8_waterfall_reset();
+                                s_ft8_capture_start_ms = g_msticks;
+                                s_ft8_isr_count_start = demod_am_get_isr_call_count();
+
+                                proc_start_ms = g_msticks;
+                                ft8_decoder_process_slot();
+                                {
+                                    ft8_decoded_msg_t msg;
+                                    uint8_t n_msgs = 0U;
+                                    while (ft8_decoder_get_message(&msg)) {
+                                        ft8_text_push_line(msg.line); /* see ft8_text_push_line()'s own comment - FT8 gets its own dedicated scrolling grid now, not RTTY's */
+                                        n_msgs++;
+                                    }
+#if DEBUG_UART_ENABLED
+                                    /* dB calibration diagnostic (09/2026, gated behind
+                                     * DEBUG_UART_ENABLED per the project owner: with 500+
+                                     * real decodes a session, this was eating scrollback
+                                     * space that should show actual received callsigns
+                                     * instead) - see ft8_waterfall_adapter.h's
+                                     * FT8_ADAPTER_DB_OFFSET comment. -112 was tuned
+                                     * against this board's real front-end (see the
+                                     * session's own min/max readings) - if it drifts
+                                     * again, check this line: it should sit roughly
+                                     * around -104/-7. db_min/db_max captured BEFORE the
+                                     * reset above - see this block's own comment for
+                                     * why. */
+                                    if (n_msgs == 0U) {
+                                        char diag[40];
+                                        int dmin, dmax, p = 0;
+
+                                        dmin = (int)db_min;
+                                        dmax = (int)db_max;
+
+                                        diag[p++] = 'd'; diag[p++] = 'B'; diag[p++] = ' ';
+                                        diag[p++] = 'm'; diag[p++] = 'i'; diag[p++] = 'n'; diag[p++] = '=';
+                                        if (dmin < 0) { diag[p++] = '-'; dmin = -dmin; }
+                                        if (dmin >= 100) { diag[p++] = (char)('0' + (dmin / 100) % 10); }
+                                        if (dmin >= 10)  { diag[p++] = (char)('0' + (dmin / 10) % 10); }
+                                        diag[p++] = (char)('0' + dmin % 10);
+                                        diag[p++] = ' '; diag[p++] = 'm'; diag[p++] = 'a'; diag[p++] = 'x'; diag[p++] = '=';
+                                        if (dmax < 0) { diag[p++] = '-'; dmax = -dmax; }
+                                        if (dmax >= 100) { diag[p++] = (char)('0' + (dmax / 100) % 10); }
+                                        if (dmax >= 10)  { diag[p++] = (char)('0' + (dmax / 10) % 10); }
+                                        diag[p++] = (char)('0' + dmax % 10);
+                                        diag[p] = '\0';
+
+                                        ft8_text_push_line("(no decodes this slot)");
+                                        ft8_text_push_line(diag);
+                                    }
+#else
+                                    (void)n_msgs; /* only read above under DEBUG_UART_ENABLED */
+#endif
+                                }
+                                s_ft8_last_proc_ms = g_msticks - proc_start_ms; /* see ft8_status_draw()'s "proc=" field */
+                            }
+                            /* else: RTC says a new 15s boundary arrived
+                             * but is_full() is still false (fewer than
+                             * 93 blocks collected in what should have
+                             * been a full real 15s) - genuinely
+                             * shouldn't happen once the audio pipeline
+                             * is running normally, but left as a silent
+                             * skip (capture stays running, tries again
+                             * next boundary) rather than a hard fault,
+                             * same conservative behavior the old design
+                             * had for its equivalent case. */
+                        }
+                    }
+                }
+
+                if (s_ft8_cascade_visible) {
+                    /* Only redrawn while actually visible (09/2026 #3)
+                     * - see s_ft8_cascade_visible's own comment. This
+                     * used to run unconditionally, which is exactly why
+                     * toggling to the expanded text view didn't visibly
+                     * do anything: this fires on basically every new
+                     * waterfall row (~every 160ms), so it kept
+                     * repainting straight over whatever
+                     * ft8_text_panel_draw()'s expanded layout had just
+                     * drawn in that same screen area. Deliberately does
+                     * NOT update s_ft8_spectrum_last_counter while
+                     * hidden either - leaving it stale means the very
+                     * first check after the cascade becomes visible
+                     * again sees a "changed" row and repaints fresh,
+                     * which is exactly the desired behavior (no explicit
+                     * force-redraw call needed for this side of the
+                     * toggle). */
+                    uint32_t now_row = ft8_waterfall_get_row_counter();
+                    if (now_row != s_ft8_spectrum_last_counter) {
+                        s_ft8_spectrum_last_counter = now_row;
+                        ft8_cascade_draw();
+                    }
+                }
+
+#if DEBUG_UART_ENABLED
+                /* Diagnostic status readout (09/2026) - added because
+                 * the "(no decodes this slot)" message was reportedly
+                 * never appearing at all, and the cascade running fine
+                 * doesn't prove the RTC-aligned decode-slot machinery
+                 * above is even engaging. Fixed position, overwritten
+                 * every frame (NOT pushed into the scrolling text
+                 * panel - this isn't a log, just a live state readout)
+                 * - "run" (is a slot capture currently armed) and
+                 * "blk" (how many of the 93 blocks needed for a full
+                 * slot have been collected so far). "proc" is the last
+                 * ft8_decoder_process_slot() call's wall-clock cost in
+                 * ms. Gated behind DEBUG_UART_ENABLED (09/2026 #2, per
+                 * the project owner) now that the underlying scheduling
+                 * bug is fixed - kept, not deleted, in case a future
+                 * regression needs it again; just not cluttering the
+                 * normal, everyday screen any more. */
+                ft8_status_draw(s_ft8_capture_running, ft8_waterfall_get()->num_blocks, ft8_decoder_get_total_count(), s_ft8_last_proc_ms, s_ft8_last_capture_ms, s_ft8_last_raw_samples, s_ft8_last_isr_calls, s_ft8_arm_count, ft8_decoder_get_last_num_candidates(), s_ft8_arm_rtc_sec);
+#else
+                /* The diagnostics above (s_ft8_last_proc_ms and friends)
+                 * are still computed unconditionally either way - cheap,
+                 * and matches this project's own "background sets
+                 * state, the visible-when-appropriate draw call reads
+                 * it" pattern used everywhere else - only their SCREEN
+                 * DISPLAY is gated. With ft8_status_draw() itself
+                 * compiled out here, nothing else reads them any more
+                 * in a normal build, so this silences the resulting
+                 * "set but not used" warnings without touching any of
+                 * the (unconditional, still-live) code that sets them. */
+                (void)s_ft8_arm_rtc_sec;
+                (void)s_ft8_last_proc_ms;
+                (void)s_ft8_last_capture_ms;
+                (void)s_ft8_last_raw_samples;
+                (void)s_ft8_last_isr_calls;
+#endif
+                ft8_text_panel_draw();
             } else {
-                /* Covers BOTH "not in RTTY mode" and "menu is open" -
-                 * sdr_spectrum_waterfall_tick() already skips its own
-                 * drawing internally while s_menu_open, so it's always
-                 * safe to call here regardless of which of those two
-                 * reasons drawing_now was false for. */
+                /* Covers "neither RTTY nor FT8 showing" (plain mode,
+                 * or the menu is open) - sdr_spectrum_waterfall_tick()
+                 * already skips its own drawing internally while
+                 * s_menu_open. */
                 sdr_spectrum_waterfall_tick();
             }
+            status_bar_tick(); /* clock + S-meter/dBm + PPM calib - see its own comment: now runs regardless of rtty_showing/ft8_showing, unlike before */
             demo_touch_poll();
             tune_encoder_poll();
         }
         rf_agc_poll(); /* RF-level (analog PGA) auto-AGC - see its own comment */
         rtty_poll(); /* drains rtty.c's decoded text to debug UART - see its own comment */
+        usb_serial_poll(); /* drains USB CDC-ACM RX into its ring buffer / re-arms the endpoint - see usb_serial.h */
+        time_sync_poll(); /* drains ESP32 time-sync frames (now over USB) into rtc_hw - see time_sync.h */
         settings_poll(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2, s_nonwfm_use_48k,
                       s_pga_gain_db_x2, spectrum_smooth_pct_for_save(), s_speaker_pa_enabled, s_rf_agc_rin_level); /* debounced CONFIG.CSV autosave - see settings.h's comment; cheap no-op most iterations */
+        {
+            /* Bring-up measurement only, see stack_watermark.h - a
+             * no-op (debug_print_dec expands away) whenever
+             * DEBUG_UART_ENABLED=0. Every 10s of uptime is plenty for
+             * a value that's only ever supposed to trend DOWN
+             * (worse-case) over a session, never needs sub-second
+             * resolution. */
+            static uint32_t s_last_stack_report_ms = 0U;
+            if ((g_msticks - s_last_stack_report_ms) >= 10000U) {
+                s_last_stack_report_ms = g_msticks;
+                debug_print_dec("stack: free bytes (low-water mark)", stack_watermark_get_free_bytes());
+                debug_print_dec("stack: painted region bytes", stack_watermark_get_painted_bytes());
+            }
+        }
 #if TOUCH_EDGE_DEBUG
         touch_debug_stream_poll(); /* see TOUCH_EDGE_DEBUG's comment */
 #endif
@@ -949,6 +1313,14 @@ int main(void)
             && !rtty_scope_active()
            ) {
             debug_print_dec("waterfall ticks", g_fill_count);
+            /* *** TEMPORARY - remove alongside the selftest call and the
+             * variable's declaration once acted on *** - piggybacks on
+             * this already-periodic, already-reliably-captured debug
+             * block so the LUT-size result isn't lost the way the
+             * one-shot print right after boot has repeatedly been. */
+            debug_print(g_ipa_lut_selftest_pass ?
+                         "ipa lut size selftest: PASS\n" :
+                         "ipa lut size selftest: FAIL (see boot-time message for details)\n");
             /* ISR timing check (see demod_am.h's comment above
              * demod_am_get_last_cycles()): one block's real-time
              * budget is SDR_RX_BLOCK_SAMPLES samples at 96kHz (was
@@ -1550,6 +1922,7 @@ typedef struct {
     const char *label;
     demod_mode_t mode;
     rtty_variant_t rtty_variant;
+    bool is_ft8; /* added 09/2026 - see the FT8 entry below. Omitted (defaults to false via C's "fewer initializers than members" zero-fill) on every other row, so none of the existing rows needed touching. */
 } demod_mode_entry_t;
 
 static const demod_mode_entry_t k_demod_modes[] = {
@@ -1560,7 +1933,8 @@ static const demod_mode_entry_t k_demod_modes[] = {
     { "NFM",    DEMOD_MODE_NFM, RTTY_VARIANT_NONE },
     { "WFM",    DEMOD_MODE_WFM, RTTY_VARIANT_NONE },
     { "RTTY-L", DEMOD_MODE_LSB, RTTY_VARIANT_NORMAL   }, /* confirmed correct polarity on LSB, 08/08/2026 */
-    { "RTTY-U", DEMOD_MODE_USB, RTTY_VARIANT_INVERTED }  /* USB mirrors LSB - see this block's comment */
+    { "RTTY-U", DEMOD_MODE_USB, RTTY_VARIANT_INVERTED }, /* USB mirrors LSB - see this block's comment */
+    { "FT8",    DEMOD_MODE_USB, RTTY_VARIANT_NONE, true } /* added 09/2026 - USB dial-frequency convention, same as WSJT-X/real FT8 operators expect; see ft8_decoder.h/ft8_waterfall_adapter.h for the decode chain this arms */
 };
 #define DEMOD_MODE_ENTRY_COUNT (sizeof(k_demod_modes) / sizeof(k_demod_modes[0]))
 static ui_button_t s_menu_mode_tiles[DEMOD_MODE_ENTRY_COUNT];
@@ -1802,7 +2176,7 @@ static uint32_t s_rf_agc_last_clip_ms = 0U;   /* g_msticks at the last DETECTED 
  * once the on/off switch moved to its own separate control (s_nr_on)
  * and this value no longer needed to double as an implicit bypass at
  * its minimum). Starts at 0 - matches nr_ss_init()'s own default. */
-static uint16_t s_nr_strength = 50U;
+static uint16_t s_nr_strength = 0U;
 #define NR_STRENGTH_STEP 10U /* per encoder detent - ~32 detents edge
                                  * to edge across the full 0-4095 range,
                                  * similar turn-count feel to PGA/VOLUME's
@@ -1979,9 +2353,28 @@ static uint8_t spectrum_smooth_pct_for_save(void)
 #define STEP_Y 8
 #define VOL_X  478
 #define VOL_Y  38
-#define TIME_X 690
+#define TIME_X 700 /* moved again (09/2026 #3), per the project owner:
+                     * align to the right margin alongside the battery
+                     * indicator - "HH:MM:SS" (8 chars) at scale 2 is
+                     * 96px wide, so 700+96=796, a 4px margin from the
+                     * 800px screen edge, matching the left-hand 4px
+                     * margin convention used everywhere else in this
+                     * file (e.g. gfx_text(4, ...)). Confirmed clear of
+                     * SAM_CALIB (594-664) and STEP (ends ~586) on this
+                     * same y=8 row - more margin than the previous
+                     * position (672), not less. TIME_TAP_X1 (below) is
+                     * defined relative to this so the tap-to-set-clock
+                     * zone moves with it automatically. */
 #define TIME_Y 8
-#define BATT_X 690
+#define BATT_X 716 /* moved again (09/2026 #3), per the project owner:
+                     * same right-margin alignment as TIME_X above, on
+                     * BATT_Y's own row. Icon (BATT_W=48) + 2px gap +
+                     * voltage text (always exactly 5 chars at scale 1,
+                     * see battery_voltage_format() - fixed width, no
+                     * need to measure it here) = 80px total, so
+                     * 716+80=796, the same 4px right margin TIME_X
+                     * lands on. Confirmed clear of SPK_ICON_X(661) +
+                     * its own ~16px width on this same row. */
 #define BATT_Y 40
 #define BATT_W 48 /* shortened from 70 on 08/09/2026, per the project
                     * owner ("la bateria la puedes hacer algo mas
@@ -1995,21 +2388,23 @@ static uint8_t spectrum_smooth_pct_for_save(void)
 #define BATT_H 16
 
 /* Speaker-enabled indicator (07/09/2026, per the project owner) -
- * sits in the gap between the badge row (ends at BADGE_COL(6)+BADGE_W
- * = 649, see BADGE_COL's own comment) and the battery gauge (BATT_X =
- * 690) - 41px available. Proportions (width:height, box width:box
- * height:horn width) match the real, widely-used "speaker/volume"
- * glyph (e.g. Feather icons' "volume-1": box 4x6, horn 5 wide, full
- * height 14, all in a 24-tall viewBox - a 9:14 width:height ratio,
- * TALLER than wide) rather than an invented shape - see
- * speaker_icon_draw()'s own comment for why that matters. Vertically
- * centered in the status strip (like BADGE_Y0), not pinned to the
- * battery's shorter BATT_Y/H, since this icon is taller than the
- * battery gauge by design. */
+ * moved (09/2026 #2, per the project owner) to sit just left of the
+ * clock (TIME_X/Y) instead of down in the status strip next to the
+ * badge row - same top-bar row as the clock now, vertically centered
+ * on its scale-2 text height (14px) rather than the status strip's
+ * own height. Right edge kept comfortably clear of TIME_TAP_X1 (=
+ * TIME_X-10, the clock-keypad tap zone's own left boundary) so a tap
+ * meant for this icon can't also register as a tap on the clock.
+ * Proportions (width:height, box width:box height:horn width) match
+ * the real, widely-used "speaker/volume" glyph (e.g. Feather icons'
+ * "volume-1": box 4x6, horn 5 wide, full height 14, all in a 24-tall
+ * viewBox - a 9:14 width:height ratio, TALLER than wide) rather than
+ * an invented shape - see speaker_icon_draw()'s own comment for why
+ * that matters. */
 #define SPK_ICON_W 16
 #define SPK_ICON_H 24
-#define SPK_ICON_X 661
-#define SPK_ICON_Y (uint16_t)(STATUS_STRIP_Y + (STATUS_STRIP_H - SPK_ICON_H) / 2U)
+#define SPK_ICON_X (uint16_t)(TIME_X - 28U) /* icon right edge lands at TIME_X-12, 2px clear of TIME_TAP_X1 (TIME_X-10) - see this block's own comment */
+#define SPK_ICON_Y (uint16_t)(TIME_Y + 7U - SPK_ICON_H / 2U) /* 7 = half the clock's own scale-2 text height (14px) - centers this icon on the clock's row, now that it lives there */
 
 /*
  * Renders `hz` as a fixed 11-char field "XXX.XXX.XXX" with thousands
@@ -2122,14 +2517,36 @@ static void mode_display_draw(void)
     const char *label;
     uint16_t color;
 
-    switch (demod_am_get_mode()) {
-    case DEMOD_MODE_USB: label = "USB"; color = GFX_COLOR_GREEN; break;
-    case DEMOD_MODE_LSB: label = "LSB"; color = GFX_COLOR_GREEN; break;
-    case DEMOD_MODE_NFM: label = "NFM"; color = GFX_COLOR_ORANGE; break;
-    case DEMOD_MODE_WFM: label = "WFM"; color = GFX_COLOR_CYAN; break;
-    case DEMOD_MODE_SAM: label = "SAM"; color = GFX_COLOR_YELLOW; break;
-    case DEMOD_MODE_AM:
-    default:             label = "AM "; color = GFX_COLOR_YELLOW; break;
+    /* RTTY/FT8 take priority over the underlying demod mode (09/2026,
+     * per the project owner) - both actually run on top of a real SSB
+     * demod mode under the hood (see demod_am_get_mode()'s own value
+     * while either is active), but showing "USB"/"LSB" here while
+     * decoding RTTY or FT8 buries the more useful fact ("I'm in FT8
+     * mode") under an implementation detail nobody's asking about in
+     * the moment - the underlying SSB side is still visible/settable
+     * from the mode menu itself if it's ever needed. All labels
+     * (including the pre-existing USB/LSB/etc. below) are kept at a
+     * FIXED 4 characters, padded with a trailing space where needed
+     * (e.g. "USB " not "USB") - RTTY is the one genuinely 4-character
+     * label, and without padding the others to match, switching
+     * between a 4-char and a 3-char label would leave a ghost 4th
+     * character on screen from whichever was drawn immediately
+     * before (this field is redrawn as a fixed-width block, not
+     * cleared separately first). */
+    if (s_ft8_mode_enabled) {
+        label = "FT8 "; color = GFX_COLOR_CYAN;
+    } else if (rtty_scope_active()) {
+        label = "RTTY"; color = GFX_COLOR_CYAN;
+    } else {
+        switch (demod_am_get_mode()) {
+        case DEMOD_MODE_USB: label = "USB "; color = GFX_COLOR_GREEN; break;
+        case DEMOD_MODE_LSB: label = "LSB "; color = GFX_COLOR_GREEN; break;
+        case DEMOD_MODE_NFM: label = "NFM "; color = GFX_COLOR_ORANGE; break;
+        case DEMOD_MODE_WFM: label = "WFM "; color = GFX_COLOR_CYAN; break;
+        case DEMOD_MODE_SAM: label = "SAM "; color = GFX_COLOR_YELLOW; break;
+        case DEMOD_MODE_AM:
+        default:             label = "AM  "; color = GFX_COLOR_YELLOW; break;
+        }
     }
     gfx_text((uint16_t)MODE_X, MODE_Y, label, color, GFX_COLOR_DARKGRAY, 3);
 }
@@ -2396,47 +2813,41 @@ static void aux_row_display_draw(void)
 }
 
 /*
- * Time-of-day slot. There is NO RTC configured in this project (and
- * no battery-backed clock domain has been brought up) - see
- * s_time_offset_min's own comment for exactly what this shows instead
- * and its one real limitation (doesn't survive a power cycle). When/
- * if the GD32F450's RTC gets configured (needs LXTAL bring-up +
- * calendar init), swap the source here for the real one and drop
- * s_time_offset_min/the SET keypad entirely - nothing else about this
- * function's shape needs to change.
+ * Time-of-day slot. Sourced from the real RTC (rtc_hw.c/h) since its
+ * LXTAL bring-up and the ESP32 NTP link went in - this used to be a
+ * software uptime+offset hack (s_time_offset_min, now dropped
+ * entirely) before either of those existed. Exactly the swap this
+ * function's own old comment already anticipated: "nothing else
+ * about this function's shape needs to change".
  *
- * s_time_offset_min: minutes added to uptime (g_msticks/60000) before
- * wrapping to a 24h wall-clock read, i.e. displayed = (uptime_min +
- * s_time_offset_min) % 1440 - added 08/09/2026, per the project
- * owner: tap the clock readout to type in the actual HH:MM (see
- * menu_time_keypad_show()) instead of only ever showing raw uptime.
- * This is a SOFTWARE offset only, not a real clock - it does not tick
- * while powered off and is NOT persisted to CONFIG.CSV (persisting it
- * would just silently show the wrong time after any real-world delay
- * across a power cycle, which is worse than plainly resetting to
- * uptime=0's offset and needing a re-set - see the project's own
- * settings.h precedent for "don't persist something that would be
- * actively misleading"). Starts at 0 (matches the old raw-uptime
- * behavior) until the first SET.
+ * WIDENED to "HH:MM:SS" (09/2026), per the project owner: with only
+ * HH:MM on screen there was no way to SEE whether the RTC actually
+ * held a correct, live-ticking time (e.g. still stuck on the
+ * 2026-01-01 00:00:00 default epoch because the ESP32's NTP sync
+ * hasn't landed yet) versus just not being able to tell from the
+ * FT8 grid's own behavior alone. Seconds make that immediately
+ * visible - see status_bar_tick()'s own comment for the matching
+ * redraw-throttle change this needed (was minute-granularity, which
+ * would have left a stale second digit on screen for up to 59s).
  */
-static uint32_t s_time_offset_min = 0U;
-
 static void time_display_draw(void)
 {
-    extern volatile uint32_t g_msticks;
-    uint32_t total_min = ((g_msticks / 60000UL) + s_time_offset_min) % 1440UL; /* 1440 = minutes/day - wraps the wall-clock read at 24h */
-    uint32_t hh = total_min / 60UL;
-    uint32_t mm = total_min % 60UL;
-    char buf[6];
+    rtc_hw_datetime_t dt;
+    char buf[9];
 
-    buf[0] = (char)('0' + (hh / 10UL));
-    buf[1] = (char)('0' + (hh % 10UL));
+    rtc_hw_get(&dt);
+
+    buf[0] = (char)('0' + (dt.hour / 10U));
+    buf[1] = (char)('0' + (dt.hour % 10U));
     buf[2] = ':';
-    buf[3] = (char)('0' + (mm / 10UL));
-    buf[4] = (char)('0' + (mm % 10UL));
-    buf[5] = '\0';
+    buf[3] = (char)('0' + (dt.minute / 10U));
+    buf[4] = (char)('0' + (dt.minute % 10U));
+    buf[5] = ':';
+    buf[6] = (char)('0' + (dt.second / 10U));
+    buf[7] = (char)('0' + (dt.second % 10U));
+    buf[8] = '\0';
     gfx_text((uint16_t)TIME_X, TIME_Y, buf,
-             GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, 3);
+             GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, 2); /* scale dropped from 3 to 2 (09/2026 #2) - see TIME_X's own comment for why: at scale 3 "HH:MM:SS" no longer fit next to sam_calib_display_draw()'s field */
 }
 
 /*
@@ -2570,7 +2981,17 @@ static void battery_display_draw(void)
  */
 static void speaker_icon_draw(void)
 {
-    uint16_t color = s_speaker_pa_enabled ? GFX_COLOR_WHITE : GFX_COLOR_DARKGRAY;
+    /* GFX_COLOR_GRAY, not GFX_COLOR_DARKGRAY (09/2026 #2, per the
+     * project owner): this icon now sits right next to the clock
+     * (SPK_ICON_X/Y - see their own comment), whose text background is
+     * GFX_COLOR_DARKGRAY - drawing a disabled/muted icon in that exact
+     * same color would make it functionally invisible against the
+     * clock's own background the moment the two sit side by side.
+     * GFX_COLOR_GRAY is still clearly dimmer than the enabled state's
+     * WHITE (matching how mode_display_draw()'s own disabled/inactive
+     * states already use GRAY as the "off" shade elsewhere in this
+     * file), just not identical to anything it now sits next to. */
+    uint16_t color = s_speaker_pa_enabled ? GFX_COLOR_WHITE : GFX_COLOR_GRAY;
     const uint8_t  box_w = 7U;
     const uint8_t  box_h = 10U; /* centered - the horn's widest opening; see this function's comment for the 7/10/16/24 proportions' origin */
     const uint16_t box_y = (uint16_t)(SPK_ICON_Y + (SPK_ICON_H - box_h) / 2U);
@@ -3436,7 +3857,7 @@ static void badges_draw(void)
  * nothing else sits right of the clock in this bar.
  */
 #define TIME_TAP_X1 (uint16_t)(TIME_X - 10)
-#define TIME_TAP_Y2 36 /* clock text bottom (~TIME_Y+21 at scale 3) plus a few px margin, still short of BATT_Y(40) */
+#define TIME_TAP_Y2 36 /* clock text bottom (~TIME_Y+14 at scale 2 - was scale 3 until TIME_X's own 09/2026 #2 comment) plus a few px margin, still short of BATT_Y(40) */
 
 
 /*
@@ -3591,6 +4012,19 @@ static void spec_span_labels_draw(void)
     int32_t half_span_hz;
     uint32_t panel_center_hz;
     uint8_t i;
+
+    /* Added 09/2026: skip entirely whenever RTTY's scope+text panel or
+     * FT8's text panel is occupying this same screen area instead of
+     * the normal spectrum/waterfall (see the main loop's
+     * rtty_showing/ft8_showing gate) - this function paints straight
+     * into MENU_AREA regardless of who's using it right now, and
+     * every one of its 5 call sites (touch drag-tune, encoder tuning,
+     * step change, etc.) can fire from a touch/encoder gesture no
+     * matter which mode is active, corrupting whatever RTTY/FT8 had
+     * drawn there. */
+    if (rtty_scope_active() || s_ft8_mode_enabled) {
+        return;
+    }
 
     /* *** 01/09/2026: rate-aware via spec_zoom_full_span_hz() *** -
      * see that function's own comment for the full "why" (this used
@@ -5528,12 +5962,6 @@ static void menu_mode_preset_callback(void *widget, ui_event_t event, void *user
         switch (k_demod_modes[idx].rtty_variant) {
         case RTTY_VARIANT_NORMAL:
             rtty_set_mark_space_hz(CONFIG_RTTY_MARK_HZ, CONFIG_RTTY_SPACE_HZ);
-            /* Reapply any active station NORMAL/REVERSE convention on
-             * top of this fresh sideband-mirror base pair - see
-             * rtty_reapply_station_inversion()'s comment in rtty.h.
-             * Without this, switching modes would silently drop the
-             * DIG page's INV tile back to NORMAL even though the tile
-             * itself still reads REVERSE. */
             rtty_reapply_station_inversion();
             rtty_set_enabled(1U);
             break;
@@ -5546,6 +5974,49 @@ static void menu_mode_preset_callback(void *widget, ui_event_t event, void *user
         default:
             rtty_set_enabled(0U);
             break;
+        }
+
+        /* FT8 on/off - same "picking anything else unambiguously
+         * means I'm done with this" reasoning as RTTY_VARIANT_NONE
+         * above. Arms a fresh capture immediately on turning ON (see
+         * ft8_decimator.h/ft8_waterfall_adapter.h); turning OFF just
+         * stops feeding it, whatever partial slot was mid-capture is
+         * simply abandoned. */
+        if (k_demod_modes[idx].is_ft8) {
+            s_ft8_mode_enabled = true;
+            s_ft8_force_reseed_slot = true; /* see its own declaration comment and the main-loop consumer for the full "why" - without this, entering FT8 mode armed a capture immediately instead of waiting for a real :00/:15/:30/:45 boundary */
+            /*
+             * g_ft8_shared_ram (see ft8_shared_ram.h) is a UNION with
+             * the main waterfall's own pixel buffer - the waterfall
+             * legitimately writes into that SAME memory the whole
+             * time the receiver runs in a normal (non-FT8) mode, so
+             * ft8_fft1024_init()'s twiddle/Hann/bit-reversal tables
+             * (last populated at boot) are long overwritten with real
+             * waterfall pixel data by the time someone actually
+             * enters FT8 mode. Re-running init HERE, every time FT8
+             * mode is entered (not just once at boot), guarantees the
+             * tables are fresh and correct at the moment they're
+             * actually needed. Confirmed via real-hardware debug
+             * tracing (09/2026) that skipping this causes a bus fault
+             * inside ft8_fft1024_compute_db()'s load loop (garbage
+             * out-of-range values in s_bitrev[] indexing straight into
+             * the 1024-sample window).
+             */
+            ft8_fft1024_init();
+            ft8_decimator_reset();
+            ft8_waterfall_reset();
+            demod_am_ft8_capture_set_active(true);
+            ft8_text_panel_reset();
+            ft8_text_push_line("FT8 - waiting for next :00/15/30/45 UTC slot...");
+        } else {
+            s_ft8_mode_enabled = false;
+            demod_am_ft8_capture_set_active(false);
+            /* g_ft8_shared_ram (see ft8_shared_ram.h) means the pixels
+             * this same memory just held were FT8's mag[]/FFT tables/
+             * cascade, not waterfall content - clear it so the real
+             * waterfall doesn't briefly show that as garbage on the
+             * way back to a normal mode. */
+            waterfall_init();
         }
 
         debug_print("mode: demodulator now ");
@@ -5627,7 +6098,15 @@ static void menu_mode_list_show(void)
     }
 
     s_menu_detail_back = (ui_button_t){
-        MENU_TILE_COL(0), MENU_TILE_ROW(2), MENU_TILE_W, MENU_TILE_H,
+        /* col 1, not col 0 (09/2026) - with 8 entries this used to sit
+         * on its own free row-2, but the 9th entry (FT8) now lands
+         * exactly at row=2/col=0 (i/4, i%4 - see the loop above), same
+         * cell BACK used to claim, hiding the tile underneath it.
+         * s_menu_detail_back is repositioned independently by every
+         * picker screen that uses it (see the other 4 call sites in
+         * this file) - moving it only here doesn't affect any of
+         * those. */
+        MENU_TILE_COL(1), MENU_TILE_ROW(2), MENU_TILE_W, MENU_TILE_H,
         "BACK", GFX_COLOR_BLACK, GFX_COLOR_YELLOW, GFX_COLOR_WHITE,
         3, 0, 1, menu_tile_exit_callback, NULL};
     ui_screen_add_button(&s_menu_screen, &s_menu_detail_back);
@@ -6056,10 +6535,16 @@ static void menu_time_keypad_clr_callback(void *widget, ui_event_t event, void *
 /*
  * SET - clamps HH to 0-23 and MM to 0-59 (same "clamp rather than
  * reject" policy as every other manual entry field in this file, e.g.
- * the frequency keypad's TUNE_MIN_HZ/MAX_HZ clamp) then solves
- * s_time_offset_min so time_display_draw() reads exactly this HH:MM
- * at THIS instant - see s_time_offset_min's own declaration comment
- * for what it means and its one limitation.
+ * the frequency keypad's TUNE_MIN_HZ/MAX_HZ clamp), then writes
+ * straight into the real RTC via rtc_hw_set() - keeps the RTC's
+ * current date untouched and only overwrites hour/minute (seconds
+ * reset to :00, matching "I just read the time off my phone/watch as
+ * HH:MM" precision). This is a manual override on top of the ESP32
+ * NTP sync (see rtc_hw.c/time_sync.c) - useful before the first
+ * sync lands, or if the ESP32 link isn't populated on a given unit at
+ * all; a later NTP resync will simply overwrite this again with the
+ * FULL_SET's own date, per time_sync.c's unconditional-FULL_SET
+ * design.
  *
  * *** 08/09/2026 - now requires EXACTLY 4 digits, not just "any
  * digits" *** per the project owner's report that "0424" seemed to
@@ -6073,36 +6558,27 @@ static void menu_time_keypad_clr_callback(void *widget, ui_event_t event, void *
  * stricter threshold appropriate to a fixed-width HHMM field (a
  * frequency has no fixed digit count to compare against; a clock
  * does).
- *
- * int32_t intermediate for the delta because uptime_min's own modulo
- * result (0..1439) can legitimately be LARGER than desired_min (e.g.
- * uptime shows 23:50 and the user sets 00:10) - the raw subtraction
- * goes negative there, and one +1440 fixup brings it back into range
- * before the final %1440 (which cannot itself go negative once that
- * fixup ran, since desired_min and uptime_min%1440 are each already
- * within 0..1439).
  */
 static void menu_time_keypad_accept_callback(void *widget, ui_event_t event, void *user_data)
 {
     (void)widget;
     (void)user_data;
     if (event == UI_EVENT_RELEASE && s_time_entry_digits == TIME_ENTRY_MAX_DIGITS) {
-        extern volatile uint32_t g_msticks;
+        rtc_hw_datetime_t dt;
         uint16_t hh = s_time_entry_value / 100U;
         uint16_t mm = s_time_entry_value % 100U;
-        int32_t desired_min;
-        int32_t uptime_min_now;
-        int32_t delta;
 
         if (hh > 23U) { hh = 23U; }
         if (mm > 59U) { mm = 59U; }
-        desired_min = (int32_t)hh * 60 + (int32_t)mm;
-        uptime_min_now = (int32_t)((g_msticks / 60000UL) % 1440UL);
-        delta = desired_min - uptime_min_now;
-        if (delta < 0) { delta += 1440; }
-        s_time_offset_min = (uint32_t)delta;
 
-        debug_print_dec("clock: set, offset minutes now", s_time_offset_min);
+        rtc_hw_get(&dt); /* keep the current date, only overwrite HH:MM - see this function's comment */
+        dt.hour   = (uint8_t)hh;
+        dt.minute = (uint8_t)mm;
+        dt.second = 0U;
+        rtc_hw_set(&dt);
+
+        debug_print_dec("clock: manually set via keypad, hour", dt.hour);
+        debug_print_dec("clock: manually set via keypad, minute", dt.minute);
         time_display_draw(); /* top bar - instant feedback, don't wait for the next periodic tick */
         menu_screen_close();
     }
@@ -7105,6 +7581,287 @@ static void rf_agc_poll(void)
 #define RTTY_SCOPE_GAP_H   2U /* thin gap between the scope trace and the text panel, same idea as WF_PANEL_Y's own "64+280+2" gap from the normal spectrum panel */
 #define RTTY_SCOPE_TRACE_H (uint16_t)(RTTY_TEXT_PANEL_Y - SPEC_Y - RTTY_SCOPE_GAP_H) /* 358 - 144 - 2 = 212, replaces the old SPEC_H-based bar_area_h */
 
+/* FT8 has no dedicated scope/cascade of its own yet (see
+ * ft8_waterfall_adapter.h's pending work) - this just blanks the same
+ * trace area RTTY's scope occupies, once, on switching into FT8 mode,
+ * so it doesn't show whatever the PREVIOUS mode's spectrum last
+ * painted there. Defined here (not earlier, where it's called from
+ * main()'s loop) because SPEC_Y/RTTY_SCOPE_TRACE_H aren't in scope
+ * yet at that point in the file - same "wrapper function instead of
+ * the raw macro" reasoning as every other main()-loop call into this
+ * block of RTTY/FT8 display code. */
+static void ft8_scope_area_clear(void)
+{
+    gfx_fill_rect(0, SPEC_Y, MAIN_W, RTTY_SCOPE_TRACE_H, GFX_COLOR_BLACK);
+}
+
+#if DEBUG_UART_ENABLED
+/* Diagnostic status readout - see its call site in main() for why.
+ * Fixed position, overwritten every frame - not part of the scrolling
+ * text panel. */
+static void ft8_status_draw(bool running, int num_blocks, uint32_t total_decoded, uint32_t last_proc_ms, uint32_t last_capture_ms, uint32_t last_raw_samples, uint32_t last_isr_calls, uint32_t arm_count, int last_num_candidates, uint32_t arm_rtc_sec)
+{
+    char line1[64];
+    char line2[80];
+    char line3[80];
+    int p;
+    uint32_t free_stack = stack_watermark_get_free_bytes();
+
+    /* Split across two lines (09/2026, per the project owner: the
+     * single-line version ran off the right edge of the screen once
+     * proc_ms/capms/ins/isr were all added for the slot-drift
+     * investigation). RTTY_TEXT_LINE_H (18px: 14px glyph height at
+     * scale 2 + 4px leading) is this project's own established
+     * spacing for stacked scale-2 text lines - reused here for
+     * consistency rather than inventing a different gap. */
+
+    p = 0;
+    line1[p++] = 'r'; line1[p++] = 'u'; line1[p++] = 'n'; line1[p++] = '=';
+    line1[p++] = running ? 'Y' : 'N';
+    line1[p++] = ' '; line1[p++] = 'b'; line1[p++] = 'l'; line1[p++] = 'k'; line1[p++] = '=';
+    if (num_blocks >= 100) { line1[p++] = (char)('0' + (num_blocks/100)%10); }
+    if (num_blocks >= 10)  { line1[p++] = (char)('0' + (num_blocks/10)%10); }
+    line1[p++] = (char)('0' + num_blocks%10);
+    line1[p++] = '/'; line1[p++] = '9'; line1[p++] = '3';
+    /* stack_watermark_get_free_bytes() (09/2026) - added to check a
+     * concrete suspicion after the FT8 window widened to 1600Hz: a
+     * LOT of new code (the 1024-pt FFT, the cascade, the resampler)
+     * went in since this was last measured (see stack_watermark.h's
+     * own history) - if this reads low/zero, stack is genuinely
+     * tight and could be corrupting nearby memory (which may well
+     * include g_ft8_shared_ram - see ft8_shared_ram.h), a very
+     * different fix than a dB calibration issue. */
+    line1[p++] = ' '; line1[p++] = 's'; line1[p++] = 't'; line1[p++] = 'k'; line1[p++] = '=';
+    {
+        uint32_t v = free_stack;
+        if (v >= 10000U) { line1[p++] = (char)('0' + (v/10000U)%10U); }
+        if (v >= 1000U)  { line1[p++] = (char)('0' + (v/1000U)%10U); }
+        if (v >= 100U)   { line1[p++] = (char)('0' + (v/100U)%10U); }
+        if (v >= 10U)    { line1[p++] = (char)('0' + (v/10U)%10U); }
+        line1[p++] = (char)('0' + v%10U);
+    }
+    /* Total decodes since boot (09/2026, per the project owner's
+     * request) - lets you tell at a glance how productive a given
+     * band/time/tuning is while experimenting, without having to
+     * scroll back through the text panel and count lines yourself. */
+    line1[p++] = ' '; line1[p++] = 'c'; line1[p++] = 'n'; line1[p++] = 't'; line1[p++] = '=';
+    {
+        uint32_t v = total_decoded;
+        if (v >= 10000U) { line1[p++] = (char)('0' + (v/10000U)%10U); }
+        if (v >= 1000U)  { line1[p++] = (char)('0' + (v/1000U)%10U); }
+        if (v >= 100U)   { line1[p++] = (char)('0' + (v/100U)%10U); }
+        if (v >= 10U)    { line1[p++] = (char)('0' + (v/10U)%10U); }
+        line1[p++] = (char)('0' + v%10U);
+    }
+    line1[p] = '\0';
+    gfx_text(4, (uint16_t)(SPEC_Y + 2), line1, GFX_COLOR_WHITE, GFX_COLOR_BLACK, 2);
+
+    p = 0;
+    /* Real wall-clock cost of the last ft8_decoder_process_slot() call
+     * (09/2026, per the project owner's slot-overlap concern - see
+     * the slot-index tracking comment above for the full "why"): lets
+     * you directly confirm how much of the ~2.4s slack between the
+     * 93-block capture (14.88s) and the full 15s slot period this is
+     * actually using, instead of guessing. */
+    line2[p++] = 'p'; line2[p++] = 'r'; line2[p++] = 'o'; line2[p++] = 'c'; line2[p++] = '=';
+    {
+        uint32_t v = last_proc_ms;
+        if (v >= 10000U) { line2[p++] = (char)('0' + (v/10000U)%10U); }
+        if (v >= 1000U)  { line2[p++] = (char)('0' + (v/1000U)%10U); }
+        if (v >= 100U)   { line2[p++] = (char)('0' + (v/100U)%10U); }
+        if (v >= 10U)    { line2[p++] = (char)('0' + (v/10U)%10U); }
+        line2[p++] = (char)('0' + v%10U);
+    }
+    /* Real wall-clock ms from ft8_decimator_reset() to
+     * ft8_waterfall_is_full() (09/2026) - see s_ft8_last_capture_ms's
+     * own declaration comment in the main loop for the full "why":
+     * this should read ~14880 if the audio sample clock genuinely
+     * runs at 3200Hz as assumed - a consistent, meaningfully different
+     * reading here is direct evidence of an audio/RTC clock-rate
+     * mismatch, not something fixable by adjusting the boundary-
+     * detection logic alone. */
+    line2[p++] = ' '; line2[p++] = 'c'; line2[p++] = 'a'; line2[p++] = 'p'; line2[p++] = 'm'; line2[p++] = 's'; line2[p++] = '=';
+    {
+        uint32_t v = last_capture_ms;
+        if (v >= 10000U) { line2[p++] = (char)('0' + (v/10000U)%10U); }
+        if (v >= 1000U)  { line2[p++] = (char)('0' + (v/1000U)%10U); }
+        if (v >= 100U)   { line2[p++] = (char)('0' + (v/100U)%10U); }
+        if (v >= 10U)    { line2[p++] = (char)('0' + (v/10U)%10U); }
+        line2[p++] = (char)('0' + v%10U);
+    }
+    /* Raw input samples counted for the last capture, completely
+     * independent of the resampler's own bookkeeping (09/2026) - see
+     * ft8_decimator_get_raw_sample_count()'s comment. Divide this by
+     * (capms/1000) to get the true measured input sample rate - should
+     * read ~12000 if the audio pipeline genuinely runs at the rate
+     * this whole project assumes. */
+    line2[p++] = ' '; line2[p++] = 'i'; line2[p++] = 'n'; line2[p++] = 's'; line2[p++] = '=';
+    {
+        uint32_t v = last_raw_samples;
+        if (v >= 100000U) { line2[p++] = (char)('0' + (v/100000U)%10U); }
+        if (v >= 10000U)  { line2[p++] = (char)('0' + (v/10000U)%10U); }
+        if (v >= 1000U)   { line2[p++] = (char)('0' + (v/1000U)%10U); }
+        if (v >= 100U)    { line2[p++] = (char)('0' + (v/100U)%10U); }
+        if (v >= 10U)     { line2[p++] = (char)('0' + (v/10U)%10U); }
+        line2[p++] = (char)('0' + v%10U);
+    }
+    /* Raw ISR-invocation delta across the last capture (09/2026) - see
+     * demod_am_get_isr_call_count()'s own comment for the full "why":
+     * isr*1000/capms should read ~375 (96K front end) or ~187.5 (48K
+     * front end) if the audio ISR itself fires at
+     * front_end_rate/SDR_RX_BLOCK_SAMPLES as this project assumes -
+     * checked with NO decimation math from this project in between,
+     * to isolate DMA/I2S/codec timing from a possible bug in this
+     * file's own decimation bookkeeping. */
+    line2[p++] = ' '; line2[p++] = 'i'; line2[p++] = 's'; line2[p++] = 'r'; line2[p++] = '=';
+    {
+        uint32_t v = last_isr_calls;
+        if (v >= 10000U) { line2[p++] = (char)('0' + (v/10000U)%10U); }
+        if (v >= 1000U)  { line2[p++] = (char)('0' + (v/1000U)%10U); }
+        if (v >= 100U)   { line2[p++] = (char)('0' + (v/100U)%10U); }
+        if (v >= 10U)    { line2[p++] = (char)('0' + (v/10U)%10U); }
+        line2[p++] = (char)('0' + v%10U);
+    }
+    line2[p] = '\0';
+    gfx_text(4, (uint16_t)(SPEC_Y + 2 + 18U), line2, GFX_COLOR_WHITE, GFX_COLOR_BLACK, 2);
+
+    /* On-screen arm-cycle diagnostic (09/2026) - see s_ft8_arm_count's
+     * own declaration comment in the main loop for the full "why":
+     * cyc= increments once per real arm - if it's not moving at all
+     * while blk cycles, this exact code path isn't the one running.
+     * (The old tgt=/now= fields, meaningful only for the g_msticks-
+     * target scheduling design this project has since moved away
+     * from - see this whole block's own top comment - are gone; rsec=
+     * below IS the scheduling ground truth now, not a readback of a
+     * separately-computed target.) */
+    p = 0;
+    line3[p++] = 'c'; line3[p++] = 'y'; line3[p++] = 'c'; line3[p++] = '=';
+    {
+        uint32_t v = arm_count;
+        if (v >= 10000U) { line3[p++] = (char)('0' + (v/10000U)%10U); }
+        if (v >= 1000U)  { line3[p++] = (char)('0' + (v/1000U)%10U); }
+        if (v >= 100U)   { line3[p++] = (char)('0' + (v/100U)%10U); }
+        if (v >= 10U)    { line3[p++] = (char)('0' + (v/10U)%10U); }
+        line3[p++] = (char)('0' + v%10U);
+    }
+    /* Candidate count from the last decode (09/2026) - see
+     * ft8_decoder_get_last_num_candidates()'s own comment: lets you
+     * correlate a busy band (more candidates -> more LDPC decode work
+     * -> higher proc=) directly against the arm-cycle drift, instead
+     * of guessing whether that's the cause. */
+    line3[p++] = ' '; line3[p++] = 'c'; line3[p++] = 'a'; line3[p++] = 'n'; line3[p++] = 'd'; line3[p++] = '=';
+    {
+        int v = last_num_candidates;
+        if (v < 0) { v = 0; }
+        if (v >= 100) { line3[p++] = (char)('0' + (v/100)%10); }
+        if (v >= 10)  { line3[p++] = (char)('0' + (v/10)%10); }
+        line3[p++] = (char)('0' + v%10);
+    }
+    /* RTC second-of-minute the last arm actually fired on (09/2026) -
+     * this IS the scheduling trigger itself now (see this whole
+     * block's own top-of-function comment and the main loop's RTC-
+     * edge-detector), not a separate readback of some other target -
+     * so this should read EXACTLY 0, 15, 30 or 45 every single time,
+     * with no exceptions. Any other value here would mean the RTC
+     * itself briefly reported something other than a true multiple of
+     * 15 at the instant of an arm - which the edge-detector's own
+     * "% 15 == 0" check makes structurally impossible, so this field
+     * is now mostly a sanity check that the wiring between the arm
+     * site and this readout is correct, rather than a drift detector
+     * in its own right. */
+    line3[p++] = ' '; line3[p++] = 'r'; line3[p++] = 's'; line3[p++] = 'e'; line3[p++] = 'c'; line3[p++] = '=';
+    {
+        uint32_t v = arm_rtc_sec;
+        if (v >= 10U) { line3[p++] = (char)('0' + (v/10U)%10U); }
+        line3[p++] = (char)('0' + v%10U);
+    }
+    line3[p] = '\0';
+    gfx_text(4, (uint16_t)(SPEC_Y + 2 + 36U), line3, GFX_COLOR_YELLOW, GFX_COLOR_BLACK, 2);
+
+    /* LXTAL failure warning (09/2026) - see rtc_hw_lxtal_failed()'s
+     * own comment for the full "why": only drawn when true, so this
+     * never clutters the normal display - if the crystal never
+     * confirmed stable, every RTC-driven boundary/timestamp in this
+     * whole FT8 pipeline is running on an unconfirmed clock, which is
+     * a far more important thing to know at a glance than any of the
+     * other diagnostic fields above. */
+    if (rtc_hw_lxtal_failed())
+    {
+        gfx_text(4, (uint16_t)(SPEC_Y + 2 + 54U), "*** RTC LXTAL FAILED - TIMING UNRELIABLE ***", GFX_COLOR_RED, GFX_COLOR_BLACK, 2);
+    }
+}
+#endif /* DEBUG_UART_ENABLED */
+
+/* FT8's trace area splits into two: a thin live bar spectrum on top
+ * (cheap, redrawn every subblock - see ft8_spectrum_draw()) and a
+ * scrolling cascade below it (see ft8_cascade_draw(), redrawn less
+ * often - it's the more expensive one). */
+#define FT8_CASCADE_GAP_H 2U
+#define FT8_CASCADE_AREA_Y (uint16_t)(SPEC_Y + FT8_CASCADE_GAP_H)
+#define FT8_CASCADE_AREA_H (uint16_t)(RTTY_SCOPE_TRACE_H - FT8_CASCADE_GAP_H)
+
+
+/*
+ * Scrolling cascade for FT8's search window (09/2026) - shows the
+ * last FT8_WF_HISTORY_ROWS subblocks (see ft8_waterfall_adapter.c),
+ * so a weak/intermittent signal that came and went a few seconds ago
+ * is still visible, not just an instantaneous snapshot.
+ *
+ * Scroll speed is throttled at the SOURCE (FT8_WF_ROW_PERIOD in
+ * ft8_waterfall_adapter.c - a new row only gets pushed every 4th
+ * subblock, ~320ms), not by skipping redraws here - per the project
+ * owner, throttling only the redraw made the cascade jump 4 rows at
+ * once each time it repainted (the data kept shifting every subblock
+ * underneath, redraw or not). Polling ft8_waterfall_get_row_counter()
+ * here means this only ever redraws when a genuinely new row exists,
+ * so each repaint is a smooth one-row scroll at the slower rate,
+ * never a multi-row jump.
+ *
+ * No diffing against the previous frame - blanks and redraws the
+ * whole cascade area every time it runs, simplest correct approach
+ * given it now uses the full trace area (no separate bar-spectrum
+ * region to share space with anymore). If it still feels heavy,
+ * FT8_WF_ROW_PERIOD (slower scroll) or FT8_WF_HISTORY_ROWS (fewer
+ * gfx_fill_rect() calls per redraw) are the two levers - both live in
+ * ft8_waterfall_adapter.c.
+ */
+static void ft8_cascade_draw(void)
+{
+    const uint8_t *hist;
+    int rows, cols;
+    uint16_t cell_w, cell_h;
+    int r, c;
+
+    ft8_waterfall_get_history(&hist, &rows, &cols);
+    cell_w = (uint16_t)(MAIN_W / (uint16_t)cols);
+    cell_h = (uint16_t)(FT8_CASCADE_AREA_H / (uint16_t)rows);
+    if (cell_h < 1U) { cell_h = 1U; }
+
+    for (r = 0; r < rows; r++) {
+        for (c = 0; c < cols; c++) {
+            uint8_t v = hist[(r * cols) + c];
+            /* Follows the MAIN spectrum/waterfall's own selected
+             * palette (09/2026 #6, per the project owner) via
+             * spectrum_colormap() - the same public LUT lookup
+             * spectrum_draw() itself uses, so switching palettes from
+             * the settings menu (VIRIDIS/INFERNO/TURBO/GRAYSCALE/...)
+             * now re-colors this cascade too, automatically, with no
+             * separate palette state of its own to keep in sync.
+             * Passing (v, 0, 255) rather than a real dB range: v is
+             * ALREADY a 0-255 intensity byte (see
+             * ft8_waterfall_adapter.c), and spectrum_colormap()'s own
+             * normalization ((db-db_min)/(db_max-db_min)*255) reduces
+             * to the identity for exactly that range - v goes straight
+             * to s_lut[v], the same direct index the raw stored byte
+             * always was, just through the shared LUT instead of a
+             * hardcoded green-only mapping. */
+            uint16_t color = spectrum_colormap((float)v, 0.0f, 255.0f);
+            gfx_fill_rect((uint16_t)(c * cell_w), (uint16_t)(FT8_CASCADE_AREA_Y + (r * cell_h)),
+                          cell_w, cell_h, color);
+        }
+    }
+}
+
 #define RTTY_TEXT_SCALE    2U
 #define RTTY_TEXT_LINE_H   18U /* 7px glyph (gfx_font.h's GFX_FONT_HEIGHT) * scale 2 = 14, +4 leading */
 #define RTTY_TEXT_CHAR_W   12U /* (5+1)px * scale 2 - mirrors gfx.c's own per-glyph step formula (gfx_font.h isn't included outside gfx.c, so this is a plain literal like RTTY_TEXT_COLS' comment already is) */
@@ -7251,6 +8008,243 @@ static void rtty_text_push(char c)
         s_rtty_text_last_was_eol = 0U;
         rtty_text_putc(c);
     }
+}
+
+/*
+ * FT8's OWN scrolling history (09/2026 #2) - used to reuse RTTY's
+ * panel wholesale (rtty_text_push_line(), one line at a time through
+ * the same char-at-a-time grid RTTY's live decode stream uses). Split
+ * into its own, much simpler grid instead, per the project owner
+ * (500+ decodes a session, only the last ~8 ever visible): unlike
+ * RTTY's continuous character stream (where the incremental,
+ * flicker-free draw path genuinely matters - see s_rtty_text_draw_row/
+ * col's comment), FT8 only ever pushes a handful of WHOLE lines at
+ * once, at most once per ~15s slot - far too slow a rate for a
+ * gfx_fill_rect()-then-redraw flash to read as flicker, so this skips
+ * that whole optimization and just always fully repaints when
+ * anything changed. That simplicity is what makes the cascade-
+ * reclaiming 2-column expanded layout below tractable: RTTY's own
+ * grid/draw code (above) is completely untouched by any of this.
+ *
+ * FT8_TEXT_ROWS(32) is sized for the EXPANDED (cascade-hidden)
+ * 2-column view (16 rows/column - see ft8_text_panel_draw()); the
+ * compact (cascade-visible) view just shows the most recent 8 of
+ * whatever's stored, same look as the old shared-panel days.
+ */
+#define FT8_TEXT_ROWS 32U
+
+static char    s_ft8_text_grid[FT8_TEXT_ROWS][RTTY_TEXT_COLS + 1U]; /* +1 NUL per row - reuses RTTY's own COLS/CHAR_W/LINE_H/SCALE constants, just a separate grid */
+static uint8_t s_ft8_text_row_len[FT8_TEXT_ROWS];
+static uint8_t s_ft8_text_count;      /* how many of the FT8_TEXT_ROWS slots hold a real line so far - grows 0..FT8_TEXT_ROWS, then stays there (oldest dropped on every push past that point) */
+static bool    s_ft8_text_full_redraw = true; /* starts true so the very first draw after boot/mode-entry paints the (blank) area once */
+
+/* Blanks FT8's own grid - called on genuinely (re-)entering FT8 mode
+ * fresh (mirrors rtty_text_panel_reset()'s own "fresh mode entry"
+ * role, but for FT8's separate storage - RTTY's scrollback is
+ * untouched either way now, since the two no longer share a grid at
+ * all). */
+static void ft8_text_panel_reset(void)
+{
+    uint8_t r;
+
+    for (r = 0; r < FT8_TEXT_ROWS; r++) {
+        s_ft8_text_grid[r][0] = '\0';
+        s_ft8_text_row_len[r] = 0U;
+    }
+    s_ft8_text_count = 0U;
+    ft8_text_force_redraw();
+}
+
+/* Forces the next ft8_text_panel_draw() to fully repaint - used both
+ * after a genuine content change (every push, see below) and after a
+ * layout change (s_ft8_cascade_visible toggled, or switching back
+ * into FT8 after the menu covered this area) - unlike RTTY's version
+ * of this, there's no cheaper incremental path to fall back to here,
+ * so this is really just a "content or layout is now stale, repaint
+ * on the next call" flag. */
+static void ft8_text_force_redraw(void)
+{
+    s_ft8_text_full_redraw = true;
+}
+
+/* Appends one whole decoded line (or the mode-entry placeholder
+ * message) - see this block's own top comment for why FT8 gets this
+ * much simpler whole-line model instead of RTTY's character-at-a-time
+ * one. Truncates to RTTY_TEXT_COLS if somehow longer (shouldn't
+ * happen for a real FT8 message, which the protocol itself keeps
+ * short, but the placeholder/diagnostic strings are hand-written and
+ * worth guarding anyway). */
+static void ft8_text_push_line(const char *s)
+{
+    uint8_t row, len;
+
+    if (s_ft8_text_count < FT8_TEXT_ROWS) {
+        row = s_ft8_text_count;
+        s_ft8_text_count++;
+    } else {
+        uint8_t r;
+        for (r = 0; r < (FT8_TEXT_ROWS - 1U); r++) {
+            uint8_t i;
+            for (i = 0; i <= s_ft8_text_row_len[r + 1U]; i++) { /* <= to copy the NUL too */
+                s_ft8_text_grid[r][i] = s_ft8_text_grid[r + 1U][i];
+            }
+            s_ft8_text_row_len[r] = s_ft8_text_row_len[r + 1U];
+        }
+        row = FT8_TEXT_ROWS - 1U;
+    }
+
+    len = 0U;
+    while (s[len] != '\0' && len < RTTY_TEXT_COLS) {
+        s_ft8_text_grid[row][len] = s[len];
+        len++;
+    }
+    s_ft8_text_grid[row][len] = '\0';
+    s_ft8_text_row_len[row] = len;
+
+    ft8_text_force_redraw();
+}
+
+/*
+ * Paints FT8's history - always a full repaint when
+ * s_ft8_text_full_redraw is set (see its own comment for why that's
+ * fine here, unlike RTTY's panel). Two layouts, chosen by
+ * s_ft8_cascade_visible (see its own comment), differing ONLY in how
+ * much vertical space is available - both are a single column, full
+ * MAIN_W wide:
+ *
+ *   - COMPACT (cascade visible): the same small RTTY_TEXT_PANEL_Y/H
+ *     footprint FT8 always used, showing only the most recent 8 of
+ *     whatever's stored - unchanged look from before this split.
+ *   - EXPANDED (cascade hidden): reclaims the WHOLE combined region
+ *     from SPEC_Y down (the cascade's own area plus the normal text
+ *     panel) for MORE rows of the SAME single column - roughly 2x the
+ *     compact view's visible history, addressing the project owner's
+ *     "500+ decodes, only a few ever visible" complaint.
+ *
+ * TRIED two side-by-side columns here first (09/2026 #3) and reverted
+ * (09/2026 #4), per the project owner catching two real problems with
+ * it: (1) splitting the available height across 2 columns roughly
+ * HALVES the row count per column for the SAME total screen space -
+ * 318px/18px-per-row is 17 rows total either way, so 2 columns only
+ * ever gets ~8 rows each, which visibly failed to reach anywhere near
+ * the bottom of the reclaimed region, wasting most of it; and (2) a
+ * real decoded line (UTC time, SNR, frequency offset, callsign, grid
+ * square - and the project owner's own planned addition, distance to
+ * the receiving station's grid square) routinely runs past a half-
+ * screen-wide column's ~33 characters, visibly overlapping into the
+ * neighboring column. A single column sidesteps both: full 17 rows
+ * used, full MAIN_W width available per line.
+ */
+static void ft8_text_panel_draw(void)
+{
+    uint16_t region_y, region_h;
+    uint8_t shown_rows;
+    uint8_t avail, to_show, first_src, i;
+
+    if (!s_ft8_text_full_redraw) {
+        return;
+    }
+
+    if (s_ft8_cascade_visible) {
+        region_y = RTTY_TEXT_PANEL_Y;
+        region_h = RTTY_TEXT_PANEL_H;
+    } else {
+        region_y = SPEC_Y;
+        region_h = (uint16_t)((WF_PANEL_Y + WATERFALL_ROWS + 4U) - SPEC_Y); /* reclaims the cascade's own FT8_CASCADE_AREA_Y/H region too, AND the original compact panel's own footprint at the bottom - the whole combined span MENU_AREA_H already computes, all as one column now */
+    }
+    shown_rows = (uint8_t)(region_h / RTTY_TEXT_LINE_H); /* computed from whichever region_h just got picked, not hardcoded - always fits exactly, using the FULL height either way now that there's only one column */
+    if (shown_rows > FT8_TEXT_ROWS) {
+        shown_rows = FT8_TEXT_ROWS; /* can't show more than is actually stored - only matters if the region ever grows past FT8_TEXT_ROWS*LINE_H, not the case today but a cheap guard against s_ft8_text_grid overrun if it ever does */
+    }
+    /* Reserve the LAST row for the own-grid/decode-count badge below,
+     * in BOTH layouts (09/2026 #7, per the project owner's request to
+     * bring back an always-visible reception count, plus which grid
+     * this is all being measured from) - drawn separately from the
+     * scrolling decode lines rather than sharing a row with the most
+     * recent one, so a long decoded line can never run into it. Costs
+     * exactly one line of history each layout (7 instead of 8 compact,
+     * 16 instead of 17 expanded) - negligible against what it buys:
+     * a fixed, predictable corner readout that's never pushed off
+     * screen or overwritten by scrolling content. */
+    if (shown_rows > 0U) { shown_rows--; }
+
+    gfx_fill_rect(0, region_y, MAIN_W, region_h, GFX_COLOR_BLACK);
+
+    avail = s_ft8_text_count;
+    to_show = (avail < shown_rows) ? avail : shown_rows;
+    first_src = (uint8_t)(avail - to_show); /* oldest of the ones about to be shown - during the first few minutes after entering FT8 (avail < shown_rows), this is just 0, showing everything received so far starting from the top */
+
+    for (i = 0; i < to_show; i++) {
+        uint8_t src = (uint8_t)(first_src + i);
+        if (s_ft8_text_row_len[src] > 0U) {
+            uint16_t y = (uint16_t)(region_y + 4U + (uint16_t)i * RTTY_TEXT_LINE_H);
+            gfx_text(4, y, s_ft8_text_grid[src], GFX_COLOR_GREEN, GFX_COLOR_BLACK, RTTY_TEXT_SCALE);
+        }
+    }
+
+    /* Own-grid + total-decoded-count badge - bottom-right corner of
+     * whichever region was just cleared above, own reserved row (see
+     * the comment on shown_rows-- above), right-aligned. Built by hand
+     * (no snprintf on this target) the same way every other on-screen
+     * counter in this file is. Labels "GRID:"/"CNT:" added (09/2026 #2,
+     * per the project owner) since two bare numbers/strings side by
+     * side read ambiguously at a glance - grid comes from
+     * ft8_decoder_get_own_grid() - empty if nothing valid is currently
+     * set (see its own comment), in which case "GRID:" is skipped
+     * entirely rather than shown with nothing after it.
+     *
+     * Folds in the "no recent time sync" warning too (09/2026) - see
+     * sync_warning_active()'s own comment for the full "why" and the
+     * shared 6-hour threshold. FT8 alignment depends entirely on the
+     * RTC being correct (see this whole file's RTC-driven scheduling
+     * above), so this is exactly the mode where an unnoticed stale
+     * clock matters most - shown HERE, FT8-only (see
+     * sync_warning_active()'s own comment on why this is no longer
+     * shown in any other mode), and kept fresh even with no other FT8
+     * activity happening by sync_status_poll()'s own edge-detection. */
+    {
+        char badge[48];
+        int p = 0;
+        const char *grid = ft8_decoder_get_own_grid();
+        uint32_t count = ft8_decoder_get_total_count();
+        uint16_t badge_x, badge_y;
+        uint16_t badge_color = GFX_COLOR_CYAN;
+
+        if (*grid != '\0') {
+            static const char label[] = "GRID:";
+            int i;
+            for (i = 0; label[i] != '\0' && p < (int)sizeof(badge) - 1; i++) { badge[p++] = label[i]; }
+            while (*grid != '\0' && p < (int)sizeof(badge) - 1) { badge[p++] = *grid++; }
+            if (p < (int)sizeof(badge) - 1) { badge[p++] = ' '; }
+            if (p < (int)sizeof(badge) - 1) { badge[p++] = ' '; }
+        }
+        {
+            static const char label[] = "CNT:";
+            int i;
+            for (i = 0; label[i] != '\0' && p < (int)sizeof(badge) - 1; i++) { badge[p++] = label[i]; }
+        }
+        {
+            char digits[10];
+            int nd = 0;
+            uint32_t v = count;
+            if (v == 0U) { digits[nd++] = '0'; }
+            while (v > 0U && nd < (int)sizeof(digits)) { digits[nd++] = (char)('0' + (v % 10U)); v /= 10U; }
+            while (nd > 0 && p < (int)sizeof(badge) - 1) { badge[p++] = digits[--nd]; }
+        }
+        if (sync_warning_active()) {
+            static const char suffix[] = "  NO TIME SYNC";
+            int i;
+            for (i = 0; suffix[i] != '\0' && p < (int)sizeof(badge) - 1; i++) { badge[p++] = suffix[i]; }
+            badge_color = GFX_COLOR_RED;
+        }
+        badge[p] = '\0';
+
+        badge_x = (uint16_t)(MAIN_W - 4U - (uint16_t)(p * ((5 + 1) * RTTY_TEXT_SCALE))); /* 5 = GFX_FONT_WIDTH (gfx_font.h, not visible from here - see gfx_char()'s own step calc for where this exact "+1, *scale" shape comes from) */
+        badge_y = (uint16_t)(region_y + region_h - RTTY_TEXT_LINE_H + 4U);
+        gfx_text(badge_x, badge_y, badge, badge_color, GFX_COLOR_BLACK, RTTY_TEXT_SCALE);
+    }
+
+    s_ft8_text_full_redraw = false;
 }
 
 /*
@@ -7578,15 +8572,22 @@ static void tune_encoder_poll(void)
     if (s_encoder_target == ENCODER_TARGET_VOLUME) {
         uint8_t volume_activity = 0U;
 
-        /* Volume mode: the encoder button still cycles the tune step
-         * (ready for when you flip back) - but only draw it if the
-         * main screen is actually showing; STEP's position doesn't
-         * exist on the menu detail view (see s_menu_open's checks
-         * throughout this function). */
+        /* Changed 09/2026 #2, per the project owner: pressing used to
+         * cycle the tune step here ("ready for when you flip back") -
+         * but now that a press from TUNE jumps straight into VOLUME
+         * (see this function's TUNE-target press handler, below), a
+         * second press reads naturally as "I'm done adjusting volume",
+         * not "let me also change the step while I'm here". Mirrors
+         * s_btn_vol's own toggle-back-to-TUNE behavior exactly, so the
+         * knob and the VOL button always agree on what a press means
+         * in this target. Returns immediately - once the target's
+         * changed, this poll's detents/timeout below no longer apply
+         * to VOLUME at all. */
         if (press) {
-            set_tune_step_idx((uint8_t)((s_tune_step_idx + 1U) % TUNE_STEP_COUNT));
-            if (!s_menu_open) { step_display_draw(); }
-            volume_activity = 1U;
+            s_encoder_target = ENCODER_TARGET_TUNE;
+            debug_print("encoder: press - knob back to TUNE\n");
+            aux_row_display_draw();
+            return;
         }
 
         if (detents != 0) {
@@ -7814,9 +8815,22 @@ static void tune_encoder_poll(void)
     }
 
     if (press) {
-        set_tune_step_idx((uint8_t)((s_tune_step_idx + 1U) % TUNE_STEP_COUNT));
-        debug_print_dec("tune: step now Hz", k_tune_steps[s_tune_step_idx]);
-        step_display_draw();
+        /* Changed 09/2026, per the project owner: this used to cycle
+         * the tune step directly (set_tune_step_idx()) - STEP already
+         * got its own dedicated picker list via the STEP button
+         * (menu_step_list_show(), see demo_button_callback()'s own
+         * comment) a while back, leaving this click as a redundant,
+         * less discoverable way to reach the same thing. Now mirrors
+         * s_btn_vol's own behavior instead: jumps the encoder target
+         * straight to VOLUME, so a knob click gives quick volume
+         * access without reaching for the VOL button - same
+         * inactivity-timeout arming and aux-row redraw s_btn_vol
+         * itself does, so this behaves identically whichever way you
+         * get there. */
+        s_encoder_target = ENCODER_TARGET_VOLUME;
+        s_volume_target_last_ms = g_msticks; /* starts the inactivity timeout - see its own comment */
+        debug_print("encoder: press - knob now controls VOLUME\n");
+        aux_row_display_draw();
     }
 
     if (detents != 0) {
@@ -8323,6 +9337,21 @@ static void demo_touch_poll(void)
      * for the clock-setting keypad (08/09/2026) - see TIME_TAP_X1/Y2's
      * and menu_time_keypad_show()'s comments. */
     static uint8_t s_time_tap_active = 0U;
+    /* s_cascade_tap_active (09/2026): a tap inside FT8's decode-display
+     * area (while FT8 mode is showing) toggles s_ft8_cascade_visible -
+     * see s_ft8_cascade_visible's own comment. WIDENED (09/2026 #2, per
+     * the project owner) to the FULL combined region (SPEC_Y down to
+     * the same bottom edge ft8_text_panel_draw()'s expanded layout
+     * uses), not just the original narrow cascade strip
+     * (FT8_CASCADE_AREA_Y/H) - the expanded view visually fills that
+     * whole region, so the tap-to-toggle zone needs to match what the
+     * user actually sees as "the detections area", not the technical
+     * sub-region the cascade itself used to occupy alone. Same
+     * "decide on press, honor on release" shape as the other special
+     * zones above; s_spec_drag_active below is now excluded for the
+     * whole of FT8 mode (not just this zone) for the same reason - see
+     * its own comment. */
+    static uint8_t s_cascade_tap_active = 0U;
     uint16_t x = 0, y = 0;
     uint8_t pressed = touch_read(&x, &y);
 
@@ -8345,13 +9374,29 @@ static void demo_touch_poll(void)
          * coordinates can be garbage). s_spec_drag_hz_accum/
          * s_spec_drag_moved both reset here too - a fresh gesture
          * starts clean, regardless of whatever a previous one left
-         * behind. */
-        s_spec_drag_active = (uint8_t)(!s_touch_owner_is_menu
+         * behind.
+         *
+         * Excludes ALL of FT8 mode now (09/2026 #2, per the project
+         * owner: a tap meant to toggle the cascade was often ALSO
+         * retuning the VFO) - the previous version only carved out the
+         * narrow FT8_CASCADE_AREA_Y/H strip, leaving the rest of this
+         * zone's own SPEC_Y..SPEC_Y+SPEC_H span (up to y=344) still
+         * live for drag/tap-to-tune even in FT8 mode, which is
+         * genuinely never wanted while FT8 owns this whole area (there
+         * is no "spectrum" here to drag-tune against - the thin live
+         * bar and the cascade/decode text aren't it). A blanket
+         * per-mode exclusion is simpler than trying to track an
+         * increasingly exact sub-zone by hand, and matches "desactivar
+         * completamente" exactly. */
+        s_spec_drag_active = (uint8_t)(!s_touch_owner_is_menu && !s_ft8_mode_enabled
             && x < MAIN_W && y >= SPEC_Y && y < (uint16_t)(SPEC_Y + SPEC_H));
         s_spec_drag_prev_x = x;
         s_spec_tap_start_x = x;
         s_spec_drag_hz_accum = 0.0f;
         s_spec_drag_moved = 0U;
+
+        s_cascade_tap_active = (uint8_t)(s_ft8_mode_enabled && !s_menu_open
+            && y >= SPEC_Y && y < (uint16_t)(WF_PANEL_Y + WATERFALL_ROWS + 4U));
 
         /* Frequency keypad tap zone - top bar only, so mutually
          * exclusive with both of the above by construction (MENU_AREA
@@ -8426,6 +9471,31 @@ static void demo_touch_poll(void)
         menu_time_keypad_show();
     }
 
+    if (s_cascade_tap_active && !pressed) {
+        /* See s_ft8_cascade_visible's own comment. Toggling FROM
+         * expanded TO compact needs an explicit clear FIRST - the
+         * compact layout ft8_text_panel_draw() then paints only clears
+         * its own small RTTY_TEXT_PANEL_Y/H footprint, which is nowhere
+         * near tall enough to cover whatever the expanded layout just
+         * had painted (its full SPEC_Y..(WF_PANEL_Y+WATERFALL_ROWS+4)
+         * span - the same region s_cascade_tap_active's own zone
+         * covers, above). Clearing only ft8_scope_area_clear()'s
+         * narrower RTTY_SCOPE_TRACE_H strip here (an earlier version of
+         * this fix) left the expanded view's own lower rows - anything
+         * that had been painted below the old cascade's own footprint -
+         * as stray leftover pixels once the compact panel repainted
+         * over only its own small area. Toggling the OTHER way round
+         * (compact -> expanded) needs no such extra step: the expanded
+         * layout's own clear already covers this same full region as
+         * part of its own paint, including wherever the compact panel
+         * used to sit. */
+        s_ft8_cascade_visible = !s_ft8_cascade_visible;
+        if (s_ft8_cascade_visible) {
+            gfx_fill_rect(0, SPEC_Y, MAIN_W, (uint16_t)((WF_PANEL_Y + WATERFALL_ROWS + 4U) - SPEC_Y), GFX_COLOR_BLACK);
+        }
+        ft8_text_force_redraw();
+    }
+
     if (s_spec_drag_active && !pressed && !s_spec_drag_moved) {
         /* Released without ever crossing the drag threshold - a
          * genuine tap. See spec_tap_tune_to_x()'s own comment. Uses
@@ -8442,6 +9512,7 @@ static void demo_touch_poll(void)
         s_spec_drag_moved = 0U;
         s_freq_tap_active = 0U;
         s_time_tap_active = 0U;
+        s_cascade_tap_active = 0U;
     }
 }
 
@@ -8764,6 +9835,118 @@ static uint8_t zoom_process_block(void)
  * sdr_rx_poll_block_iq() has no new block yet, this tick does nothing
  * (the rest of the main loop - touch, UI - stays just as responsive).
  */
+/*
+ * Extracted from sdr_spectrum_waterfall_tick() (09/2026), per the
+ * project owner's report: the on-screen clock and dBm/S-meter readout
+ * were frozen the whole time FT8 (or RTTY) mode was active, because
+ * they used to live inside sdr_spectrum_waterfall_tick(), which only
+ * runs for the plain (non-FT8, non-RTTY) spectrum/waterfall mode -
+ * confirmed and flagged earlier this session, deferred at the time to
+ * avoid mixing it into the FT8 investigation, but now actively
+ * blocking that investigation: with the clock frozen, there was no
+ * way to visually confirm whether a real-time RTC fix (see
+ * rtc_hw.c's rtc_register_sync_wait() fix) was actually taking effect
+ * while testing in FT8 mode. Called unconditionally from the main
+ * loop now, regardless of which mode-specific branch
+ * (rtty_showing/ft8_showing/plain spectrum) is active - own
+ * independent ~30fps-ish timing gate, NOT tied to s_db_count/spectrum
+ * FFT accumulation (which doesn't exist as a concept in FT8/RTTY
+ * mode) the way the original inline block was.
+ */
+
+/* "Is the clock trustworthy right now" check (09/2026), per the
+ * project owner: feeds FT8's own bottom-right badge (see
+ * ft8_text_panel_draw()'s own use of this) and sync_status_poll()
+ * below, which forces that badge to refresh promptly when this value
+ * changes. Backed by rtc_hw_has_ever_synced()/rtc_hw_get_seconds_
+ * since_sync() (09/2026 #3, moved from a RAM/g_msticks-based version
+ * in time_sync.c per the project owner's report: that version
+ * reported "never synced" after EVERY reboot, even when the RTC
+ * itself - kept ticking correctly the whole time by VBAT - never
+ * actually lost sync; see rtc_hw_mark_synced()'s own comment in
+ * rtc_hw.c for the battery-backed register this now persists into
+ * instead). See those two functions' own comments for why "never
+ * synced" has to be checked first rather than folded into the
+ * elapsed-time comparison.
+ *
+ * FT8-ONLY (09/2026 #2), per the project owner: this used to also
+ * drive a general corner badge shown in every mode - dropped, since a
+ * "NO TIME SYNC" warning while just listening to AM/FM broadcast (no
+ * feature on this board actually NEEDS the RTC outside FT8's own
+ * RTC-driven scheduling) read as confusing rather than useful. FT8 is
+ * the one mode where an unnoticed stale clock silently breaks
+ * something real. */
+#define SYNC_WARNING_MAX_S (6UL * 60UL * 60UL) /* 6 hours, per the project owner's own request */
+static bool sync_warning_active(void)
+{
+    if (!rtc_hw_has_ever_synced()) {
+        return true;
+    }
+    return rtc_hw_get_seconds_since_sync() > SYNC_WARNING_MAX_S;
+}
+
+/* Forces FT8's own badge to repaint the moment sync_warning_active()'s
+ * value actually CHANGES (09/2026, fixing the project owner's report
+ * that the "NO TIME SYNC" text stayed on screen after a real sync
+ * landed, until something else - a mode change - happened to force a
+ * redraw anyway). ft8_text_panel_draw() only repaints when
+ * s_ft8_text_full_redraw is set (see its own comment - a new decoded
+ * line, a cascade toggle, or entering FT8 mode all set it), so a sync
+ * event arriving with no OTHER FT8 activity around it left the badge
+ * showing whatever sync_warning_active() returned the last time
+ * something else triggered a redraw - stale, exactly like the report
+ * describes. Called from status_bar_tick(), which already runs every
+ * ~33ms regardless of mode, so this edge-detects the transition
+ * promptly without needing its own separate polling cadence. Only
+ * forces the redraw while FT8 is actually showing right now - a
+ * transition that happens while in some OTHER mode doesn't need to do
+ * anything here, since entering FT8 mode already forces its own fresh
+ * redraw (see the mode-transition block's own ft8_text_force_redraw()
+ * call), which reads sync_warning_active() live at that point anyway. */
+static void sync_status_poll(void)
+{
+    static bool s_last_sync_warning = true; /* matches sync_warning_active()'s own "assume the worst until proven otherwise" default */
+    bool active = sync_warning_active();
+
+    if (active != s_last_sync_warning && s_ft8_mode_enabled) {
+        ft8_text_force_redraw();
+    }
+    s_last_sync_warning = active;
+}
+
+static void status_bar_tick(void)
+{
+    static uint32_t s_next_status_ms = 0U;
+#define STATUS_BAR_TICK_MS 33U /* ~30fps - matches SPECTRUM_FRAME_MS's own value (defined further down in this file, past this function, so not referenced directly here - see that macro's own comment) */
+
+    if ((int32_t)(g_msticks - s_next_status_ms) < 0) {
+        return;
+    }
+    s_next_status_ms = g_msticks + STATUS_BAR_TICK_MS;
+
+    smeter_draw(smeter_segments_from_peak(demod_am_get_signal_peak()));
+    smeter_dbfs_uart_report(demod_am_get_signal_peak()); /* see its own comment - S-meter calibration aid */
+    smeter_dbm_update_and_draw(demod_am_get_signal_peak());
+    sam_calib_display_draw(); /* MS5351 PPM calibration readout, 21/08/2026 - see its own comment; needs to update live as the PLL converges */
+    sync_status_poll();
+    {
+        /* Was minute-granularity (now_min = g_msticks/60000) back when
+         * the clock only showed HH:MM - correct then, since the
+         * displayed text genuinely didn't change within a minute.
+         * Now that time_display_draw() shows seconds too (09/2026),
+         * that same throttle would leave a stale "SS" digit on screen
+         * for up to 59 real seconds between redraws - switched to
+         * second-granularity so the seconds actually visibly tick. */
+        static uint32_t s_last_time_sec = 0xFFFFFFFFUL;
+        uint32_t now_sec = g_msticks / 1000UL;
+        bool rtc_just_changed = rtc_hw_consume_dirty(); /* always consume, regardless of the OR below - see rtc_hw_consume_dirty()'s comment */
+        if (now_sec != s_last_time_sec || rtc_just_changed) {
+            s_last_time_sec = now_sec;
+            time_display_draw();
+        }
+    }
+}
+
 static void sdr_spectrum_waterfall_tick(void)
 {
     /*
@@ -8797,8 +9980,9 @@ static void sdr_spectrum_waterfall_tick(void)
     static uint32_t s_db_count = 0U;
     static uint32_t s_next_frame_ms = 0U;
     static uint16_t line[WATERFALL_WIDTH];
+    static uint8_t s_wf_idx[WATERFALL_WIDTH]; /* per-column palette index, fed to the IPA - see the loop below */
     static uint32_t s_frame_count = 0U;
-    uint32_t t_fft0, t_fft1, t_spec0, t_spec1, t_wf0, t_wf1;
+    uint32_t t_fft0, t_fft1, t_spec0, t_spec1, t_wf0, t_wf1, t_wfidx0, t_wfidx1, t_colormap0, t_colormap1;
     uint32_t fft_us = 0U;
     uint16_t x, n;
     int16_t i_min, i_max, q_min, q_max;
@@ -8893,36 +10077,6 @@ static void sdr_spectrum_waterfall_tick(void)
         return;
     }
     s_next_frame_ms = g_msticks + SPECTRUM_FRAME_MS;
-
-    /* Per-frame status updates, all cheap and all OUTSIDE the ISR:
-     * S-meter (skips its blits when the segment count is unchanged)
-     * and the once-a-minute time readout. ALWAYS run, even while the
-     * settings menu is open (31/07/2026, see s_menu_screen's
-     * declaration comment) - the right column and top bar stay live
-     * the whole time the menu is showing, only the spectrum/waterfall
-     * panel underneath the menu gets skipped below. */
-    smeter_draw(smeter_segments_from_peak(demod_am_get_signal_peak()));
-    smeter_dbfs_uart_report(demod_am_get_signal_peak()); /* see its own comment - S-meter calibration aid */
-    /* *** 01/09/2026: replaces the old snr_update_and_draw(), moved
-     * HERE specifically (not left inside the s_db_frame/!s_menu_open
-     * gated block below, where the old SNR readout used to live) -
-     * this reads demod_am_get_signal_peak() directly, same as the
-     * S-meter bar right above it, so it should stay live exactly like
-     * the S-meter does (never freezing while the menu is open) rather
-     * than inheriting the old SNR readout's "freezes with s_db_frame"
-     * behavior, which no longer applies now that this doesn't touch
-     * s_db_frame at all. See smeter_dbm_update_and_draw()'s own
-     * comment for the full "why" of this replacement. */
-    smeter_dbm_update_and_draw(demod_am_get_signal_peak());
-    sam_calib_display_draw(); /* MS5351 PPM calibration readout, 21/08/2026 - see its own comment; needs to update live as the PLL converges, same cadence as the S-meter above, not just on mode-change events */
-    {
-        static uint32_t s_last_time_min = 0xFFFFFFFFUL;
-        uint32_t now_min = g_msticks / 60000UL;
-        if (now_min != s_last_time_min) {
-            s_last_time_min = now_min;
-            time_display_draw();
-        }
-    }
 
     /* Settings menu covers the spectrum+waterfall panel while open
      * (see s_menu_screen's declaration comment) - no point spending
@@ -9130,11 +10284,24 @@ static void sdr_spectrum_waterfall_tick(void)
      * Uses the frame-averaged dB, so the waterfall inherits the same
      * noise smoothing as the trace. Blitted just inside the panel
      * border, same x origin as the spectrum trace so columns line up
-     * vertically between the two views. */
+     * vertically between the two views.
+     *
+     * *** IPA-accelerated colormap (09/2026) *** - this loop only computes
+     * the bin-to-index mapping now (bin selection + float normalization,
+     * which the IPA can't do); the index->RGB565 LUT lookup that used to
+     * happen inline via spectrum_colormap() is done by the IPA in
+     * ipa_waterfall_colormap_line() below instead - see ipa_waterfall.h for
+     * the full division of labor and why. s_wf_idx is a plain byte per
+     * column, reused across frames like `line` already was. */
+    t_wfidx0 = DWT->CYCCNT;
     for (x = 0; x < WATERFALL_WIDTH; x++) {
         uint32_t bin = ((uint32_t)x * FFT_BINS_IQ) / WATERFALL_WIDTH;
-        line[x] = spectrum_colormap(s_db_frame[bin], s_db_min, s_db_max);
+        s_wf_idx[x] = spectrum_colormap_index(s_db_frame[bin], s_db_min, s_db_max);
     }
+    t_wfidx1 = DWT->CYCCNT;
+    t_colormap0 = DWT->CYCCNT;
+    ipa_waterfall_colormap_line(s_wf_idx, line, WATERFALL_WIDTH);
+    t_colormap1 = DWT->CYCCNT;
     waterfall_push_line(line);
     waterfall_blit(SPEC_TRACE_X, WF_Y);
     t_wf1 = DWT->CYCCNT;
@@ -9148,9 +10315,28 @@ static void sdr_spectrum_waterfall_tick(void)
     if (!s_menu_open && (s_frame_count % 30U) == 0U) {
         uint32_t spec_us = (uint32_t)(((uint64_t)(t_spec1 - t_spec0)) * 1000000U / SystemCoreClock);
         uint32_t wf_us   = (uint32_t)(((uint64_t)(t_wf1 - t_wf0)) * 1000000U / SystemCoreClock);
+        uint32_t wfidx_us     = (uint32_t)(((uint64_t)(t_wfidx1 - t_wfidx0)) * 1000000U / SystemCoreClock);
+        uint32_t colormap_us  = (uint32_t)(((uint64_t)(t_colormap1 - t_colormap0)) * 1000000U / SystemCoreClock);
+        /* pushblit computed from raw cycles (t_wf1 - t_colormap1), not by
+         * subtracting the already-rounded *_us values above - each *_us
+         * truncates independently, so subtracting rounded microseconds
+         * could in principle underflow this unsigned value by a cycle or
+         * two's worth of rounding error; raw cycles between two points on
+         * the same monotonic counter can't go negative. */
+        uint32_t pushblit_us  = (uint32_t)(((uint64_t)(t_wf1 - t_colormap1)) * 1000000U / SystemCoreClock);
         debug_print_dec("sdr_tick: last fft (us)", fft_us);
         debug_print_dec("sdr_tick: spectrum_draw (us)", spec_us);
         debug_print_dec("sdr_tick: waterfall push+blit (us)", wf_us);
+        /* *** TEMPORARY breakdown (09/2026) *** - isolates the IPA
+         * colormap call from the rest of the waterfall block (index-build
+         * loop on one side, waterfall_push_line()+waterfall_blit() on the
+         * other) to measure the actual saving from ipa_waterfall_colormap_line()
+         * vs. the old inline spectrum_colormap() CPU loop it replaced.
+         * wfidx_us + colormap_us + pushblit_us == wf_us (modulo rounding);
+         * remove once you have the number you need. */
+        debug_print_dec("  wf breakdown: idx-build (us)", wfidx_us);
+        debug_print_dec("  wf breakdown: IPA colormap (us)", colormap_us);
+        debug_print_dec("  wf breakdown: push+blit (us)", pushblit_us);
         debug_print_dec("sdr_tick: frame TOTAL (us)", fft_us + spec_us + wf_us);
         debug_print_dec_signed("sdr_tick: I(left) min", i_min);
         debug_print_dec_signed("sdr_tick: I(left) max", i_max);

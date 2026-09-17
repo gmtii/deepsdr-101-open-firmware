@@ -44,13 +44,25 @@ INCLUDES  = -ICMSIS/Include
 INCLUDES += -ICMSIS/GD/GD32F4xx/Include
 INCLUDES += -IFirmware/Include
 INCLUDES += -IUser
+INCLUDES += -IFt8Lib
 # CMSIS-DSP: PrivateInclude before Include isn't required, but keeping
 # both on the path matches upstream's own build files.
 INCLUDES += -ICMSIS/DSP/Include
 INCLUDES += -ICMSIS/DSP/PrivateInclude
+# USB CDC-ACM (GD32F4xx USB device library, device-mode subset only -
+# see USB/README-ish comment in User/usb_serial.h for the TIMER2 vs
+# TIMER5 note). usb_conf.h/usbd_conf.h live in USB/conf, adapted from
+# GigaDevice's CDC_ACM demo to drop the GD32450i-EVAL BSP dependency.
+INCLUDES += -IUSB/conf
+INCLUDES += -IUSB/driver/Include
+INCLUDES += -IUSB/device/core/Include
+INCLUDES += -IUSB/device/class/cdc/Include
+INCLUDES += -IUSB/ustd/class/cdc
+INCLUDES += -IUSB/ustd/common
 
 # --- Sources ---
 C_SOURCES   = $(wildcard User/*.c)
+C_SOURCES  += $(wildcard Ft8Lib/ft8/*.c)
 C_SOURCES  += $(wildcard Firmware/Source/*.c)
 C_SOURCES  += CMSIS/GD/GD32F4xx/Source/system_gd32f4xx.c
 # CMSIS-DSP: only the specific functions demod_am.c uses (biquad
@@ -69,6 +81,15 @@ C_SOURCES  += CMSIS/DSP/Source/FilteringFunctions/arm_fir_decimate_f32.c
 C_SOURCES  += CMSIS/DSP/Source/FilteringFunctions/arm_fir_decimate_init_f32.c
 C_SOURCES  += CMSIS/DSP/Source/FilteringFunctions/arm_fir_interpolate_f32.c
 C_SOURCES  += CMSIS/DSP/Source/FilteringFunctions/arm_fir_interpolate_init_f32.c
+# USB CDC-ACM (device mode only - host-mode driver/interrupt sources
+# are not built at all, see USB/driver/Source)
+C_SOURCES  += USB/driver/Source/drv_usb_core.c
+C_SOURCES  += USB/driver/Source/drv_usb_dev.c
+C_SOURCES  += USB/driver/Source/drv_usbd_int.c
+C_SOURCES  += USB/device/core/Source/usbd_core.c
+C_SOURCES  += USB/device/core/Source/usbd_enum.c
+C_SOURCES  += USB/device/core/Source/usbd_transc.c
+C_SOURCES  += USB/device/class/cdc/Source/cdc_acm_core.c
 
 ASM_SOURCES = CMSIS/GD/GD32F4xx/Source/GCC/startup_gd32f450_470.S
 
