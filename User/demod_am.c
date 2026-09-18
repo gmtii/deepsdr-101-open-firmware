@@ -1614,6 +1614,59 @@ static uint8_t s_hfdl_dbg_decoded_bytes[32]; /* snapshot para el volcado hex dif
 static volatile uint32_t s_hfdl_dbg_decoded_dump_len = 0u;
 static char s_hfdl_pdu_summary[220]; /* resumen MPDU/LPDU (direccion, IDs, tipo, ICAO) - ver su uso mas abajo */
 static volatile uint32_t s_hfdl_pdu_summary_len = 0u;
+static char s_hfdl_screen_line1[48]; /* resumen compacto MPDU/LPDU para pantalla, 16/09/2026 */
+static char s_hfdl_screen_line2[48]; /* resumen compacto Performance data (GPS) para pantalla, vacio si no aplica */
+static char s_hfdl_screen_line3[48]; /* ICAO del avion (via tabla de correlacion) o "?" si desconocido */
+
+/* Tabla de correlacion src_id -> ICAO (16/09/2026, pedida por el
+ * propietario del proyecto). El "src_id"/"dst_id" del MPDU es un
+ * identificador corto y efimero asignado durante el LOGON de la
+ * sesion, NO la direccion ICAO real de 24 bits - esa solo aparece en
+ * los LPDU de LOGON_REQUEST/LOGON_CONFIRM/LOGOFF (ver hfdl_pdu.h).
+ * Esta tabla guarda esa correlacion la primera vez que vemos un LOGON,
+ * para poder mostrar el ICAO real en los USER_DATA/Performance data
+ * posteriores del mismo avion. Si el avion ya estaba conectado antes
+ * de empezar a escuchar, nunca veremos su LOGON y el ICAO
+ * sencillamente no se puede saber a partir de USER_DATA solo - eso es
+ * una limitacion del protocolo, no de esta tabla. Tamano pequeno (8
+ * entradas) - reemplazo round-robin simple, no hace falta mas para un
+ * numero razonable de aviones activos a la vez en un canal HFDL. */
+#define HFDL_ICAO_CACHE_SIZE 8u
+static struct {
+    uint32_t src_id;
+    uint32_t icao;
+    uint8_t valid;
+} s_hfdl_icao_cache[HFDL_ICAO_CACHE_SIZE];
+static uint32_t s_hfdl_icao_cache_next = 0u;
+
+static void hfdl_icao_cache_put(uint32_t src_id, uint32_t icao)
+{
+    uint32_t i;
+    for (i = 0u; i < HFDL_ICAO_CACHE_SIZE; i++) {
+        if (s_hfdl_icao_cache[i].valid && s_hfdl_icao_cache[i].src_id == src_id) {
+            s_hfdl_icao_cache[i].icao = icao; /* actualiza si ya habia entrada para este src_id (re-logon) */
+            return;
+        }
+    }
+    s_hfdl_icao_cache[s_hfdl_icao_cache_next].src_id = src_id;
+    s_hfdl_icao_cache[s_hfdl_icao_cache_next].icao = icao;
+    s_hfdl_icao_cache[s_hfdl_icao_cache_next].valid = 1u;
+    s_hfdl_icao_cache_next = (s_hfdl_icao_cache_next + 1u) % HFDL_ICAO_CACHE_SIZE;
+}
+
+/* Devuelve 1 y rellena *icao_out si se conoce, 0 si no (avion nunca
+ * visto en LOGON desde que arranco el firmware). */
+static uint8_t hfdl_icao_cache_get(uint32_t src_id, uint32_t *icao_out)
+{
+    uint32_t i;
+    for (i = 0u; i < HFDL_ICAO_CACHE_SIZE; i++) {
+        if (s_hfdl_icao_cache[i].valid && s_hfdl_icao_cache[i].src_id == src_id) {
+            *icao_out = s_hfdl_icao_cache[i].icao;
+            return 1u;
+        }
+    }
+    return 0u;
+}
 static uint8_t s_hfdl_full_decoded[128]; /* copia completa de los bytes decodificados (16/09/2026, movido de la ISR al bucle principal) */
 static volatile uint32_t s_hfdl_full_decoded_len = 0u;
 static volatile uint8_t s_hfdl_pdu_parse_pending = 0u;
@@ -1643,6 +1696,25 @@ uint32_t demod_am_hfdl_get_last_decoded_len(void)
     return s_hfdl_dbg_done_decoded_len;
 }
 
+/* Lineas compactas para pantalla (16/09/2026, ver hfdl_scope_panel_draw()
+ * en main.c) - persisten entre llamadas igual que demod_am_hfdl_get_last_
+ * decoded_len(), no son flags de un solo uso. Cadena vacia si no hay nada
+ * que mostrar (ver demod_am_hfdl_analyze_pdu()). */
+const char *demod_am_hfdl_get_screen_line1(void)
+{
+    return s_hfdl_screen_line1;
+}
+
+const char *demod_am_hfdl_get_screen_line2(void)
+{
+    return s_hfdl_screen_line2;
+}
+
+const char *demod_am_hfdl_get_screen_line3(void)
+{
+    return s_hfdl_screen_line3;
+}
+
 /* Analiza MPDU/LPDU/HFNPDU y monta s_hfdl_pdu_summary - llamada SOLO
  * desde el bucle principal (16/09/2026, movido aqui tras corrupcion
  * real en hardware con esto en la ISR - ver el comentario en el punto
@@ -1664,10 +1736,68 @@ static void demod_am_hfdl_analyze_pdu(void)
     #define PDU_APPEND_HEX6(v) do { uint32_t _x = (uint32_t)(v) & 0xFFFFFFu; int _b; for (_b = 20; _b >= 0; _b -= 4) { uint8_t _nib = (uint8_t)((_x >> _b) & 0xFu); if (p < sizeof(s_hfdl_pdu_summary) - 1u) { s_hfdl_pdu_summary[p++] = (char)((_nib < 10u) ? ('0' + _nib) : ('A' + (_nib - 10u))); } } } while (0)
 
     s_hfdl_pdu_summary_len = 0u;
+    s_hfdl_screen_line1[0] = '\0'; /* vaciar SIEMPRE aqui - mismo motivo que el bug de
+                                       s_hfdl_pdu_summary encontrado en hardware real: sin esto, un
+                                       segmento sin analisis nuevo dejaria en pantalla el resumen del
+                                       ultimo exito anterior, sin relacion con el mensaje actual. */
+    s_hfdl_screen_line2[0] = '\0';
+    s_hfdl_screen_line3[0] = '\0';
     if (!hfdl_mpdu_parse_header(s_hfdl_full_decoded, s_hfdl_full_decoded_len, &hdr) || !hdr.crc_ok) {
         return;
     }
     n_lpdu = hfdl_mpdu_extract_lpdus(s_hfdl_full_decoded, s_hfdl_full_decoded_len, &hdr, lpdus, 4u);
+
+    /* Linea 1 compacta para pantalla - solo el primer LPDU, suficiente
+     * para el caso comun (un solo LPDU por MPDU, que es lo que hemos
+     * visto siempre en pruebas reales). */
+    if (n_lpdu > 0u) {
+        uint32_t sp = 0u;
+        #define SCR1_APPEND(str) do { const char *_s = (str); while (*_s && sp < sizeof(s_hfdl_screen_line1) - 1u) { s_hfdl_screen_line1[sp++] = *_s++; } } while (0)
+        #define SCR1_APPEND_DEC(v) do { uint32_t _x = (uint32_t)(v); char _d[10]; uint8_t _n = 0u; if (_x == 0u) { _d[_n++] = '0'; } while (_x > 0u && _n < 10u) { _d[_n++] = (char)('0' + (_x % 10u)); _x /= 10u; } while (_n > 0u && sp < sizeof(s_hfdl_screen_line1) - 1u) { s_hfdl_screen_line1[sp++] = _d[--_n]; } } while (0)
+        #define SCR1_APPEND_HEX6(v) do { uint32_t _x = (uint32_t)(v) & 0xFFFFFFu; int _b; for (_b = 20; _b >= 0; _b -= 4) { uint8_t _nib = (uint8_t)((_x >> _b) & 0xFu); if (sp < sizeof(s_hfdl_screen_line1) - 1u) { s_hfdl_screen_line1[sp++] = (char)((_nib < 10u) ? ('0' + _nib) : ('A' + (_nib - 10u))); } } } while (0)
+        if (hdr.direction == HFDL_PDU_DIR_DOWNLINK) {
+            SCR1_APPEND("SRC:"); SCR1_APPEND_DEC(hdr.src_id);
+            SCR1_APPEND(">GS:"); SCR1_APPEND_DEC(hdr.dst_id);
+        } else {
+            SCR1_APPEND("GS:"); SCR1_APPEND_DEC(hdr.src_gs_id);
+            SCR1_APPEND(">AC x"); SCR1_APPEND_DEC(hdr.aircraft_cnt);
+        }
+        SCR1_APPEND(" "); SCR1_APPEND(k_lpdu_names[(uint32_t)lpdus[0].kind]);
+        if (lpdus[0].kind == HFDL_LPDU_KIND_LOGON_REQUEST ||
+            lpdus[0].kind == HFDL_LPDU_KIND_LOGON_CONFIRM ||
+            lpdus[0].kind == HFDL_LPDU_KIND_LOGOFF_OR_DENIED) {
+            SCR1_APPEND(" ICAO:"); SCR1_APPEND_HEX6(lpdus[0].icao_address);
+        }
+        if (lpdus[0].kind == HFDL_LPDU_KIND_USER_DATA) {
+            SCR1_APPEND(" "); SCR1_APPEND_DEC(lpdus[0].user_data_len); SCR1_APPEND("B");
+        }
+        #undef SCR1_APPEND
+        #undef SCR1_APPEND_DEC
+        #undef SCR1_APPEND_HEX6
+
+        /* Linea 3: ICAO del avion (16/09/2026) - directo si este mismo
+         * mensaje es un LOGON, o via la tabla de correlacion si es
+         * USER_DATA de una sesion cuyo LOGON ya vimos antes. */
+        {
+            uint32_t sp3 = 0u;
+            #define SCR3_APPEND(str) do { const char *_s = (str); while (*_s && sp3 < sizeof(s_hfdl_screen_line3) - 1u) { s_hfdl_screen_line3[sp3++] = *_s++; } } while (0)
+            #define SCR3_APPEND_HEX6(v) do { uint32_t _x = (uint32_t)(v) & 0xFFFFFFu; int _b; for (_b = 20; _b >= 0; _b -= 4) { uint8_t _nib = (uint8_t)((_x >> _b) & 0xFu); if (sp3 < sizeof(s_hfdl_screen_line3) - 1u) { s_hfdl_screen_line3[sp3++] = (char)((_nib < 10u) ? ('0' + _nib) : ('A' + (_nib - 10u))); } } } while (0)
+            if (lpdus[0].kind == HFDL_LPDU_KIND_LOGON_REQUEST ||
+                lpdus[0].kind == HFDL_LPDU_KIND_LOGON_CONFIRM ||
+                lpdus[0].kind == HFDL_LPDU_KIND_LOGOFF_OR_DENIED) {
+                SCR3_APPEND("ICAO: "); SCR3_APPEND_HEX6(lpdus[0].icao_address);
+            } else if (lpdus[0].kind == HFDL_LPDU_KIND_USER_DATA && hdr.direction == HFDL_PDU_DIR_DOWNLINK) {
+                uint32_t icao;
+                if (hfdl_icao_cache_get(hdr.src_id, &icao)) {
+                    SCR3_APPEND("ICAO: "); SCR3_APPEND_HEX6(icao);
+                } else {
+                    SCR3_APPEND("ICAO: ? (sin LOGON visto)");
+                }
+            }
+            #undef SCR3_APPEND
+            #undef SCR3_APPEND_HEX6
+        }
+    }
 
     PDU_APPEND("  MPDU: ");
     PDU_APPEND(hdr.direction == HFDL_PDU_DIR_DOWNLINK ? "downlink (avion->tierra)" : "uplink (tierra->avion)");
@@ -1688,6 +1818,14 @@ static void demod_am_hfdl_analyze_pdu(void)
             lpdus[li].kind == HFDL_LPDU_KIND_LOGOFF_OR_DENIED) {
             PDU_APPEND(" ICAO=0x");
             PDU_APPEND_HEX6(lpdus[li].icao_address);
+            /* Guarda la correlacion src_id->ICAO (16/09/2026) - ver el
+             * comentario de hfdl_icao_cache_put() arriba. Solo tiene
+             * sentido en downlink: hdr.src_id es "el ID corto de ESTE
+             * avion" solo en ese caso (en uplink, hdr.src_gs_id es la
+             * estacion de tierra, no un avion concreto). */
+            if (hdr.direction == HFDL_PDU_DIR_DOWNLINK && lpdus[li].crc_ok) {
+                hfdl_icao_cache_put(hdr.src_id, lpdus[li].icao_address);
+            }
         }
         if (lpdus[li].kind == HFDL_LPDU_KIND_USER_DATA) {
             hfdl_hfnpdu_perf_data_t perf;
@@ -1705,6 +1843,25 @@ static void demod_am_hfdl_analyze_pdu(void)
                         s_hfdl_full_decoded_len - user_data_off, &perf)) {
                     int32_t lat_x10000 = (int32_t)(perf.location.lat * 10000.0 + (perf.location.lat >= 0.0 ? 0.5 : -0.5));
                     int32_t lon_x10000 = (int32_t)(perf.location.lon * 10000.0 + (perf.location.lon >= 0.0 ? 0.5 : -0.5));
+                    {
+                        /* Linea 2 compacta para pantalla - solo GPS+leg, lo
+                         * mas util de un vistazo. */
+                        int32_t sl_lat = lat_x10000, sl_lon = lon_x10000;
+                        uint32_t sp = 0u;
+                        #define SCR2_APPEND(str) do { const char *_s = (str); while (*_s && sp < sizeof(s_hfdl_screen_line2) - 1u) { s_hfdl_screen_line2[sp++] = *_s++; } } while (0)
+                        #define SCR2_APPEND_DEC(v) do { uint32_t _x = (uint32_t)(v); char _d[10]; uint8_t _n = 0u; if (_x == 0u) { _d[_n++] = '0'; } while (_x > 0u && _n < 10u) { _d[_n++] = (char)('0' + (_x % 10u)); _x /= 10u; } while (_n > 0u && sp < sizeof(s_hfdl_screen_line2) - 1u) { s_hfdl_screen_line2[sp++] = _d[--_n]; } } while (0)
+                        SCR2_APPEND("GPS ");
+                        if (sl_lat < 0) { SCR2_APPEND("-"); sl_lat = -sl_lat; }
+                        SCR2_APPEND_DEC((uint32_t)sl_lat / 10000u); SCR2_APPEND(".");
+                        SCR2_APPEND_DEC((uint32_t)sl_lat % 10000u);
+                        SCR2_APPEND(",");
+                        if (sl_lon < 0) { SCR2_APPEND("-"); sl_lon = -sl_lon; }
+                        SCR2_APPEND_DEC((uint32_t)sl_lon / 10000u); SCR2_APPEND(".");
+                        SCR2_APPEND_DEC((uint32_t)sl_lon % 10000u);
+                        SCR2_APPEND(" LEG:"); SCR2_APPEND_DEC(perf.flight_leg);
+                        #undef SCR2_APPEND
+                        #undef SCR2_APPEND_DEC
+                    }
                     PDU_APPEND("\n      Performance data: lat=");
                     if (lat_x10000 < 0) { PDU_APPEND("-"); lat_x10000 = -lat_x10000; }
                     PDU_APPEND_DEC((uint32_t)lat_x10000 / 10000u);

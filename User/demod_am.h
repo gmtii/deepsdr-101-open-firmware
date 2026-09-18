@@ -645,6 +645,9 @@ void demod_am_hfdl_probe_debug_poll(void);
  * "ultimo estado" atenuado, a su eleccion de UI). */
 hfdl_preamble_state_t demod_am_hfdl_get_preamble_state(void);
 uint32_t demod_am_hfdl_get_last_decoded_len(void);
+const char *demod_am_hfdl_get_screen_line1(void);
+const char *demod_am_hfdl_get_screen_line2(void);
+const char *demod_am_hfdl_get_screen_line3(void);
 
 /* Pre-AGC envelope peak (int16 full-scale units, instant-attack /
  * slow-release ballistics) - the UI's S-meter source. Convert to

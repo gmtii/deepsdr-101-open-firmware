@@ -8563,12 +8563,30 @@ static void rtty_scope_draw(void)
  */
 static uint8_t s_hfdl_badge_was_active = 0xFFU; /* sentinel - neither 0 nor 1, forces the first draw after a reset to actually paint the strip */
 static int32_t s_hfdl_state_strip_last = -2; /* -2 = sentinel (forces first draw), -1 = idle (sin burst) - moved to file scope so hfdl_scope_panel_reset() can force a redraw too */
+static char s_hfdl_msg_strip_last1[48] = { 0 }; /* ultimo contenido pintado, 16/09/2026 - para no repintar si no ha cambiado */
+static char s_hfdl_msg_strip_last2[48] = { 0 };
+static char s_hfdl_msg_strip_last3[48] = { 0 };
 
+static uint8_t hfdl_str_differs(const char *a, const char *b, uint32_t n)
+{
+    uint32_t i;
+    for (i = 0U; i < n; i++) {
+        if (a[i] != b[i]) { return 1U; }
+        if (a[i] == '\0') { return 0U; }
+    }
+    return 0U;
+}
+
+#define HFDL_MSG_STRIP_H    18U /* alto por linea del resumen (fuente escala 2), 16/09/2026 - dibujado en la zona del waterfall, ver hfdl_scope_panel_draw() */
 static void hfdl_scope_panel_reset(void)
 {
     gfx_fill_rect(0, SPEC_Y, MAIN_W, SPEC_H, GFX_COLOR_BLACK);
     s_hfdl_badge_was_active = 0xFFU;
     s_hfdl_state_strip_last = -2;
+    s_hfdl_msg_strip_last1[0] = '\0';
+    s_hfdl_msg_strip_last2[0] = '\0';
+    s_hfdl_msg_strip_last3[0] = '\0';
+    gfx_fill_rect(0, WF_Y, MAIN_W, HFDL_MSG_STRIP_H * 4U, GFX_COLOR_BLACK); /* limpia tambien la zona del waterfall usada para el resumen */
 }
 
 static uint8_t hfdl_scope_is_active(void)
@@ -8691,6 +8709,40 @@ static void hfdl_scope_panel_draw(void)
             gfx_text(4, (uint16_t)(SPEC_Y + 5), line, base_color, GFX_COLOR_BLACK, 2);
             s_hfdl_badge_was_active = burst_now;
             s_hfdl_badge_last_attempts = crc_attempts;
+        }
+    }
+
+    /* Resumen MPDU/LPDU/Performance data/ICAO en la zona del WATERFALL
+     * (16/09/2026) - no se usa para nada en modo HFDL (waterfall_blit()
+     * nunca se llama aqui), y da sitio de sobra para 4 lineas (72px de
+     * alto) sin robarle nada al espectro, a diferencia del primer
+     * intento (una tira encima de la tira de estado, ya revertido).
+     * Mismo criterio anti-parpadeo: redibujo solo en cambio de
+     * contenido. */
+    {
+        const char *line1 = demod_am_hfdl_get_screen_line1();
+        const char *line2 = demod_am_hfdl_get_screen_line2();
+        const char *line3 = demod_am_hfdl_get_screen_line3();
+        if (hfdl_str_differs(line1, s_hfdl_msg_strip_last1, sizeof(s_hfdl_msg_strip_last1)) ||
+            hfdl_str_differs(line2, s_hfdl_msg_strip_last2, sizeof(s_hfdl_msg_strip_last2)) ||
+            hfdl_str_differs(line3, s_hfdl_msg_strip_last3, sizeof(s_hfdl_msg_strip_last3))) {
+            uint32_t i;
+            gfx_fill_rect(0, WF_Y, MAIN_W, HFDL_MSG_STRIP_H * 4U, GFX_COLOR_BLACK);
+            if (line1[0] != '\0') {
+                gfx_text(4, (uint16_t)(WF_Y + 2U), line1, GFX_COLOR_YELLOW, GFX_COLOR_BLACK, 2);
+            }
+            if (line2[0] != '\0') {
+                gfx_text(4, (uint16_t)(WF_Y + 2U + HFDL_MSG_STRIP_H), line2, GFX_COLOR_CYAN, GFX_COLOR_BLACK, 2);
+            }
+            if (line3[0] != '\0') {
+                gfx_text(4, (uint16_t)(WF_Y + 2U + 2U * HFDL_MSG_STRIP_H), line3, GFX_COLOR_GREEN, GFX_COLOR_BLACK, 2);
+            }
+            for (i = 0U; i < sizeof(s_hfdl_msg_strip_last1) && line1[i] != '\0'; i++) { s_hfdl_msg_strip_last1[i] = line1[i]; }
+            s_hfdl_msg_strip_last1[i < sizeof(s_hfdl_msg_strip_last1) ? i : sizeof(s_hfdl_msg_strip_last1) - 1U] = '\0';
+            for (i = 0U; i < sizeof(s_hfdl_msg_strip_last2) && line2[i] != '\0'; i++) { s_hfdl_msg_strip_last2[i] = line2[i]; }
+            s_hfdl_msg_strip_last2[i < sizeof(s_hfdl_msg_strip_last2) ? i : sizeof(s_hfdl_msg_strip_last2) - 1U] = '\0';
+            for (i = 0U; i < sizeof(s_hfdl_msg_strip_last3) && line3[i] != '\0'; i++) { s_hfdl_msg_strip_last3[i] = line3[i]; }
+            s_hfdl_msg_strip_last3[i < sizeof(s_hfdl_msg_strip_last3) ? i : sizeof(s_hfdl_msg_strip_last3) - 1U] = '\0';
         }
     }
 
