@@ -6,6 +6,57 @@
  * debug_uart.h's comment. Keeps PA9/USART0 untouched (no GPIO AF
  * config, no clock enable) rather than just skipping the prints. */
 
+/* ISR HARD SILENCE (16/09/2026, real-hardware UART corruption found
+ * with the HFDL module - see hfdl_payload_decode.c's internal
+ * debug_print*_always() calls). Different from s_quiet (debug_uart.h's
+ * existing quiet mode): quiet mode is a VOLUME control that the
+ * _always() variants deliberately bypass by design (see their own
+ * comment - they're the lines meant to survive quiet mode). This is
+ * the opposite: a small number of call sites (hfdl_payload_decode.c's
+ * internal prints, called from inside the audio ISR via
+ * demod_am.c's hfdl_payload_decode_begin_segment()/finish() calls)
+ * need to be fully silenced - EVEN the _always ones - for the
+ * specific duration of that one ISR-context call, to avoid the same
+ * ISR-vs-main-loop uart_putc() reentrancy corruption already found and
+ * fixed once for this module's own top-level summary prints (see
+ * demod_am_hfdl_probe_debug_poll()'s deferral pattern) - that fix
+ * doesn't cover hfdl_payload_decode.c's OWN internal prints, which
+ * this project intentionally never modifies for delicate protocol-
+ * parsing code. Checked once, at the bottom of debug_print() (which
+ * every other debug_print*() function/alias funnels through for its
+ * actual character output), so one guard covers all of them. */
+static volatile uint8_t s_isr_silence = 0U;
+
+void debug_uart_isr_silence_begin(void)
+{
+    s_isr_silence = 1U;
+}
+
+void debug_uart_isr_silence_end(void)
+{
+    s_isr_silence = 0U;
+}
+
+/* QUIET MODE (16/09/2026, ported properly with the HFDL module - see
+ * debug_uart.h's comment. This project's own ~238 other debug_print()
+ * call sites (waterfall ticks, smeter dBFS, block budget cycle
+ * breakdowns, etc.) drown out the handful of HFDL lines that matter
+ * during a focused test session - debug_uart_set_quiet(1) silences
+ * all of THOSE (they funnel through the quiet-respecting debug_print()
+ * below) while every debug_print*_always() call (this module's own
+ * summaries) keeps printing, via debug_print_raw() below, which never
+ * checks s_quiet. Independent of s_isr_silence above - that one
+ * silences EVERYTHING, even _always(), for a specific brief ISR-only
+ * window; this one silences only the ordinary (non-always) call
+ * sites, for as long as the caller wants. Default 0 (normal,
+ * unchanged behaviour for anyone who never calls this). */
+static uint8_t s_quiet = 0U;
+
+void debug_uart_set_quiet(uint8_t quiet)
+{
+    s_quiet = quiet;
+}
+
 void debug_uart_init(void)
 {
     rcu_periph_clock_enable(RCU_GPIOA);
@@ -26,6 +77,12 @@ void debug_uart_init(void)
 
 static void uart_putc(char c)
 {
+    if (s_isr_silence) {
+        return; /* see s_isr_silence's own comment - the true single choke point:
+                  * debug_print_hex32/hex16's digit loops call uart_print_hex_nibble()
+                  * -> uart_putc() directly, bypassing debug_print() entirely, so the
+                  * guard belongs here, not there. */
+    }
     while (usart_flag_get(USART0, USART_FLAG_TBE) == RESET) {
     }
     usart_data_transmit(USART0, (uint8_t)c);
@@ -97,6 +154,38 @@ void debug_print(const char *s)
     char usb_buf[DEBUG_USB_LINE_MAX];
     uint16_t usb_len = 0U;
 
+    if (s_isr_silence || s_quiet) {
+        return; /* s_isr_silence: see its own comment, hard mute even for _always() callers
+                  * (not relevant here since THIS is the quiet-respecting path anyway).
+                  * s_quiet: this project's ordinary call sites - see s_quiet's own comment. */
+    }
+
+    while (*s) {
+        char c = *s;
+        if (c == '\n') {
+            uart_putc('\r');
+            if (usb_len < DEBUG_USB_LINE_MAX) { usb_buf[usb_len++] = '\r'; }
+        }
+        uart_putc(c);
+        if (usb_len < DEBUG_USB_LINE_MAX) { usb_buf[usb_len++] = c; }
+        s++;
+    }
+
+    usb_debug_flush(usb_buf, usb_len);
+}
+
+/* Unconditional raw writer (16/09/2026) - bypasses s_quiet entirely
+ * (but NOT s_isr_silence, via uart_putc() - see that flag's own
+ * comment: it silences EVERYTHING, _always() included, for its brief
+ * ISR-only window). debug_print_always() and friends funnel through
+ * this instead of debug_print() so this project's quiet mode (added
+ * alongside this) doesn't accidentally swallow HFDL's own summary
+ * lines the way it's meant to swallow everything else. */
+static void debug_print_raw(const char *s)
+{
+    char usb_buf[DEBUG_USB_LINE_MAX];
+    uint16_t usb_len = 0U;
+
     while (*s) {
         char c = *s;
         if (c == '\n') {
@@ -113,6 +202,12 @@ void debug_print(const char *s)
 
 static void uart_print_hex_nibble(uint8_t nibble)
 {
+    if (s_quiet) {
+        return; /* see s_quiet's own comment - debug_print_hex32/hex16's nibble loop
+                  * calls this directly, bypassing debug_print(), so needs its own check
+                  * to actually respect quiet mode (this project's ~238 other call sites
+                  * include a few hex32/hex16 dumps). */
+    }
     if (nibble < 10) {
         uart_putc('0' + nibble);
     } else {
@@ -161,11 +256,48 @@ void debug_print_dec(const char *label, uint32_t val)
     debug_print("\n");
 }
 
-/* _always() variants - see debug_uart.h's comment on why these are
- * plain aliases here. */
-void debug_print_always(const char *s) { debug_print(s); }
-void debug_print_hex32_always(const char *label, uint32_t val) { debug_print_hex32(label, val); }
-void debug_print_dec_always(const char *label, uint32_t val) { debug_print_dec(label, val); }
+/* _always() variants (16/09/2026) - now REAL bypasses of s_quiet, via
+ * debug_print_raw() - see that function's own comment. Before quiet
+ * mode existed in this branch, these were plain aliases to the
+ * ordinary functions (see the git history/conversation for why); now
+ * that s_quiet exists, aliasing would defeat the whole point of
+ * "_always" (HFDL's own summaries would go silent along with
+ * everything else the moment someone calls debug_uart_set_quiet(1)). */
+void debug_print_always(const char *s) { debug_print_raw(s); }
+
+void debug_print_hex32_always(const char *label, uint32_t val)
+{
+    debug_print_raw(label);
+    debug_print_raw(" = 0x");
+    for (int i = 7; i >= 0; i--) {
+        uint8_t nibble = (val >> (i * 4)) & 0xF;
+        char c = (nibble < 10) ? (char)('0' + nibble) : (char)('A' + (nibble - 10));
+        char buf[2] = { c, '\0' };
+        debug_print_raw(buf);
+    }
+    debug_print_raw("\n");
+}
+
+void debug_print_dec_always(const char *label, uint32_t val)
+{
+    char buf[11];
+    int i = 10;
+    buf[10] = '\0';
+
+    if (val == 0) {
+        buf[--i] = '0';
+    } else {
+        while (val > 0 && i > 0) {
+            buf[--i] = (char)('0' + (val % 10));
+            val /= 10;
+        }
+    }
+
+    debug_print_raw(label);
+    debug_print_raw(" = ");
+    debug_print_raw(&buf[i]);
+    debug_print_raw("\n");
+}
 
 /* Fixed-point float print (ported 16/09/2026 with the HFDL module,
  * verbatim from the HFDL branch's debug_uart.c - see debug_uart.h's

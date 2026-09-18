@@ -1,6 +1,7 @@
 #include "hfdl_scope.h"
 #include "waterfall.h" /* waterfall_ram_borrow_for_hfdl/return_from_hfdl - see hfdl_scope_set_enabled() */
 #include "gd32f4xx.h" /* __get_PRIMASK()/__disable_irq()/__set_PRIMASK() - see hfdl_scope_set_enabled()'s critical section */
+#include "debug_uart.h" /* debug_uart_set_quiet() - auto quiet mode on HFDL entry/exit, see hfdl_scope_set_enabled() */
 
 /*
  * See hfdl_scope.h for the full "what this is/isn't" story. FFT
@@ -416,6 +417,16 @@ void hfdl_scope_set_enabled(uint8_t on)
     } else {
         waterfall_ram_return_from_hfdl();
     }
+
+    /* Modo silencioso automatico (16/09/2026) - a peticion del
+     * propietario del proyecto: con las ~238 lineas normales de log
+     * del proyecto (waterfall ticks, smeter, block budget...) resulta
+     * muy dificil leer las lineas de HFDL que importan. Se activa solo
+     * al ENTRAR de verdad en modo HFDL (esta funcion ya solo llega
+     * aqui en una transicion real, ver el guard de mas arriba) y se
+     * desactiva al salir, para no dejar el resto del proyecto mudo por
+     * accidente si HFDL nunca se ha usado en esta sesion. */
+    debug_uart_set_quiet(s_enabled ? 1u : 0u);
 }
 
 uint8_t hfdl_scope_get_enabled(void)

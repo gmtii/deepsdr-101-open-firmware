@@ -3,6 +3,14 @@
 #include "hfdl_scope.h" /* hfdl_scope_feed() - burst-detector tap, 16/09/2026, see the call site below */
 #include "hfdl_demod_chain.h" /* hfdl_demod_chain_t/_init/_process - LOCKED detection, sub-pieza 1, 16/09/2026 */
 #include "hfdl_preamble_sync.h" /* hfdl_preamble_sync_t/_init/_reset/_process_symbol - ditto */
+#include "hfdl_data_segment.h" /* hfdl_data_segment_t - segmento de datos, sub-pieza 2, 16/09/2026 */
+#include "hfdl_equalizer.h" /* hfdl_equalizer_t - ditto */
+#include "hfdl_payload_decode.h" /* hfdl_payload_decode_begin_segment/feed_symbol/finish/get_crc_status - ditto */
+#include "hfdl_preamble_seq.h" /* HFDL_T_SEQ/HFDL_T_LEN - ditto */
+#include "hfdl_soft_demod.h" /* hfdl_soft_demod_costas_phase_error - ditto */
+#include "hfdl_costas.h" /* hfdl_costas_adjust - ditto */
+#include "hfdl_pdu.h" /* hfdl_mpdu_parse_header/extract_lpdus - resumen MPDU/LPDU, 16/09/2026 */
+#include "hfdl_hfnpdu.h" /* hfdl_hfnpdu_parse_performance_data - posicion GPS dentro de USER_DATA, 16/09/2026 */
 #include "sam.h" /* DEMOD_MODE_SAM - 21/08/2026 */
 #include "config.h"
 #include "sdr_rx.h"
@@ -1587,6 +1595,147 @@ static volatile uint32_t s_hfdl_dbg_burst_end_best_state = 0u;
 static volatile float s_hfdl_dbg_burst_end_best_a_score = 0.0f;
 static volatile uint8_t s_hfdl_dbg_a2_pending = 0u;
 static volatile uint8_t s_hfdl_dbg_locked_pending = 0u;
+static volatile uint32_t s_hfdl_dbg_locked_m1 = 0u;
+
+/* SUB-PIEZA 2 (16/09/2026) - resumen de fin de segmento + estado CRC,
+ * mismo patron de deferral que arriba (ver su comentario). */
+static volatile uint8_t s_hfdl_dbg_done_pending = 0u;
+static volatile uint32_t s_hfdl_dbg_done_m1 = 0u;
+static volatile uint32_t s_hfdl_dbg_done_total = 0u;
+static volatile uint32_t s_hfdl_dbg_done_m2skip = 0u;
+static volatile uint32_t s_hfdl_dbg_done_eqtrain = 0u;
+static volatile uint32_t s_hfdl_dbg_done_data = 0u;
+static volatile float s_hfdl_dbg_done_eq_mse = 0.0f;
+static volatile uint8_t s_hfdl_dbg_done_ready = 0u;
+static volatile uint8_t s_hfdl_dbg_done_crc_ok = 0u;
+static volatile uint8_t s_hfdl_dbg_done_crc_valid = 0u;
+static volatile uint32_t s_hfdl_dbg_done_decoded_len = 0u;
+static uint8_t s_hfdl_dbg_decoded_bytes[32]; /* snapshot para el volcado hex diferido, ver su uso mas abajo */
+static volatile uint32_t s_hfdl_dbg_decoded_dump_len = 0u;
+static char s_hfdl_pdu_summary[220]; /* resumen MPDU/LPDU (direccion, IDs, tipo, ICAO) - ver su uso mas abajo */
+static volatile uint32_t s_hfdl_pdu_summary_len = 0u;
+static uint8_t s_hfdl_full_decoded[128]; /* copia completa de los bytes decodificados (16/09/2026, movido de la ISR al bucle principal) */
+static volatile uint32_t s_hfdl_full_decoded_len = 0u;
+static volatile uint8_t s_hfdl_pdu_parse_pending = 0u;
+
+/* Estado actual del preambulo, para pintarlo en pantalla (16/09/2026,
+ * pedido por el propietario del proyecto para poder probar sin PC/UART
+ * encendido, con una fuente de captura externa). Actualizado cada
+ * simbolo dentro del bloque de la ISR de arriba - "current", no un
+ * evento de una sola vez como los flags _pending de encima, asi que
+ * sin logica de drenaje: demod_am_hfdl_get_preamble_state() simplemente
+ * lee el ultimo valor. Solo tiene sentido mientras hay burst activo
+ * (hfdl_scope_burst_active()) - el llamador debe comprobar eso primero,
+ * ver el comentario de demod_am_hfdl_get_preamble_state(). */
+static volatile hfdl_preamble_state_t s_hfdl_current_pre_state = HFDL_PREAMBLE_A1_SEARCH;
+
+hfdl_preamble_state_t demod_am_hfdl_get_preamble_state(void)
+{
+    return s_hfdl_current_pre_state;
+}
+
+/* Longitud del ultimo PDU decodificado con exito (para el badge en
+ * pantalla, ver hfdl_scope_panel_draw() en main.c) - persiste entre
+ * llamadas, no es un flag de un solo uso como los _pending de arriba,
+ * asi que no necesita drenaje: simplemente el ultimo valor conocido. */
+uint32_t demod_am_hfdl_get_last_decoded_len(void)
+{
+    return s_hfdl_dbg_done_decoded_len;
+}
+
+/* Analiza MPDU/LPDU/HFNPDU y monta s_hfdl_pdu_summary - llamada SOLO
+ * desde el bucle principal (16/09/2026, movido aqui tras corrupcion
+ * real en hardware con esto en la ISR - ver el comentario en el punto
+ * de copia de s_hfdl_full_decoded[]). Structs grandes como locales
+ * normales aqui: la pila del bucle principal no tiene ni de lejos la
+ * profundidad de la ISR de audio (Costas/Viterbi/etc.), asi que no
+ * hace falta la misma cautela de convertirlas a estaticas. */
+static void demod_am_hfdl_analyze_pdu(void)
+{
+    hfdl_mpdu_header_t hdr;
+    hfdl_lpdu_result_t lpdus[4];
+    uint32_t n_lpdu, p = 0u, li;
+    static const char *k_lpdu_names[] = {
+        "INVALID", "LOGON_REQUEST", "LOGON_CONFIRM",
+        "LOGOFF_OR_DENIED", "USER_DATA", "UNKNOWN_TYPE"
+    };
+    #define PDU_APPEND(str) do { const char *_s = (str); while (*_s && p < sizeof(s_hfdl_pdu_summary) - 1u) { s_hfdl_pdu_summary[p++] = *_s++; } } while (0)
+    #define PDU_APPEND_DEC(v) do { uint32_t _x = (uint32_t)(v); char _d[10]; uint8_t _n = 0u; if (_x == 0u) { _d[_n++] = '0'; } while (_x > 0u && _n < 10u) { _d[_n++] = (char)('0' + (_x % 10u)); _x /= 10u; } while (_n > 0u && p < sizeof(s_hfdl_pdu_summary) - 1u) { s_hfdl_pdu_summary[p++] = _d[--_n]; } } while (0)
+    #define PDU_APPEND_HEX6(v) do { uint32_t _x = (uint32_t)(v) & 0xFFFFFFu; int _b; for (_b = 20; _b >= 0; _b -= 4) { uint8_t _nib = (uint8_t)((_x >> _b) & 0xFu); if (p < sizeof(s_hfdl_pdu_summary) - 1u) { s_hfdl_pdu_summary[p++] = (char)((_nib < 10u) ? ('0' + _nib) : ('A' + (_nib - 10u))); } } } while (0)
+
+    s_hfdl_pdu_summary_len = 0u;
+    if (!hfdl_mpdu_parse_header(s_hfdl_full_decoded, s_hfdl_full_decoded_len, &hdr) || !hdr.crc_ok) {
+        return;
+    }
+    n_lpdu = hfdl_mpdu_extract_lpdus(s_hfdl_full_decoded, s_hfdl_full_decoded_len, &hdr, lpdus, 4u);
+
+    PDU_APPEND("  MPDU: ");
+    PDU_APPEND(hdr.direction == HFDL_PDU_DIR_DOWNLINK ? "downlink (avion->tierra)" : "uplink (tierra->avion)");
+    if (hdr.direction == HFDL_PDU_DIR_DOWNLINK) {
+        PDU_APPEND(" src_id="); PDU_APPEND_DEC(hdr.src_id);
+        PDU_APPEND(" dst_gs_id="); PDU_APPEND_DEC(hdr.dst_id);
+    } else {
+        PDU_APPEND(" src_gs_id="); PDU_APPEND_DEC(hdr.src_gs_id);
+        PDU_APPEND(" aircraft_cnt="); PDU_APPEND_DEC(hdr.aircraft_cnt);
+    }
+    PDU_APPEND("\n");
+    for (li = 0u; li < n_lpdu; li++) {
+        PDU_APPEND("    LPDU: ");
+        PDU_APPEND(k_lpdu_names[(uint32_t)lpdus[li].kind]);
+        PDU_APPEND(lpdus[li].crc_ok ? " (crc ok)" : " (crc BAD)");
+        if (lpdus[li].kind == HFDL_LPDU_KIND_LOGON_REQUEST ||
+            lpdus[li].kind == HFDL_LPDU_KIND_LOGON_CONFIRM ||
+            lpdus[li].kind == HFDL_LPDU_KIND_LOGOFF_OR_DENIED) {
+            PDU_APPEND(" ICAO=0x");
+            PDU_APPEND_HEX6(lpdus[li].icao_address);
+        }
+        if (lpdus[li].kind == HFDL_LPDU_KIND_USER_DATA) {
+            hfdl_hfnpdu_perf_data_t perf;
+            uint32_t user_data_off;
+            PDU_APPEND(" user_data_len=");
+            PDU_APPEND_DEC(lpdus[li].user_data_len);
+            /* Solo para el PRIMER LPDU de un MPDU DOWNLINK - ver el
+             * comentario original de esta cuenta de desplazamiento en
+             * la conversacion de porte de este modulo (verificado byte
+             * a byte contra un mensaje real). */
+            if (hdr.direction == HFDL_PDU_DIR_DOWNLINK && li == 0u &&
+                s_hfdl_full_decoded_len > hdr.hdr_len + 3u) {
+                user_data_off = hdr.hdr_len + 3u;
+                if (hfdl_hfnpdu_parse_performance_data(s_hfdl_full_decoded + user_data_off,
+                        s_hfdl_full_decoded_len - user_data_off, &perf)) {
+                    int32_t lat_x10000 = (int32_t)(perf.location.lat * 10000.0 + (perf.location.lat >= 0.0 ? 0.5 : -0.5));
+                    int32_t lon_x10000 = (int32_t)(perf.location.lon * 10000.0 + (perf.location.lon >= 0.0 ? 0.5 : -0.5));
+                    PDU_APPEND("\n      Performance data: lat=");
+                    if (lat_x10000 < 0) { PDU_APPEND("-"); lat_x10000 = -lat_x10000; }
+                    PDU_APPEND_DEC((uint32_t)lat_x10000 / 10000u);
+                    PDU_APPEND(".");
+                    PDU_APPEND_DEC((uint32_t)lat_x10000 % 10000u);
+                    PDU_APPEND(" lon=");
+                    if (lon_x10000 < 0) { PDU_APPEND("-"); lon_x10000 = -lon_x10000; }
+                    PDU_APPEND_DEC((uint32_t)lon_x10000 / 10000u);
+                    PDU_APPEND(".");
+                    PDU_APPEND_DEC((uint32_t)lon_x10000 % 10000u);
+                    PDU_APPEND(" flight_leg="); PDU_APPEND_DEC(perf.flight_leg);
+                    PDU_APPEND(" gs_id="); PDU_APPEND_DEC(perf.gs_id);
+                    PDU_APPEND(" utc=");
+                    PDU_APPEND_DEC(perf.utc_time.hour); PDU_APPEND(":");
+                    PDU_APPEND_DEC(perf.utc_time.min); PDU_APPEND(":");
+                    PDU_APPEND_DEC(perf.utc_time.sec);
+                } else {
+                    PDU_APPEND(" (contenido ACARS/HFNPDU sin decodificar)");
+                }
+            } else {
+                PDU_APPEND(" (contenido ACARS/HFNPDU sin decodificar)");
+            }
+        }
+        PDU_APPEND("\n");
+    }
+    s_hfdl_pdu_summary[p] = '\0';
+    s_hfdl_pdu_summary_len = p;
+    #undef PDU_APPEND
+    #undef PDU_APPEND_DEC
+    #undef PDU_APPEND_HEX6
+}
 
 /* Drains the flags above from the MAIN LOOP - see their declaration
  * comment for why this must never be called from ISR context. Call
@@ -1617,10 +1766,63 @@ void demod_am_hfdl_probe_debug_poll(void)
     }
     if (s_hfdl_dbg_locked_pending) {
         s_hfdl_dbg_locked_pending = 0u;
-        /* SUB-PIEZA 2 (pendiente): aqui es donde arrancara el segmento
-         * de datos real + ecualizador + payload decode - ver el
-         * comentario en el bloque de la ISR. */
-        debug_print_always("\n*** HFDL LOCKED *** (segmento de datos aun no enganchado - sub-pieza 2)\n");
+        debug_print_dec_always("\n*** HFDL PREAMBLE LOCKED *** M1", s_hfdl_dbg_locked_m1);
+    }
+    if (s_hfdl_dbg_done_pending) {
+        s_hfdl_dbg_done_pending = 0u;
+        debug_print_always("=== HFDL data segment DONE ===\n");
+        debug_print_dec_always("  M1", s_hfdl_dbg_done_m1);
+        debug_print_dec_always("  total symbols seen", s_hfdl_dbg_done_total);
+        debug_print_dec_always("  M2_SKIP symbols seen (expect 15)", s_hfdl_dbg_done_m2skip);
+        debug_print_dec_always("  EQ_TRAIN symbols seen", s_hfdl_dbg_done_eqtrain);
+        debug_print_dec_always("  DATA symbols seen", s_hfdl_dbg_done_data);
+        debug_print_float_always("  eq MSE, all EQ_TRAIN symbols", s_hfdl_dbg_done_eq_mse);
+        debug_print_dec_always("  payload decode ready", s_hfdl_dbg_done_ready);
+        debug_print_dec_always("  CRC last_ok", s_hfdl_dbg_done_crc_ok);
+        debug_print_dec_always("  CRC last_valid", s_hfdl_dbg_done_crc_valid);
+        debug_print_dec_always("  decoded_len", s_hfdl_dbg_done_decoded_len);
+        if (s_hfdl_dbg_decoded_dump_len > 0u) {
+            /* Construye la linea ENTERA en un buffer local (16/09/2026)
+             * - evita 8 llamadas sueltas a debug_print_hex32_always().
+             * SIN seccion critica de IRQ real: se probo una vez (ver
+             * conversacion de porte de este modulo) y parece haber
+             * empeorado las cosas - deshabilitar interrupciones de
+             * verdad cerca del DMA circular de audio, muy sensible al
+             * tiempo, es mas peligroso que el problema que intentaba
+             * arreglar (un desbordamiento del propio DMA por no
+             * atenderse a tiempo puede corromper memoria de forma mas
+             * grave que una linea de log incompleta). Se acepta el
+             * riesgo, mas leve, de que esta linea salga ocasionalmente
+             * incompleta si un LOCKED nuevo coincide exactamente con
+             * ella - eso nunca ha afectado al CRC ni a los datos en
+             * si, solo a como se ve esta linea de depuracion. */
+            char line[16 + 32u * 3u]; /* "  decoded bytes: " + hasta 32 bytes como "XX " */
+            uint32_t len = 0u, i;
+            const char *prefix = "  decoded bytes:";
+            for (i = 0u; prefix[i] != '\0'; i++) { line[len++] = prefix[i]; }
+            for (i = 0u; i < s_hfdl_dbg_decoded_dump_len; i++) {
+                uint8_t b = s_hfdl_dbg_decoded_bytes[i];
+                uint8_t hi = (uint8_t)(b >> 4), lo = (uint8_t)(b & 0xFu);
+                line[len++] = ' ';
+                line[len++] = (char)((hi < 10u) ? ('0' + hi) : ('A' + (hi - 10u)));
+                line[len++] = (char)((lo < 10u) ? ('0' + lo) : ('A' + (lo - 10u)));
+            }
+            line[len++] = '\n';
+            line[len] = '\0';
+            debug_print_always(line);
+        }
+        if (s_hfdl_pdu_parse_pending) {
+            s_hfdl_pdu_parse_pending = 0u;
+            demod_am_hfdl_analyze_pdu(); /* fuera de la ISR, ver su comentario */
+        }
+        if (s_hfdl_pdu_summary_len > 0u) {
+            /* SIN seccion critica de IRQ real - ver el comentario del
+             * volcado hex de arriba, mismo motivo. */
+            debug_print_always(s_hfdl_pdu_summary);
+        }
+        if (s_hfdl_dbg_done_crc_valid && s_hfdl_dbg_done_crc_ok) {
+            debug_print_always("  *** CRC OK ***\n");
+        }
     }
 }
 
@@ -1809,6 +2011,16 @@ void demod_am_init(void)
     nr_ss_init();
     rtty_init();
     rtty_scope_init();
+    hfdl_scope_init(); /* MISSING from the initial port (16/09/2026), real-hardware regression -
+                          * without this, s_hann[]/s_twiddle_cos/s_twiddle_sin/s_bitrev[] all sit
+                          * at their zero-init .bss default forever. hfdl_scope_poll() multiplies
+                          * every accumulated sample by s_hann[] before the FFT - an all-zero
+                          * window means the FFT input is all-zero regardless of real signal, so
+                          * in_band_sum is always exactly 0.0f, which primes floor_power at its
+                          * 1.0e-9f floor (prints as "0.000000" at 6 decimal digits) and it can
+                          * never move from there. Same "missing one-time init call" shape as the
+                          * hfdl_scope_poll() omission found earlier in this same port - called
+                          * once here, at boot, same spot rtty_scope_init() already is. */
     {
         uint32_t k;
         for (k = 0; k < HILBERT_GROUP_DELAY_DEC; k++) {
@@ -2610,6 +2822,24 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
             static float s_hfdl_probe_burst_best_a_score = -1.0f;
             uint8_t burst_now;
 
+            /* SUB-PIEZA 2 (16/09/2026) - segmento de datos + ecualizador +
+             * payload decode + CRC, portado desde el mismo bloque de la
+             * rama HFDL, ya validado con datos reales (crc_ok=1
+             * confirmado en el arnes de host contra la captura de Nueva
+             * York, 11387kHz) antes de traerlo aqui - ver la conversacion
+             * de porte de este modulo. Tamanos pequenos (36 y 248 bytes),
+             * no hace falta TCM esta vez. */
+            static hfdl_data_segment_t s_hfdl_data_segment;
+            static hfdl_equalizer_t s_hfdl_equalizer;
+            static uint8_t s_hfdl_data_segment_active = 0u;
+            static uint32_t s_hfdl_eq_bitmask = 0u;
+            static uint8_t s_hfdl_polarity_decided = 0u;
+            static float32_t s_hfdl_polarity_dot_accum = 0.0f;
+            static float32_t s_hfdl_polarity_buf_i[HFDL_T_LEN];
+            static float32_t s_hfdl_polarity_buf_q[HFDL_T_LEN];
+            static float32_t s_hfdl_eq_train_err_sq_sum = 0.0f;
+            static uint32_t s_hfdl_current_m1 = 0u;
+
             if (!s_hfdl_probe_init_done) {
                 s_hfdl_probe_init_done = 1u;
                 hfdl_preamble_sync_init(&s_hfdl_preamble);
@@ -2685,7 +2915,142 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
                     s_hfdl_probe_symbol_count++;
                     s_hfdl_probe_burst_symbol_count++;
 
+                    /* ---- Segmento de datos + ecualizador (sub-pieza 2)
+                     * - se ejecuta ANTES de avanzar el correlador de
+                     * preambulo, igual que en la rama HFDL original: en
+                     * el simbolo exacto en que pre_state pasa a LOCKED
+                     * por primera vez, s_hfdl_data_segment_active
+                     * todavia es 0 aqui (se pone a 1 mas abajo, en ESTA
+                     * misma iteracion) - asi que el segmento empieza a
+                     * consumir simbolos desde el SIGUIENTE, sin contar
+                     * dos veces el simbolo del propio M1. ---- */
+                    if (s_hfdl_data_segment_active) {
+                        hfdl_data_segment_state_t ds_state_before = hfdl_data_segment_get_state(&s_hfdl_data_segment);
+                        uint32_t t_idx_before = hfdl_data_segment_get_t_idx(&s_hfdl_data_segment);
+
+                        hfdl_equalizer_push(&s_hfdl_equalizer, probe_i_half_out[p], probe_q_half_out[p]);
+                        hfdl_equalizer_push(&s_hfdl_equalizer, probe_i_out[p], probe_q_out[p]);
+                        float32_t eq_i, eq_q;
+                        hfdl_equalizer_execute(&s_hfdl_equalizer, &eq_i, &eq_q);
+
+                        if (ds_state_before == HFDL_DSEG_EQ_TRAIN) {
+                            if (!s_hfdl_polarity_decided) {
+                                s_hfdl_polarity_buf_i[t_idx_before] = eq_i;
+                                s_hfdl_polarity_buf_q[t_idx_before] = eq_q;
+                                s_hfdl_polarity_dot_accum += eq_i * HFDL_T_SEQ[0][t_idx_before];
+                                if (t_idx_before == HFDL_T_LEN - 1u) {
+                                    s_hfdl_eq_bitmask = (s_hfdl_polarity_dot_accum < 0.0f) ? 1u : 0u;
+                                    for (uint32_t k = 0; k < HFDL_T_LEN; k++) {
+                                        float32_t d = HFDL_T_SEQ[s_hfdl_eq_bitmask][k];
+                                        hfdl_equalizer_step(&s_hfdl_equalizer, d, 0.0f, s_hfdl_polarity_buf_i[k], s_hfdl_polarity_buf_q[k]);
+                                        float32_t err = d - s_hfdl_polarity_buf_i[k];
+                                        s_hfdl_eq_train_err_sq_sum += err * err;
+                                    }
+                                    s_hfdl_polarity_decided = 1u;
+                                }
+                            } else {
+                                float32_t d = HFDL_T_SEQ[s_hfdl_eq_bitmask][t_idx_before];
+                                hfdl_equalizer_step(&s_hfdl_equalizer, d, 0.0f, eq_i, eq_q);
+                                float32_t phase_err = ((d >= 0.0f) ? 1.0f : -1.0f) * eq_q;
+                                hfdl_costas_adjust(&s_hfdl_probe_chain.costas, phase_err);
+                                float32_t err = d - eq_i;
+                                s_hfdl_eq_train_err_sq_sum += err * err;
+                            }
+                        } else if (ds_state_before == HFDL_DSEG_DATA_1 || ds_state_before == HFDL_DSEG_DATA_2) {
+                            hfdl_payload_decode_feed_symbol(eq_i, eq_q, s_hfdl_eq_bitmask);
+                            float32_t costas_phase_err = hfdl_soft_demod_costas_phase_error(
+                                    s_hfdl_data_segment.mod_arity, eq_i, eq_q);
+                            hfdl_costas_adjust(&s_hfdl_probe_chain.costas, costas_phase_err);
+                        }
+
+                        hfdl_data_segment_process_symbol(&s_hfdl_data_segment, probe_i_out[p], probe_q_out[p]);
+                        if (hfdl_data_segment_get_state(&s_hfdl_data_segment) == HFDL_DSEG_DONE) {
+                            /* UART DEFERRAL - ver el comentario de mas
+                             * arriba (burst START/END) - misma razon,
+                             * esto tambien corre dentro de la ISR. */
+                            s_hfdl_dbg_done_m1 = s_hfdl_current_m1;
+                            s_hfdl_dbg_done_total = hfdl_data_segment_get_total_symbols_seen(&s_hfdl_data_segment);
+                            s_hfdl_dbg_done_m2skip = hfdl_data_segment_get_m2_skip_symbols_seen(&s_hfdl_data_segment);
+                            s_hfdl_dbg_done_eqtrain = hfdl_data_segment_get_eq_train_symbols_seen(&s_hfdl_data_segment);
+                            s_hfdl_dbg_done_data = hfdl_data_segment_get_data_symbols_seen(&s_hfdl_data_segment);
+                            s_hfdl_dbg_done_eq_mse = s_hfdl_eq_train_err_sq_sum / (float32_t)s_hfdl_dbg_done_eqtrain;
+
+                            debug_uart_isr_silence_begin(); /* ver comentario en debug_uart.c */
+                            {
+                                uint32_t ram_cap;
+                                uint8_t *ram = hfdl_scope_get_hfdl_ram(&ram_cap);
+                                const uint8_t *decoded = (void *)0;
+                                uint32_t decoded_len = 0u;
+                                if (ram != (void *)0) {
+                                    hfdl_payload_decode_finish_ex(ram, &decoded, &decoded_len);
+                                    if (decoded != (void *)0) {
+                                        uint32_t dump_n = decoded_len < 32u ? decoded_len : 32u, k;
+                                        for (k = 0u; k < dump_n; k++) {
+                                            s_hfdl_dbg_decoded_bytes[k] = decoded[k];
+                                        }
+                                        s_hfdl_dbg_decoded_dump_len = dump_n;
+                                    } else {
+                                        s_hfdl_dbg_decoded_dump_len = 0u;
+                                    }
+                                }
+                                s_hfdl_dbg_done_decoded_len = decoded_len;
+
+                                {
+                                    uint8_t crc_last_ok, crc_last_valid, crc_attempts, crc_good;
+                                    hfdl_payload_decode_get_crc_status(&crc_last_ok, &crc_last_valid, &crc_attempts, &crc_good);
+                                    s_hfdl_dbg_done_crc_ok = crc_last_ok;
+                                    s_hfdl_dbg_done_crc_valid = crc_last_valid;
+                                    (void)crc_attempts;
+                                    (void)crc_good;
+
+                                    /* Resumen MPDU/LPDU/HFNPDU - MOVIDO
+                                     * al bucle principal (16/09/2026,
+                                     * corrupcion real en hardware con
+                                     * esto resuelto directamente aqui en
+                                     * la ISR - ver la conversacion de
+                                     * porte de este modulo: ni
+                                     * convertir los locales a estaticos
+                                     * lo arreglo, y sin bug de memoria
+                                     * detectable con ASan sobre
+                                     * mensajes reales completos, asi
+                                     * que se opto por sacar TODO el
+                                     * analisis de la ISR en vez de
+                                     * seguir intentando acotar la causa
+                                     * a ciegas). Aqui SOLO se copian los
+                                     * bytes crudos (barato) - el parseo
+                                     * de verdad ocurre en
+                                     * demod_am_hfdl_probe_debug_poll(),
+                                     * bucle principal, pila mucho menos
+                                     * profunda. */
+                                    s_hfdl_pdu_parse_pending = 0u;
+                                    s_hfdl_pdu_summary_len = 0u; /* BUG REAL encontrado (16/09/2026): sin
+                                       esto, un segmento fallido reimprimia el resumen del ULTIMO exito
+                                       anterior (mismas coordenadas GPS repetidas con CRC=0!) porque
+                                       s_hfdl_pdu_summary[] nunca se vaciaba cuando no habia contenido
+                                       nuevo. Vaciar aqui, siempre, antes de decidir si hay contenido
+                                       nuevo que analizar. */
+                                    if (crc_last_ok && crc_last_valid && decoded != (void *)0) {
+                                        uint32_t copy_n = decoded_len < (uint32_t)sizeof(s_hfdl_full_decoded) ?
+                                                decoded_len : (uint32_t)sizeof(s_hfdl_full_decoded);
+                                        uint32_t k2;
+                                        for (k2 = 0u; k2 < copy_n; k2++) {
+                                            s_hfdl_full_decoded[k2] = decoded[k2];
+                                        }
+                                        s_hfdl_full_decoded_len = copy_n;
+                                        s_hfdl_pdu_parse_pending = 1u;
+                                    }
+                                }
+                            }
+                            debug_uart_isr_silence_end();
+                            s_hfdl_dbg_done_pending = 1u;
+
+                            s_hfdl_data_segment_active = 0u;
+                            hfdl_preamble_sync_reset(&s_hfdl_preamble);
+                        }
+                    }
+
                     pre_state = hfdl_preamble_sync_process_symbol(&s_hfdl_preamble, probe_i_out[p], probe_q_out[p]);
+                    s_hfdl_current_pre_state = pre_state; /* para pantalla, ver su declaracion arriba */
 
                     snr_now = hfdl_scope_get_snr_ratio();
                     if (snr_now > s_hfdl_probe_burst_snr_peak) {
@@ -2705,12 +3070,24 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
                     s_hfdl_was_a2_search = (pre_state == HFDL_PREAMBLE_A2_SEARCH);
 
                     if (pre_state == HFDL_PREAMBLE_LOCKED && !s_hfdl_was_locked) {
-                        /* SUB-PIEZA 2 (pendiente): aqui es donde arranca
-                         * el segmento de datos real + ecualizador +
-                         * hfdl_payload_decode_begin_segment_ex(). Por
-                         * ahora solo se registra el LOCKED en si
-                         * (deferred - ver comentario de burst-start). */
-                        s_hfdl_dbg_locked_pending = 1u;
+                        const hfdl_frame_params_t *fp = hfdl_preamble_sync_get_frame_params(&s_hfdl_preamble);
+                        int32_t m1_idx = hfdl_preamble_sync_get_m1_index(&s_hfdl_preamble);
+                        s_hfdl_current_m1 = (uint32_t)m1_idx;
+                        s_hfdl_dbg_locked_m1 = (uint32_t)m1_idx;
+                        s_hfdl_dbg_locked_pending = 1u; /* deferred - see burst-start comment above */
+
+                        hfdl_data_segment_init(&s_hfdl_data_segment, fp->mod_arity, fp->data_segment_cnt);
+                        s_hfdl_data_segment_active = 1u;
+                        debug_uart_isr_silence_begin(); /* ver comentario en debug_uart.c - los prints
+                                                            internos de hfdl_payload_decode.c no estan
+                                                            diferidos y corrompian la UART al llamarse
+                                                            desde la ISR (hallado en hardware real) */
+                        s_hfdl_dbg_done_ready = hfdl_payload_decode_begin_segment((uint32_t)m1_idx) ? 1u : 0u;
+                        debug_uart_isr_silence_end();
+                        hfdl_equalizer_init(&s_hfdl_equalizer, HFDL_EQ_ACTIVE_MU);
+                        s_hfdl_polarity_decided = 0u;
+                        s_hfdl_polarity_dot_accum = 0.0f;
+                        s_hfdl_eq_train_err_sq_sum = 0.0f;
                     }
                     s_hfdl_was_locked = (pre_state == HFDL_PREAMBLE_LOCKED);
                 }

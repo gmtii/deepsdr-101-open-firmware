@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "hfdl_preamble_sync.h" /* hfdl_preamble_state_t - demod_am_hfdl_get_preamble_state()'s return type */
 
 /*
  * AM envelope demodulator, from baseband I/Q to the speaker.
@@ -635,6 +636,15 @@ demod_am_cycles_breakdown_t demod_am_get_last_cycles_breakdown(void);
  * there. Call unconditionally from the main loop, alongside
  * hfdl_scope_poll(). Cheap no-op most iterations (just flag checks). */
 void demod_am_hfdl_probe_debug_poll(void);
+
+/* Estado actual del preambulo HFDL (A1/A2/M1/LOCKED), para pintarlo en
+ * pantalla - ver su comentario en demod_am.c. Solo tiene sentido
+ * mientras hfdl_scope_burst_active() es verdadero; con burst inactivo,
+ * el valor es el ultimo alcanzado del burst anterior (no se resetea a
+ * proposito - le sirve al llamador tanto un "idle" gris como un
+ * "ultimo estado" atenuado, a su eleccion de UI). */
+hfdl_preamble_state_t demod_am_hfdl_get_preamble_state(void);
+uint32_t demod_am_hfdl_get_last_decoded_len(void);
 
 /* Pre-AGC envelope peak (int16 full-scale units, instant-attack /
  * slow-release ballistics) - the UI's S-meter source. Convert to

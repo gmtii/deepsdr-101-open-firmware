@@ -60,6 +60,24 @@ void debug_print_dec_always(const char *label, uint32_t val);
  * this link/no-syscalls target. */
 void debug_print_float_always(const char *label, float val);
 
+/* QUIET MODE - ver el comentario en debug_uart.c. Silencia los ~238
+ * puntos de log normales del proyecto (waterfall ticks, smeter,
+ * block budget...) dejando vivos los debug_print*_always() de HFDL.
+ * Independiente de debug_uart_isr_silence_begin/end() de abajo. */
+void debug_uart_set_quiet(uint8_t quiet);
+
+/* Hard-silences ALL debug output, even the _always() variants that
+ * bypass quiet mode - see debug_uart.c's own comment on s_isr_silence
+ * for why and when to use this (specifically: around
+ * hfdl_payload_decode_begin_segment()/finish() when called from ISR
+ * context, since that module's own internal debug_print*_always()
+ * calls aren't deferred like this project's other ISR-to-main-loop
+ * prints). Keep the silenced span as short as possible - this is a
+ * plain flag, not a counter, so nested calls are NOT supported: don't
+ * call _begin() again before a matching _end(). */
+void debug_uart_isr_silence_begin(void);
+void debug_uart_isr_silence_end(void);
+
 #else
 
 #define debug_uart_init()             ((void)0)
@@ -72,6 +90,9 @@ void debug_print_float_always(const char *label, float val);
 #define debug_print_hex32_always(label, val) ((void)0)
 #define debug_print_dec_always(label, val)   ((void)0)
 #define debug_print_float_always(label, val) ((void)0)
+#define debug_uart_set_quiet(quiet)           ((void)0)
+#define debug_uart_isr_silence_begin()        ((void)0)
+#define debug_uart_isr_silence_end()          ((void)0)
 
 #endif /* DEBUG_UART_ENABLED */
 

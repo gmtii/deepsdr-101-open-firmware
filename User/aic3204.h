@@ -219,10 +219,12 @@ uint8_t aic3204_set_input_impedance(aic3204_rin_t level);
  * *** BENCH-TEST ONLY, single-ended override *** - 07/09/2026, per
  * the project owner: for HFDL testing with the analog RF front-end
  * (QSD) fully disconnected and a line-level audio jack feeding IN2L/
- * IN3x directly instead, the source is NOT differential like the
- * QSD's I/Q outputs are, so aic3204_phase2_init()'s captured
- * differential wiring (IN2L(P)/IN2R(M) for the left/I channel,
- * IN3x(P)/IN3x(M) for the right/Q channel - see that function's own
+ * IN2R (I) and IN3R/IN3L (Q) directly instead, the source is NOT
+ * differential like the QSD's I/Q outputs are, so
+ * aic3204_phase2_init()'s captured differential wiring (IN2L(P)/
+ * IN2R(M) for the left/I channel, IN3R(P)/IN3L(M) for the right/Q
+ * channel - both genuinely differential, verified 13/08/2026 against
+ * the real TLV320AIC3204 datasheet - see that function's own
  * register-by-register comment) would short/cancel a single-ended
  * source fed onto only one side of each pair.
  *

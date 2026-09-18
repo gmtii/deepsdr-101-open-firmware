@@ -8562,11 +8562,13 @@ static void rtty_scope_draw(void)
  * lines, there's no per-signal tuning to do here).
  */
 static uint8_t s_hfdl_badge_was_active = 0xFFU; /* sentinel - neither 0 nor 1, forces the first draw after a reset to actually paint the strip */
+static int32_t s_hfdl_state_strip_last = -2; /* -2 = sentinel (forces first draw), -1 = idle (sin burst) - moved to file scope so hfdl_scope_panel_reset() can force a redraw too */
 
 static void hfdl_scope_panel_reset(void)
 {
     gfx_fill_rect(0, SPEC_Y, MAIN_W, SPEC_H, GFX_COLOR_BLACK);
     s_hfdl_badge_was_active = 0xFFU;
+    s_hfdl_state_strip_last = -2;
 }
 
 static uint8_t hfdl_scope_is_active(void)
@@ -8601,6 +8603,7 @@ static void hfdl_scope_tuning_diag_tick(void)
 
 #define HFDL_SCOPE_DB_FLOOR -60.0f
 #define HFDL_BADGE_STRIP_H  24U
+#define HFDL_STATE_STRIP_H  20U /* tira de estado A1/A2/M1/LOCKED al pie del panel, 16/09/2026 */
 static void hfdl_scope_panel_draw(void)
 {
     static float s_db[HFDL_SCOPE_BINS];
@@ -8608,7 +8611,7 @@ static void hfdl_scope_panel_draw(void)
     float hz_per_bin = hfdl_scope_hz_per_bin();
     float nyquist_hz = hz_per_bin * (float)HFDL_SCOPE_BINS;
     uint16_t bar_y = (uint16_t)(SPEC_Y + HFDL_BADGE_STRIP_H);
-    uint16_t bar_area_h = (uint16_t)(SPEC_H - HFDL_BADGE_STRIP_H);
+    uint16_t bar_area_h = (uint16_t)(SPEC_H - HFDL_BADGE_STRIP_H - HFDL_STATE_STRIP_H);
     uint8_t burst_now;
 
     if (hfdl_scope_frame_ready()) {
@@ -8647,7 +8650,7 @@ static void hfdl_scope_panel_draw(void)
         hfdl_payload_decode_get_crc_status(&crc_last_ok, &crc_last_valid, &crc_attempts, &crc_good);
 
         if (burst_now != s_hfdl_badge_was_active || crc_attempts != s_hfdl_badge_last_attempts) {
-            char line[40];
+            char line[48];
             uint32_t len = 0U;
             const char *base = burst_now ? "HFDL: BURST DETECTED  " : "HFDL: listening...  ";
             uint16_t base_color = burst_now ? GFX_COLOR_YELLOW : GFX_COLOR_DARKGRAY;
@@ -8668,6 +8671,19 @@ static void hfdl_scope_panel_draw(void)
                         if (v == 0U && len < sizeof(line) - 1U) { line[len++] = '/'; }
                     }
                 }
+                if (crc_last_ok) {
+                    /* Bytes del ultimo PDU decodificado con exito - pedido
+                     * para poder ver "llegaron datos" sin abrir la UART. */
+                    uint32_t decoded_len = demod_am_hfdl_get_last_decoded_len();
+                    char digits[10]; uint8_t nd = 0U; uint32_t x = decoded_len;
+                    if (len < sizeof(line) - 1U) { line[len++] = ' '; }
+                    if (len < sizeof(line) - 1U) { line[len++] = '('; }
+                    if (x == 0U) { digits[nd++] = '0'; }
+                    while (x > 0U && nd < sizeof(digits)) { digits[nd++] = (char)('0' + (x % 10U)); x /= 10U; }
+                    while (nd > 0U && len < sizeof(line) - 1U) { line[len++] = digits[--nd]; }
+                    if (len < sizeof(line) - 1U) { line[len++] = 'B'; }
+                    if (len < sizeof(line) - 1U) { line[len++] = ')'; }
+                }
             }
             line[len] = '\0';
 
@@ -8675,6 +8691,42 @@ static void hfdl_scope_panel_draw(void)
             gfx_text(4, (uint16_t)(SPEC_Y + 5), line, base_color, GFX_COLOR_BLACK, 2);
             s_hfdl_badge_was_active = burst_now;
             s_hfdl_badge_last_attempts = crc_attempts;
+        }
+    }
+
+    /* Tira de estado del preambulo (A1/A2/M1/LOCKED), 16/09/2026 -
+     * pedida para poder probar con una fuente de captura externa sin
+     * tener el PC/UART encendido al lado. Redibujo solo en cambio de
+     * estado, mismo criterio anti-parpadeo que el badge de arriba.
+     * "Alcanzado" (incluye el actual) en verde, "todavia no" en gris
+     * oscuro, LOCKED en su propio color (cian) al llegar - para que se
+     * distinga de un vistazo de "solo un paso mas de progreso". */
+    {
+        hfdl_preamble_state_t cur_state = demod_am_hfdl_get_preamble_state();
+        int32_t state_now = burst_now ? (int32_t)cur_state : -1;
+
+        if (state_now != s_hfdl_state_strip_last) {
+            static const char *k_state_labels[4] = { "A1", "A2", "M1", "LOCKED" };
+            uint16_t cell_w = (uint16_t)(MAIN_W / 4U);
+            uint16_t strip_y = (uint16_t)(SPEC_Y + SPEC_H - HFDL_STATE_STRIP_H);
+            uint32_t s;
+
+            gfx_fill_rect(0, strip_y, MAIN_W, HFDL_STATE_STRIP_H, GFX_COLOR_BLACK);
+            for (s = 0U; s < 4U; s++) {
+                uint16_t color;
+                if (!burst_now) {
+                    color = GFX_COLOR_DARKGRAY; /* idle - ninguna etapa iluminada */
+                } else if (s == 3U && (uint32_t)cur_state == 3U) {
+                    color = GFX_COLOR_CYAN; /* LOCKED en si, distinto del progreso "alcanzado" */
+                } else if (s <= (uint32_t)cur_state) {
+                    color = GFX_COLOR_GREEN; /* esta etapa (o una posterior) ya alcanzada este burst */
+                } else {
+                    color = GFX_COLOR_DARKGRAY; /* todavia no */
+                }
+                gfx_text((uint16_t)(s * cell_w + 8U), (uint16_t)(strip_y + 4U),
+                          k_state_labels[s], color, GFX_COLOR_BLACK, 2);
+            }
+            s_hfdl_state_strip_last = state_now;
         }
     }
 }

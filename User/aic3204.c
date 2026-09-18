@@ -521,14 +521,26 @@ void aic3204_configure_rate(aic3204_rate_t rate)
 
     /*
     Lo que significa registro por registro
-    Canal Izquierdo (Left ADC):
+    Canal Izquierdo (Left ADC / I):
     0x34 = 0x10 → IN2L entra al terminal positivo del MICPGA izquierdo con resistencia de 10 kΩ 
     0x36 = 0x10 → IN2R entra al terminal negativo del MICPGA izquierdo con resistencia de 10 kΩ 
     Esto configura el canal izquierdo como diferencial: la señal se toma entre IN2L (+) e IN2R (−), no contra common-mode.
-    Canal Derecho (Right ADC):
-    0x37 = 0x04 → IN3R entra al terminal positivo del MICPGA derecho con 10 kΩ 
-    0x39 = 0x04 → IN3R entra al terminal negativo del MICPGA derecho con 10 kΩ 
-    Esto conecta IN3R a ambos terminales (+ y −) del PGA derecho, lo cual anularía la señal (ganancia diferencial ≈ 0). 
+    Canal Derecho (Right ADC / Q):
+    0x37 = 0x04 → IN3R entra al terminal positivo del MICPGA derecho con 10 kΩ
+    0x39 = 0x04 → IN3L (NO IN3R) entra al terminal negativo del MICPGA derecho con 10 kΩ - verificado
+        13/08/2026 contra el datasheet real del TLV320AIC3204 (4 tablas de rutado de PGA
+        confirmadas): el campo de bits[3:2] de P1R57 (terminal M del canal derecho) NO selecciona
+        el mismo pin fisico que P1R55 (terminal P) pese a compartir el mismo valor de registro -
+        selecciona IN3L, cruzado respecto al terminal P, exactamente el mismo patron cruzado que ya
+        usa el canal izquierdo entre P1R52/P1R54 (dos pines fisicos distintos, IN2L/IN2R). Un
+        comentario anterior en este mismo bloque decia "IN3R" en los dos sitios - ETIQUETA
+        incorrecta unicamente, nunca un fallo real de hardware ni de firmware: con el pinout
+        correcto, el canal derecho SI es diferencial de verdad (IN3R(+)/IN3L(-)), igual que el
+        izquierdo. NO TOCAR el valor 0x04 de P1R57 pensando que hace falta corregirlo - ya es
+        correcto tal cual esta.
+    Esto configura el canal derecho como diferencial real: la señal se toma entre IN3R (+) e IN3L
+    (−), igual que el canal izquierdo usa IN2L(+)/IN2R(−) - QSD real, I y Q ambos autenticamente
+    diferenciales.
 
     Ganancia y Mute:
     0x3B = 0x00 y 0x3C = 0x00 → Ambos MICPGA están desmuteados con ganancia de 0 dB 
@@ -538,8 +550,8 @@ void aic3204_configure_rate(aic3204_rate_t rate)
 
     wr(1, 0x34, 0x10, "P1R52 IN2L -> LADC_P, 10k (captured)");
     wr(1, 0x36, 0x10, "P1R54 (captured)");
-    wr(1, 0x37, 0x04, "P1R55 (captured)");
-    wr(1, 0x39, 0x04, "P1R57 (captured)");
+    wr(1, 0x37, 0x04, "P1R55 IN3R -> RADC_P, 10k (captured)");
+    wr(1, 0x39, 0x04, "P1R57 IN3L -> RADC_M, 10k (captured; verified 13/08/2026 against the real datasheet - the value is unchanged, only this label was ever wrong, see the block comment above)");
     wr(1, 0x3B, 0x00, "P1R59 MIC_PGA_L (captured)");
     wr(1, 0x3C, 0x00, "P1R60 MIC_PGA_R (captured)");
     wr(1, 0x33, 0x60, "P1R51 MICBIAS level (captured - NOT off, unlike the earlier "
@@ -979,7 +991,7 @@ uint8_t aic3204_set_input_impedance(aic3204_rin_t level)
     ok  = aic3204_write_reg(1, 0x34U, left);  /* P1R52 IN2L -> LADC_P */
     ok &= aic3204_write_reg(1, 0x36U, left);  /* P1R54 IN2R -> LADC_M */
     ok &= aic3204_write_reg(1, 0x37U, right); /* P1R55 IN3R -> RADC_P */
-    ok &= aic3204_write_reg(1, 0x39U, right); /* P1R57 IN3R -> RADC_M */
+    ok &= aic3204_write_reg(1, 0x39U, right); /* P1R57 IN3L -> RADC_M (verified 13/08/2026 against the real TLV320AIC3204 datasheet - NOT IN3R, this comment previously had the wrong pin here too, see aic3204_phase2_init()'s block comment for the full correction) */
 
     debug_print_dec("aic3204: Rin set, level (0=10k/1=20k/2=40k)", (uint32_t)level);
     if (!ok) {
@@ -999,7 +1011,7 @@ uint8_t aic3204_set_input_single_ended_test(void)
     uint8_t ok;
 
     ok  = aic3204_write_reg(1, 0x36U, 0x40U); /* P1R54 CM1L -> LADC_M, 10k (was IN2R) */
-    ok &= aic3204_write_reg(1, 0x39U, 0x40U); /* P1R57 CM1R -> RADC_M, 10k (was IN3x) */
+    ok &= aic3204_write_reg(1, 0x39U, 0x40U); /* P1R57 CM1R -> RADC_M, 10k (was IN3L - see aic3204_phase2_init()'s block comment; a past comment here briefly said IN3R, and briefly IN2R this same session - both wrong, IN3L is the verified-correct pin) */
 
     debug_print("aic3204: *** BENCH TEST *** single-ended M-terminal override applied (CM1L/CM1R at 10k)\n");
     if (!ok) {
