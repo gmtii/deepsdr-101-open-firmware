@@ -1285,3 +1285,10 @@ spi_flash_async_status_t spi_flash_async_save_poll(void)
     s_async_phase = (uint8_t)ASAVE_IDLE;
     return SPI_FLASH_ASYNC_ERROR;
 }
+
+#if HFDL_ICAO24_DB
+uint8_t spi_flash_async_save_in_progress(void)
+{
+    return (s_async_phase != (uint8_t)ASAVE_IDLE) ? 1U : 0U;
+}
+#endif

@@ -18,6 +18,9 @@
 #include "ipa_waterfall.h"
 #include "touch.h"
 #include "touch_calib.h"
+#include "icao24_db.h" /* aircraft model lookup, only with HFDL_ICAO24_DB=1 (20/09/2026) */
+#include "hfdl_aircraft.h" /* aircraft table view, only with HFDL_AIRCRAFT_TABLE=1 (20/09/2026) */
+#include "hfdl_systable.h"
 #include "spi_flash.h"
 #include "settings.h"
 #include "aic3204.h"
@@ -154,6 +157,32 @@ static void hfdl_scope_panel_reset(void);
 static uint8_t hfdl_scope_is_active(void);
 static void hfdl_scope_tuning_diag_tick(void);
 static void hfdl_scope_panel_draw(void);
+/* HFDL reception log screen (18/09/2026). Tapping the spectrum area
+ * while HFDL is the active mode toggles between the live spectrum view
+ * (burst strip, last-message summary, preamble-state strip) and a
+ * full-screen scrolling list of every reception, the same idea as the
+ * FT8 cascade toggle (s_ft8_cascade_visible above). Session-only, not
+ * written to CONFIG.CSV. The log lines live in FT8's text grid
+ * (s_ft8_text_grid) - the two modes are mutually exclusive and each one
+ * clears the grid on entry - see hfdl_log_push_row(). */
+static bool s_hfdl_log_visible = false;
+static void hfdl_log_reset(void);
+static void hfdl_log_poll(void);
+static void hfdl_icao_cache_retune_check(void);
+static void hfdl_log_force_redraw(void);
+static void hfdl_log_toggle(void);
+static void hfdl_log_panel_draw(void);
+#if HFDL_AIRCRAFT_TABLE
+/* Third HFDL screen (20/09/2026): one row per aircraft heard - ICAO, model, flight, position, time,
+ * who sent it, what it was - plus the ground station for the tuned channel and the preamble funnel.
+ * A tap on the spectrum area cycles spectrum -> reception log -> aircraft table -> spectrum. */
+static bool s_hfdl_ac_visible = false;
+static hfdl_ac_table_t s_hfdl_ac;   /* storage: the tail of FT8's text grid, see hfdl_ac_reset() */
+static bool s_hfdl_ac_dirty = true; /* the table changed or the region was wiped: repaint all rows */
+static void hfdl_ac_reset(void);
+static void hfdl_ac_force_redraw(void);
+static void hfdl_ac_panel_draw(void);
+#endif
 static void apply_lo_tune(uint32_t freq_hz);
 static void apply_demod_mode(demod_mode_t mode);
 static void menu_detail_value_redraw(void);
@@ -180,7 +209,13 @@ static void calib_height_ruler_draw(void);
  * 0 for normal use once that's been confirmed on real hardware. */
 #define SPI_FLASH_PROBE_TEST 1
 
-/* Set to 1 to override the ADC's M-terminal (negative input) routing
+/* Codec input wiring: 0 = differential (normal, RF front-end/QSD),
+ * 1 = single-ended bench mode. 18/09/2026: now selected from the Makefile
+ * (`make AIC3204_SINGLE_ENDED_TEST=1`, see the comment there); the
+ * #ifndef below only supplies the default when this file is built some
+ * other way.
+ *
+ * Set to 1 to override the ADC's M-terminal (negative input) routing
  * to common-mode right after aic3204_phase2_init(), for HFDL bench
  * testing with the RF front-end (QSD) disconnected and a single-ended
  * line-level jack feeding the codec directly instead - see
@@ -188,7 +223,16 @@ static void calib_height_ruler_draw(void);
  * the full "why" and its own hardware-validation caveat. Back to 0
  * for normal QSD-fed operation - same "opt-in bench diagnostic, off
  * by default" shape as SPI_FLASH_PROBE_TEST just above. */
+#ifndef AIC3204_SINGLE_ENDED_TEST
 #define AIC3204_SINGLE_ENDED_TEST 0
+#endif
+
+/* UI_PANEL_GAP_FIX (20/09/2026): 1 (default) = menu_screen_close() also blanks the 2px gap between the spectrum
+ * and waterfall panels, where the menu's bottom tile row used to leave a coloured stripe. 0 restores the previous
+ * behaviour, which reproduces the earlier binaries byte for byte (make UI_PANEL_GAP_FIX=0). */
+#ifndef UI_PANEL_GAP_FIX
+#define UI_PANEL_GAP_FIX 1
+#endif
 
 /*
  * TUNE_START_HZ moved to config.h (CONFIG_TUNE_START_HZ) 07/08/2026,
@@ -715,6 +759,15 @@ int main(void)
      * before anything starts actually reading real audio through the
      * ADC. */
     aic3204_set_input_single_ended_test();
+#else
+    debug_print("aic3204: input wiring = DIFFERENTIAL (RF front-end / QSD) - build with AIC3204_SINGLE_ENDED_TEST=1 for the single-ended bench mode\n");
+#endif
+
+#if HFDL_ICAO24_DB
+    /* Status of the aircraft database, printed HERE on purpose: over the USB serial port nothing
+     * printed earlier in boot is visible (the port has not enumerated yet), and these AIC3204
+     * lines are the first that are. spi_flash_init() ran long before this point. */
+    icao24_db_report();
 #endif
 
     /*
@@ -979,6 +1032,10 @@ int main(void)
                                                  * regression - see demod_am.c's comment) - must
                                                  * run every iteration, same reasoning as
                                                  * hfdl_scope_poll() just above. */
+            if (hfdl_active_now) {
+                hfdl_icao_cache_retune_check(); /* 18/09/2026: aircraft IDs are per-channel - see its own comment */
+                hfdl_log_poll(); /* 18/09/2026: appends a newly analysed reception (if any) to the HFDL log - must run right after the call above, which is what produces it. Runs whether or not the log screen is showing, so nothing is lost while the spectrum view is up. */
+            }
             if (rtty_showing && !s_rtty_scope_was_active) {
                 rtty_scope_panel_reset();
                 if (active_now && !s_rtty_mode_was_active) {
@@ -1012,6 +1069,18 @@ int main(void)
                  * menu open/close, so a full reset either way is
                  * correct and simplest. */
                 hfdl_scope_panel_reset();
+                if (s_hfdl_log_visible) {
+                    /* The log screen was up when the menu opened (or
+                     * HFDL was re-entered with it selected) - its rows
+                     * are kept in the grid, only the pixels need
+                     * repainting. */
+                    hfdl_log_force_redraw();
+                }
+#if HFDL_AIRCRAFT_TABLE
+                if (s_hfdl_ac_visible) {
+                    hfdl_ac_force_redraw();
+                }
+#endif
             }
             s_hfdl_scope_was_active = hfdl_showing;
 
@@ -1298,7 +1367,16 @@ int main(void)
 #endif
                 ft8_text_panel_draw();
             } else if (hfdl_showing) {
-                hfdl_scope_panel_draw(); /* ported 16/09/2026 - draws the burst-detector strip + spectrum, see its own comment */
+#if HFDL_AIRCRAFT_TABLE
+                if (s_hfdl_ac_visible) {
+                    hfdl_ac_panel_draw(); /* 20/09/2026 - aircraft table, see hfdl_ac_panel_draw() */
+                } else
+#endif
+                if (s_hfdl_log_visible) {
+                    hfdl_log_panel_draw(); /* 18/09/2026 - full-screen reception list, see hfdl_log_panel_draw() */
+                } else {
+                    hfdl_scope_panel_draw(); /* ported 16/09/2026 - draws the burst-detector strip + spectrum, see its own comment */
+                }
                 hfdl_scope_tuning_diag_tick(); /* cheap no-op unless hfdl_scope_get_enabled(), see its own comment */
             } else {
                 /* Covers "neither RTTY, FT8 nor HFDL showing" (plain
@@ -2585,6 +2663,14 @@ static void mode_display_draw(void)
         label = "FT8 "; color = GFX_COLOR_CYAN;
     } else if (rtty_scope_active()) {
         label = "RTTY"; color = GFX_COLOR_CYAN;
+    } else if (hfdl_scope_is_active()) {
+        /* 18/09/2026: same treatment as FT8/RTTY above - HFDL runs on
+         * top of plain USB (see k_demod_modes[]'s HFDL row), but "USB"
+         * here hid the fact that the HFDL decoder is what's selected.
+         * hfdl_scope_is_active() (not just hfdl_scope_get_enabled()) so
+         * the label falls back to the real demod mode if something
+         * like a band preset switches it away from USB. */
+        label = "HFDL"; color = GFX_COLOR_CYAN;
     } else {
         switch (demod_am_get_mode()) {
         case DEMOD_MODE_USB: label = "USB "; color = GFX_COLOR_GREEN; break;
@@ -4071,6 +4157,16 @@ static void spec_span_labels_draw(void)
      * matter which mode is active, corrupting whatever RTTY/FT8 had
      * drawn there. */
     if (rtty_scope_active() || s_ft8_mode_enabled) {
+        return;
+    }
+    /* 18/09/2026: HFDL too. Same reason as above - retuning (encoder,
+     * band/step change, ...) calls this while HFDL owns the area, and
+     * the scale strip it paints (bottom 24px of SPEC_H) landed on top
+     * of the preamble-state strip in the spectrum view and, worse, on
+     * top of the log rows in the reception-log view. The HFDL spectrum
+     * is an audio-domain scope (0..6kHz), so an RF span scale means
+     * nothing there anyway. */
+    if (hfdl_scope_is_active()) {
         return;
     }
 
@@ -6012,6 +6108,12 @@ static void menu_mode_preset_callback(void *widget, ui_event_t event, void *user
          * borrow/return of the union happens BEFORE FT8/RTTY populate
          * or use it this same call, never after. */
         hfdl_scope_set_enabled(k_demod_modes[idx].is_hfdl ? 1U : 0U);
+        if (k_demod_modes[idx].is_hfdl) {
+#if HFDL_ICAO24_DB
+            icao24_db_report(); /* 20/09/2026: status of ICAO24.BIN again, visible now that the USB serial port is up */
+#endif
+            hfdl_log_reset(); /* 18/09/2026: picking HFDL starts a fresh, empty reception log - same as FT8 clearing its own history on entry (ft8_text_panel_reset() below). Both modes share one text grid, and each clears it when it is entered. */
+        }
 
         /* RTTY on/off + polarity - see k_demod_modes[]'s comment for
          * the RTTY_VARIANT_NORMAL/INVERTED story. Picking a PLAIN
@@ -7371,6 +7473,16 @@ static void menu_screen_close(void)
      * sdr_spectrum_waterfall_tick() frame (within ~33ms - imperceptible). */
     ui_panel_draw(&s_spectrum_panel);
     ui_panel_draw(&s_waterfall_panel);
+#if UI_PANEL_GAP_FIX
+    /* Stray stripe of menu tiles left under the spectrum (fixed 20/09/2026). The two panels are
+     * separated by a 2px gap, y = SPEC_Y+SPEC_H .. WF_PANEL_Y-1 (344..345), that belongs to neither of them,
+     * so ui_panel_draw() above never touches it - but the menu area does cover it, and the third row of tiles
+     * (y 318..412: FT8/HFDL/BACK in the mode picker, NEXT/../EXIT in the settings grid) crosses it. Whatever
+     * that row painted there stayed behind: a thin line of button colours (blue, blue, yellow...) right under
+     * the bottom edge of the spectrum, seen for a long time after closing any menu. Paint it black, the colour
+     * radio_screen_draw() gives it. */
+    gfx_fill_rect(0, (uint16_t)(SPEC_Y + SPEC_H), MAIN_W, (uint16_t)(WF_PANEL_Y - (SPEC_Y + SPEC_H)), GFX_COLOR_BLACK);
+#endif
     /* The span-label row (+/- edges, "LO" marker, divider) lives
      * INSIDE the spectrum panel and gets wiped by the menu's black
      * fill same as the border does - restore it too, zoom-aware in
@@ -8096,6 +8208,14 @@ static void rtty_text_push(char c)
  * 2-column view (16 rows/column - see ft8_text_panel_draw()); the
  * compact (cascade-visible) view just shows the most recent 8 of
  * whatever's stored, same look as the old shared-panel days.
+ *
+ * 18/09/2026: this grid (s_ft8_text_grid / s_ft8_text_row_len /
+ * s_ft8_text_count, plus ft8_text_push_line() and
+ * ft8_text_panel_reset()) is ALSO the storage behind the HFDL
+ * reception log - see the "HFDL reception log screen" block further
+ * down. Safe because FT8 and HFDL are never active at the same time
+ * and each mode clears the grid on entry; it saves ~2KB of main SRAM,
+ * which is not available (about 1KB is free in total).
  */
 #define FT8_TEXT_ROWS 32U
 
@@ -8662,9 +8782,9 @@ static void hfdl_scope_panel_draw(void)
      * approach used elsewhere in this file. */
     burst_now = hfdl_scope_burst_active();
     {
-        static uint8_t s_hfdl_badge_last_attempts = 0xFFU; /* sentinel, forces first draw */
+        static uint16_t s_hfdl_badge_last_attempts = 0xFFFFU; /* sentinel, forces first draw - widened from uint8_t/0xFF with the counters themselves, see hfdl_payload_decode.c */
         uint8_t crc_last_ok, crc_last_valid;
-        uint8_t crc_attempts, crc_good;
+        uint16_t crc_attempts, crc_good;
         hfdl_payload_decode_get_crc_status(&crc_last_ok, &crc_last_valid, &crc_attempts, &crc_good);
 
         if (burst_now != s_hfdl_badge_was_active || crc_attempts != s_hfdl_badge_last_attempts) {
@@ -8783,6 +8903,541 @@ static void hfdl_scope_panel_draw(void)
     }
 }
 
+
+/*
+ * HFDL reception log screen (18/09/2026)
+ * --------------------------------------
+ * Shown instead of the live spectrum view while s_hfdl_log_visible is
+ * set (toggled by tapping the spectrum area, see hfdl_log_toggle()).
+ * It reclaims the whole spectrum + waterfall region, like FT8's
+ * expanded text view, and lists every reception (CRC-OK MPDU with at
+ * least one LPDU) as the run loop sees it, oldest at the top, scrolling
+ * once the screen is full. Bottom-right corner: "CRC OK good/attempts".
+ * There is deliberately no burst/listening line and no A1/A2/M1/LOCKED
+ * strip here - those belong to the spectrum view only.
+ *
+ * One reception = 1..3 rows, built from the same three summary lines
+ * the spectrum view shows for the last message (see
+ * demod_am_hfdl_get_screen_line1..3()):
+ *
+ *   HH:MM:SS <line 1: direction/IDs/LPDU type/size>     (yellow)
+ *            <line 2: GPS + flight leg, only if present> (cyan)
+ *            <line 3: ICAO, or "?" if never seen logging on> (green)
+ *
+ * STORAGE: the rows are kept in FT8's text grid (s_ft8_text_grid /
+ * s_ft8_text_count, pushed with ft8_text_push_line()). Main SRAM has
+ * roughly 1KB free, so a second 2KB grid was not an option, and it is
+ * not needed: FT8 and HFDL are mutually exclusive modes, and each one
+ * clears the grid when it is entered (ft8_text_panel_reset() from
+ * hfdl_log_reset() and from the FT8 branch of the mode-picker
+ * callback). Colours are derived from the row text (hfdl_log_row_color())
+ * rather than stored, to avoid a parallel array.
+ */
+#define HFDL_LOG_INDENT      9U  /* strlen("HH:MM:SS ") - continuation rows are indented by this much so they line up under the message text */
+#define HFDL_LOG_BADGE_CLEAR_W (uint16_t)(20U * RTTY_TEXT_CHAR_W) /* fixed-width clear behind the CRC badge ("CRC OK 65535/65535" is 18 chars at most) so a shrinking value can never leave ghost digits */
+
+static uint32_t s_hfdl_log_last_seq;                 /* last demod_am_hfdl_get_rx_seq() value already turned into rows */
+static bool     s_hfdl_log_dirty = true;             /* rows or layout changed - repaint the whole region on the next draw */
+static bool     s_hfdl_log_badge_valid;              /* false = the badge pixels are stale/wiped, repaint them */
+static uint16_t s_hfdl_log_badge_last_good;
+static uint16_t s_hfdl_log_badge_last_attempts;
+static uint32_t s_hfdl_icao_cache_freq_hz;           /* tuned frequency the aircraft-ID table was last flushed at - see hfdl_icao_cache_retune_check() */
+
+static void hfdl_log_force_redraw(void)
+{
+    s_hfdl_log_dirty = true;
+    s_hfdl_log_badge_valid = false;
+}
+
+/* Blanks the log and marks everything seen so far as already handled,
+ * so a reception analysed before this call can't show up as the first
+ * row of a "fresh" session. */
+static void hfdl_log_reset(void)
+{
+    ft8_text_panel_reset(); /* clears the shared grid (and flags FT8's own redraw, harmless while FT8 is off) */
+    s_hfdl_log_last_seq = demod_am_hfdl_get_rx_seq();
+    demod_am_hfdl_icao_cache_clear(); /* new HFDL session: forget aircraft IDs learned earlier */
+    s_hfdl_icao_cache_freq_hz = s_tune_hz;
+#if HFDL_AIRCRAFT_TABLE
+    hfdl_ac_reset(); /* after ft8_text_panel_reset() above: the table lives in the same grid */
+#endif
+    hfdl_log_force_redraw();
+}
+
+/* HFDL aircraft IDs (used to look up an aircraft's ICAO, see
+ * demod_am.c's ID -> ICAO table) are assigned per channel: the same
+ * number on another channel is a different aircraft. dumphfdl keys its
+ * cache by frequency; this firmware just flushes the table when the
+ * tuned frequency has moved far enough to be another channel. 3kHz is
+ * one channel width, and HFDL channels are never closer than that, so
+ * fine tuning around the same channel keeps the table. Compared against
+ * the frequency the table was last flushed at (not the previous
+ * poll), so slow stepwise drift eventually trips it too. */
+#define HFDL_ICAO_CACHE_RETUNE_HZ 3000U
+
+static void hfdl_icao_cache_retune_check(void)
+{
+    uint32_t d = (s_tune_hz > s_hfdl_icao_cache_freq_hz)
+        ? (s_tune_hz - s_hfdl_icao_cache_freq_hz)
+        : (s_hfdl_icao_cache_freq_hz - s_tune_hz);
+
+    if (d > HFDL_ICAO_CACHE_RETUNE_HZ) {
+        demod_am_hfdl_icao_cache_clear();
+        s_hfdl_icao_cache_freq_hz = s_tune_hz;
+    }
+}
+
+#if HFDL_AIRCRAFT_TABLE
+/* With the aircraft table on, the reception log keeps only the first HFDL_LOG_ROWS rows of the
+ * shared grid (the screen shows 16 anyway; the extra two let the top of the screen always start on a
+ * timestamped row) and the aircraft table takes the rest, ~21 records, so no new RAM is needed. */
+#define HFDL_LOG_ROWS 18U
+
+static void hfdl_log_store_row(const char *row)
+{
+    uint8_t r;
+    uint8_t len = 0U;
+
+    if (s_ft8_text_count < HFDL_LOG_ROWS) {
+        r = s_ft8_text_count;
+        s_ft8_text_count++;
+    } else {
+        uint8_t k;
+        for (k = 0U; k < (HFDL_LOG_ROWS - 1U); k++) {
+            uint8_t i;
+            for (i = 0U; i <= s_ft8_text_row_len[k + 1U]; i++) { s_ft8_text_grid[k][i] = s_ft8_text_grid[k + 1U][i]; }
+            s_ft8_text_row_len[k] = s_ft8_text_row_len[k + 1U];
+        }
+        r = (uint8_t)(HFDL_LOG_ROWS - 1U);
+    }
+    while (row[len] != '\0' && len < RTTY_TEXT_COLS) { s_ft8_text_grid[r][len] = row[len]; len++; }
+    s_ft8_text_grid[r][len] = '\0';
+    s_ft8_text_row_len[r] = len;
+}
+#endif
+
+/* prefix + text -> one grid row (truncated to the grid's width). */
+static void hfdl_log_push_row(const char *prefix, const char *text)
+{
+    char row[RTTY_TEXT_COLS + 1U];
+    uint32_t n = 0U;
+    uint32_t i;
+
+    for (i = 0U; prefix[i] != '\0' && n < RTTY_TEXT_COLS; i++) { row[n++] = prefix[i]; }
+    for (i = 0U; text[i] != '\0' && n < RTTY_TEXT_COLS; i++) { row[n++] = text[i]; }
+    row[n] = '\0';
+#if HFDL_AIRCRAFT_TABLE
+    hfdl_log_store_row(row);
+#else
+    ft8_text_push_line(row);
+#endif
+}
+
+/* Called every main-loop iteration while HFDL is the active mode, right
+ * after demod_am_hfdl_probe_debug_poll() (which is what runs the
+ * analysis and refreshes screen lines 1..3). Cheap no-op unless a new
+ * reception has been analysed since the last call. */
+static void hfdl_log_poll(void)
+{
+    static const char k_indent[HFDL_LOG_INDENT + 1U] = "         ";
+    uint32_t seq = demod_am_hfdl_get_rx_seq();
+    const char *line1;
+    const char *line2;
+    const char *line3;
+    char stamp[HFDL_LOG_INDENT + 1U];
+    rtc_hw_datetime_t dt;
+
+    if (seq == s_hfdl_log_last_seq) {
+        return;
+    }
+    s_hfdl_log_last_seq = seq;
+
+    line1 = demod_am_hfdl_get_screen_line1();
+    line2 = demod_am_hfdl_get_screen_line2();
+    line3 = demod_am_hfdl_get_screen_line3();
+    if (line1[0] == '\0') {
+        return; /* can't happen (seq only advances with a non-empty line 1), but never push an empty header row */
+    }
+
+    /* HH:MM:SS from the RTC - the same clock the status bar shows. If it
+     * has never been synced the time is meaningless, exactly as it is on
+     * the status bar. % 10 keeps every character a digit even if the RTC
+     * ever returns something out of range. */
+    rtc_hw_get(&dt);
+    stamp[0] = (char)('0' + (uint8_t)((dt.hour   / 10U) % 10U));
+    stamp[1] = (char)('0' + (uint8_t)( dt.hour   % 10U));
+    stamp[2] = ':';
+    stamp[3] = (char)('0' + (uint8_t)((dt.minute / 10U) % 10U));
+    stamp[4] = (char)('0' + (uint8_t)( dt.minute % 10U));
+    stamp[5] = ':';
+    stamp[6] = (char)('0' + (uint8_t)((dt.second / 10U) % 10U));
+    stamp[7] = (char)('0' + (uint8_t)( dt.second % 10U));
+    stamp[8] = ' ';
+    stamp[9] = '\0';
+
+    hfdl_log_push_row(stamp, line1);
+    if (line2[0] != '\0') { hfdl_log_push_row(k_indent, line2); }
+    if (line3[0] != '\0') { hfdl_log_push_row(k_indent, line3); }
+    s_hfdl_log_dirty = true;
+#if HFDL_AIRCRAFT_TABLE
+    {
+        hfdl_ac_event_t ev = *demod_am_hfdl_get_last_event();
+        uint8_t needs_model = 0U;
+        hfdl_ac_rec_t *rec;
+
+        ev.hh = (uint8_t)dt.hour;
+        ev.mm = (uint8_t)dt.minute;
+        ev.ss = (uint8_t)dt.second;
+        if (s_hfdl_ac.cap == 0U) {
+            hfdl_ac_reset(); /* HFDL was active without hfdl_log_reset() having run (e.g. restored at boot) */
+        }
+        rec = hfdl_ac_update(&s_hfdl_ac, &ev, &needs_model);
+        if (rec != (hfdl_ac_rec_t *)0) {
+#if HFDL_ICAO24_DB
+            if (needs_model != 0U) {
+                char mdl[25];
+                if (icao24_db_lookup(rec->icao, mdl, sizeof(mdl))) {
+                    uint32_t mi;
+                    for (mi = 0U; (mi < (sizeof(rec->model) - 1U)) && (mdl[mi] != '\0'); mi++) { rec->model[mi] = mdl[mi]; }
+                    rec->model[mi] = '\0';
+                }
+            }
+#else
+            (void)needs_model;
+#endif
+            s_hfdl_ac_dirty = true;
+        }
+    }
+#endif
+}
+
+/* Colour of a stored row, derived from its text (see the block comment
+ * above): the first row of a reception starts with the timestamp
+ * digits, the GPS row has 'G' right after the indent, anything else is
+ * the ICAO row. */
+static uint16_t hfdl_log_row_color(const char *row, uint8_t len)
+{
+    if (row[0] >= '0' && row[0] <= '9') {
+        return GFX_COLOR_YELLOW;
+    }
+    if (len > HFDL_LOG_INDENT && row[HFDL_LOG_INDENT] == 'G') {
+        return GFX_COLOR_CYAN;
+    }
+    return GFX_COLOR_GREEN;
+}
+
+/* "CRC OK good/attempts", bottom-right corner. good = CRC-OK MPDUs,
+ * attempts = every finished data segment (see
+ * hfdl_payload_decode_get_crc_status()). Repainted only when one of the
+ * two numbers changed, and always into a fixed-width cleared box. */
+static void hfdl_log_badge_draw(uint16_t good, uint16_t attempts)
+{
+    char badge[24];
+    uint32_t p = 0U;
+    uint32_t v;
+    uint32_t k;
+    static const char k_label[] = "CRC OK ";
+    uint16_t bottom = (uint16_t)(WF_PANEL_Y + WATERFALL_ROWS + 4U);
+    uint16_t badge_x;
+
+    for (k = 0U; k_label[k] != '\0'; k++) { badge[p++] = k_label[k]; }
+    for (k = 0U; k < 2U; k++) {
+        char digits[6];
+        uint8_t nd = 0U;
+
+        v = (k == 0U) ? good : attempts;
+        if (v == 0U) { digits[nd++] = '0'; }
+        while (v > 0U && nd < sizeof(digits)) { digits[nd++] = (char)('0' + (v % 10U)); v /= 10U; }
+        while (nd > 0U) { badge[p++] = digits[--nd]; }
+        if (k == 0U) { badge[p++] = '/'; }
+    }
+    badge[p] = '\0';
+
+    badge_x = (uint16_t)(MAIN_W - 4U - (uint16_t)(p * RTTY_TEXT_CHAR_W));
+    gfx_fill_rect((uint16_t)(MAIN_W - 4U - HFDL_LOG_BADGE_CLEAR_W), (uint16_t)(bottom - RTTY_TEXT_LINE_H),
+                  (uint16_t)(HFDL_LOG_BADGE_CLEAR_W + 4U), RTTY_TEXT_LINE_H, GFX_COLOR_BLACK);
+    gfx_text(badge_x, (uint16_t)(bottom - RTTY_TEXT_LINE_H + 4U), badge, GFX_COLOR_GREEN, GFX_COLOR_BLACK, RTTY_TEXT_SCALE);
+
+    s_hfdl_log_badge_last_good = good;
+    s_hfdl_log_badge_last_attempts = attempts;
+    s_hfdl_log_badge_valid = true;
+}
+
+static void hfdl_log_panel_draw(void)
+{
+    uint8_t crc_last_ok, crc_last_valid;
+    uint16_t crc_attempts, crc_good;
+
+    if (s_hfdl_log_dirty) {
+        /* Same region the settings menu and FT8's expanded view use. */
+        uint16_t region_y = SPEC_Y;
+        uint16_t region_h = (uint16_t)((WF_PANEL_Y + WATERFALL_ROWS + 4U) - SPEC_Y);
+        uint8_t shown_rows = (uint8_t)(region_h / RTTY_TEXT_LINE_H);
+        uint8_t avail;
+        uint8_t to_show;
+        uint8_t first_src;
+        uint8_t i;
+
+        if (shown_rows > 0U) { shown_rows--; } /* last row is reserved for the CRC badge */
+        if (shown_rows > FT8_TEXT_ROWS) { shown_rows = FT8_TEXT_ROWS; }
+
+        gfx_fill_rect(0, region_y, MAIN_W, region_h, GFX_COLOR_BLACK);
+
+        avail = s_ft8_text_count;
+        to_show = (avail < shown_rows) ? avail : shown_rows;
+        first_src = (uint8_t)(avail - to_show); /* newest rows win once the screen is full */
+        /* Once the list scrolls, the first visible row can land in the
+         * middle of a reception (a GPS/ICAO continuation row, which
+         * starts with the indent). Skip those so the top of the screen
+         * always starts on a timestamped row - costs at most two blank
+         * rows at the bottom, only while scrolling. */
+        while (first_src < avail && s_ft8_text_grid[first_src][0] == ' ') {
+            first_src++;
+        }
+        to_show = (uint8_t)(avail - first_src);
+
+        if (avail == 0U) {
+            gfx_text(4, (uint16_t)(region_y + 4U), "Waiting for HFDL receptions...",
+                     GFX_COLOR_DARKGRAY, GFX_COLOR_BLACK, RTTY_TEXT_SCALE);
+        }
+        for (i = 0U; i < to_show; i++) {
+            uint8_t src = (uint8_t)(first_src + i);
+
+            if (s_ft8_text_row_len[src] > 0U) {
+                gfx_text(4, (uint16_t)(region_y + 4U + (uint16_t)i * RTTY_TEXT_LINE_H), s_ft8_text_grid[src],
+                         hfdl_log_row_color(s_ft8_text_grid[src], s_ft8_text_row_len[src]),
+                         GFX_COLOR_BLACK, RTTY_TEXT_SCALE);
+            }
+        }
+
+        s_hfdl_log_dirty = false;
+        s_hfdl_log_badge_valid = false; /* the fill above wiped it */
+    }
+
+    hfdl_payload_decode_get_crc_status(&crc_last_ok, &crc_last_valid, &crc_attempts, &crc_good);
+    if (!s_hfdl_log_badge_valid
+        || crc_good != s_hfdl_log_badge_last_good
+        || crc_attempts != s_hfdl_log_badge_last_attempts) {
+        hfdl_log_badge_draw(crc_good, crc_attempts);
+    }
+}
+
+#if HFDL_AIRCRAFT_TABLE
+/*
+ * Aircraft table screen (20/09/2026). Layout of the 17 text bands of the spectrum+waterfall region:
+ *   band 0        state, carrier OFFSET (Hz, at the last preamble lock), ground station of the tuned channel, "n AC / m FR"
+ *   band 1        column titles
+ *   bands 2..15   one aircraft per band, most recent first (yellow), ground-station messages in cyan
+ *   band 16       preamble funnel, and CRC OK good/attempts at the bottom right
+ * Rows are only repainted when the table changed; the header and footer bands are repainted on their
+ * own whenever one of the numbers in them changes.
+ */
+static bool     s_hfdl_ac_hdr_valid;         /* the header and footer pixels match the values below */
+static uint8_t  s_hfdl_ac_last_state;
+static int16_t  s_hfdl_ac_last_afc;
+static uint32_t s_hfdl_ac_last_khz = 0xFFFFFFFFU; /* channel the GS text below was built for */
+static char     s_hfdl_ac_gs_txt[24];
+static uint16_t s_hfdl_ac_last_funnel[3];
+static uint16_t s_hfdl_ac_last_crc[2];
+static uint8_t  s_hfdl_ac_last_count;
+
+static void hfdl_ac_reset(void)
+{
+    hfdl_ac_init(&s_hfdl_ac, &s_ft8_text_grid[HFDL_LOG_ROWS][0],
+                 (uint32_t)(sizeof(s_ft8_text_grid) - ((uint32_t)HFDL_LOG_ROWS * sizeof(s_ft8_text_grid[0]))));
+    s_hfdl_ac_dirty = true;
+    s_hfdl_ac_hdr_valid = false;
+    s_hfdl_ac_last_khz = 0xFFFFFFFFU;
+}
+
+static void hfdl_ac_force_redraw(void)
+{
+    s_hfdl_ac_dirty = true;
+    s_hfdl_ac_hdr_valid = false;
+}
+
+/* tiny string builders (no printf in this firmware) */
+static void ac_txt_str(char *b, uint32_t *p, uint32_t cap, const char *s)
+{
+    while ((*s != '\0') && (*p < (cap - 1U))) { b[(*p)++] = *s++; }
+    b[*p] = '\0';
+}
+
+static void ac_txt_dec(char *b, uint32_t *p, uint32_t cap, uint32_t v)
+{
+    char t[10];
+    uint32_t n = 0U;
+    do { t[n++] = (char)('0' + (v % 10U)); v /= 10U; } while ((v > 0U) && (n < sizeof(t)));
+    while ((n > 0U) && (*p < (cap - 1U))) { b[(*p)++] = t[--n]; }
+    b[*p] = '\0';
+}
+
+/* "GS 5 AUCKLAND", "GS 1/2/4/9+" (channel shared by several stations) or "GS ?" for a frequency that is
+ * not an HFDL channel in the table. */
+static void hfdl_ac_build_gs_text(uint32_t khz)
+{
+    uint8_t ids[4];
+    uint32_t n = hfdl_gs_for_khz(khz, ids);
+    uint32_t p = 0U;
+    uint32_t i;
+
+    s_hfdl_ac_gs_txt[0] = '\0';
+    ac_txt_str(s_hfdl_ac_gs_txt, &p, sizeof(s_hfdl_ac_gs_txt), "GS ");
+    if (n == 0U) {
+        ac_txt_str(s_hfdl_ac_gs_txt, &p, sizeof(s_hfdl_ac_gs_txt), "?");
+    } else if (n == 1U) {
+        const char *nm = hfdl_gs_name(ids[0]);
+        ac_txt_dec(s_hfdl_ac_gs_txt, &p, sizeof(s_hfdl_ac_gs_txt), ids[0]);
+        ac_txt_str(s_hfdl_ac_gs_txt, &p, sizeof(s_hfdl_ac_gs_txt), " ");
+        ac_txt_str(s_hfdl_ac_gs_txt, &p, sizeof(s_hfdl_ac_gs_txt), (nm != (const char *)0) ? nm : "?");
+    } else {
+        for (i = 0U; (i < n) && (i < 4U); i++) {
+            if (i > 0U) { ac_txt_str(s_hfdl_ac_gs_txt, &p, sizeof(s_hfdl_ac_gs_txt), "/"); }
+            ac_txt_dec(s_hfdl_ac_gs_txt, &p, sizeof(s_hfdl_ac_gs_txt), ids[i]);
+        }
+        if (n > 4U) { ac_txt_str(s_hfdl_ac_gs_txt, &p, sizeof(s_hfdl_ac_gs_txt), "+"); }
+    }
+}
+
+static void hfdl_ac_header_footer_draw(uint16_t region_y, uint16_t region_h)
+{
+    static const char *const k_state[4] = { "SEARCH", "A1 OK", "A2 OK", "FRAME" };
+    uint16_t bottom = (uint16_t)(region_y + region_h);
+    uint8_t  state = (uint8_t)demod_am_hfdl_get_preamble_state();
+    float    afc_f = demod_am_hfdl_get_lock_costas_hz();
+    int16_t  afc;
+    uint32_t khz = (s_tune_hz + 500U) / 1000U;
+    uint16_t fun[3];
+    uint8_t  crc_ok_last, crc_valid;
+    uint16_t crc_att, crc_good;
+    char     buf[72];
+    uint32_t p;
+
+    if (state > 3U) { state = 3U; }
+    if (afc_f > 9999.0f) { afc_f = 9999.0f; } else if (afc_f < -9999.0f) { afc_f = -9999.0f; }
+    afc = (int16_t)afc_f;
+    demod_am_hfdl_get_funnel(&fun[0], &fun[1], &fun[2]);
+    hfdl_payload_decode_get_crc_status(&crc_ok_last, &crc_valid, &crc_att, &crc_good);
+
+    if (khz != s_hfdl_ac_last_khz) {
+        hfdl_ac_build_gs_text(khz);
+        s_hfdl_ac_last_khz = khz;
+        s_hfdl_ac_hdr_valid = false;
+    }
+    if (s_hfdl_ac_hdr_valid && (state == s_hfdl_ac_last_state) && (afc == s_hfdl_ac_last_afc)
+        && (fun[0] == s_hfdl_ac_last_funnel[0]) && (fun[1] == s_hfdl_ac_last_funnel[1]) && (fun[2] == s_hfdl_ac_last_funnel[2])
+        && (crc_good == s_hfdl_ac_last_crc[0]) && (crc_att == s_hfdl_ac_last_crc[1]) && (s_hfdl_ac.count == s_hfdl_ac_last_count)) {
+        return;
+    }
+
+    /* ---- band 0: "SEARCH  AFC +12Hz  GS 3 REYKJAVIK" ... "7 AC / 22 FR" ---- */
+    gfx_fill_rect(0, region_y, MAIN_W, RTTY_TEXT_LINE_H, GFX_COLOR_BLACK);
+    p = 0U; buf[0] = '\0';
+    ac_txt_str(buf, &p, sizeof(buf), k_state[state]);
+    ac_txt_str(buf, &p, sizeof(buf), "  OFFSET "); /* the carrier loop's frequency at the last preamble lock - a measurement, not a correction (named AFC in the first version) */
+    if (afc >= 0) { ac_txt_str(buf, &p, sizeof(buf), "+"); } else { ac_txt_str(buf, &p, sizeof(buf), "-"); }
+    ac_txt_dec(buf, &p, sizeof(buf), (uint32_t)((afc >= 0) ? afc : -afc));
+    ac_txt_str(buf, &p, sizeof(buf), "Hz  ");
+    ac_txt_str(buf, &p, sizeof(buf), s_hfdl_ac_gs_txt);
+    gfx_text(4, (uint16_t)(region_y + 4U), buf, GFX_COLOR_CYAN, GFX_COLOR_BLACK, RTTY_TEXT_SCALE);
+    p = 0U; buf[0] = '\0';
+    ac_txt_dec(buf, &p, sizeof(buf), s_hfdl_ac.count);
+    ac_txt_str(buf, &p, sizeof(buf), " AC / ");
+    ac_txt_dec(buf, &p, sizeof(buf), crc_good);
+    ac_txt_str(buf, &p, sizeof(buf), " FR");
+    gfx_text((uint16_t)(MAIN_W - 4U - (uint16_t)(p * RTTY_TEXT_CHAR_W)), (uint16_t)(region_y + 4U), buf,
+             GFX_COLOR_YELLOW, GFX_COLOR_BLACK, RTTY_TEXT_SCALE);
+
+    /* ---- last band: "START a > CONFIRM b > MODE c > FRAME d" ... "CRC OK good/attempts" ---- */
+    gfx_fill_rect(0, (uint16_t)(bottom - RTTY_TEXT_LINE_H), MAIN_W, RTTY_TEXT_LINE_H, GFX_COLOR_BLACK);
+    p = 0U; buf[0] = '\0';
+    ac_txt_str(buf, &p, sizeof(buf), "START ");   ac_txt_dec(buf, &p, sizeof(buf), (fun[0] > 9999U) ? 9999U : fun[0]);
+    ac_txt_str(buf, &p, sizeof(buf), " > CONFIRM "); ac_txt_dec(buf, &p, sizeof(buf), (fun[1] > 9999U) ? 9999U : fun[1]);
+    ac_txt_str(buf, &p, sizeof(buf), " > MODE ");  ac_txt_dec(buf, &p, sizeof(buf), (fun[2] > 9999U) ? 9999U : fun[2]);
+    ac_txt_str(buf, &p, sizeof(buf), " > FRAME ");  ac_txt_dec(buf, &p, sizeof(buf), (crc_good > 9999U) ? 9999U : crc_good);
+    gfx_text(4, (uint16_t)(bottom - RTTY_TEXT_LINE_H + 4U), buf, GFX_COLOR_WHITE, GFX_COLOR_BLACK, RTTY_TEXT_SCALE);
+    p = 0U; buf[0] = '\0';
+    ac_txt_str(buf, &p, sizeof(buf), "CRC OK ");
+    ac_txt_dec(buf, &p, sizeof(buf), crc_good);
+    ac_txt_str(buf, &p, sizeof(buf), "/");
+    ac_txt_dec(buf, &p, sizeof(buf), crc_att);
+    gfx_text((uint16_t)(MAIN_W - 4U - (uint16_t)(p * RTTY_TEXT_CHAR_W)), (uint16_t)(bottom - RTTY_TEXT_LINE_H + 4U), buf,
+             GFX_COLOR_GREEN, GFX_COLOR_BLACK, RTTY_TEXT_SCALE);
+
+    s_hfdl_ac_last_state = state;
+    s_hfdl_ac_last_afc = afc;
+    s_hfdl_ac_last_funnel[0] = fun[0]; s_hfdl_ac_last_funnel[1] = fun[1]; s_hfdl_ac_last_funnel[2] = fun[2];
+    s_hfdl_ac_last_crc[0] = crc_good; s_hfdl_ac_last_crc[1] = crc_att;
+    s_hfdl_ac_last_count = s_hfdl_ac.count;
+    s_hfdl_ac_hdr_valid = true;
+}
+
+static void hfdl_ac_panel_draw(void)
+{
+    uint16_t region_y = SPEC_Y;
+    uint16_t region_h = (uint16_t)((WF_PANEL_Y + WATERFALL_ROWS + 4U) - SPEC_Y);
+
+    if (s_hfdl_ac.cap == 0U) {
+        hfdl_ac_reset();
+    }
+    if (s_hfdl_ac_dirty) {
+        char line[HFDL_AC_ROW_LEN + 1U];
+        uint8_t i;
+
+        gfx_fill_rect(0, region_y, MAIN_W, region_h, GFX_COLOR_BLACK);
+        hfdl_ac_format_titles(line);
+        gfx_text(4, (uint16_t)(region_y + 4U + RTTY_TEXT_LINE_H), line, GFX_COLOR_WHITE, GFX_COLOR_BLACK, RTTY_TEXT_SCALE); /* GFX_COLOR_DARKGRAY was almost invisible on the real panel */
+        if (s_hfdl_ac.count == 0U) {
+            gfx_text(4, (uint16_t)(region_y + 4U + (2U * RTTY_TEXT_LINE_H)), "Waiting for HFDL receptions...",
+                     GFX_COLOR_WHITE, GFX_COLOR_BLACK, RTTY_TEXT_SCALE);
+        }
+        for (i = 0U; (i < s_hfdl_ac.count) && (i < 14U); i++) {
+            uint16_t color = (i == 0U) ? GFX_COLOR_YELLOW
+                           : (((s_hfdl_ac.rec[i].flags & HFDL_AC_R_UPLINK) != 0U) ? GFX_COLOR_CYAN : GFX_COLOR_GREEN);
+            hfdl_ac_format_row(&s_hfdl_ac.rec[i], line);
+            gfx_text(4, (uint16_t)(region_y + 4U + ((2U + i) * RTTY_TEXT_LINE_H)), line, color, GFX_COLOR_BLACK, RTTY_TEXT_SCALE);
+        }
+        s_hfdl_ac_dirty = false;
+        s_hfdl_ac_hdr_valid = false; /* the fill above wiped the header and footer */
+    }
+    hfdl_ac_header_footer_draw(region_y, region_h);
+}
+#endif /* HFDL_AIRCRAFT_TABLE */
+
+/* Spectrum view -> reception log -> (aircraft table ->) spectrum view. Called from demo_touch_poll()
+ * on a tap in the spectrum area while HFDL is active. The aircraft table screen only exists with
+ * HFDL_AIRCRAFT_TABLE=1; without it this is the original two-way toggle. */
+static void hfdl_log_toggle(void)
+{
+#if HFDL_AIRCRAFT_TABLE
+    if (s_hfdl_ac_visible) {
+        s_hfdl_ac_visible = false;                     /* aircraft table -> spectrum */
+        ui_panel_draw(&s_spectrum_panel);
+        ui_panel_draw(&s_waterfall_panel);
+        hfdl_scope_panel_reset();
+    } else if (s_hfdl_log_visible) {
+        s_hfdl_log_visible = false;                    /* reception log -> aircraft table */
+        s_hfdl_ac_visible = true;
+        hfdl_ac_force_redraw();                        /* hfdl_ac_panel_draw() clears the whole region itself */
+    } else {
+        s_hfdl_log_visible = true;                     /* spectrum -> reception log */
+        hfdl_log_force_redraw();
+    }
+#else
+    s_hfdl_log_visible = !s_hfdl_log_visible;
+    if (s_hfdl_log_visible) {
+        hfdl_log_force_redraw(); /* hfdl_log_panel_draw() clears the whole region itself */
+    } else {
+        /* Back to the spectrum view: the log's full-region fill wiped the
+         * panel borders/backgrounds, so restore them (same pair
+         * menu_screen_close() uses), then re-arm every strip of the
+         * spectrum view so it repaints from scratch. */
+        ui_panel_draw(&s_spectrum_panel);
+        ui_panel_draw(&s_waterfall_panel);
+        hfdl_scope_panel_reset();
+    }
+#endif
+}
 
 static void tune_encoder_poll(void)
 {
@@ -9685,13 +10340,14 @@ static void demo_touch_poll(void)
          * increasingly exact sub-zone by hand, and matches "desactivar
          * completamente" exactly. */
         s_spec_drag_active = (uint8_t)(!s_touch_owner_is_menu && !s_ft8_mode_enabled
+            && !hfdl_scope_is_active() /* 18/09/2026: HFDL too, same as FT8 - a tap in the spectrum area now toggles the reception log (see s_cascade_tap_active below), and the HFDL scope is audio-domain (0..6kHz) so mapping x to an RF offset for tap/drag-to-tune was meaningless there anyway. Tune with the encoder, the frequency keypad or the BANDS list as before. */
             && x < MAIN_W && y >= SPEC_Y && y < (uint16_t)(SPEC_Y + SPEC_H));
         s_spec_drag_prev_x = x;
         s_spec_tap_start_x = x;
         s_spec_drag_hz_accum = 0.0f;
         s_spec_drag_moved = 0U;
 
-        s_cascade_tap_active = (uint8_t)(s_ft8_mode_enabled && !s_menu_open
+        s_cascade_tap_active = (uint8_t)((s_ft8_mode_enabled || hfdl_scope_is_active()) && !s_menu_open /* 18/09/2026: same zone doubles as the HFDL spectrum<->reception-log toggle, see hfdl_log_toggle() */
             && y >= SPEC_Y && y < (uint16_t)(WF_PANEL_Y + WATERFALL_ROWS + 4U));
 
         /* Frequency keypad tap zone - top bar only, so mutually
@@ -9765,6 +10421,15 @@ static void demo_touch_poll(void)
 
     if (s_time_tap_active && !pressed) {
         menu_time_keypad_show();
+    }
+
+    if (s_cascade_tap_active && !pressed && !s_ft8_mode_enabled) {
+        /* HFDL (18/09/2026): the zone was armed by hfdl_scope_is_active()
+         * (FT8 and HFDL are mutually exclusive), so this is the HFDL
+         * spectrum <-> reception-log toggle. Disarm so the FT8 block
+         * right below doesn't also run. */
+        hfdl_log_toggle();
+        s_cascade_tap_active = 0U;
     }
 
     if (s_cascade_tap_active && !pressed) {

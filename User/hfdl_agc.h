@@ -63,7 +63,9 @@
  * burst turning on, slow enough not to fight the matched filter/
  * symsync loop underneath it. Revisit once real-signal captures are
  * available - see the project's HFDL_fase2 session notes. */
+#ifndef HFDL_AGC_BW /* overridable at build time, see the Makefile (18/09/2026) */
 #define HFDL_AGC_BW 0.05f
+#endif
 
 /* Gain clamps - prevent runaway gain during silence/near-zero input
  * (which would otherwise amplify quantization/thermal noise towards

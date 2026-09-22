@@ -23,6 +23,61 @@ DEFS = -DGD32F450 -DUSE_STDPERIPH_DRIVER -DHXTAL_VALUE=12288000U
 # needed).
 DEBUG_UART_ENABLED ?= 0
 DEFS += -DDEBUG_UART_ENABLED=$(DEBUG_UART_ENABLED)
+# Codec input wiring (18/09/2026). 0 (default) = DIFFERENTIAL I/Q, the
+# normal wiring for the RF front-end (QSD): IN2L(+)/IN2R(-) and
+# IN3R(+)/IN3L(-). 1 = SINGLE-ENDED bench mode, for a line-level audio
+# source wired straight to the codec with the front-end disconnected
+# (see aic3204_set_input_single_ended_test() in User/aic3204.h). Pick it
+# on the command line, e.g. `make clean && make AIC3204_SINGLE_ENDED_TEST=1`
+# - do a `make clean` whenever you change it, the Makefile does not
+# track defines.
+AIC3204_SINGLE_ENDED_TEST ?= 0
+DEFS += -DAIC3204_SINGLE_ENDED_TEST=$(AIC3204_SINGLE_ENDED_TEST)
+
+# Display fix (20/09/2026). 1 (default): after a menu closes, the 2px gap between the spectrum and waterfall
+# panels is blanked (a row of the menu's tiles used to leave a coloured stripe there). 0 = previous behaviour;
+# use it to rebuild the binaries of earlier tests byte for byte, e.g. `make UI_PANEL_GAP_FIX=0`.
+UI_PANEL_GAP_FIX ?= 1
+DEFS += -DUI_PANEL_GAP_FIX=$(UI_PANEL_GAP_FIX)
+
+# HFDL tuning knobs (18/09/2026). Every name below is a compile-time
+# constant in the HFDL code that is wrapped in #ifndef, so it can be
+# overridden from the command line for A/B experiments without editing
+# any source, e.g.
+#     make clean && make HFDL_QUANT_POWER_EMA_LAMBDA=0.05f HFDL_AGC_BW=0.02f
+# Values are passed straight through as C literals (so floats need the
+# trailing "f"). Unset knobs keep the source default, so a plain `make`
+# builds exactly what it always did. Do a `make clean` whenever you change
+# one - the Makefile does not track defines. NOTE: the comments inside the
+# HFDL sources have long advertised `make HFDL_...=` overrides, but until
+# this block existed nothing here forwarded them to the compiler, so they
+# silently had no effect. See each knob's own comment for what it does:
+#   HFDL_AGC_BW                     hfdl_agc.h       chain AGC loop bandwidth
+#   HFDL_COSTAS_DEFAULT_ALPHA/BETA  hfdl_costas.h    carrier loop gains
+#   HFDL_SYMSYNC_LOOP_B0/NEG_A1/RATE_ADJ  hfdl_symsync.h  symbol timing loop
+#   HFDL_EQ_NLMS                    hfdl_equalizer.c 1 = normalized LMS like liquid-dsp/dumphfdl (mu then means what it does there, 0.1)
+#   HFDL_EQ_MU_OVERRIDE             hfdl_equalizer.h equalizer LMS step size
+#   HFDL_EQ_POWER_EMA_LAMBDA, HFDL_EQ_GAIN_LEAK_RATE, HFDL_EQ_DISABLE_GAIN_RENORM
+#                                   hfdl_equalizer.c
+#   HFDL_QUANT_POWER_EMA_LAMBDA     hfdl_payload_decode.c  soft-bit amplitude tracker
+#   HFDL_MIXER_SIGN_OVERRIDE        hfdl_iq_mixer.h  subcarrier mixer sign
+#   HFDL_BURST_ON_RATIO/OFF_RATIO   hfdl_scope.c     burst detector thresholds
+#   HFDL_CHAIN_ALWAYS_ON            demod_am.c       1 = run the demod chain all the time, ignore the burst detector
+#   HFDL_ABORT_BAD_TRAINING         demod_am.c       1 = give up on a frame after the initial training if its error >= HFDL_ABORT_MSE_THRESHOLD (default 1.0); off by default
+#   HFDL_ICAO24_DB                  icao24_db.c      1 = show the aircraft model next to the ICAO, read from ICAO24.BIN on the flash volume (see scripts/make_icao24_compact.py); off by default
+#   HFDL_AIRCRAFT_TABLE             hfdl_aircraft.c  1 = third HFDL screen: one row per aircraft (ICAO, model, flight, position, time, event) + ground station and preamble funnel; off by default
+#   HFDL_M1_DIAG                    demod_am.c       1 = per-frame M1/A2 correlation strengths on the debug UART; off by default
+#   HFDL_HOLD_MAX_DROPOUT_MS        demod_am.c       keep the chain running through burst-detector dropouts of up to this many ms once a frame is locked (0 = off)
+HFDL_KNOBS := HFDL_AGC_BW HFDL_COSTAS_DEFAULT_ALPHA HFDL_COSTAS_DEFAULT_BETA \
+    HFDL_SYMSYNC_LOOP_B0 HFDL_SYMSYNC_LOOP_NEG_A1 HFDL_SYMSYNC_RATE_ADJ \
+    HFDL_EQ_NLMS HFDL_EQ_MU_OVERRIDE HFDL_EQ_POWER_EMA_LAMBDA HFDL_EQ_GAIN_LEAK_RATE HFDL_EQ_DISABLE_GAIN_RENORM \
+    HFDL_QUANT_POWER_EMA_LAMBDA HFDL_MIXER_SIGN_OVERRIDE \
+    HFDL_BURST_ON_RATIO HFDL_BURST_OFF_RATIO HFDL_CHAIN_ALWAYS_ON HFDL_HOLD_MAX_DROPOUT_MS \
+    HFDL_ABORT_BAD_TRAINING HFDL_ABORT_MSE_THRESHOLD HFDL_M1_DIAG HFDL_ICAO24_DB HFDL_AIRCRAFT_TABLE
+$(foreach k,$(HFDL_KNOBS),$(if $($(k)),$(eval DEFS += -D$(k)=$($(k)))))
+# Escape hatch for anything not listed above: make HFDL_EXTRA_DEFS="-DFOO=1 -DBAR=2"
+HFDL_EXTRA_DEFS ?=
+DEFS += $(HFDL_EXTRA_DEFS)
 # RTTY_ENABLED build flag REMOVED 08/08/2026: RTTY (User/rtty.c,
 # rtty_scope.c) graduated from a debug-build-only tool to a real
 # selectable mode (RTTY-L/RTTY-U in main.c's k_demod_modes[]) once

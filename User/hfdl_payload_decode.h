@@ -164,7 +164,7 @@ void hfdl_payload_decode_finish(void);
  * short" early-out or a real hfdl_mpdu_parse_header() call) - check it
  * before trusting last_ok_out. */
 void hfdl_payload_decode_get_crc_status(uint8_t *last_ok_out, uint8_t *last_valid_out,
-        uint8_t *attempts_out, uint8_t *good_out);
+        uint16_t *attempts_out, uint16_t *good_out);
 
 /* Host-testable self-test: builds a synthetic HFDL data segment from
  * scratch (known message bits -> CRC-appended -> conv-encoded ->

@@ -34,9 +34,13 @@ static uint8_t s_frame_ready;
 static uint8_t s_enabled;
 
 /* --- burst detector state, see hfdl_scope.h's comment --- */
+#ifndef HFDL_BURST_ON_RATIO /* both ratios overridable at build time (18/09/2026), see the Makefile */
 #define HFDL_BURST_ON_RATIO   3.16f  /* ~+10dB (10^(10/20)) above the floor to DECLARE a burst */
+#endif
+#ifndef HFDL_BURST_OFF_RATIO
 #define HFDL_BURST_OFF_RATIO  2.0f   /* ~+6dB - lower than the ON ratio (hysteresis), so a burst hovering right at
                                        * the edge doesn't chatter on/off every window */
+#endif
 #define HFDL_FLOOR_RISE_ALPHA 0.01f  /* floor creeps UP toward a quieter-than-expected... i.e. a LOUDER-than-floor
                                        * reading slowly, so a burst doesn't drag the floor up and mask itself */
 #define HFDL_FLOOR_FALL_ALPHA 0.10f  /* floor settles DOWN toward a quieter reading faster - the band genuinely

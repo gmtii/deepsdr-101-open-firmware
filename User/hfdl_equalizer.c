@@ -122,6 +122,37 @@ void hfdl_equalizer_step(hfdl_equalizer_t *eq, float32_t d_i, float32_t d_q, flo
 {
 	float32_t err_i = d_i - y_i;
 	float32_t err_q = d_q - y_q;
+	float32_t mu_eff = eq->mu;
+
+	/* NORMALIZED LMS option (18/09/2026). liquid-dsp's eqlms_cccf_step() - the
+	 * equalizer dumphfdl actually uses, with eqlms_cccf_set_bw(eq, 0.1) - is a
+	 * NORMALIZED LMS: w += mu * conj(err) * x / x2_sum, where x2_sum is the
+	 * energy of the whole tap window, sum |x|^2 (verified against liquid-dsp's
+	 * src/equalization/src/eqlms.proto.c, EQLMS(_step): "w[n+1] = w[n] +
+	 * mu*conj(d-d_hat)*x[n]/(x[n]' * conj(x[n]))"). This is the point the
+	 * header's "HONEST UNCERTAINTY" section could not confirm at the time. The
+	 * update below historically lacked that division. With the input
+	 * normalized to unit power per sample, x2_sum is about HFDL_EQ_LEN (15), so
+	 * the same "mu" gave a step ~15x LARGER than the reference's: mu=0.1 here
+	 * behaves like an NLMS step of ~1.5 (stable only below 2, and any burst of
+	 * input power above the running average pushes it over). That matches what
+	 * this project measured on real captures - mu=0.1 diverged ("~2.5x the
+	 * first-window MSE"), mu=0.03 did not, and huge training errors show up
+	 * occasionally. Set HFDL_EQ_NLMS=1 to use the reference's rule; mu then has
+	 * the reference's meaning (0.1 = dumphfdl's value). Default 0 keeps the old
+	 * behaviour so results stay comparable until it has been A/B tested. */
+#ifndef HFDL_EQ_NLMS
+#define HFDL_EQ_NLMS 0
+#endif
+#if HFDL_EQ_NLMS
+	{
+		float32_t x2 = 0.0f;
+		for (uint32_t k = 0; k < HFDL_EQ_LEN; k++) {
+			x2 += eq->delay_i[k] * eq->delay_i[k] + eq->delay_q[k] * eq->delay_q[k];
+		}
+		mu_eff = (x2 > 1.0e-6f) ? (eq->mu / x2) : 0.0f; /* liquid: no update when the window is empty */
+	}
+#endif
 
 	/* taps[k] += mu * conj(delay[k]) * error - see header's top
 	 * comment for why this exact (textbook, unnormalized) form was
@@ -130,8 +161,8 @@ void hfdl_equalizer_step(hfdl_equalizer_t *eq, float32_t d_i, float32_t d_q, flo
 	 *   real: delay_i*err_i + delay_q*err_q
 	 *   imag: delay_i*err_q - delay_q*err_i */
 	for (uint32_t k = 0; k < HFDL_EQ_LEN; k++) {
-		eq->taps_i[k] += eq->mu * (eq->delay_i[k] * err_i + eq->delay_q[k] * err_q);
-		eq->taps_q[k] += eq->mu * (eq->delay_i[k] * err_q - eq->delay_q[k] * err_i);
+		eq->taps_i[k] += mu_eff * (eq->delay_i[k] * err_i + eq->delay_q[k] * err_q);
+		eq->taps_q[k] += mu_eff * (eq->delay_i[k] * err_q - eq->delay_q[k] * err_i);
 	}
 
 	/* GAIN-COLLAPSE FIX (20/08/2026) - real captures across many

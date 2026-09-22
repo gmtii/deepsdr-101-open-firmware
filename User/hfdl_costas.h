@@ -45,8 +45,13 @@
  * real or sigidwiki.com signal once the full chain exists.
  */
 
+/* Both overridable at build time (18/09/2026), see the Makefile's HFDL knobs. */
+#ifndef HFDL_COSTAS_DEFAULT_ALPHA
 #define HFDL_COSTAS_DEFAULT_ALPHA 0.1f
+#endif
+#ifndef HFDL_COSTAS_DEFAULT_BETA
 #define HFDL_COSTAS_DEFAULT_BETA  (0.047f * HFDL_COSTAS_DEFAULT_ALPHA * HFDL_COSTAS_DEFAULT_ALPHA)
+#endif
 
 typedef struct {
 	float32_t phase; /* current phase estimate, radians */

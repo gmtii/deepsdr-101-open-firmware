@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "hfdl_aircraft.h"      /* hfdl_ac_event_t, only with HFDL_AIRCRAFT_TABLE=1 */
 #include "hfdl_preamble_sync.h" /* hfdl_preamble_state_t - demod_am_hfdl_get_preamble_state()'s return type */
 
 /*
@@ -648,6 +649,34 @@ uint32_t demod_am_hfdl_get_last_decoded_len(void);
 const char *demod_am_hfdl_get_screen_line1(void);
 const char *demod_am_hfdl_get_screen_line2(void);
 const char *demod_am_hfdl_get_screen_line3(void);
+
+/* Counter that advances by one for every new HFDL reception (a CRC-OK
+ * MPDU carrying at least one LPDU) - lets the UI detect "screen lines
+ * 1..3 now hold something new" without polling their text. Main-loop
+ * use only. See demod_am.c for details. */
+uint32_t demod_am_hfdl_get_rx_seq(void);
+
+#if HFDL_AIRCRAFT_TABLE
+/* Aircraft table support (20/09/2026, only with HFDL_AIRCRAFT_TABLE=1). All main-loop use. */
+
+/* The reception that made demod_am_hfdl_get_rx_seq() advance, in structured form (ICAO, aircraft
+ * ID, ground station, LPDU type, flight, position). flags has HFDL_AC_EV_IGNORE set when the message
+ * was not usable. The time fields are left 0: the caller stamps them. */
+const hfdl_ac_event_t *demod_am_hfdl_get_last_event(void);
+
+/* Preamble funnel counters since boot, counted while the demod chain runs: A1 found (START), A2
+ * confirmed (CONFIRM), M1 identified so the frame starts (MODE). */
+void demod_am_hfdl_get_funnel(uint16_t *start, uint16_t *confirm, uint16_t *mode);
+
+/* Carrier-loop frequency estimate at the last preamble lock, Hz. */
+float demod_am_hfdl_get_lock_costas_hz(void);
+#endif
+
+/* Forgets the HFDL aircraft-ID -> ICAO mappings learned from LOGON_CONFIRM
+ * LPDUs. IDs are only valid on one channel, so main.c calls this on
+ * entering HFDL mode and when the tuned frequency moves to another
+ * channel. Main-loop use only. */
+void demod_am_hfdl_icao_cache_clear(void);
 
 /* Pre-AGC envelope peak (int16 full-scale units, instant-attack /
  * slow-release ballistics) - the UI's S-meter source. Convert to

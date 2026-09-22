@@ -3,6 +3,10 @@
 
 #include <stdint.h>
 
+#ifndef HFDL_ICAO24_DB
+#define HFDL_ICAO24_DB 0
+#endif
+
 /*
  * Bit-banged transport driver for the external SPI NOR flash chip
  * that SHARES this board's touch-panel bus.
@@ -328,6 +332,13 @@ uint8_t spi_flash_async_save_start(const char name8[8], const char ext3[3],
 
 /* Call once per main loop iteration while a save is in progress. */
 spi_flash_async_status_t spi_flash_async_save_poll(void);
+
+#if HFDL_ICAO24_DB
+/* 1 while an async save is between start and DONE/ERROR. The flash chip ignores
+ * read commands while it is programming or erasing, so anything that reads the
+ * chip from the main loop (icao24_db.c) must not do so while this is 1. */
+uint8_t spi_flash_async_save_in_progress(void);
+#endif
 
 /* Diagnostic bring-up probe #3 - walks CHANNEL.CSV's FAT12 cluster
  * chain and prints its content. See spi_flash_probe_channel_csv()'s

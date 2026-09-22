@@ -10,6 +10,7 @@
 #include "hfdl_soft_demod.h" /* hfdl_soft_demod_costas_phase_error - ditto */
 #include "hfdl_costas.h" /* hfdl_costas_adjust - ditto */
 #include "hfdl_pdu.h" /* hfdl_mpdu_parse_header/extract_lpdus - resumen MPDU/LPDU, 16/09/2026 */
+#include "icao24_db.h" /* aircraft model from the ICAO address, only with HFDL_ICAO24_DB=1 (20/09/2026) */
 #include "hfdl_hfnpdu.h" /* hfdl_hfnpdu_parse_performance_data - posicion GPS dentro de USER_DATA, 16/09/2026 */
 #include "sam.h" /* DEMOD_MODE_SAM - 21/08/2026 */
 #include "config.h"
@@ -1606,6 +1607,57 @@ static volatile uint32_t s_hfdl_dbg_done_m2skip = 0u;
 static volatile uint32_t s_hfdl_dbg_done_eqtrain = 0u;
 static volatile uint32_t s_hfdl_dbg_done_data = 0u;
 static volatile float s_hfdl_dbg_done_eq_mse = 0.0f;
+/* Input-level snapshot taken when a data segment finishes (18/09/2026) - lets a UART log
+ * show, per decode attempt, how hard the codec input was driven, to correlate with CRC
+ * results. Raw values; converted to dB in demod_am_hfdl_probe_debug_poll(). */
+static volatile float s_hfdl_dbg_done_agc_pow = 0.0f;  /* chain AGC input power (i^2+q^2, int16-count units) */
+static volatile float s_hfdl_dbg_done_agc_gain = 0.0f; /* chain AGC gain applied at that moment */
+static volatile float s_hfdl_dbg_done_sig_peak = 0.0f; /* peak |I+jQ| of the channel-filtered signal (int16 counts) */
+/* Equalizer/carrier diagnostics (18/09/2026, from the first KiwiSDR capture: CRC OK was 77% when the
+ * frame-average training error was below 1.0 and ~3% above 1.5, i.e. failures are mostly "the
+ * equalizer never converged" - these tell whether that happens right at the start of the frame or
+ * only later, and whether the carrier loop was far off when the preamble locked). */
+static volatile float s_hfdl_dbg_done_init_mse = 0.0f;   /* training error over the FIRST 135 EQ_TRAIN symbols only (the initial training burst) */
+static volatile float s_hfdl_dbg_done_pol_dot = 0.0f;    /* polarity-decision correlation over the first T window (+-15 max; near 0 = a coin flip) */
+static volatile uint32_t s_hfdl_dbg_done_bitmask = 0u;   /* polarity decided from it (which T sequence variant was trained against) */
+static volatile float s_hfdl_dbg_lock_costas_hz = 0.0f;  /* Costas loop frequency estimate when the preamble locked, Hz */
+static volatile float s_hfdl_dbg_done_costas_hz = 0.0f;  /* ... and when the data segment finished */
+
+/* ---- Optional experiments (18/09/2026). ALL OFF BY DEFAULT: with none of these knobs set, none of
+ * this is compiled and the firmware is byte-for-byte the one tested as A/B/C. ----
+ *
+ * HFDL_ABORT_BAD_TRAINING=1  Give up on a frame once its initial 135-symbol training is over if the
+ *     training error is at or above HFDL_ABORT_MSE_THRESHOLD (default 1.0). The receiver is committed
+ *     to a locked frame for its whole length (1.9 s single slot, 4.3 s double) and ignores new
+ *     preambles meanwhile. In replayed recordings ~70% of the time was spent inside attempts, most of
+ *     them frames whose training never converged (those decoded ~3% of the time), so aborting them
+ *     may let the receiver catch real frames it currently misses. Cost: the few frames that would
+ *     have decoded despite a bad training error are lost too (in the A/B/C/D/BB logs, 4 of 22 CRC OK
+ *     came from frames with initial training error >= 1.0) - hence the threshold is a knob.
+ *     Aborted frames are not counted as decode attempts (no CRC check runs on them).
+ * HFDL_M1_DIAG=1 (debug UART builds only)  Also print, per frame, the correlation of the winning M1
+ *     template, the runner-up template's, and the A2 correlation, to tell real double-slot frames from
+ *     wrongly-identified M1 values (a wrong M1 holds the receiver 4.3 s instead of 1.9 s). */
+#ifndef HFDL_ABORT_BAD_TRAINING
+#define HFDL_ABORT_BAD_TRAINING 0
+#endif
+#ifndef HFDL_ABORT_MSE_THRESHOLD
+#define HFDL_ABORT_MSE_THRESHOLD 1.0f
+#endif
+#ifndef HFDL_M1_DIAG
+#define HFDL_M1_DIAG 0
+#endif
+#if HFDL_ABORT_BAD_TRAINING && DEBUG_UART_ENABLED
+static volatile uint8_t s_hfdl_dbg_abort_pending = 0u;
+static volatile uint32_t s_hfdl_dbg_abort_m1 = 0u;
+static volatile float s_hfdl_dbg_abort_mse = 0.0f;
+static volatile float s_hfdl_dbg_abort_pol = 0.0f;
+#endif
+#if DEBUG_UART_ENABLED && HFDL_M1_DIAG
+static volatile float s_hfdl_dbg_lock_m1_score = 0.0f;   /* signed correlation of the M1 template that won */
+static volatile float s_hfdl_dbg_lock_m1_second = 0.0f;  /* |correlation| of the best of the other 7 templates */
+static volatile float s_hfdl_dbg_lock_a_score = 0.0f;    /* A-sequence correlation at the last check (A2) */
+#endif
 static volatile uint8_t s_hfdl_dbg_done_ready = 0u;
 static volatile uint8_t s_hfdl_dbg_done_crc_ok = 0u;
 static volatile uint8_t s_hfdl_dbg_done_crc_valid = 0u;
@@ -1618,33 +1670,60 @@ static char s_hfdl_screen_line1[48]; /* resumen compacto MPDU/LPDU para pantalla
 static char s_hfdl_screen_line2[48]; /* resumen compacto Performance data (GPS) para pantalla, vacio si no aplica */
 static char s_hfdl_screen_line3[48]; /* ICAO del avion (via tabla de correlacion) o "?" si desconocido */
 
-/* Tabla de correlacion src_id -> ICAO (16/09/2026, pedida por el
- * propietario del proyecto). El "src_id"/"dst_id" del MPDU es un
- * identificador corto y efimero asignado durante el LOGON de la
- * sesion, NO la direccion ICAO real de 24 bits - esa solo aparece en
- * los LPDU de LOGON_REQUEST/LOGON_CONFIRM/LOGOFF (ver hfdl_pdu.h).
- * Esta tabla guarda esa correlacion la primera vez que vemos un LOGON,
- * para poder mostrar el ICAO real en los USER_DATA/Performance data
- * posteriores del mismo avion. Si el avion ya estaba conectado antes
- * de empezar a escuchar, nunca veremos su LOGON y el ICAO
- * sencillamente no se puede saber a partir de USER_DATA solo - eso es
- * una limitacion del protocolo, no de esta tabla. Tamano pequeno (8
- * entradas) - reemplazo round-robin simple, no hace falta mas para un
- * numero razonable de aviones activos a la vez en un canal HFDL. */
+/* Aircraft ID -> ICAO table (rewritten 18/09/2026).
+ *
+ * The src_id of a downlink MPDU (dst_id of an uplink one) is a short ID
+ * the ground station assigns to the aircraft when it logs on; it is NOT
+ * the 24-bit ICAO address. The ICAO only travels inside the logon/logoff
+ * LPDUs. This table remembers the mapping so that later USER_DATA /
+ * Performance data from the same aircraft can be shown with its ICAO.
+ *
+ * Filled the same way dumphfdl does it (lpdu.c: ac_cache_entry_create()
+ * is called only for LOGON_CONFIRM / LOGON_RESUME_CONFIRM, using the
+ * "Assigned AC ID" field carried INSIDE the confirm LPDU; entries are
+ * deleted on LOGOFF_REQUEST / LOGON_DENIED). Two differences from the
+ * first version of this table, which mapped the MPDU header's src_id of
+ * a downlink LOGON_REQUEST instead: (1) an aircraft that has not logged
+ * on yet has no assigned ID, so that mapping was wrong, and (2) the
+ * LOGON_CONFIRM comes from the ground station (uplink), so it was never
+ * stored at all - which is why most USER_DATA rows ended up with an
+ * unknown ICAO.
+ *
+ * dumphfdl keys its cache by (frequency, ID) because IDs are only
+ * meaningful on one channel. This firmware listens to one channel at a
+ * time, so instead the whole table is flushed when the channel changes
+ * (see demod_am_hfdl_icao_cache_clear() and main.c). If the aircraft's
+ * LOGON_CONFIRM was never heard (it logged on before we started
+ * listening, or on another channel) its ICAO simply cannot be known from
+ * USER_DATA alone - a protocol limitation. 8 entries, round-robin
+ * replacement. */
 #define HFDL_ICAO_CACHE_SIZE 8u
 static struct {
-    uint32_t src_id;
+    uint32_t src_id; /* the assigned aircraft ID (kept under its old field name) */
     uint32_t icao;
     uint8_t valid;
 } s_hfdl_icao_cache[HFDL_ICAO_CACHE_SIZE];
 static uint32_t s_hfdl_icao_cache_next = 0u;
 
-static void hfdl_icao_cache_put(uint32_t src_id, uint32_t icao)
+/* Drops every entry for this ICAO (an aircraft is logged on under exactly
+ * one ID at a time; also used for logoff/denied). */
+static void hfdl_icao_cache_delete_icao(uint32_t icao)
 {
     uint32_t i;
     for (i = 0u; i < HFDL_ICAO_CACHE_SIZE; i++) {
+        if (s_hfdl_icao_cache[i].valid && s_hfdl_icao_cache[i].icao == icao) {
+            s_hfdl_icao_cache[i].valid = 0u;
+        }
+    }
+}
+
+static void hfdl_icao_cache_put(uint32_t src_id, uint32_t icao)
+{
+    uint32_t i;
+    hfdl_icao_cache_delete_icao(icao); /* re-logon: forget the aircraft's previous ID */
+    for (i = 0u; i < HFDL_ICAO_CACHE_SIZE; i++) {
         if (s_hfdl_icao_cache[i].valid && s_hfdl_icao_cache[i].src_id == src_id) {
-            s_hfdl_icao_cache[i].icao = icao; /* actualiza si ya habia entrada para este src_id (re-logon) */
+            s_hfdl_icao_cache[i].icao = icao; /* the ID was reassigned to another aircraft */
             return;
         }
     }
@@ -1652,6 +1731,52 @@ static void hfdl_icao_cache_put(uint32_t src_id, uint32_t icao)
     s_hfdl_icao_cache[s_hfdl_icao_cache_next].icao = icao;
     s_hfdl_icao_cache[s_hfdl_icao_cache_next].valid = 1u;
     s_hfdl_icao_cache_next = (s_hfdl_icao_cache_next + 1u) % HFDL_ICAO_CACHE_SIZE;
+}
+
+/* Forgets every ID -> ICAO mapping. Main loop only (same context as the
+ * analysis that reads/writes the table). */
+void demod_am_hfdl_icao_cache_clear(void)
+{
+    uint32_t i;
+    for (i = 0u; i < HFDL_ICAO_CACHE_SIZE; i++) {
+        s_hfdl_icao_cache[i].valid = 0u;
+    }
+    s_hfdl_icao_cache_next = 0u;
+}
+
+/* Cleans up the 6-byte Flight ID field of a Performance data HFNPDU
+ * (18/09/2026) for display. Aircraft avionics fill it inconsistently:
+ * real captures show it padded with NULs and/or spaces, or left entirely
+ * blank. Rules: a NUL byte or a space is padding (leading and trailing
+ * padding is dropped, so "  IB6251" shows as "IB6251"); printable ASCII
+ * is kept; anything else (control or 8-bit bytes) means the field does not
+ * hold a real flight ID, so nothing is shown at all rather than garbage.
+ * out must hold 7 bytes. Returns the length written (0 = nothing to show). */
+static uint32_t hfdl_flight_id_clean(const char *raw, char *out)
+{
+    uint32_t first = 0u;
+    uint32_t last = 0u; /* one past the last kept char */
+    uint32_t i;
+    uint32_t n = 0u;
+
+    for (i = 0u; i < 6u; i++) {
+        uint8_t c = (uint8_t)raw[i];
+        if (c == 0u || c == (uint8_t)' ') {
+            continue; /* padding */
+        }
+        if (c < 0x21u || c > 0x7Eu) {
+            out[0] = '\0';
+            return 0u; /* not a real flight ID */
+        }
+        if (last == 0u) { first = i; }
+        last = i + 1u;
+    }
+    for (i = first; i < last; i++) {
+        uint8_t c = (uint8_t)raw[i];
+        out[n++] = (c == 0u) ? ' ' : (char)c; /* a NUL in the middle would end the string early; show it as a gap */
+    }
+    out[n] = '\0';
+    return n;
 }
 
 /* Devuelve 1 y rellena *icao_out si se conoce, 0 si no (avion nunca
@@ -1715,6 +1840,50 @@ const char *demod_am_hfdl_get_screen_line3(void)
     return s_hfdl_screen_line3;
 }
 
+/* Reception sequence number (18/09/2026): bumped once at the end of
+ * demod_am_hfdl_analyze_pdu() for every CRC-OK MPDU that produced a
+ * non-empty screen line 1 (i.e. at least one LPDU). The HFDL reception
+ * log in main.c compares it against its own last-seen value to know
+ * when screen lines 1..3 hold a NEW reception worth appending - the
+ * lines themselves are overwritten (and blanked) on every analysis, so
+ * they cannot be used for change detection on their own. Written and
+ * read from the main loop only, no ISR involvement, so no volatile or
+ * critical section is needed. */
+static uint32_t s_hfdl_rx_seq = 0u;
+
+uint32_t demod_am_hfdl_get_rx_seq(void)
+{
+    return s_hfdl_rx_seq;
+}
+
+#if HFDL_AIRCRAFT_TABLE
+/* Aircraft table support (20/09/2026), see demod_am.h. The event is rebuilt by every
+ * demod_am_hfdl_analyze_pdu() call; the funnel counters are written from the ISR-side chain code
+ * and only read from the main loop (16-bit reads are atomic here). */
+static hfdl_ac_event_t s_hfdl_last_ev;
+static volatile uint16_t s_hfdl_funnel_start = 0u;
+static volatile uint16_t s_hfdl_funnel_confirm = 0u;
+static volatile uint16_t s_hfdl_funnel_mode = 0u;
+static uint8_t s_hfdl_was_m1_search = 0u;
+
+const hfdl_ac_event_t *demod_am_hfdl_get_last_event(void)
+{
+    return &s_hfdl_last_ev;
+}
+
+void demod_am_hfdl_get_funnel(uint16_t *start, uint16_t *confirm, uint16_t *mode)
+{
+    *start = s_hfdl_funnel_start;
+    *confirm = s_hfdl_funnel_confirm;
+    *mode = s_hfdl_funnel_mode;
+}
+
+float demod_am_hfdl_get_lock_costas_hz(void)
+{
+    return s_hfdl_dbg_lock_costas_hz;
+}
+#endif
+
 /* Analiza MPDU/LPDU/HFNPDU y monta s_hfdl_pdu_summary - llamada SOLO
  * desde el bucle principal (16/09/2026, movido aqui tras corrupcion
  * real en hardware con esto en la ISR - ver el comentario en el punto
@@ -1733,19 +1902,72 @@ static void demod_am_hfdl_analyze_pdu(void)
     };
     #define PDU_APPEND(str) do { const char *_s = (str); while (*_s && p < sizeof(s_hfdl_pdu_summary) - 1u) { s_hfdl_pdu_summary[p++] = *_s++; } } while (0)
     #define PDU_APPEND_DEC(v) do { uint32_t _x = (uint32_t)(v); char _d[10]; uint8_t _n = 0u; if (_x == 0u) { _d[_n++] = '0'; } while (_x > 0u && _n < 10u) { _d[_n++] = (char)('0' + (_x % 10u)); _x /= 10u; } while (_n > 0u && p < sizeof(s_hfdl_pdu_summary) - 1u) { s_hfdl_pdu_summary[p++] = _d[--_n]; } } while (0)
+    /* 4-digit zero-padded fraction, see SCR2_APPEND_FRAC4 (18/09/2026) */
+    #define PDU_APPEND_FRAC4(v) do { uint32_t _f = (uint32_t)(v); char _fb[5]; _fb[0] = (char)('0' + (_f / 1000u) % 10u); _fb[1] = (char)('0' + (_f / 100u) % 10u); _fb[2] = (char)('0' + (_f / 10u) % 10u); _fb[3] = (char)('0' + _f % 10u); _fb[4] = '\0'; PDU_APPEND(_fb); } while (0)
     #define PDU_APPEND_HEX6(v) do { uint32_t _x = (uint32_t)(v) & 0xFFFFFFu; int _b; for (_b = 20; _b >= 0; _b -= 4) { uint8_t _nib = (uint8_t)((_x >> _b) & 0xFu); if (p < sizeof(s_hfdl_pdu_summary) - 1u) { s_hfdl_pdu_summary[p++] = (char)((_nib < 10u) ? ('0' + _nib) : ('A' + (_nib - 10u))); } } } while (0)
 
     s_hfdl_pdu_summary_len = 0u;
-    s_hfdl_screen_line1[0] = '\0'; /* vaciar SIEMPRE aqui - mismo motivo que el bug de
-                                       s_hfdl_pdu_summary encontrado en hardware real: sin esto, un
-                                       segmento sin analisis nuevo dejaria en pantalla el resumen del
-                                       ultimo exito anterior, sin relacion con el mensaje actual. */
-    s_hfdl_screen_line2[0] = '\0';
-    s_hfdl_screen_line3[0] = '\0';
+    /* Always clear here - same reason as the s_hfdl_pdu_summary bug found on real
+     * hardware: without it, a segment with no new analysis would leave the
+     * previous success's summary on screen, unrelated to the current message.
+     *
+     * 18/09/2026: clear the WHOLE buffers, not just byte 0. The SCRn_APPEND
+     * macros below only ever write characters, never a terminating NUL, so
+     * with only [0] cleared every line kept the tail of the longest text it
+     * had ever held ("...USER DATA 47BICAO:78160E2C1", "INVALIDA", flight IDs
+     * followed by leftovers of older lines - seen on the reception log).
+     * Zeroed buffers + append-only writes that stop at size-1 guarantee the
+     * terminator. */
+    {
+        uint32_t zi;
+        for (zi = 0u; zi < sizeof(s_hfdl_screen_line1); zi++) { s_hfdl_screen_line1[zi] = '\0'; }
+        for (zi = 0u; zi < sizeof(s_hfdl_screen_line2); zi++) { s_hfdl_screen_line2[zi] = '\0'; }
+        for (zi = 0u; zi < sizeof(s_hfdl_screen_line3); zi++) { s_hfdl_screen_line3[zi] = '\0'; }
+    }
     if (!hfdl_mpdu_parse_header(s_hfdl_full_decoded, s_hfdl_full_decoded_len, &hdr) || !hdr.crc_ok) {
         return;
     }
     n_lpdu = hfdl_mpdu_extract_lpdus(s_hfdl_full_decoded, s_hfdl_full_decoded_len, &hdr, lpdus, 4u);
+
+#if HFDL_AIRCRAFT_TABLE
+    /* Structured copy of what this message says, for the aircraft table. Downlink: the aircraft is
+     * the sender (src_id) and the ground station the destination; uplink: the station is the sender
+     * and the aircraft is the first addressee. A logon confirm carries the ID it assigns. */
+    {
+        uint32_t zi;
+        uint8_t *zp = (uint8_t *)&s_hfdl_last_ev;
+        for (zi = 0u; zi < (uint32_t)sizeof(s_hfdl_last_ev); zi++) { zp[zi] = 0u; }
+        s_hfdl_last_ev.ac_id = HFDL_AC_ID_NONE;
+        s_hfdl_last_ev.flags = HFDL_AC_EV_IGNORE;
+        if (n_lpdu > 0u && lpdus[0].kind != HFDL_LPDU_KIND_INVALID && lpdus[0].kind != HFDL_LPDU_KIND_UNKNOWN_TYPE) {
+            s_hfdl_last_ev.flags = 0u;
+            s_hfdl_last_ev.lpdu_type = lpdus[0].type_octet;
+            if (hdr.direction == HFDL_PDU_DIR_DOWNLINK) {
+                s_hfdl_last_ev.ac_id = hdr.src_id;
+                s_hfdl_last_ev.gs_id = hdr.dst_id;
+            } else {
+                s_hfdl_last_ev.flags |= HFDL_AC_EV_UPLINK;
+                s_hfdl_last_ev.gs_id = hdr.src_gs_id;
+                if (hdr.aircraft_cnt > 0u) { s_hfdl_last_ev.ac_id = hdr.aircraft[0].dst_id; }
+            }
+            if (lpdus[0].kind == HFDL_LPDU_KIND_LOGON_REQUEST || lpdus[0].kind == HFDL_LPDU_KIND_LOGON_CONFIRM ||
+                lpdus[0].kind == HFDL_LPDU_KIND_LOGOFF_OR_DENIED) {
+                s_hfdl_last_ev.flags |= HFDL_AC_EV_ICAO;
+                s_hfdl_last_ev.icao = lpdus[0].icao_address;
+            }
+            if (lpdus[0].kind == HFDL_LPDU_KIND_LOGON_CONFIRM) {
+                s_hfdl_last_ev.flags |= HFDL_AC_EV_ASSIGN;
+                s_hfdl_last_ev.ac_id = lpdus[0].ac_id;
+            } else if (lpdus[0].kind == HFDL_LPDU_KIND_USER_DATA && hdr.direction == HFDL_PDU_DIR_DOWNLINK) {
+                uint32_t known_icao;
+                if (hfdl_icao_cache_get(hdr.src_id, &known_icao)) {
+                    s_hfdl_last_ev.flags |= HFDL_AC_EV_ICAO;
+                    s_hfdl_last_ev.icao = known_icao;
+                }
+            }
+        }
+    }
+#endif
 
     /* Linea 1 compacta para pantalla - solo el primer LPDU, suficiente
      * para el caso comun (un solo LPDU por MPDU, que es lo que hemos
@@ -1786,13 +2008,24 @@ static void demod_am_hfdl_analyze_pdu(void)
                 lpdus[0].kind == HFDL_LPDU_KIND_LOGON_CONFIRM ||
                 lpdus[0].kind == HFDL_LPDU_KIND_LOGOFF_OR_DENIED) {
                 SCR3_APPEND("ICAO: "); SCR3_APPEND_HEX6(lpdus[0].icao_address);
+#if HFDL_ICAO24_DB
+                { char mdl[25]; if (icao24_db_lookup(lpdus[0].icao_address, mdl, sizeof(mdl))) { SCR3_APPEND("  "); SCR3_APPEND(mdl); } }
+#endif
             } else if (lpdus[0].kind == HFDL_LPDU_KIND_USER_DATA && hdr.direction == HFDL_PDU_DIR_DOWNLINK) {
                 uint32_t icao;
                 if (hfdl_icao_cache_get(hdr.src_id, &icao)) {
                     SCR3_APPEND("ICAO: "); SCR3_APPEND_HEX6(icao);
-                } else {
-                    SCR3_APPEND("ICAO: ? (sin LOGON visto)");
+#if HFDL_ICAO24_DB
+                    { char mdl[25]; if (icao24_db_lookup(icao, mdl, sizeof(mdl))) { SCR3_APPEND("  "); SCR3_APPEND(mdl); } }
+#endif
                 }
+                /* 18/09/2026: when the aircraft's LOGON was never heard
+                 * (so src_id can't be mapped to an ICAO), line 3 is now
+                 * left empty. It used to say "ICAO: ? (sin LOGON visto)",
+                 * a diagnostic meant to show that the missing ICAO was a
+                 * protocol limitation and not a decode failure - not
+                 * useful day to day. Empty line 3 means neither view
+                 * (spectrum summary or reception log) draws a row for it. */
             }
             #undef SCR3_APPEND
             #undef SCR3_APPEND_HEX6
@@ -1818,13 +2051,17 @@ static void demod_am_hfdl_analyze_pdu(void)
             lpdus[li].kind == HFDL_LPDU_KIND_LOGOFF_OR_DENIED) {
             PDU_APPEND(" ICAO=0x");
             PDU_APPEND_HEX6(lpdus[li].icao_address);
-            /* Guarda la correlacion src_id->ICAO (16/09/2026) - ver el
-             * comentario de hfdl_icao_cache_put() arriba. Solo tiene
-             * sentido en downlink: hdr.src_id es "el ID corto de ESTE
-             * avion" solo en ese caso (en uplink, hdr.src_gs_id es la
-             * estacion de tierra, no un avion concreto). */
-            if (hdr.direction == HFDL_PDU_DIR_DOWNLINK && lpdus[li].crc_ok) {
-                hfdl_icao_cache_put(hdr.src_id, lpdus[li].icao_address);
+            /* Update the aircraft ID -> ICAO table, as dumphfdl does: a
+             * CRC-OK LOGON_CONFIRM (uplink) carries the newly assigned
+             * ID; a LOGOFF/LOGON_DENIED ends the association. A
+             * LOGON_REQUEST teaches us nothing about IDs. See the
+             * comment above hfdl_icao_cache_put(). */
+            if (lpdus[li].crc_ok) {
+                if (lpdus[li].kind == HFDL_LPDU_KIND_LOGON_CONFIRM) {
+                    hfdl_icao_cache_put(lpdus[li].ac_id, lpdus[li].icao_address);
+                } else if (lpdus[li].kind == HFDL_LPDU_KIND_LOGOFF_OR_DENIED) {
+                    hfdl_icao_cache_delete_icao(lpdus[li].icao_address);
+                }
             }
         }
         if (lpdus[li].kind == HFDL_LPDU_KIND_USER_DATA) {
@@ -1843,36 +2080,64 @@ static void demod_am_hfdl_analyze_pdu(void)
                         s_hfdl_full_decoded_len - user_data_off, &perf)) {
                     int32_t lat_x10000 = (int32_t)(perf.location.lat * 10000.0 + (perf.location.lat >= 0.0 ? 0.5 : -0.5));
                     int32_t lon_x10000 = (int32_t)(perf.location.lon * 10000.0 + (perf.location.lon >= 0.0 ? 0.5 : -0.5));
+                    char fid[7];
+                    uint32_t fid_len = hfdl_flight_id_clean(perf.flight_id, fid);
+#if HFDL_AIRCRAFT_TABLE
+                    s_hfdl_last_ev.flags |= HFDL_AC_EV_PERF;
+                    if (fid_len > 0u) {
+                        uint32_t fi;
+                        for (fi = 0u; (fi < fid_len) && (fi < 6u); fi++) { s_hfdl_last_ev.flight[fi] = fid[fi]; }
+                        s_hfdl_last_ev.flight[fi] = '\0';
+                        s_hfdl_last_ev.flags |= HFDL_AC_EV_FLIGHT;
+                    }
+                    /* latitude 180 is the "no position" value, not a place */
+                    if (perf.location.lat >= -90.0 && perf.location.lat <= 90.0 && perf.location.lon >= -180.0 && perf.location.lon <= 180.0) {
+                        s_hfdl_last_ev.lat_e4 = lat_x10000;
+                        s_hfdl_last_ev.lon_e4 = lon_x10000;
+                        s_hfdl_last_ev.flags |= HFDL_AC_EV_POS;
+                    }
+#endif
                     {
                         /* Linea 2 compacta para pantalla - solo GPS+leg, lo
                          * mas util de un vistazo. */
                         int32_t sl_lat = lat_x10000, sl_lon = lon_x10000;
                         uint32_t sp = 0u;
                         #define SCR2_APPEND(str) do { const char *_s = (str); while (*_s && sp < sizeof(s_hfdl_screen_line2) - 1u) { s_hfdl_screen_line2[sp++] = *_s++; } } while (0)
+                        /* 18/09/2026: the fractional part must be zero-padded to 4 digits - it
+                         * used to print through SCR2_APPEND_DEC, so 12.0500 came out as "12.500"
+                         * and 0.0034 as "0.34" (10x/100x wrong). */
+                        #define SCR2_APPEND_FRAC4(v) do { uint32_t _f = (uint32_t)(v); char _fb[5]; _fb[0] = (char)('0' + (_f / 1000u) % 10u); _fb[1] = (char)('0' + (_f / 100u) % 10u); _fb[2] = (char)('0' + (_f / 10u) % 10u); _fb[3] = (char)('0' + _f % 10u); _fb[4] = '\0'; SCR2_APPEND(_fb); } while (0)
                         #define SCR2_APPEND_DEC(v) do { uint32_t _x = (uint32_t)(v); char _d[10]; uint8_t _n = 0u; if (_x == 0u) { _d[_n++] = '0'; } while (_x > 0u && _n < 10u) { _d[_n++] = (char)('0' + (_x % 10u)); _x /= 10u; } while (_n > 0u && sp < sizeof(s_hfdl_screen_line2) - 1u) { s_hfdl_screen_line2[sp++] = _d[--_n]; } } while (0)
                         SCR2_APPEND("GPS ");
                         if (sl_lat < 0) { SCR2_APPEND("-"); sl_lat = -sl_lat; }
                         SCR2_APPEND_DEC((uint32_t)sl_lat / 10000u); SCR2_APPEND(".");
-                        SCR2_APPEND_DEC((uint32_t)sl_lat % 10000u);
+                        SCR2_APPEND_FRAC4((uint32_t)sl_lat % 10000u);
                         SCR2_APPEND(",");
                         if (sl_lon < 0) { SCR2_APPEND("-"); sl_lon = -sl_lon; }
                         SCR2_APPEND_DEC((uint32_t)sl_lon / 10000u); SCR2_APPEND(".");
-                        SCR2_APPEND_DEC((uint32_t)sl_lon % 10000u);
+                        SCR2_APPEND_FRAC4((uint32_t)sl_lon % 10000u);
                         SCR2_APPEND(" LEG:"); SCR2_APPEND_DEC(perf.flight_leg);
+                        /* Flight ID goes LAST on purpose: main.c's reception
+                         * log recognises this row by its leading "GPS "
+                         * (hfdl_log_row_color()). Shown only when the
+                         * aircraft actually filled the field. */
+                        if (fid_len > 0u) { SCR2_APPEND(" FLT:"); SCR2_APPEND(fid); }
                         #undef SCR2_APPEND
                         #undef SCR2_APPEND_DEC
+                        #undef SCR2_APPEND_FRAC4
                     }
                     PDU_APPEND("\n      Performance data: lat=");
                     if (lat_x10000 < 0) { PDU_APPEND("-"); lat_x10000 = -lat_x10000; }
                     PDU_APPEND_DEC((uint32_t)lat_x10000 / 10000u);
                     PDU_APPEND(".");
-                    PDU_APPEND_DEC((uint32_t)lat_x10000 % 10000u);
+                    PDU_APPEND_FRAC4((uint32_t)lat_x10000 % 10000u);
                     PDU_APPEND(" lon=");
                     if (lon_x10000 < 0) { PDU_APPEND("-"); lon_x10000 = -lon_x10000; }
                     PDU_APPEND_DEC((uint32_t)lon_x10000 / 10000u);
                     PDU_APPEND(".");
-                    PDU_APPEND_DEC((uint32_t)lon_x10000 % 10000u);
+                    PDU_APPEND_FRAC4((uint32_t)lon_x10000 % 10000u);
                     PDU_APPEND(" flight_leg="); PDU_APPEND_DEC(perf.flight_leg);
+                    if (fid_len > 0u) { PDU_APPEND(" flight_id="); PDU_APPEND(fid); }
                     PDU_APPEND(" gs_id="); PDU_APPEND_DEC(perf.gs_id);
                     PDU_APPEND(" utc=");
                     PDU_APPEND_DEC(perf.utc_time.hour); PDU_APPEND(":");
@@ -1889,9 +2154,13 @@ static void demod_am_hfdl_analyze_pdu(void)
     }
     s_hfdl_pdu_summary[p] = '\0';
     s_hfdl_pdu_summary_len = p;
+    if (s_hfdl_screen_line1[0] != '\0') {
+        s_hfdl_rx_seq++; /* a real reception - see demod_am_hfdl_get_rx_seq() */
+    }
     #undef PDU_APPEND
     #undef PDU_APPEND_DEC
     #undef PDU_APPEND_HEX6
+    #undef PDU_APPEND_FRAC4
 }
 
 /* Drains the flags above from the MAIN LOOP - see their declaration
@@ -1925,6 +2194,20 @@ void demod_am_hfdl_probe_debug_poll(void)
         s_hfdl_dbg_locked_pending = 0u;
         debug_print_dec_always("\n*** HFDL PREAMBLE LOCKED *** M1", s_hfdl_dbg_locked_m1);
     }
+#if HFDL_ABORT_BAD_TRAINING && DEBUG_UART_ENABLED
+    if (s_hfdl_dbg_abort_pending) {
+        s_hfdl_dbg_abort_pending = 0u;
+        debug_print_always("=== HFDL frame ABORTED early ===\n");
+        debug_print_dec_always("  abort: M1", s_hfdl_dbg_abort_m1);
+        debug_print_float_always("  abort: initial training error", s_hfdl_dbg_abort_mse);
+        debug_print_float_always("  abort: polarity correlation (max 15, near 0 = coin flip)", s_hfdl_dbg_abort_pol);
+#if HFDL_M1_DIAG
+        debug_print_float_always("  M1 correlation at lock (signed)", s_hfdl_dbg_lock_m1_score);
+        debug_print_float_always("  second-best M1 correlation (abs)", s_hfdl_dbg_lock_m1_second);
+        debug_print_float_always("  A2 correlation at lock (signed)", s_hfdl_dbg_lock_a_score);
+#endif
+    }
+#endif
     if (s_hfdl_dbg_done_pending) {
         s_hfdl_dbg_done_pending = 0u;
         debug_print_always("=== HFDL data segment DONE ===\n");
@@ -1934,6 +2217,24 @@ void demod_am_hfdl_probe_debug_poll(void)
         debug_print_dec_always("  EQ_TRAIN symbols seen", s_hfdl_dbg_done_eqtrain);
         debug_print_dec_always("  DATA symbols seen", s_hfdl_dbg_done_data);
         debug_print_float_always("  eq MSE, all EQ_TRAIN symbols", s_hfdl_dbg_done_eq_mse);
+        /* Input level (18/09/2026). 0 dB = one full-scale int16 rail (32768 counts). The first is the
+         * average power reaching the chain AGC (in-channel, after the channel filter and mixer); the
+         * second is the peak |I+jQ| of the channel-filtered signal, on the SAME scale (0 dB = magnitude
+         * of one full-scale rail) - close to 0 dB means the codec is (nearly) clipping. If chain-AGC level is very low (below about -60 dB) the AGC's fixed maximum
+         * gain (x1000) can no longer bring the signal up to the unit scale the rest of the chain expects. */
+        debug_print_float_always("  chain AGC input level, dB re full-scale rail", 10.0f * log10f(s_hfdl_dbg_done_agc_pow + 1.0e-12f) - 90.309f);
+        debug_print_float_always("  chain AGC gain, dB", 20.0f * log10f(s_hfdl_dbg_done_agc_gain + 1.0e-12f));
+        debug_print_float_always("  channel |I+jQ| peak, dB re full-scale rail", 20.0f * log10f(s_hfdl_dbg_done_sig_peak + 1.0e-12f) - 90.309f);
+        debug_print_float_always("  eq MSE, initial training (first 135 symbols)", s_hfdl_dbg_done_init_mse);
+        debug_print_float_always("  polarity correlation (max 15, near 0 = coin flip)", s_hfdl_dbg_done_pol_dot);
+        debug_print_dec_always("  polarity bitmask", s_hfdl_dbg_done_bitmask);
+        debug_print_float_always("  Costas freq at preamble LOCK, Hz", s_hfdl_dbg_lock_costas_hz);
+        debug_print_float_always("  Costas freq at frame end, Hz", s_hfdl_dbg_done_costas_hz);
+#if DEBUG_UART_ENABLED && HFDL_M1_DIAG
+        debug_print_float_always("  M1 correlation at lock (signed)", s_hfdl_dbg_lock_m1_score);
+        debug_print_float_always("  second-best M1 correlation (abs)", s_hfdl_dbg_lock_m1_second);
+        debug_print_float_always("  A2 correlation at lock (signed)", s_hfdl_dbg_lock_a_score);
+#endif
         debug_print_dec_always("  payload decode ready", s_hfdl_dbg_done_ready);
         debug_print_dec_always("  CRC last_ok", s_hfdl_dbg_done_crc_ok);
         debug_print_dec_always("  CRC last_valid", s_hfdl_dbg_done_crc_valid);
@@ -2995,6 +3296,11 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
             static float32_t s_hfdl_polarity_buf_i[HFDL_T_LEN];
             static float32_t s_hfdl_polarity_buf_q[HFDL_T_LEN];
             static float32_t s_hfdl_eq_train_err_sq_sum = 0.0f;
+            static float32_t s_hfdl_eq_init_err_sq_sum = 0.0f; /* same, first HFDL_INIT_TRAIN_SYMBOLS only */
+#define HFDL_INIT_TRAIN_SYMBOLS 135u /* 9 windows of HFDL_T_LEN, see hfdl_data_segment.h */
+#if HFDL_ABORT_BAD_TRAINING
+            static uint8_t s_hfdl_abort_checked = 0u; /* the post-training check runs once per frame */
+#endif
             static uint32_t s_hfdl_current_m1 = 0u;
 
             if (!s_hfdl_probe_init_done) {
@@ -3004,6 +3310,50 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
             }
 
             burst_now = hfdl_scope_burst_active();
+
+            /* EXPERIMENTAL chain gating (18/09/2026), both off by default -
+             * with neither knob set, none of this is compiled and burst_now
+             * is exactly the burst detector's verdict, as before.
+             *
+             * Why: hfdl_scope's burst detector decides whether the WHOLE
+             * demod chain runs (mixer .. Costas, preamble hunt, data
+             * segment) - and its metric is the in-band spectrum sum
+             * normalized to the window's own peak bin, not a true power
+             * ratio, so it is a strict test (a weak or fading frame can
+             * miss the ON threshold entirely, and a fade of a few dB in
+             * mid-frame drops it below OFF). A frame is 3390 symbols (1.9s)
+             * or 7710 (4.3s): losing the gate part-way through it leaves
+             * the data segment short of symbols and that frame is lost.
+             * These two knobs let you test how much that costs:
+             *   HFDL_CHAIN_ALWAYS_ON=1      run the chain continuously and
+             *       let the preamble correlator alone find frames (what
+             *       dumphfdl does). The rising/falling edge logic below then
+             *       fires only once, at the start.
+             *   HFDL_HOLD_MAX_DROPOUT_MS=N  once a frame is LOCKED (data
+             *       segment active), keep the chain running through
+             *       detector dropouts of up to N ms instead of stopping at
+             *       the first one; the edges below then ignore the
+             *       dropout, so the chain is not reset mid-frame. */
+#ifndef HFDL_CHAIN_ALWAYS_ON
+#define HFDL_CHAIN_ALWAYS_ON 0
+#endif
+#ifndef HFDL_HOLD_MAX_DROPOUT_MS
+#define HFDL_HOLD_MAX_DROPOUT_MS 0
+#endif
+#if HFDL_CHAIN_ALWAYS_ON
+            burst_now = 1u;
+#elif HFDL_HOLD_MAX_DROPOUT_MS > 0
+            {
+                static uint32_t s_hfdl_hold_samples = 0u; /* 12kHz samples spent bridging the current dropout */
+                if (burst_now) {
+                    s_hfdl_hold_samples = 0u;
+                } else if (s_hfdl_data_segment_active
+                        && s_hfdl_hold_samples < (uint32_t)HFDL_HOLD_MAX_DROPOUT_MS * 12u) {
+                    s_hfdl_hold_samples += s_dec_block_samples;
+                    burst_now = 1u; /* keep feeding the chain */
+                }
+            }
+#endif
 
             if (burst_now && !s_hfdl_probe_was_active) {
                 /* Flanco de subida: burst nuevo - reinicia el estado de
@@ -3102,7 +3452,10 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
                                         hfdl_equalizer_step(&s_hfdl_equalizer, d, 0.0f, s_hfdl_polarity_buf_i[k], s_hfdl_polarity_buf_q[k]);
                                         float32_t err = d - s_hfdl_polarity_buf_i[k];
                                         s_hfdl_eq_train_err_sq_sum += err * err;
+                                        s_hfdl_eq_init_err_sq_sum += err * err; /* first window is always inside the initial 135 */
                                     }
+                                    s_hfdl_dbg_done_pol_dot = s_hfdl_polarity_dot_accum;
+                                    s_hfdl_dbg_done_bitmask = s_hfdl_eq_bitmask;
                                     s_hfdl_polarity_decided = 1u;
                                 }
                             } else {
@@ -3112,6 +3465,9 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
                                 hfdl_costas_adjust(&s_hfdl_probe_chain.costas, phase_err);
                                 float32_t err = d - eq_i;
                                 s_hfdl_eq_train_err_sq_sum += err * err;
+                                if (hfdl_data_segment_get_eq_train_symbols_seen(&s_hfdl_data_segment) < HFDL_INIT_TRAIN_SYMBOLS) {
+                                    s_hfdl_eq_init_err_sq_sum += err * err;
+                                }
                             }
                         } else if (ds_state_before == HFDL_DSEG_DATA_1 || ds_state_before == HFDL_DSEG_DATA_2) {
                             hfdl_payload_decode_feed_symbol(eq_i, eq_q, s_hfdl_eq_bitmask);
@@ -3121,6 +3477,27 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
                         }
 
                         hfdl_data_segment_process_symbol(&s_hfdl_data_segment, probe_i_out[p], probe_q_out[p]);
+#if HFDL_ABORT_BAD_TRAINING
+                        if (!s_hfdl_abort_checked
+                                && hfdl_data_segment_get_eq_train_symbols_seen(&s_hfdl_data_segment) >= HFDL_INIT_TRAIN_SYMBOLS) {
+                            float32_t abort_mse = s_hfdl_eq_init_err_sq_sum / (float32_t)HFDL_INIT_TRAIN_SYMBOLS;
+                            s_hfdl_abort_checked = 1u;
+                            if (abort_mse >= (float32_t)HFDL_ABORT_MSE_THRESHOLD) {
+#if DEBUG_UART_ENABLED
+                                s_hfdl_dbg_abort_m1 = s_hfdl_current_m1;
+                                s_hfdl_dbg_abort_mse = abort_mse;
+                                s_hfdl_dbg_abort_pol = s_hfdl_polarity_dot_accum;
+                                s_hfdl_dbg_abort_pending = 1u; /* printed from the main loop, like every other event */
+#endif
+                                /* Same two lines a finished frame ends with (see the DONE block below), minus
+                                 * the CRC/decode step: the next LOCK re-initializes the segment, the payload
+                                 * decoder (hfdl_payload_decode_begin_segment_ex() explicitly copes with a
+                                 * segment whose finish() never ran), the equalizer and every accumulator. */
+                                s_hfdl_data_segment_active = 0u;
+                                hfdl_preamble_sync_reset(&s_hfdl_preamble);
+                            }
+                        }
+#endif
                         if (hfdl_data_segment_get_state(&s_hfdl_data_segment) == HFDL_DSEG_DONE) {
                             /* UART DEFERRAL - ver el comentario de mas
                              * arriba (burst START/END) - misma razon,
@@ -3131,6 +3508,11 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
                             s_hfdl_dbg_done_eqtrain = hfdl_data_segment_get_eq_train_symbols_seen(&s_hfdl_data_segment);
                             s_hfdl_dbg_done_data = hfdl_data_segment_get_data_symbols_seen(&s_hfdl_data_segment);
                             s_hfdl_dbg_done_eq_mse = s_hfdl_eq_train_err_sq_sum / (float32_t)s_hfdl_dbg_done_eqtrain;
+                            s_hfdl_dbg_done_agc_pow = hfdl_demod_chain_get_agc_power_avg(&s_hfdl_probe_chain);
+                            s_hfdl_dbg_done_agc_gain = hfdl_demod_chain_get_agc_gain(&s_hfdl_probe_chain);
+                            s_hfdl_dbg_done_sig_peak = s_sig_peak;
+                            s_hfdl_dbg_done_init_mse = s_hfdl_eq_init_err_sq_sum / (float32_t)HFDL_INIT_TRAIN_SYMBOLS;
+                            s_hfdl_dbg_done_costas_hz = s_hfdl_probe_chain.costas.freq * (1800.0f / (2.0f * PI));
 
                             debug_uart_isr_silence_begin(); /* ver comentario en debug_uart.c */
                             {
@@ -3153,7 +3535,8 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
                                 s_hfdl_dbg_done_decoded_len = decoded_len;
 
                                 {
-                                    uint8_t crc_last_ok, crc_last_valid, crc_attempts, crc_good;
+                                    uint8_t crc_last_ok, crc_last_valid;
+                                    uint16_t crc_attempts, crc_good;
                                     hfdl_payload_decode_get_crc_status(&crc_last_ok, &crc_last_valid, &crc_attempts, &crc_good);
                                     s_hfdl_dbg_done_crc_ok = crc_last_ok;
                                     s_hfdl_dbg_done_crc_valid = crc_last_valid;
@@ -3224,12 +3607,20 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
                     if (pre_state == HFDL_PREAMBLE_A2_SEARCH && !s_hfdl_was_a2_search) {
                         s_hfdl_dbg_a2_pending = 1u; /* deferred - see burst-start comment above */
                     }
+#if HFDL_AIRCRAFT_TABLE
+                    if (pre_state == HFDL_PREAMBLE_A2_SEARCH && !s_hfdl_was_a2_search) { s_hfdl_funnel_start++; }
+                    if (pre_state == HFDL_PREAMBLE_M1_SEARCH && !s_hfdl_was_m1_search) { s_hfdl_funnel_confirm++; }
+                    s_hfdl_was_m1_search = (pre_state == HFDL_PREAMBLE_M1_SEARCH) ? 1u : 0u;
+#endif
                     s_hfdl_was_a2_search = (pre_state == HFDL_PREAMBLE_A2_SEARCH);
 
                     if (pre_state == HFDL_PREAMBLE_LOCKED && !s_hfdl_was_locked) {
                         const hfdl_frame_params_t *fp = hfdl_preamble_sync_get_frame_params(&s_hfdl_preamble);
                         int32_t m1_idx = hfdl_preamble_sync_get_m1_index(&s_hfdl_preamble);
                         s_hfdl_current_m1 = (uint32_t)m1_idx;
+#if HFDL_AIRCRAFT_TABLE
+                        s_hfdl_funnel_mode++;
+#endif
                         s_hfdl_dbg_locked_m1 = (uint32_t)m1_idx;
                         s_hfdl_dbg_locked_pending = 1u; /* deferred - see burst-start comment above */
 
@@ -3245,6 +3636,26 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
                         s_hfdl_polarity_decided = 0u;
                         s_hfdl_polarity_dot_accum = 0.0f;
                         s_hfdl_eq_train_err_sq_sum = 0.0f;
+                        s_hfdl_eq_init_err_sq_sum = 0.0f;
+#if HFDL_ABORT_BAD_TRAINING
+                        s_hfdl_abort_checked = 0u;
+#endif
+#if DEBUG_UART_ENABLED && HFDL_M1_DIAG
+                        {
+                            uint32_t mk;
+                            float32_t second = 0.0f;
+                            s_hfdl_dbg_lock_m1_score = hfdl_framer_get_last_score(&s_hfdl_preamble.m1_framer[m1_idx]);
+                            for (mk = 0u; mk < HFDL_M_SHIFT_CNT; mk++) {
+                                float32_t sc;
+                                if ((int32_t)mk == m1_idx) { continue; }
+                                sc = fabsf(hfdl_framer_get_last_score(&s_hfdl_preamble.m1_framer[mk]));
+                                if (sc > second) { second = sc; }
+                            }
+                            s_hfdl_dbg_lock_m1_second = second;
+                            s_hfdl_dbg_lock_a_score = hfdl_preamble_sync_get_a_score(&s_hfdl_preamble);
+                        }
+#endif
+                        s_hfdl_dbg_lock_costas_hz = s_hfdl_probe_chain.costas.freq * (1800.0f / (2.0f * PI));
                     }
                     s_hfdl_was_locked = (pre_state == HFDL_PREAMBLE_LOCKED);
                 }

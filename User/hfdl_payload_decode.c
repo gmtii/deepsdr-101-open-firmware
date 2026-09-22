@@ -266,15 +266,24 @@ void hfdl_payload_decode_feed_symbol(float32_t eq_i, float32_t eq_q, uint32_t po
  * realistic use before someone checks the screen or reboots). last_ok
  * and last_valid packed into one byte (bit 0 = valid, bit 1 = ok) to
  * save the other byte a separate uint8_t would cost. Read via
- * hfdl_payload_decode_get_crc_status() below. */
-static uint8_t s_hfdl_crc_attempts = 0u;
-static uint8_t s_hfdl_crc_good = 0u;
+ * hfdl_payload_decode_get_crc_status() below.
+ *
+ * 18/09/2026: the two counters were widened to uint16_t. They are now
+ * shown permanently as "CRC OK good/attempts" on the HFDL reception
+ * log screen (see main.c's hfdl_log_panel_draw()), which is meant to be
+ * left running for hours on a busy channel - with a uint8_t pair,
+ * "attempts" wraps after 255 bursts (well under two hours at a few
+ * bursts per minute) and the two numbers then wrap independently of
+ * each other, giving nonsense such as "40/3". The cost is 2 bytes of
+ * RAM in total. */
+static uint16_t s_hfdl_crc_attempts = 0u;
+static uint16_t s_hfdl_crc_good = 0u;
 #define HFDL_CRC_STATUS_VALID_BIT 0x01u
 #define HFDL_CRC_STATUS_OK_BIT    0x02u
 static uint8_t s_hfdl_crc_status_bits = 0u; /* 0 until the first decode ever completes */
 
 void hfdl_payload_decode_get_crc_status(uint8_t *last_ok_out, uint8_t *last_valid_out,
-        uint8_t *attempts_out, uint8_t *good_out)
+        uint16_t *attempts_out, uint16_t *good_out)
 {
     if (last_ok_out) { *last_ok_out = (s_hfdl_crc_status_bits & HFDL_CRC_STATUS_OK_BIT) ? 1u : 0u; }
     if (last_valid_out) { *last_valid_out = (s_hfdl_crc_status_bits & HFDL_CRC_STATUS_VALID_BIT) ? 1u : 0u; }
