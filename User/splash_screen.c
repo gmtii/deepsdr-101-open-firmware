@@ -35,7 +35,7 @@ void splash_screen_draw(void)
     static const char *line2 = "WFM / NFM / AM / SSB";
     static const char *line3 = "EA8DGL ESTEBAN - UA6YKK ALEXANDR - EA7GIB BLAS";
     static const char *line4 = "GNU GPL 3.0";
-    static const char *version = "V0.6dev 16/9/2026 ";
+    static const char *version = "V0.6dev FT8 HFDL 22/9/26 ";
 
     const uint8_t scale1 = 4; /* linea 1, grande */
     const uint8_t scale2 = 2; /* lineas 2-3, mas pequenas */
