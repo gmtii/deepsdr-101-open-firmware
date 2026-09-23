@@ -2,9 +2,34 @@
 #include "rm68120_exmc.h"
 #include "debug_uart.h"
 #include "gfx.h"
-#include "gfx_vfo_font.h"
+
+/* --- ETAPA 1 DEL PORT A gfx2 ---------------------------------------------
+ * El nucleo grafico nuevo entra aqui junto al antiguo, no en su lugar. Los
+ * dos conviven: gfx.c sigue pintando todo menos el reloj de la barra
+ * superior, que es el unico elemento que pasa a gfx2 en esta etapa.
+ *
+ * Se elige el reloj porque es lo mas aislado que hay: no tiene interaccion,
+ * se repinta solo, y si algo sale mal se revierte cambiando una funcion.
+ * El objetivo de la etapa no es que se vea mejor (aunque se vea), sino
+ * comprobar EN LA RADIO que gfx2 enlaza, compone y vuelca bien conviviendo
+ * con el resto del firmware, y cuanta RAM y flash cuesta de verdad.
+ */
+#include "gfx2.h"
+#include "palette.h"
+#include "font_num_20.h"
+#include "ui_top.h"   /* ETAPA 2: cabecera y barra de estado */
 #include "ui.h"
 #include "waterfall.h"
+#include "spec_chrome.h"
+#include "ui_act.h"
+#include "ui_grid.h"
+#include "ui_kbd.h"
+#include "ui_digi.h"
+#include "spec_snap.h"
+#include "font_ui_14b.h"
+#include "ui_det.h"
+#include "ui_cfg.h"
+#include "palette.h"
 #include "touch.h"
 #include "touch_calib.h"
 #include "spi_flash.h"
@@ -12,6 +37,7 @@
 #include "aic3204.h"
 #include "config.h"
 #include "rtty.h"
+#include "cw.h" /* decodificador de CW - ver k_demod_modes[] y cw_poll() */
 #include "rtty_scope.h"
 #include "ms5351.h"
 #include "lo_gen_gd32.h"
@@ -25,6 +51,7 @@
 #include "sdr_rx.h"
 #include "fft.h"
 #include "spectrum.h"
+#include "spec_agc.h" /* autoescala del espectro, ver su cabecera */
 #include "nr_ss.h" /* NR strength control (RADIO page tile) - see ENCODER_TARGET_NR */
 #include "splash_screen.h"
 #include "splash_screen.h"
@@ -47,7 +74,6 @@ static void badges_draw(void);
 static void smeter_draw(uint8_t segs);
 static uint8_t smeter_segments_from_peak(float peak);
 static void smeter_dbm_update_and_draw(float peak);
-static void spec_agc_apply(const float *db_frame);
 
 /* spec_zoom_t / s_spec_zoom - moved up from their original spot further
  * down (see spec_zoom_t's own design-comment block, still down there,
@@ -70,18 +96,14 @@ typedef enum {
 
 static spec_zoom_t s_spec_zoom = SPEC_ZOOM_1X;
 static void tune_encoder_poll(void);
-static void menu_screen_open(void);
 static void menu_screen_close(void);
 static void screen_sleep_enter(void);
 static void screen_wake(void);
 static void zoom_decimators_init(void);
 static void menu_grid_show(void);
 static void menu_bands_show(void);
-static void menu_step_list_show(void);
-static void menu_mode_list_show(void);
 static void menu_freq_keypad_show(void);
 static void menu_time_keypad_show(void);
-static void menu_tile_rfagc_refresh(void);
 static void rf_agc_apply_pga(void);
 static void rf_agc_mute_for_transition(void); /* forward-declared here too (08/09/2026) - main()'s new att_rin_level boot-apply block needs it before its real definition further down, same reasoning as rf_agc_apply_pga() just above */
 /* Forward declarations for main.c-owned CONFIG.CSV fields added
@@ -109,18 +131,90 @@ static uint8_t s_speaker_pa_enabled;
  * block needs it earlier - see this block's own header comment).
  * Added 08/09/2026 alongside CONFIG.CSV's new att_rin_level field. */
 static uint8_t s_rf_agc_rin_level;
+/* s_att_suelo (lo que el usuario ha pedido en el tile ATT, frente a lo que
+ * el codec tiene puesto ahora mismo) - mismo tratamiento y misma razon: el
+ * bloque de aplicar ajustes de main() lo necesita antes de su declaracion
+ * real. Ver ahi el porque de separarlo de s_rf_agc_rin_level. */
+static uint8_t s_att_suelo;
+/* s_pga_hf_x2: la ganancia de entrada que has elegido TU, frente a la que
+ * la radio se pone sola en WFM. Declaracion tentativa aqui por lo mismo que
+ * las de al lado - el autoguardado del bucle principal la necesita antes.
+ * Ver apply_demod_mode() para el porque. */
+static int16_t s_pga_hf_x2;
 static uint8_t spectrum_smooth_pct_for_save(void);
 static void rf_agc_poll(void);
 static void rtty_poll(void);
-static uint8_t rtty_scope_active(void);
+static void cw_poll(void);
+static uint8_t digi_panel_active(void);
 static void rtty_scope_panel_reset(void);
 static void rtty_text_panel_reset(void);
 static void rtty_text_force_redraw(void);
 static void rtty_scope_draw(void);
+static int64_t tune_mueve_pasos(int64_t f, int32_t pasos, int64_t paso_hz);
 static void apply_lo_tune(uint32_t freq_hz);
 static void apply_demod_mode(demod_mode_t mode);
 static void menu_detail_value_redraw(void);
+
+/* =======================================================================
+ * ETAPA 2 DEL PORT: cabecera y barra de estado con gfx2
+ * -----------------------------------------------------------------------
+ * El dibujo vive en User/ui_top.c, que no depende de nada del firmware
+ * salvo gfx2: recibe una estructura con el estado y pinta. Aqui solo se
+ * rellena esa estructura desde las variables vivas de la radio.
+ *
+ * Esa separacion es lo que permite que el simulador de host compile el
+ * MISMO ui_top.c con valores inventados y saque un PNG de lo que va a
+ * salir en el panel - incluida la comprobacion del peor caso de anchura,
+ * que ya pillo que la pastilla del mando se salia por 14 px.
+ *
+ * DECLARACIONES aqui arriba; la definicion de top_sync() va mas abajo,
+ * despues de k_agc_profile_labels y demas estado que necesita leer.
+ * ======================================================================= */
+static float   s_db_frame[FFT_BINS_IQ]; /* lo ULTIMO dibujado, promediado por cuadro */
+static uint8_t s_db_frame_listo = 0U;
+static ui_top_state_t s_top;
+static char s_top_freq[16];   /* >= FREQ_FIELD_CHARS+1, que se define mas abajo */
+static char s_top_knobval[16];
+static char s_top_volts[10];
+static char s_top_sam[16] = "";
+static int16_t s_top_dbm = 0;
+static uint8_t s_top_dbm_valid = 0U;
+static uint8_t s_top_segs = 0U;
+static const char *s_time_text = "--:--";
+static char s_time_buf[6] = "--:--";
+static char s_top_bw[8];   /* "4,0 k" para el chip de ancho de filtro */
+
+/* Declaradas mas abajo (junto a las etiquetas del menu); top_sync() necesita
+ * los Hz aqui arriba y duplicar la tabla seria justo como se consigue que dos
+ * sitios de la pantalla digan anchos distintos. */
+static const uint32_t k_audio_bw_hz[3];
+static const uint32_t k_cw_bw_hz[3];   /* lo mismo, para el filtro de CW */
+
+static void top_sync(void);
+
+
 static void settings_value_redraw(void);
+static void tema_cambiar(void);
+static void paleta_cambiar(void);
+typedef enum { GRID_NADA = 0, GRID_AJUSTES, GRID_BANDAS, GRID_MODO, GRID_PASOS, GRID_INFO } grid_pant_t;
+static void grid_show(grid_pant_t p);
+/* Teclado numerico (etapa 19). El tipo y el estado suben aqui porque
+ * menu_screen_close() y cfg_show(), que estan muy por delante, tienen que
+ * poder apagarlo; el cuerpo vive junto a las funciones de entrada, que es
+ * donde se entiende. */
+typedef enum { KBD_NADA = 0, KBD_FREQ, KBD_HORA } kbd_modo_t;
+static kbd_modo_t s_kbd_modo;
+static int8_t     s_kbd_press;
+static uint8_t    kbd_activa(void);
+static void       kbd_touch(uint16_t x, uint16_t y, uint8_t pressed);
+static void       kbd_lectura_draw(void);
+static void       kbd_show(kbd_modo_t modo);
+/* El indice del tema y la funcion que lo aplica se declaran aqui arriba
+ * porque los necesitan dos sitios que estan muy por delante de la tabla:
+ * el guardado de ajustes del bucle principal y el arranque. La TABLA
+ * sigue junto a g_pal, que es donde se entiende. */
+static uint8_t s_tema_idx;
+static void tema_aplicar(uint8_t i);
 
 /* Set to 0 to go back to the normal demo once the real panel height is calibrated. */
 #define CALIB_HEIGHT_TEST 0
@@ -711,6 +805,11 @@ int main(void)
     }
     if (s_loaded_settings.have_audio_bw) {
         demod_am_set_audio_bw(s_loaded_settings.audio_bw);
+        /* El mismo ajuste guardado vale para los dos caminos: el filtro de
+         * audio de AM/BLU y el de CW. Sin esto, al encender la radio en CW
+         * el filtro arrancaba en su valor por defecto y no en el que
+         * dejaste puesto. */
+        demod_am_set_cw_bw_hz((float)k_cw_bw_hz[(uint8_t)s_loaded_settings.audio_bw]);
     }
     if (s_loaded_settings.have_volume_db_x2) {
         int32_t v = s_loaded_settings.volume_db_x2;
@@ -748,11 +847,17 @@ int main(void)
     if (s_loaded_settings.have_backlight_pct) {
         backlight_set_percent(s_loaded_settings.backlight_pct); /* clamps both ends itself, see backlight.h's comment */
     }
+    /* Tema: se aplica ANTES de que se pinte nada, para que el arranque ya
+     * salga con los colores buenos en vez de pintarse oscuro y cambiar. */
+    if (s_loaded_settings.have_tema_idx) {
+        tema_aplicar(s_loaded_settings.tema_idx);
+    }
     if (s_loaded_settings.have_att_rin_level) {
         uint8_t v = s_loaded_settings.att_rin_level;
 
         if (v > (uint8_t)AIC3204_RIN_40K) { v = (uint8_t)AIC3204_RIN_40K; }
-        s_rf_agc_rin_level = v;
+        s_att_suelo = v;          /* lo guardado es lo que pidio el usuario */
+        s_rf_agc_rin_level = v;   /* y el codec arranca justo ahi */
         aic3204_set_input_impedance((aic3204_rin_t)s_rf_agc_rin_level); /* same call the manual ATT tile and rf_agc_escalate_rin()/deescalate_rin() make */
         rf_agc_mute_for_transition(); /* Rin isn't soft-stepped, unlike PGA - see this function's own comment; harmless/no-op this early in boot, kept for consistency with every other Rin-changing call site */
     }
@@ -855,7 +960,7 @@ int main(void)
         {
             static uint8_t s_rtty_scope_was_active = 0U;
             static uint8_t s_rtty_mode_was_active = 0U; /* tracks active_now, NOT drawing_now - see below */
-            uint8_t active_now = rtty_scope_active();
+            uint8_t active_now = digi_panel_active();
             /* Only actually DRAW the scope when the settings menu
              * isn't covering the panel - added 08/08/2026, per the
              * project owner: the scope never checked s_menu_open at
@@ -925,8 +1030,9 @@ int main(void)
         }
         rf_agc_poll(); /* RF-level (analog PGA) auto-AGC - see its own comment */
         rtty_poll(); /* drains rtty.c's decoded text to debug UART - see its own comment */
+        cw_poll();   /* lo mismo para el CW, al mismo panel - ver su comentario */
         settings_poll(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2, s_nonwfm_use_48k,
-                      s_pga_gain_db_x2, spectrum_smooth_pct_for_save(), s_speaker_pa_enabled, s_rf_agc_rin_level); /* debounced CONFIG.CSV autosave - see settings.h's comment; cheap no-op most iterations */
+                      ((s_pga_hf_x2 >= 0) ? s_pga_hf_x2 : s_pga_gain_db_x2), spectrum_smooth_pct_for_save(), s_speaker_pa_enabled, s_att_suelo, s_tema_idx); /* debounced CONFIG.CSV autosave - see settings.h's comment; cheap no-op most iterations */
 #if TOUCH_EDGE_DEBUG
         touch_debug_stream_poll(); /* see TOUCH_EDGE_DEBUG's comment */
 #endif
@@ -946,7 +1052,7 @@ int main(void)
              * is irrelevant to an RTTY tuning session either way -
              * this isn't about reducing UART traffic, it's about
              * signal-to-noise in the log. */
-            && !rtty_scope_active()
+            && !digi_panel_active()
            ) {
             debug_print_dec("waterfall ticks", g_fill_count);
             /* ISR timing check (see demod_am.h's comment above
@@ -995,6 +1101,7 @@ int main(void)
                      * if the total above points at a WFM overrun, that's
                      * the next thing worth adding, not assumed here. */
                     demod_am_cycles_breakdown_t bd = demod_am_get_last_cycles_breakdown();
+                    (void)bd;
                     debug_print_dec("  frontend (deinterleave/down-mix/CHF)", bd.frontend);
                     debug_print_dec("  extract  (mode-specific: AM/WFM/SSB)", bd.extract);
                     debug_print_dec("  audio    (DC block + audio LPF)", bd.audio);
@@ -1111,16 +1218,23 @@ static const uint16_t TOP_H        = 64;
 static const uint16_t MAIN_W       = 800;             /* panel width, border included - was 676 before the RCOL removal above */
 static const uint16_t SPEC_Y       = 104;             /* = TOP_H(64) + STATUS_STRIP_H(40) - was 64 */
 static const uint16_t SPEC_H       = 240;             /* was 280 - see this block's header comment: SPEC_Y+SPEC_H unchanged at 344 */
-static const uint16_t SPEC_TRACE_X = 2;               /* inside the 1px panel border   */
-static const uint16_t SPEC_TRACE_W = 796;             /* = WATERFALL_WIDTH; /4 exact for the SR/4 marker - was 672 (MAIN_W-4 either way) */
+/* ETAPA 3b: la traza deja los 40 px de la izquierda para la canaleta de los
+ * ejes (numeros de dB arriba, escala de color del waterfall abajo) - ver
+ * spec_chrome.h. Los valores salen de ahi y no se repiten aqui: que la regla
+ * y la traza calculen la misma geometria por caminos distintos es justo como
+ * se consigue que el eje mienta. */
+static const uint16_t SPEC_TRACE_X = SPC_TRACE_X;     /* = 40, tras la canaleta */
+static const uint16_t SPEC_TRACE_W = SPC_TRACE_W;     /* = WATERFALL_WIDTH; /4 exacto para el marcador de Fs/4 */
 static const uint16_t WF_PANEL_Y   = 104 + 240 + 2;   /* = 346, same value as before (see header comment) */
 static const uint16_t WF_Y         = 104 + 240 + 4;   /* first waterfall row - same value as before */
 
-/* Bottom button bar: 6 buttons. */
-static const uint16_t BTNBAR_Y     = 428;
-static const uint16_t BTNBAR_BTN_W = 121;
-static const uint16_t BTNBAR_BTN_H = 46;
-static const uint16_t BTNBAR_GAP   = 10;              /* 6*121 + 7*10 = 796 <= 800     */
+/* Barra de acciones: la geometria la manda ahora ui_act.h (UI_ACT_Y/H/
+ * BTN_W/GAP), que es quien la dibuja y quien resuelve los toques. Las cuatro
+ * constantes BTNBAR_* que habia aqui se han eliminado en vez de dejarlas
+ * apuntando a los valores nuevos: dos sitios con la misma geometria es
+ * exactamente como se consigue que el dibujo y la zona de toque se separen.
+ * La barra crece de 46 a 54 px de alto (9,2 mm) aprovechando el hueco que
+ * quedaba libre entre el waterfall (acaba en 420) y el borde de la pantalla. */
 
 /*
  * IMPORTANT: these widgets are static (not local to
@@ -1132,7 +1246,6 @@ static const uint16_t BTNBAR_GAP   = 10;              /* 6*121 + 7*10 = 796 <= 8
  * another call. This is exactly the kind of bug that doesn't produce
  * a compile error but silently corrupts memory at runtime.
  */
-static ui_screen_t s_demo_screen;
 static ui_panel_t  s_title_panel;
 static ui_panel_t  s_spectrum_panel;
 static ui_panel_t  s_waterfall_panel;
@@ -1155,9 +1268,6 @@ static ui_button_t s_btn_menu;
  * see demo_button_callback()'s header comment) or another MENU cycle
  * position. ui_button_draw()'s rendering (fill+border+centered label)
  * already matches badge_draw()'s look, so no visual seam. */
-static ui_button_t s_btn_agc_profile;
-static ui_button_t s_btn_audio_bw; /* AM/SSB audio filter width - real touchable button (see badges_draw()'s comment), added 02/08/2026 replacing the BW slot's old plain badge_draw() call */
-
 /*
  * encoder_target_t - hoisted up here (was originally declared further
  * down, right before s_encoder_target - see that declaration's full
@@ -1177,7 +1287,8 @@ typedef enum {
     ENCODER_TARGET_SMOOTH,
     ENCODER_TARGET_PGA,
     ENCODER_TARGET_NR,
-    ENCODER_TARGET_RTTY_SHIFT
+    ENCODER_TARGET_RTTY_SHIFT,
+    ENCODER_TARGET_CW_TONE
 } encoder_target_t;
 
 /*
@@ -1230,7 +1341,6 @@ typedef enum {
  *     waterfall CONTENT follows on the next tick's frame, ~33ms later
  *     at most - imperceptible.
  */
-static ui_screen_t s_menu_screen;
 /* s_menu_detail_active: 0 = grid showing, 1 = a detail view showing.
  * s_menu_detail_target: WHICH detail view, when active - reuses
  * encoder_target_t rather than inventing a parallel enum, since the
@@ -1243,6 +1353,7 @@ static encoder_target_t s_menu_detail_target = ENCODER_TARGET_TUNE;
  * (menu_grid_show() clears both whenever it runs), but kept as its
  * own flag rather than folded into a 3-state enum - simplest thing
  * that reads clearly at each of the few call sites that check it. */
+static uint8_t s_menu_cfg_active = 0U; /* la pantalla de ajustes con columna esta abierta */
 static uint8_t s_menu_bands_active = 0U;
 /* s_menu_step_active / s_menu_mode_active: same bookkeeping idea as
  * s_menu_bands_active, for the two picker lists reachable directly
@@ -1333,52 +1444,18 @@ typedef enum {
     MENU_PAGE_COUNT
 } menu_page_t;
 
-/* Display name for each page - the pager's row-1 label (see
- * menu_grid_show()) just indexes this by s_menu_page, so adding a
- * future page never needs a new switch/if chain there, only a new
- * entry here (kept in the same MENU_PAGE_* order by construction). */
-static const char *const k_menu_page_names[MENU_PAGE_COUNT] = {
-    "RADIO", "UI", "HW", "DIG"
-};
-
 static menu_page_t s_menu_page = MENU_PAGE_RADIO;
-static ui_button_t s_menu_page_prev;
-static ui_button_t s_menu_page_label; /* row 1 - informational only, enabled=0 (see ui_screen_add_button()'s comment in ui.c) */
-static ui_button_t s_menu_page_next;
-static ui_button_t s_menu_tile_agc;
-static ui_button_t s_menu_tile_squelch;
-static ui_button_t s_menu_tile_backlight;
-static ui_button_t s_menu_tile_scale;
-static ui_button_t s_menu_tile_volume;
-static ui_button_t s_menu_tile_nb;
-static ui_button_t s_menu_tile_smooth; /* was the reserved/empty slot - see menu_grid_show() */
-static ui_button_t s_menu_tile_spec_style; /* spectrum trace style toggle, added 31/07/2026 alongside the region resize */
-static ui_button_t s_menu_tile_palette; /* spectrum/waterfall color palette cycle, added 08/09/2026 - see spectrum_set_palette()'s comment in spectrum.h */
-static ui_button_t s_menu_tile_trace; /* HEATMAP trace white/color-matched toggle, added 08/09/2026 - see spectrum_set_heatmap_trace_white()'s comment in spectrum.h */
-static ui_button_t s_menu_tile_zoom; /* spectrum/waterfall zoom, see spec_zoom_t below */
-static ui_button_t s_menu_tile_bw; /* AM/SSB audio filter width selector (4K0/2K3/1K8) - repurposed 02/08/2026 from the grid's BANDS tile, see menu_tile_bw_callback()'s comment */
-static ui_button_t s_menu_tile_pga; /* AIC3204 MIC_PGA analog input gain - fills the grid's last spare slot */
-static ui_button_t s_menu_tile_rfagc; /* RF-level auto-AGC (PGA backoff) toggle, added 07/08/2026 - fills RADIO slot 6 */
-static ui_button_t s_menu_tile_att; /* manual codec input attenuator (AIC3204 Rin: 10k/20k/40k = 0/-6/-12dB), added 01/09/2026 - fills RADIO slot 7, see menu_tile_att_callback()'s comment */
-static ui_button_t s_menu_tile_rtty_shift; /* RTTY mark/space separation, added 08/08/2026 - fills DIG slot 0 (moved off RADIO 09/08/2026, see the "Settings grid PAGES" comment) */
-static ui_button_t s_menu_tile_rtty_baud;  /* RTTY bit rate, added 09/08/2026 - DIG slot 1, see rtty_set_baud()'s comment */
-static ui_button_t s_menu_tile_rtty_inv;   /* RTTY station NORMAL/REVERSE convention, added 09/08/2026 - DIG slot 2, see rtty_set_station_inverted()'s comment */
-static ui_button_t s_menu_tile_nr; /* NR (Spectral Subtraction) strength, AM/USB/LSB only - see nr_ss.h, fills RADIO page slot 5 */
-static ui_button_t s_menu_tile_speaker_pa; /* speaker PA enable/mute (PB7) - HW page, see its own comment */
-static ui_button_t s_menu_tile_sleep; /* screen SLEEP one-shot action - HW page, added 10/08/2026, see screen_sleep_enter()'s comment */
-static ui_button_t s_menu_tile_cal; /* touch CALibration one-shot action - HW page, see touch_calib.h/menu_tile_cal_callback() */
-static ui_button_t s_menu_tile_cal_ppm; /* MS5351 crystal PPM CALibration one-shot action - HW page, added 26/08/2026, see menu_tile_cal_ppm_callback() */
-static ui_button_t s_menu_tile_ifbw; /* WFM pre-discriminator channel filter width (96K/80K) - HW page slot 4, added 01/09/2026, see menu_tile_ifbw_callback() */
-static ui_button_t s_menu_tile_specagc; /* Spectrum/waterfall auto-scale toggle - HW page slot 5, added 01/09/2026, see menu_tile_specagc_callback() */
-static ui_button_t s_menu_tile_rate; /* AM/USB/LSB/NFM sample rate 96K/48K toggle - HW page slot 6, added 01/09/2026, see menu_tile_rate_callback() */
+
+ /* was the reserved/empty slot - see menu_grid_show() */
 /* s_speaker_pa_enabled: backs BOTH the tile's label (menu_tile_speaker_pa_refresh())
  * and the actual GPIO level (speaker_pa_set_enabled(), defined down
  * with the rest of the GPIO drivers near led_gpio_init() - declared
  * here instead, alongside the tile, since it's used well before that
  * point in the file). */
-static uint8_t s_speaker_pa_enabled = 1U; /* speaker on by default at boot */
-static ui_button_t s_menu_tile_exit;
-static ui_button_t s_menu_detail_back; /* the DETAIL view's only widget besides the value text itself */
+static uint8_t s_speaker_pa_enabled = 1U;
+/* 22/09/2026: aqui vivia s_menu_detail_back, el boton "BACK" que compartian
+ * las pantallas de detalle y los dos teclados. Ya no lo usa nadie: las de
+ * detalle se dibujan con ui_det.c y los teclados con ui_kbd.c. */
 /* Backing buffers for the tiles whose label needs to show a live value
  * (AGC/SQUELCH/BACKLIGHT/VOLUME/SPT/SMOOTH/SPEC/ZOOM/PGA/NR) - ui_button_t.label
  * is just a const char*, so whatever it points at must outlive the
@@ -1387,25 +1464,9 @@ static ui_button_t s_menu_detail_back; /* the DETAIL view's only widget besides 
  * comment; its DETAIL view does show both LO and HI, see
  * menu_detail_value_redraw()). Sized generously; actual content is
  * always much shorter. */
-static char s_menu_tile_agc_buf[16];
-static char s_menu_tile_squelch_buf[16];
-static char s_menu_tile_backlight_buf[16];
-static char s_menu_tile_volume_buf[16];
-static char s_menu_tile_pga_buf[16];
-static char s_menu_tile_nr_buf[16];
-static char s_menu_tile_rtty_shift_buf[16];
-static char s_menu_tile_rtty_baud_buf[16];
 /* s_menu_tile_rtty_inv needs no buffer - only two possible strings
  * ("INV NORM"/"INV REV"), same "point straight at a literal" shape as
  * s_menu_tile_speaker_pa's SPK ON/OFF. */
-static char s_menu_tile_nb_buf[16];
-static char s_menu_tile_smooth_buf[16];
-static char s_menu_tile_spec_style_buf[16];
-static char s_menu_tile_palette_buf[16];
-static char s_menu_tile_bw_buf[16];
-static char s_menu_tile_zoom_buf[16];
-static char s_menu_tile_att_buf[16];
-static char s_menu_tile_ifbw_buf[16];
 
 /* NR master on/off (Spectral Subtraction - see nr_ss.h), mirrored into
  * nr_ss_set_enabled() on every change - toggled by the bottom bar's NR
@@ -1485,32 +1546,17 @@ static uint8_t s_spec_smooth_passes = 0U;
 #define BAND_STEP_25K   5U
 #define BAND_STEP_100K  6U
 #define BAND_STEP_1M    7U
-/* Uppercase K/M, not lowercase: gfx_font5x7 only covers 0x20-0x5A
- * (space, digits, UPPERCASE, punctuation - see gfx_font.h) - no
- * lowercase glyphs exist, and gfx_glyph_for() silently substitutes a
- * blank space for anything outside that range. A lowercase "1k" was
- * rendering as "1 " (the 'k' just missing, not garbled - easy to miss
- * at a glance), while "1M" happened to look fine because 'M' is
- * already uppercase. Found 31/07/2026 - see also the panadapter's
- * "+/-96K" span labels below, same root cause, same fix. "12K5" (not
- * "12.5K" - the font has no '.') is the closest 4-char fit; it's a
- * common enough ham-radio convention for 12.5kHz to read fine. */
-static const char *k_tune_step_labels[] = {
-    "100 ", "1K  ", "5K  ", "10K ", "12K5", "25K ", "100K", "1M  "
+/* Las mismas, escritas de verdad, para la cabecera y la barra de acciones,
+ * que ya usan fuente proporcional. Las de arriba se quedan para las
+ * pantallas que siguen dibujando con la 5x7 de ancho fijo, donde "12,5 kHz"
+ * ni cabe ni se lee. Mismo orden e indices: si una crece, la otra tambien. */
+static const char *k_tune_step_labels_ui[] = {
+    "100 Hz", "1 kHz", "5 kHz", "10 kHz", "12,5 kHz", "25 kHz", "100 kHz", "1 MHz"
 };
 /* s_tune_step_idx's actual declaration moved up near s_menu_open/
  * s_tune_hz, 18/08/2026 - see the comment there. This comment block
  * (why CONFIG_TUNE_START_STEP_IDX is what it is) still applies
  * unchanged. */
-
-/* STEP picker list - added 01/08/2026, replaces the old "STEP button
- * just cycles to the next entry" behavior with a real pick-from-a-list
- * screen (see menu_step_list_show()): TUNE_STEP_COUNT is exactly 8, so
- * it fills one 4x2 grid page with no leftover slots, same tile
- * geometry as the BANDS list below. Declared here (not up with
- * s_menu_screen's other widgets) since it needs TUNE_STEP_COUNT, same
- * reasoning as s_menu_band_tiles' comment. */
-static ui_button_t s_menu_step_tiles[TUNE_STEP_COUNT];
 
 /*
  * MODE picker list - added 01/08/2026, same treatment as STEP above:
@@ -1546,25 +1592,54 @@ typedef enum {
     RTTY_VARIANT_INVERTED      /* RTTY on, mark/space SWAPPED - see this block's comment above */
 } rtty_variant_t;
 
+/*
+ * CW anadido 21/09/2026. Encaja igual que RTTY-L/RTTY-U: no es un
+ * demodulador propio sino un oyente colgado de USB o LSB, asi que lleva
+ * su modo real debajo y un interruptor encima.
+ *
+ * Va sobre USB porque es la convencion en las bandas de aficionado. Para
+ * decodificar da exactamente igual -un tono es un tono en cualquiera de
+ * las dos bandas laterales-; lo unico que cambia es hacia que lado hay
+ * que girar el mando para que suba el pitido, y con USB gira como espera
+ * casi todo el mundo.
+ */
+/*
+ * La DESCRIPCION va aqui dentro, 22/09/2026, y no en un array aparte
+ * indexado por el mismo indice.
+ *
+ * Estaba en un k_modo_desc[] paralelo, y al anadir CW en medio paso lo
+ * que tenia que pasar: las descripciones se corrieron una posicion y la
+ * ultima entrada leia FUERA del array. Lo que sale de ahi no es un texto
+ * sino cuatro bytes cualesquiera tratados como puntero, y el dibujador
+ * de texto se va a recorrer memoria arbitraria buscando un cero. La
+ * pantalla de modos dejaba de aparecer entera.
+ *
+ * Y lo peor es que el compilador no puede avisar: el array paralelo
+ * estaba bien formado, solo era mas corto. Dos tablas que hay que
+ * mantener alineadas a mano son una tabla con un fallo pendiente. Ahora
+ * anadir un modo es anadir una linea, y no hay ninguna otra que se
+ * pueda olvidar.
+ */
 typedef struct {
     const char *label;
+    const char *desc;
     demod_mode_t mode;
     rtty_variant_t rtty_variant;
+    uint8_t cw;                 /* 1 = ademas enciende el decodificador de CW */
 } demod_mode_entry_t;
 
 static const demod_mode_entry_t k_demod_modes[] = {
-    { "AM",     DEMOD_MODE_AM,  RTTY_VARIANT_NONE },
-    { "SAM",    DEMOD_MODE_SAM, RTTY_VARIANT_NONE }, /* synchronous AM, 21/08/2026 - see sam.h */
-    { "USB",    DEMOD_MODE_USB, RTTY_VARIANT_NONE },
-    { "LSB",    DEMOD_MODE_LSB, RTTY_VARIANT_NONE },
-    { "NFM",    DEMOD_MODE_NFM, RTTY_VARIANT_NONE },
-    { "WFM",    DEMOD_MODE_WFM, RTTY_VARIANT_NONE },
-    { "RTTY-L", DEMOD_MODE_LSB, RTTY_VARIANT_NORMAL   }, /* confirmed correct polarity on LSB, 08/08/2026 */
-    { "RTTY-U", DEMOD_MODE_USB, RTTY_VARIANT_INVERTED }  /* USB mirrors LSB - see this block's comment */
+    { "AM",     "Amplitud modulada",   DEMOD_MODE_AM,  RTTY_VARIANT_NONE,     0U },
+    { "SAM",    "AM síncrona",         DEMOD_MODE_SAM, RTTY_VARIANT_NONE,     0U }, /* synchronous AM, 21/08/2026 - see sam.h */
+    { "USB",    "Banda lateral alta",  DEMOD_MODE_USB, RTTY_VARIANT_NONE,     0U },
+    { "LSB",    "Banda lateral baja",  DEMOD_MODE_LSB, RTTY_VARIANT_NONE,     0U },
+    { "NFM",    "FM estrecha",         DEMOD_MODE_NFM, RTTY_VARIANT_NONE,     0U },
+    { "WFM",    "FM ancha",            DEMOD_MODE_WFM, RTTY_VARIANT_NONE,     0U },
+    { "CW",     "Telegrafía Morse",    DEMOD_MODE_USB, RTTY_VARIANT_NONE,     1U }, /* ver el comentario de arriba */
+    { "RTTY-L", "Teletipo en LSB",     DEMOD_MODE_LSB, RTTY_VARIANT_NORMAL,   0U }, /* confirmed correct polarity on LSB, 08/08/2026 */
+    { "RTTY-U", "Teletipo en USB",     DEMOD_MODE_USB, RTTY_VARIANT_INVERTED, 0U }  /* USB mirrors LSB - see this block's comment */
 };
 #define DEMOD_MODE_ENTRY_COUNT (sizeof(k_demod_modes) / sizeof(k_demod_modes[0]))
-static ui_button_t s_menu_mode_tiles[DEMOD_MODE_ENTRY_COUNT];
-
 /*
  * --- Frequency-entry keypad ----------------------------------------------
  *
@@ -1579,7 +1654,6 @@ static ui_button_t s_menu_mode_tiles[DEMOD_MODE_ENTRY_COUNT];
  *   row2: 7 8 9 (BACK lives here, col 3 - shared widget, not in this array)
  *   row3: Hz 0 kHz MHz
  */
-static ui_button_t s_menu_freq_tiles[15];
 
 /*
  * --- BANDS presets -------------------------------------------------------
@@ -1626,29 +1700,110 @@ static ui_button_t s_menu_freq_tiles[15];
  * historically the most active AM calling channel (truckers). AM,
  * 10kHz step (BAND_STEP_10K) - the actual 40-channel CB spacing.
  */
+/*
+ * *** 22/09/2026, LISTA REHECHA ENTERA, por el dueno del proyecto: "la
+ * ventana de bandas... en la que hay ahora es un desproposito, quiero todas
+ * las bandas ham, la fm, las sw vhf y lo que veas que falte ahi" ***
+ *
+ * Lo que habia eran doce entradas sueltas con una sigla cada una. Ahora:
+ *
+ * - Estan TODAS las bandas de aficionado de la Region 1 que caben en el
+ *   rango del aparato (30 kHz a 180 MHz), de 2200 m a 2 m. Fuera queda 70 cm
+ *   (430 MHz), que el hardware no alcanza.
+ * - Estan todas las bandas de radiodifusion de onda corta por metros, de
+ *   120 m a 11 m, mas onda media y onda larga.
+ * - Estan las de utilidad que se escuchan de verdad con esto: FM comercial,
+ *   aeronautica, marina VHF, CB, NDB, NAVTEX, emisoras horarias y la banda
+ *   de los satelites meteorologicos de 137 MHz.
+ *
+ * Cada entrada lleva su RANGO escrito, que es lo que faltaba para poder
+ * elegir sin tener que pulsar y mirar a ver donde caes.
+ *
+ * SOBRE EL MODO Y EL PASO de cada una: el modo es el que se usa de verdad en
+ * esa banda (LSB por debajo de 10 MHz y USB por encima en aficionados, que
+ * es convencion y no capricho; AM en radiodifusion y aeronautica; NFM en
+ * marina y 2 m; WFM solo en FM comercial). El paso es el espaciado real del
+ * servicio donde lo hay (10 kHz en CB, 12,5 kHz en marina y 2 m, 25 kHz en
+ * aeronautica, 100 kHz en FM) y 1 kHz en lo demas, que es lo fino que se
+ * necesita para SSB. La frecuencia de entrada no es el borde de la banda
+ * sino un punto donde suele haber algo.
+ *
+ * NOTA sobre el paso en onda media y larga: el canalizado real de la Region 1
+ * es de 9 kHz, que no esta entre los pasos del aparato (ver k_tune_steps).
+ * Se entra con 1 kHz, que permite caer en cualquier canal aunque haga falta
+ * girar mas.
+ */
 typedef struct {
     const char *label;
+    const char *rango;    /* escrito tal cual se pinta: "5.800-6.200 kHz" */
     uint32_t freq_hz;
     demod_mode_t mode;
     uint8_t step_idx; /* index into k_tune_steps[]/k_tune_step_labels[] - see BAND_STEP_* above */
+    uint8_t familia;  /* BAND_FAM_* */
 } band_preset_t;
 
+/* El NUMERO manda: es el orden en que salen las familias en la columna de la
+ * izquierda. Aficionados primero, por el dueno del proyecto. */
+#define BAND_FAM_HAM   0U   /* aficionados */
+#define BAND_FAM_BCST  1U   /* radiodifusion */
+#define BAND_FAM_UTIL  2U   /* utilidades */
+#define BAND_FAM_COUNT 3U
+
 static const band_preset_t k_band_presets[] = {
-    { "SW 49M",  6000000UL,   DEMOD_MODE_AM,  BAND_STEP_5K   },
-    { "SW 41M",  7200000UL,   DEMOD_MODE_AM,  BAND_STEP_5K   },
-    { "SW 31M",  9500000UL,   DEMOD_MODE_AM,  BAND_STEP_5K   },
-    { "SW 19M",  15100000UL,  DEMOD_MODE_AM,  BAND_STEP_5K   },
-    { "FM BCST", 88000000UL,  DEMOD_MODE_WFM, BAND_STEP_100K },
-    { "AIRBAND", 118000000UL, DEMOD_MODE_AM,  BAND_STEP_25K  },
-    { "2M",      144000000UL, DEMOD_MODE_NFM, BAND_STEP_12K5 },
-    { "VHF HI",  150000000UL, DEMOD_MODE_NFM, BAND_STEP_12K5 },
-    { "80M",     3750000UL,   DEMOD_MODE_LSB, BAND_STEP_1K   },
-    { "40M",     7150000UL,   DEMOD_MODE_LSB, BAND_STEP_1K   },
-    { "20M",     14250000UL,  DEMOD_MODE_USB, BAND_STEP_1K   },
-    { "11M",     27185000UL,  DEMOD_MODE_AM,  BAND_STEP_10K  }
+    /* ---- aficionados, Region 1 ---------------------------------------- */
+    { "2200 m", "135,7-137,8 kHz",    136500UL,    DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_HAM },
+    { "630 m",  "472-479 kHz",        475500UL,    DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_HAM },
+    { "160 m",  "1.810-2.000 kHz",    1840000UL,   DEMOD_MODE_LSB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { "80 m",   "3.500-3.800 kHz",    3750000UL,   DEMOD_MODE_LSB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { "60 m",   "5.351-5.367 kHz",    5357000UL,   DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { "40 m",   "7.000-7.200 kHz",    7150000UL,   DEMOD_MODE_LSB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { "30 m",   "10.100-10.150 kHz",  10120000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { "20 m",   "14.000-14.350 kHz",  14250000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { "17 m",   "18.068-18.168 kHz",  18130000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { "15 m",   "21.000-21.450 kHz",  21250000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { "12 m",   "24.890-24.990 kHz",  24950000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { "10 m",   "28,0-29,7 MHz",      28400000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { "6 m",    "50-52 MHz",          50150000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { "2 m",    "144-146 MHz",        145500000UL, DEMOD_MODE_NFM, BAND_STEP_12K5, BAND_FAM_HAM },
+
+    /* ---- radiodifusion ------------------------------------------------ */
+    { "OL",     "148-284 kHz",        198000UL,    DEMOD_MODE_AM,  BAND_STEP_1K,   BAND_FAM_BCST },
+    { "OM",     "526-1.606 kHz",      1000000UL,   DEMOD_MODE_AM,  BAND_STEP_1K,   BAND_FAM_BCST },
+    { "120 m",  "2.300-2.495 kHz",    2400000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { "90 m",   "3.200-3.400 kHz",    3300000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { "75 m",   "3.900-4.000 kHz",    3950000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { "60 m",   "4.750-5.060 kHz",    4900000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { "49 m",   "5.800-6.200 kHz",    6000000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { "41 m",   "7.200-7.450 kHz",    7300000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { "31 m",   "9.400-9.900 kHz",    9600000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { "25 m",   "11.600-12.100 kHz",  11800000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { "22 m",   "13.570-13.870 kHz",  13700000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { "19 m",   "15.100-15.830 kHz",  15400000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { "16 m",   "17.480-17.900 kHz",  17650000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { "15 m",   "18.900-19.020 kHz",  18950000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { "13 m",   "21.450-21.850 kHz",  21600000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { "11 m",   "25.670-26.100 kHz",  25800000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+
+    /* ---- utilidades ---------------------------------------------------- */
+    { "NDB",    "190-535 kHz",        350000UL,    DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_UTIL },
+    { "NAVTEX", "518 kHz",            518000UL,    DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
+    { "Horaria","2,5 / 5 / 10 MHz",   10000000UL,  DEMOD_MODE_AM,  BAND_STEP_1K,   BAND_FAM_UTIL },
+    { "CB",     "26,965-27,405 MHz",  27185000UL,  DEMOD_MODE_AM,  BAND_STEP_10K,  BAND_FAM_UTIL },
+    { "FM",     "87,5-108 MHz",       100000000UL, DEMOD_MODE_WFM, BAND_STEP_100K, BAND_FAM_UTIL },
+    { "Aérea",  "108-137 MHz",        118000000UL, DEMOD_MODE_AM,  BAND_STEP_25K,  BAND_FAM_UTIL },
+    { "Meteo",  "137-138 MHz",        137500000UL, DEMOD_MODE_WFM, BAND_STEP_12K5, BAND_FAM_UTIL },
+    { "Marina", "156-162 MHz",        156800000UL, DEMOD_MODE_NFM, BAND_STEP_12K5, BAND_FAM_UTIL },
+    { "VHF alta","162-174 MHz",       165000000UL, DEMOD_MODE_NFM, BAND_STEP_12K5, BAND_FAM_UTIL }
+};
+
+static const char *const k_band_familias[BAND_FAM_COUNT] = {
+    "Aficionados", "Radiodifusión", "Utilidades"
 };
 #define BAND_PRESET_COUNT (sizeof(k_band_presets) / sizeof(k_band_presets[0]))
-static ui_button_t s_menu_band_tiles[BAND_PRESET_COUNT]; /* the BANDS preset-list tiles, see menu_bands_show() - declared here, not up with s_menu_screen's other widgets, since it needs BAND_PRESET_COUNT */
+/* s_menu_band_tiles ELIMINADO 22/09/2026: la pantalla de bandas ya no usa
+ * widgets de ui.c, la dibuja ui_bands.c y resuelve sus toques ui_grid_hit().
+ * Con la lista nueva habrian sido 39 ui_button_t de los que solo 12 se ven a
+ * la vez. */
 
 
 /*
@@ -1683,6 +1838,32 @@ static ui_button_t s_menu_band_tiles[BAND_PRESET_COUNT]; /* the BANDS preset-lis
  */
 
 static void menu_detail_show(encoder_target_t target);
+/* Estado de la pantalla de un ajuste - ver su bloque mas abajo. Declarado
+ * aqui porque menu_detail_value_redraw() esta antes en el fichero. */
+static ui_det_state_t s_det;
+static char           s_det_val[20];
+static int8_t         s_det_press = -1;
+static void det_sync(void);
+static void menu_step_preset_callback(void *widget, ui_event_t event, void *user_data);
+static void menu_mode_preset_callback(void *widget, ui_event_t event, void *user_data);
+static void encoder_inject_detents(int32_t d);
+static void encoder_inject_press(void);
+
+/*
+ * Geometria. El valor se pinta centrado a escala 6 en la banda
+ * MENU_DETAIL_VALUE_CLEAR_Y..+H; los dos botones van a los lados, fuera de
+ * esa banda por la izquierda y la derecha, asi que no hace falta tocar el
+ * redibujado del valor.
+ */
+#define MENU_DETAIL_PM_W   150
+#define MENU_DETAIL_PM_H   120
+#define MENU_DETAIL_PM_Y   180
+#define MENU_DETAIL_PM_X0   16
+#define MENU_DETAIL_PM_X1  (uint16_t)(MENU_AREA_W - MENU_DETAIL_PM_W - 16)
+#define MENU_DETAIL_ALT_W  180
+#define MENU_DETAIL_ALT_H   44
+#define MENU_DETAIL_ALT_X  (uint16_t)((MENU_AREA_W - MENU_DETAIL_ALT_W) / 2)
+#define MENU_DETAIL_ALT_Y  306
 
 
 static encoder_target_t s_encoder_target = ENCODER_TARGET_TUNE;
@@ -1787,6 +1968,35 @@ static int16_t s_pga_gain_db_x2 = CONFIG_PGA_START_DB_X2; /* see config.h */
 static uint8_t  s_rf_agc_enabled = 0U;
 static int16_t  s_rf_agc_backoff_x2 = 0;      /* 0..RF_AGC_BACKOFF_MAX_X2, in 0.5dB units */
 static uint8_t  s_rf_agc_rin_level = 0U;      /* aic3204_rin_t - 0=10k/1=20k/2=40k, see rf_agc_escalate_rin() */
+
+/*
+ * SUELO MANUAL DEL ATENUADOR - 22/09/2026, por el dueno del proyecto: "el
+ * atenuador en usb 20m no me deja poner nada mas que -6".
+ *
+ * No le dejaba, y el comentario de menu_tile_att_callback() ya lo decia sin
+ * llamarlo fallo: el tile manual y el AGC de RF compartian
+ * s_rf_agc_rin_level, asi que en una banda con senales fuertes el automatico
+ * se lo volvia a llevar a donde el creyera. Pones 0 dB y al primer recorte
+ * sube a -6; pones -12 y en cuanto hay tres segundos de calma baja a -6. La
+ * celda se quedaba clavada en -6 sin que el usuario tocara nada.
+ *
+ * La causa de fondo es una variable contestando a dos preguntas distintas:
+ *   - "que ha pedido el usuario"            -> eso es esto, s_att_suelo
+ *   - "que tiene el codec puesto AHORA"     -> eso es s_rf_agc_rin_level
+ * Separadas, cada una tiene un solo dueno y el automatico deja de pisar al
+ * manual.
+ *
+ * Que significa suelo: el AGC puede atenuar MAS que lo que has pedido -para
+ * eso esta, para salvarte de un recorte- pero nunca menos. Al calmarse la
+ * banda vuelve a tu ajuste, no a cero. Con el AGC de RF apagado el suelo es
+ * sencillamente el atenuador, igual que antes.
+ *
+ * Es ademas lo que se guarda en CONFIG.CSV (clave att_rin_level, la misma de
+ * siempre). Antes se guardaba el valor VIVO, o sea que lo que te encontrabas
+ * al encender era donde hubiera dejado el automatico la atenuacion el
+ * instante en que toco autoguardar - no lo que tu elegiste.
+ */
+static uint8_t  s_att_suelo = 0U;
 static uint32_t s_rf_agc_last_action_ms = 0U; /* g_msticks at the last backoff/recovery/Rin step */
 static uint32_t s_rf_agc_last_clip_ms = 0U;   /* g_msticks at the last DETECTED clip - the release timer's reference point */
 #define RF_AGC_STEP_X2              CONFIG_RF_AGC_STEP_X2             /* see config.h */
@@ -1844,12 +2054,13 @@ static float s_db_min = 0.0f; /* same starting point as the old SDR_DB_MIN */
 static float s_db_max = 90.0f;  /* same starting point as the old SDR_DB_MAX */
 static uint8_t s_scale_adjust_max = 0U; /* 0 = knob moves db_min, 1 = moves db_max */
 #define SPECTRUM_DB_STEP     2.0f   /* dB per encoder detent */
-#define SPECTRUM_DB_FLOOR  (-30.0f) /* db_min can't go below this */
-#define SPECTRUM_DB_CEIL    120.0f  /* db_max can't go above this */
-#define SPECTRUM_DB_MIN_GAP  10.0f  /* db_max - db_min never allowed below this -
-                                      * keeps spectrum_draw()'s scale_t = 1/(max-min)
-                                      * from blowing up into a useless few-pixel
-                                      * sliver of range. */
+/* El suelo, el techo y el hueco minimo de la escala vienen de
+ * spec_agc.h, con la autoescala que los usa. Estuvieron aqui duplicados
+ * hasta el 22/09/2026; lo que pasa con un numero repetido en dos sitios
+ * ya lo ha pagado este fichero hoy con la tabla de modos. */
+#define SPECTRUM_DB_FLOOR   SPEC_AGC_DB_FLOOR
+#define SPECTRUM_DB_CEIL    SPEC_AGC_DB_CEIL
+#define SPECTRUM_DB_MIN_GAP SPEC_AGC_DB_MIN_GAP
 
 /*
  * --- Spectrum AGC, added 01/09/2026 -------------------------------------
@@ -1901,10 +2112,10 @@ static uint8_t s_scale_adjust_max = 0U; /* 0 = knob moves db_min, 1 = moves db_m
  * taking over," never "fight the auto-tracker."
  */
 static uint8_t s_spec_agc_enabled = 1U;
-#define SPEC_AGC_FLOOR_MARGIN_DB 3.0f
-#define SPEC_AGC_CEIL_MARGIN_DB  6.0f
-#define SPEC_AGC_MIN_SPAN_DB     50.0f /* guaranteed floor-to-ceiling headroom, signal or not */
-#define SPEC_AGC_SMOOTH_ALPHA    0.05f
+/* Los cuatro numeros de la autoescala vivian aqui y ahora estan en
+ * spec_agc.h, con el codigo que los usa. Dejarlos duplicados en los dos
+ * sitios es como se acaba con dos versiones distintas del mismo ajuste;
+ * este fichero ya ha pagado ese precio hoy con la tabla de modos. */
 
 /*
  * --- Squelch (AM + NFM, encoder target) -------------------------------
@@ -1969,29 +2180,11 @@ static uint8_t spectrum_smooth_pct_for_save(void)
  * its right at scale 3; step and volume stack in two scale-2 rows
  * next; time (scale 3) and the battery gauge live over the right
  * status column. */
-#define FREQ_TEXT_SCALE 5
 #define FREQ_FIELD_CHARS 11
-#define FREQ_X 8
-#define FREQ_Y 0
-#define MODE_X 396
-#define MODE_Y 21
-#define STEP_X 478
 #define STEP_Y 8
-#define VOL_X  478
-#define VOL_Y  38
 #define TIME_X 690
 #define TIME_Y 8
-#define BATT_X 690
 #define BATT_Y 40
-#define BATT_W 48 /* shortened from 70 on 08/09/2026, per the project
-                    * owner ("la bateria la puedes hacer algo mas
-                    * corta") - narrows the bar itself, not the icon
-                    * height or the voltage text next to it. Was
-                    * narrowed from 80->70 on 31/07/2026 for the same
-                    * voltage-readout-clearance reasoning as this
-                    * comment always had; 799-(690+48-1)=62px now free
-                    * for the "XX.XV" text (30px at scale 1), even more
-                    * margin than the old 70-wide version had. */
 #define BATT_H 16
 
 /* Speaker-enabled indicator (07/09/2026, per the project owner) -
@@ -2019,25 +2212,6 @@ static uint8_t spectrum_smooth_pct_for_save(void)
  * Manual formatting - same policy as the itoa above, no sprintf.
  * `buf` must hold FREQ_FIELD_CHARS + 1 bytes.
  */
-static void tune_freq_format(uint32_t hz, char *buf)
-{
-    int8_t pos = FREQ_FIELD_CHARS;
-    uint8_t digits = 0;
-
-    buf[pos] = '\0';
-    do {
-        if ((digits > 0U) && ((digits % 3U) == 0U)) {
-            buf[--pos] = '.';
-        }
-        buf[--pos] = (char)('0' + (hz % 10U));
-        hz /= 10U;
-        digits++;
-    } while (hz > 0U && pos > 0);
-    while (pos > 0) {
-        buf[--pos] = ' ';
-    }
-}
-
 /*
  * Renders db_x2 (native 0.5dB units) as a fixed 11-char field,
  * right-aligned, same geometry/width as tune_freq_format() so it can
@@ -2046,38 +2220,33 @@ static void tune_freq_format(uint32_t hz, char *buf)
  * convention as tune_freq_format(). `buf` must hold
  * FREQ_FIELD_CHARS + 1 bytes.
  */
-static void volume_format(int16_t db_x2, char *buf)
+/*
+ * Igual que volume_format(), pero para los sitios que ya dibuja gfx2 (la
+ * pastilla del mando y la barra de acciones): "-25,0 dB" en vez de
+ * "-25.0DB".
+ *
+ * Las mayusculas y el punto de volume_format() no eran una eleccion de
+ * estilo: la fuente 5x7 del firmware tiene las minusculas practicamente
+ * ilegibles (hay nueve pares que se diferencian en un pixel), asi que todo
+ * se escribia en mayusculas. Las pantallas que siguen usando esa fuente
+ * mantienen volume_format() tal cual; las que ya no, usan esta.
+ */
+static void volume_format_ui(int16_t db_x2, char *buf)
 {
-    int8_t pos = FREQ_FIELD_CHARS;
-    uint16_t whole, tenth;
-    uint8_t negative = (db_x2 < 0) ? 1U : 0U;
-    uint16_t mag = negative ? (uint16_t)(-(int32_t)db_x2) : (uint16_t)db_x2;
+    uint16_t mag = (db_x2 < 0) ? (uint16_t)(-(int32_t)db_x2) : (uint16_t)db_x2;
+    uint16_t whole = mag / 2U;
+    uint16_t tenth = (mag % 2U) * 5U;
+    uint8_t i = 0;
 
-    whole = mag / 2U;
-    tenth = (mag % 2U) * 5U; /* 0 or 5 - 0.5dB steps only need one decimal */
-
-    buf[pos] = '\0';
-    buf[--pos] = 'B';
-    buf[--pos] = 'D'; /* uppercase, not lowercase 'd' - same font-coverage
-                        * bug as the "1K"/"96K" fix above (gfx_font5x7 is
-                        * 0x20-0x5A only, no lowercase - see gfx_font.h).
-                        * This one was hiding in a char-by-char buffer
-                        * build, not a string literal, so the earlier grep
-                        * for it missed this one. Found 31/07/2026. */
-    buf[--pos] = (char)('0' + tenth);
-    buf[--pos] = '.';
-    do {
-        if (pos > 0) {
-            buf[--pos] = (char)('0' + (whole % 10U));
-        }
-        whole /= 10U;
-    } while (whole > 0U && pos > 0);
-    if (pos > 0) {
-        buf[--pos] = negative ? '-' : '+';
-    }
-    while (pos > 0) {
-        buf[--pos] = ' ';
-    }
+    if (db_x2 < 0) { buf[i++] = '-'; }
+    if (whole >= 10U) { buf[i++] = (char)('0' + (whole / 10U)); }
+    buf[i++] = (char)('0' + (whole % 10U));
+    buf[i++] = ',';
+    buf[i++] = (char)('0' + tenth);
+    buf[i++] = ' ';
+    buf[i++] = 'd';
+    buf[i++] = 'B';
+    buf[i] = '\0';
 }
 
 /* Same fixed-7-char-field, sign-then-digits-then-unit style as
@@ -2117,21 +2286,13 @@ static void spectrum_db_format(int16_t db_i, char *buf)
  * field at a fixed position (no ghost chars). All draw over the
  * DARKGRAY top bar / BLACK right column.
  */
+/* ETAPA 2: este readout pasa a ui_top.c. Se conserva el nombre y todas
+ * las llamadas existentes, y solo cambia lo que hace por dentro - asi el
+ * cambio se revierte tocando una funcion, sin perseguir call sites. */
 static void mode_display_draw(void)
 {
-    const char *label;
-    uint16_t color;
-
-    switch (demod_am_get_mode()) {
-    case DEMOD_MODE_USB: label = "USB"; color = GFX_COLOR_GREEN; break;
-    case DEMOD_MODE_LSB: label = "LSB"; color = GFX_COLOR_GREEN; break;
-    case DEMOD_MODE_NFM: label = "NFM"; color = GFX_COLOR_ORANGE; break;
-    case DEMOD_MODE_WFM: label = "WFM"; color = GFX_COLOR_CYAN; break;
-    case DEMOD_MODE_SAM: label = "SAM"; color = GFX_COLOR_YELLOW; break;
-    case DEMOD_MODE_AM:
-    default:             label = "AM "; color = GFX_COLOR_YELLOW; break;
-    }
-    gfx_text((uint16_t)MODE_X, MODE_Y, label, color, GFX_COLOR_DARKGRAY, 3);
+    top_sync();
+    ui_top_draw(&s_top);
 }
 
 /*
@@ -2179,42 +2340,57 @@ static float sam_current_ppm_error(void)
  * VOL sits under it. */
 #define SAM_CALIB_X (594)
 #define SAM_CALIB_Y STEP_Y
+/* ETAPA 2: ya no dibuja. Actualiza el texto y repinta la cabecera SOLO si
+ * cambio - esta funcion se llama a cada tick del espectro (30/s) y un
+ * repintado completo de cabecera en cada uno seria ~20% del tiempo de bus
+ * para un numero que se mueve despacio.
+ *
+ * Y sobre todo: en los modos que NO son SAM ya no rellena nada. La version
+ * anterior pintaba ahi un rectangulo de 70x16 con el gris de la barra para
+ * "limpiar su hueco", lo que era invisible sobre un fondo plano pero dejaba
+ * un cuadrado gris a la izquierda del reloj en cuanto la cabecera paso a
+ * tener degradado. */
 static void sam_calib_display_draw(void)
 {
-    if (demod_am_get_mode() != DEMOD_MODE_SAM) {
-        gfx_fill_rect((uint16_t)SAM_CALIB_X, (uint16_t)SAM_CALIB_Y, 70U, 16U, GFX_COLOR_DARKGRAY);
-        return;
-    }
+    char nuevo[16];
+    uint8_t i;
 
-    {
+    if (demod_am_get_mode() != DEMOD_MODE_SAM) {
+        nuevo[0] = '\0';
+    } else {
         float ppm_f = sam_current_ppm_error();
         uint8_t negative = (ppm_f < 0.0f) ? 1U : 0U;
         float mag_f = negative ? -ppm_f : ppm_f;
         uint16_t whole = (uint16_t)mag_f;
         uint16_t tenth = (uint16_t)((mag_f - (float)whole) * 10.0f + 0.5f);
-        if (tenth >= 10U) { tenth = 0U; whole++; } /* rounding carry */
+        int8_t pos = 15;
 
-        char buf[20];
-        int8_t pos = 19;
-        buf[pos] = '\0';
-        buf[--pos] = 'M';
-        buf[--pos] = 'P';
-        buf[--pos] = 'P';
-        buf[--pos] = (char)('0' + tenth);
-        buf[--pos] = '.';
+        if (tenth >= 10U) { tenth = 0U; whole++; }
+        nuevo[pos] = '\0';
+        nuevo[--pos] = 'M'; nuevo[--pos] = 'P'; nuevo[--pos] = 'P';
+        nuevo[--pos] = ' ';
+        nuevo[--pos] = (char)('0' + tenth);
+        nuevo[--pos] = ',';
         do {
-            if (pos > 0) {
-                buf[--pos] = (char)('0' + (whole % 10U));
-            }
+            if (pos > 0) { nuevo[--pos] = (char)('0' + (whole % 10U)); }
             whole /= 10U;
         } while (whole > 0U && pos > 0);
-        if (pos > 0) {
-            buf[--pos] = negative ? '-' : '+';
-        }
-
-        gfx_fill_rect((uint16_t)SAM_CALIB_X, (uint16_t)SAM_CALIB_Y, 70U, 16U, GFX_COLOR_DARKGRAY);
-        gfx_text((uint16_t)SAM_CALIB_X, (uint16_t)SAM_CALIB_Y, &buf[pos], GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, 1);
+        if (pos > 0) { nuevo[--pos] = negative ? '-' : '+'; }
+        /* compactar al principio del buffer */
+        for (i = 0U; nuevo[pos + i] != '\0'; i++) { nuevo[i] = nuevo[pos + i]; }
+        nuevo[i] = '\0';
     }
+
+    for (i = 0U; i < sizeof(s_top_sam); i++) {
+        if (s_top_sam[i] != nuevo[i]) { break; }
+        if (nuevo[i] == '\0') { return; }      /* identico: nada que hacer */
+    }
+    for (i = 0U; i < sizeof(s_top_sam); i++) {
+        s_top_sam[i] = nuevo[i];
+        if (nuevo[i] == '\0') { break; }
+    }
+    top_sync();
+    ui_top_draw(&s_top);
 }
 
 /*
@@ -2227,21 +2403,22 @@ static void sam_calib_display_draw(void)
  * outside the ui_screen framework instead, same treatment the
  * spectrum drag-to-tune zone already gets.
  */
+/* ETAPA 2: este readout pasa a ui_top.c. Se conserva el nombre y todas
+ * las llamadas existentes, y solo cambia lo que hace por dentro - asi el
+ * cambio se revierte tocando una funcion, sin perseguir call sites. */
 static void freq_display_draw(void)
 {
-    char buf[FREQ_FIELD_CHARS + 1];
-
-    tune_freq_format(s_tune_hz, buf);
-    gfx_vfo_text((uint16_t)FREQ_X, FREQ_Y, buf,
-                 GFX_COLOR_CYAN, GFX_COLOR_DARKGRAY, 2);
+    top_sync();
+    ui_top_draw(&s_top);
 }
 
+/* ETAPA 2: este readout pasa a ui_top.c. Se conserva el nombre y todas
+ * las llamadas existentes, y solo cambia lo que hace por dentro - asi el
+ * cambio se revierte tocando una funcion, sin perseguir call sites. */
 static void step_display_draw(void)
 {
-    gfx_text((uint16_t)STEP_X, STEP_Y, "STEP ",
-             GFX_COLOR_GRAY, GFX_COLOR_DARKGRAY, 2);
-    gfx_text((uint16_t)(STEP_X + 5 * 6 * 2), STEP_Y, k_tune_step_labels[s_tune_step_idx],
-             GFX_COLOR_YELLOW, GFX_COLOR_DARKGRAY, 2);
+    top_sync();
+    ui_top_draw(&s_top);
 }
 
 /*
@@ -2260,139 +2437,20 @@ static void step_display_draw(void)
  * showing before - a 4-char "100%" over a stale 7-char "+00.0DB"
  * would otherwise leave 3 uncleared pixels' worth of the old text).
  */
+/* ETAPA 2: lo sustituye la pastilla del mando de la barra de estado.
+ *
+ * Esta funcion pintaba en VOL_X/VOL_Y (478, 38) con la fuente 5x7 a escala 2
+ * y colores invertidos - encima de la cabecera nueva, que ahi tiene degradado.
+ * Ademas era redundante: mostraba BL/HI-LO/SQL/SMH/PGA/NR/VOL con su valor,
+ * que es exactamente lo que dice la pastilla, y con las palabras enteras en
+ * vez de abreviaturas de tres letras.
+ *
+ * Mismo patron que sam_calib_display_draw(): se conserva el nombre y las
+ * llamadas, y solo cambia lo que hace por dentro. */
 static void aux_row_display_draw(void)
 {
-    uint16_t fg, bg;
-
-    if (s_encoder_target == ENCODER_TARGET_BACKLIGHT) {
-        char buf[8]; /* 7-char field + NUL, e.g. "   100%" or "    50%" */
-        uint8_t pos = 7U;
-        uint8_t v = backlight_get_percent();
-
-        fg = GFX_COLOR_BLACK;
-        bg = GFX_COLOR_CYAN;
-
-        buf[pos] = '\0';
-        buf[--pos] = '%';
-        do {
-            buf[--pos] = (char)('0' + (v % 10U));
-            v /= 10U;
-        } while (v > 0U && pos > 0U);
-        while (pos > 0U) {
-            buf[--pos] = ' ';
-        }
-
-        gfx_text((uint16_t)VOL_X, VOL_Y, "BL  ", fg, bg, 2);
-        gfx_text((uint16_t)(VOL_X + 4 * 6 * 2), VOL_Y, buf, fg, bg, 2);
-    } else if (s_encoder_target == ENCODER_TARGET_SCALE) {
-        char buf[FREQ_FIELD_CHARS + 1];
-        uint8_t i;
-
-        fg = GFX_COLOR_BLACK;
-        bg = GFX_COLOR_CYAN;
-
-        /* Label says which bound the knob currently moves - toggled
-         * by the encoder BUTTON, see tune_encoder_poll()'s SCALE
-         * branch - "LO " when adjusting db_min, "HI " when adjusting
-         * db_max. Both exactly 4 chars, same width as "VOL "/"BL  "
-         * above, so no ghosting on the label side either. */
-        spectrum_db_format((int16_t)(s_scale_adjust_max ? s_db_max : s_db_min), buf);
-        gfx_text((uint16_t)VOL_X, VOL_Y, s_scale_adjust_max ? "HI  " : "LO  ", fg, bg, 2);
-        /* Same "last 7 of the fixed 11-char field" trim as the VOL
-         * branch below, and for the same reason: a consistent value
-         * field width across all four targets. */
-        for (i = 0; buf[i] == ' ' && i < (FREQ_FIELD_CHARS - 7U); i++) { }
-        gfx_text((uint16_t)(VOL_X + 4 * 6 * 2), VOL_Y, &buf[i], fg, bg, 2);
-    } else if (s_encoder_target == ENCODER_TARGET_SQUELCH) {
-        char buf[FREQ_FIELD_CHARS + 1];
-        uint8_t i;
-
-        fg = GFX_COLOR_BLACK;
-        bg = GFX_COLOR_CYAN;
-
-        /* Same fixed-7-char-field formatter as SCALE above
-         * (spectrum_db_format() is generic - any signed integer dB
-         * value) - reused rather than duplicated. */
-        spectrum_db_format((int16_t)demod_am_get_squelch_db(), buf);
-        gfx_text((uint16_t)VOL_X, VOL_Y, "SQL ", fg, bg, 2);
-        for (i = 0; buf[i] == ' ' && i < (FREQ_FIELD_CHARS - 7U); i++) { }
-        gfx_text((uint16_t)(VOL_X + 4 * 6 * 2), VOL_Y, &buf[i], fg, bg, 2);
-    } else if (s_encoder_target == ENCODER_TARGET_SMOOTH) {
-        char buf[8]; /* same 7-char percent field as BACKLIGHT above */
-        uint8_t pos = 7U;
-        uint8_t v = (uint8_t)(s_spectrum_smooth_alpha * 100.0f + 0.5f);
-
-        fg = GFX_COLOR_BLACK;
-        bg = GFX_COLOR_CYAN;
-
-        buf[pos] = '\0';
-        buf[--pos] = '%';
-        do {
-            buf[--pos] = (char)('0' + (v % 10U));
-            v /= 10U;
-        } while (v > 0U && pos > 0U);
-        while (pos > 0U) {
-            buf[--pos] = ' ';
-        }
-
-        gfx_text((uint16_t)VOL_X, VOL_Y, "SMH ", fg, bg, 2);
-        gfx_text((uint16_t)(VOL_X + 4 * 6 * 2), VOL_Y, buf, fg, bg, 2);
-    } else if (s_encoder_target == ENCODER_TARGET_PGA) {
-        char buf[FREQ_FIELD_CHARS + 1];
-        uint8_t i;
-
-        fg = GFX_COLOR_BLACK;
-        bg = GFX_COLOR_CYAN;
-
-        /* volume_format() works fine here too - PGA is stored in the
-         * same 0.5dB-native-units encoding, just always non-negative
-         * in practice, so it'll always show a "+" - that's accurate
-         * (PGA gain has no cut direction, see aic3204_set_pga_gain_db()'s
-         * comment), not a formatting bug. */
-        volume_format(s_pga_gain_db_x2, buf);
-        gfx_text((uint16_t)VOL_X, VOL_Y, "PGA ", fg, bg, 2);
-        for (i = 0; buf[i] == ' ' && i < (FREQ_FIELD_CHARS - 7U); i++) { }
-        gfx_text((uint16_t)(VOL_X + 4 * 6 * 2), VOL_Y, &buf[i], fg, bg, 2);
-    } else if (s_encoder_target == ENCODER_TARGET_NR) {
-        /* Raw 0-4095 field, no unit suffix (this is nr_ss_process()'s
-         * native threshold units, not a calibrated quantity - same
-         * "uncalibrated but useful" spirit as this project's spectrum
-         * dB scale). Without its own branch here this would silently
-         * fall into the VOLUME else-branch below and show the wrong
-         * value/label entirely. */
-        char buf[8]; /* up to 4 digits, space-padded to a fixed 7-char field */
-        uint8_t pos = 7U;
-        uint16_t v = s_nr_strength;
-
-        fg = GFX_COLOR_BLACK;
-        bg = GFX_COLOR_CYAN;
-
-        buf[pos] = '\0';
-        do {
-            buf[--pos] = (char)('0' + (v % 10U));
-            v /= 10U;
-        } while (v > 0U && pos > 0U);
-        while (pos > 0U) {
-            buf[--pos] = ' ';
-        }
-
-        gfx_text((uint16_t)VOL_X, VOL_Y, "NR  ", fg, bg, 2);
-        gfx_text((uint16_t)(VOL_X + 4 * 6 * 2), VOL_Y, buf, fg, bg, 2);
-    } else {
-        char buf[FREQ_FIELD_CHARS + 1];
-        uint8_t i;
-
-        fg = (s_encoder_target == ENCODER_TARGET_VOLUME) ? GFX_COLOR_BLACK : GFX_COLOR_GRAY;
-        bg = (s_encoder_target == ENCODER_TARGET_VOLUME) ? GFX_COLOR_CYAN : GFX_COLOR_DARKGRAY;
-
-        volume_format(s_volume_db_x2, buf);
-        gfx_text((uint16_t)VOL_X, VOL_Y, "VOL ", fg, bg, 2);
-        /* volume_format right-aligns into 11 chars; show only the last
-         * 7 ("+00.0DB") to keep the row compact and the SAME fixed
-         * width as the BACKLIGHT branch above. */
-        for (i = 0; buf[i] == ' ' && i < (FREQ_FIELD_CHARS - 7U); i++) { }
-        gfx_text((uint16_t)(VOL_X + 4 * 6 * 2), VOL_Y, &buf[i], fg, bg, 2);
-    }
+    top_sync();
+    ui_top_draw(&s_top);
 }
 
 /*
@@ -2421,6 +2479,23 @@ static void aux_row_display_draw(void)
  */
 static uint32_t s_time_offset_min = 0U;
 
+/*
+ * Geometria del reloj para gfx2. Cubre la zona que ocupaba el texto a escala
+ * 3 (TIME_X=690, TIME_Y=8, 5 caracteres) con algo de margen, y se queda por
+ * encima de TIME_TAP_Y2 (36) para no invadir el indicador de bateria, que
+ * vive mas abajo en esta misma barra.
+ */
+#define TIME2_X 684
+#define TIME2_Y   4
+#define TIME2_W (GFX2_W - TIME2_X)
+#define TIME2_H  30
+
+/* Fondo de la barra superior. GFX_COLOR_DARKGRAY es 0x4208 en RGB565, que
+ * expandido a 8 bits por canal es 0x424242: hay que rellenar con EXACTAMENTE
+ * ese valor para que la franja recompuesta no se note contra el resto. */
+#define TOPBAR_BG 0x424242u
+
+
 static void time_display_draw(void)
 {
     extern volatile uint32_t g_msticks;
@@ -2435,8 +2510,17 @@ static void time_display_draw(void)
     buf[3] = (char)('0' + (mm / 10UL));
     buf[4] = (char)('0' + (mm % 10UL));
     buf[5] = '\0';
-    gfx_text((uint16_t)TIME_X, TIME_Y, buf,
-             GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, 3);
+
+    /* ETAPA 2: el reloj ya no se pinta solo - forma parte de la cabecera.
+     * Se guarda el texto y se repinta la cabecera entera, que con la banda
+     * compositora cuesta un unico volcado por banda. */
+    {
+        uint8_t i;
+        for (i = 0U; i < sizeof(s_time_buf); i++) { s_time_buf[i] = buf[i]; }
+    }
+    s_time_text = s_time_buf;
+    top_sync();
+    ui_top_draw(&s_top);
 }
 
 /*
@@ -2449,11 +2533,6 @@ static void time_display_draw(void)
  * "not wired / read failed" escape hatch again (e.g. a future board
  * revision that removes the divider).
  */
-static uint8_t radio_battery_percent(void)
-{
-    return battery_get_percent();
-}
-
 /* Formats millivolts as a fixed 5-char "XX.XV" field (e.g. " 3.9V",
  * "12.4V") - always the same width regardless of magnitude, so
  * gfx_text() fully repaints it every refresh with no ghost digits
@@ -2463,23 +2542,6 @@ static uint8_t radio_battery_percent(void)
  * board is realistically going to have - so straight positional
  * indexing reads clearer here than their right-to-left digit-peeling
  * loops. `buf` must hold 6 bytes. */
-static void battery_voltage_format(uint16_t mv, char *buf)
-{
-    uint16_t whole = mv / 1000U;
-    uint16_t tenth = (mv % 1000U) / 100U; /* one decimal digit */
-
-    if (whole > 99U) {
-        whole = 99U; /* clamp - a display cap, not a real limit */
-    }
-
-    buf[0] = (whole >= 10U) ? (char)('0' + (whole / 10U)) : ' ';
-    buf[1] = (char)('0' + (whole % 10U));
-    buf[2] = '.';
-    buf[3] = (char)('0' + tenth);
-    buf[4] = 'V';
-    buf[5] = '\0';
-}
-
 /*
  * Battery gauge + voltage readout. The voltage text sits just right
  * of the icon (BATT_W was narrowed to make room - see its comment)
@@ -2492,39 +2554,13 @@ static void battery_voltage_format(uint16_t mv, char *buf)
  * derived value - harmless, this is a housekeeping readout polled a
  * few times a second at most, not the demod ISR.
  */
+/* ETAPA 2: este readout pasa a ui_top.c. Se conserva el nombre y todas
+ * las llamadas existentes, y solo cambia lo que hace por dentro - asi el
+ * cambio se revierte tocando una funcion, sin perseguir call sites. */
 static void battery_display_draw(void)
 {
-    uint8_t pct = radio_battery_percent();
-    uint16_t color = GFX_COLOR_GRAY;
-
-    /* body + nub */
-    gfx_rect(BATT_X, BATT_Y, (uint16_t)(BATT_W - 4), BATT_H, GFX_COLOR_WHITE);
-    gfx_fill_rect((uint16_t)(BATT_X + BATT_W - 4), (uint16_t)(BATT_Y + 4),
-                   3, (uint16_t)(BATT_H - 8), GFX_COLOR_WHITE);
-
-    if (pct <= 100U) {
-        uint16_t fill_w = (uint16_t)(((uint32_t)(BATT_W - 8) * pct) / 100UL);
-
-        color = (pct > 50U) ? GFX_COLOR_GREEN
-              : (pct > 20U) ? GFX_COLOR_ORANGE : GFX_COLOR_RED;
-        gfx_fill_rect((uint16_t)(BATT_X + 2), (uint16_t)(BATT_Y + 2),
-                       (uint16_t)(BATT_W - 8), (uint16_t)(BATT_H - 4), GFX_COLOR_DARKGRAY);
-        gfx_fill_rect((uint16_t)(BATT_X + 2), (uint16_t)(BATT_Y + 2),
-                       fill_w, (uint16_t)(BATT_H - 4), color);
-    } else {
-        gfx_text((uint16_t)(BATT_X + BATT_W / 2 - 12), (uint16_t)(BATT_Y + 1), "--",
-                 GFX_COLOR_GRAY, GFX_COLOR_DARKGRAY, 2);
-    }
-
-    {
-        char vbuf[6];
-
-        battery_voltage_format(battery_get_millivolts(), vbuf);
-        /* Vertically centered against the 16px-tall icon: scale-1 text
-         * is 7px tall, (16-7)/2 = 4 (rounds down, close enough). */
-        gfx_text((uint16_t)(BATT_X + BATT_W + 2), (uint16_t)(BATT_Y + 4), vbuf,
-                 color, GFX_COLOR_DARKGRAY, 1);
-    }
+    top_sync();
+    ui_top_draw(&s_top);
 }
 
 /*
@@ -2568,45 +2604,13 @@ static void battery_display_draw(void)
  * Fully repaints its own shape (box + every horn row) each call, so
  * toggling states needs no separate background clear first.
  */
+/* ETAPA 2: el icono lo sustituye el chip "SIN ALTAVOZ" de la barra de
+ * estado, que ademas lleva la palabra y no depende de reconocer un dibujo
+ * de 16x24. Esta funcion solo repinta la barra. */
 static void speaker_icon_draw(void)
 {
-    uint16_t color = s_speaker_pa_enabled ? GFX_COLOR_WHITE : GFX_COLOR_DARKGRAY;
-    const uint8_t  box_w = 7U;
-    const uint8_t  box_h = 10U; /* centered - the horn's widest opening; see this function's comment for the 7/10/16/24 proportions' origin */
-    const uint16_t box_y = (uint16_t)(SPK_ICON_Y + (SPK_ICON_H - box_h) / 2U);
-    const uint8_t  horn_w = (uint8_t)(SPK_ICON_W - box_w);
-    const float    half_full = (float)SPK_ICON_H * 0.5f;
-    const float    half_box  = (float)box_h * 0.5f;
-    uint8_t row;
-
-    gfx_fill_rect(SPK_ICON_X, box_y, box_w, box_h, color);
-
-    for (row = 0; row < SPK_ICON_H; row++) {
-        /* Signed distance of this row's midpoint from vertical
-         * center, folded to unsigned (top and bottom halves mirror
-         * each other). */
-        float d = ((float)row + 0.5f) - half_full;
-        uint16_t left_x;
-        uint16_t row_w;
-
-        if (d < 0.0f) { d = -d; }
-
-        if (d <= half_box) {
-            left_x = (uint16_t)(SPK_ICON_X + box_w); /* flush with the box - horn's widest point */
-        } else {
-            float frac = (d - half_box) / (half_full - half_box); /* 0 at the box edge, 1 at the very top/bottom row */
-
-            /* +0.5f before truncating = round-to-nearest, not floor -
-             * keeps the staircase steps as even as possible instead
-             * of every step being biased one direction. */
-            left_x = (uint16_t)((uint16_t)(SPK_ICON_X + box_w) + (uint16_t)((frac * (float)horn_w) + 0.5f));
-        }
-
-        row_w = (uint16_t)((uint16_t)(SPK_ICON_X + SPK_ICON_W) - left_x);
-        if (row_w > 0U) {
-            gfx_hline(left_x, (uint16_t)(SPK_ICON_Y + row), row_w, color);
-        }
-    }
+    top_sync();
+    ui_top_draw_status(&s_top);
 }
 
 /*
@@ -2630,21 +2634,18 @@ static void speaker_icon_draw(void)
 
 static uint8_t s_smeter_segs_last = 0xFFU; /* force first draw */
 
+/* ETAPA 2: pasa a ui_top.c. Se conserva el filtro de "si no cambio, no
+ * repintes" del original, que ahorra un repintado completo de la franja
+ * en la mayoria de los ticks. */
 static void smeter_draw(uint8_t segs)
 {
-    uint8_t i;
-
     if (segs == s_smeter_segs_last) {
-        return; /* nothing changed - skip the blits entirely */
+        return;
     }
     s_smeter_segs_last = segs;
-
-    for (i = 0; i < SMETER_SEGS; i++) {
-        uint16_t x = (uint16_t)(SMETER_X + i * (SMETER_SEG_W + 1));
-        uint16_t on_color = (i >= 9U) ? GFX_COLOR_RED : GFX_COLOR_GREEN;
-        gfx_fill_rect(x, SMETER_Y, SMETER_SEG_W, SMETER_SEG_H,
-                       (i < segs) ? on_color : GFX_COLOR_DARKGRAY);
-    }
+    s_top_segs = segs;
+    top_sync();
+    ui_top_draw_status(&s_top);
 }
 
 /* Convert the demod's peak (int16 scale) to lit segments. Uses the
@@ -2797,9 +2798,6 @@ static void smeter_dbfs_uart_report(float peak)
 static const float k_att_db_values[3] = { 0.0f, -6.0f, -12.0f };
 
 #define SNR_X (uint16_t)(SMETER_X + SMETER_SEGS * (SMETER_SEG_W + 1) + 12) /* right after the meter, plus a gap - name kept as "SNR_X/Y" even though this slot no longer shows SNR, since BADGE_ROW_X0 and others already reference it by this name */
-#define SNR_Y (uint16_t)(STATUS_STRIP_Y + (STATUS_STRIP_H - 14U) / 2U) /* vertically centered, scale-2 text line (GFX_FONT_HEIGHT=7 * scale 2) */
-
-static int32_t s_smeter_dbm_last_drawn = 0x7FFFFFFF; /* force first draw */
 
 /*
  * smeter_dbm_update_and_draw() - added 01/09/2026, per the project
@@ -2837,6 +2835,13 @@ static int32_t s_smeter_dbm_last_drawn = 0x7FFFFFFF; /* force first draw */
  * enough that RF-AGC likely never triggered, but this is an
  * assumption, not a confirmed fact).
  */
+/* ETAPA 2: ya no dibuja - calcula y entrega el valor a ui_top.c.
+ *
+ * dbm_valid solo se pone a 1 con el AGC principal DESACTIVADO: con el AGC
+ * actuando, la ganancia es dinamica y la lectura en dBm no significa nada.
+ * El firmware la mostraba igual; ahora la barra pone "n/d con AGC" en vez
+ * de un numero que parece bueno y no lo es (ver el apartado 3.8 del README
+ * sobre la calibracion y sus limites). */
 static void smeter_dbm_update_and_draw(float peak)
 {
     float dbfs = smeter_dbfs_from_peak(peak);
@@ -2845,43 +2850,13 @@ static void smeter_dbm_update_and_draw(float peak)
     float current_gain_db = current_att_db + current_pga_db;
     float cal_gain_db = SMETER_CAL_ATT_DB + SMETER_CAL_PGA_DB;
     float dbm_f = dbfs + SMETER_CAL_OFFSET_DB - (current_gain_db - cal_gain_db);
-    int32_t dbm_rounded;
-    uint8_t negative;
-    uint32_t mag;
-    char buf[16];
-    int8_t pos = 15;
+    int32_t dbm_rounded = (dbm_f >= 0.0f) ? (int32_t)(dbm_f + 0.5f)
+                                          : (int32_t)(dbm_f - 0.5f);
 
-    /* Round to the nearest whole dBm - same "skip the blit if nothing
-     * visibly changed" discipline as smeter_draw()'s segment check. */
-    dbm_rounded = (dbm_f >= 0.0f) ? (int32_t)(dbm_f + 0.5f) : (int32_t)(dbm_f - 0.5f);
-    if (dbm_rounded == s_smeter_dbm_last_drawn) {
-        return;
-    }
-    s_smeter_dbm_last_drawn = dbm_rounded;
-
-    negative = (dbm_rounded < 0) ? 1U : 0U;
-    mag = negative ? (uint32_t)(-dbm_rounded) : (uint32_t)dbm_rounded;
-
-    /* Same buffer-building approach the old SNR readout used: sign +
-     * digits + unit, built back-to-front. "dBm" now, not "dB" - a
-     * real (if imperfectly calibrated) absolute level, not a ratio. */
-    buf[pos] = '\0';
-    buf[--pos] = 'm';
-    buf[--pos] = 'B';
-    buf[--pos] = 'd';
-    do {
-        if (pos > 0) {
-            buf[--pos] = (char)('0' + (mag % 10U));
-        }
-        mag /= 10U;
-    } while (mag > 0U && pos > 0);
-    if (pos > 0) {
-        buf[--pos] = negative ? '-' : '+';
-    }
-
-    gfx_fill_rect((uint16_t)SNR_X, (uint16_t)SNR_Y, 90U, 14U,
-                   GFX_COLOR_BLACK);
-    gfx_text((uint16_t)SNR_X, (uint16_t)SNR_Y, &buf[pos], GFX_COLOR_YELLOW, GFX_COLOR_BLACK, 2);
+    if (dbm_rounded > 32767) { dbm_rounded = 32767; }
+    if (dbm_rounded < -32768) { dbm_rounded = -32768; }
+    s_top_dbm = (int16_t)dbm_rounded;
+    s_top_dbm_valid = (uint8_t)(demod_am_get_agc_profile() == AGC_PROFILE_MANUAL);
 }
 
 /*
@@ -2890,36 +2865,23 @@ static void smeter_dbm_update_and_draw(float peak)
  * no-op unless the SAGC tile has turned this on (s_spec_agc_enabled),
  * checked by the caller, not in here.
  */
-static void spec_agc_apply(const float *db_frame)
-{
-    float frame_min = db_frame[0];
-    float frame_max = db_frame[0];
-    float target_min, target_max;
-    uint32_t k;
-
-    for (k = 1U; k < FFT_BINS_IQ; k++) {
-        if (db_frame[k] < frame_min) { frame_min = db_frame[k]; }
-        if (db_frame[k] > frame_max) { frame_max = db_frame[k]; }
-    }
-
-    target_min = frame_min - SPEC_AGC_FLOOR_MARGIN_DB;
-    /* Guaranteed minimum headroom above the floor, regardless of how
-     * little spread the current frame has (see this function's
-     * declaration comment for why frame_max alone isn't enough) -
-     * only widen further than that when an actual signal needs it. */
-    target_max = target_min + SPEC_AGC_MIN_SPAN_DB;
-    if (frame_max + SPEC_AGC_CEIL_MARGIN_DB > target_max) {
-        target_max = frame_max + SPEC_AGC_CEIL_MARGIN_DB;
-    }
-    if (target_min < SPECTRUM_DB_FLOOR) { target_min = SPECTRUM_DB_FLOOR; }
-    if (target_max > SPECTRUM_DB_CEIL)  { target_max = SPECTRUM_DB_CEIL; }
-    if (target_max < target_min + SPECTRUM_DB_MIN_GAP) {
-        target_max = target_min + SPECTRUM_DB_MIN_GAP;
-    }
-
-    s_db_min += (target_min - s_db_min) * SPEC_AGC_SMOOTH_ALPHA;
-    s_db_max += (target_max - s_db_max) * SPEC_AGC_SMOOTH_ALPHA;
-}
+/*
+ * La autoescala se mudo a User/spec_agc.c el 22/09/2026, y no fue por
+ * ordenar: fue porque estaba mal y aqui dentro no habia forma de
+ * demostrarlo.
+ *
+ * Miraba el minimo y el maximo ABSOLUTOS del cuadro. Delante de la radio
+ * eso significa que el pico de continua del centro y los bins hundidos
+ * de los bordes -dos y cuatro muestras de quinientas doce- decidian la
+ * ventana entera: salia de -1 a 120 dB, y con 121 dB de recorrido una
+ * senal que ocupa veinte se queda plana y sin relieve. Desde fuera se
+ * veia como "la autoescala no hace nada", cuando estaba haciendo
+ * exactamente lo que se le pidio.
+ *
+ * Ahora usa percentiles y se puede alimentar con cuadros sinteticos
+ * desde el simulador: sim/autoesc.c reproduce ese caso y compara las dos
+ * versiones. Esa comprobacion es la razon de que esto sea un modulo.
+ */
 
 /*
  * STATUS BADGES: up to 6, in a 2x3 grid under the S-meter. Each shows
@@ -3002,8 +2964,6 @@ static void spec_agc_apply(const float *db_frame)
  * clear gap, vertically centered in the strip like every other
  * element in it. */
 #define BADGE_ROW_X0 (uint16_t)(SNR_X + 100U) /* 01/09/2026: widened from +90 to +100 - the dBm readout that replaced SNR here can reach 3-digit magnitudes ("-128dBm", 7 chars, 84px at this font/scale) wider than SNR's old 2-digit-typical range ever needed */
-#define BADGE_COL(n) (uint16_t)(BADGE_ROW_X0 + (n) * (BADGE_W + BADGE_GAP))
-#define BADGE_Y0 (uint16_t)(STATUS_STRIP_Y + (STATUS_STRIP_H - BADGE_H) / 2U)
 
 /* Indexed directly by agc_profile_t (demod_am.h) - MANUAL, SLOW,
  * MEDIUM, FAST in that order. Originally "MAN, SLW, MED, FST" per the
@@ -3013,14 +2973,432 @@ static void spec_agc_apply(const float *db_frame)
  * than MAN for that purpose. */
 static const char *k_agc_profile_labels[4] = { "OFF", "SLW", "MED", "FST" };
 
+/*
+ * Hz -> "4,0 k" / "0,5 k". Una funcion y no cuatro copias.
+ *
+ * Estaba escrito cuatro veces -dos en la chapa de la barra y dos en la celda
+ * de Ajustes-, una por cada combinacion de modo. Cuatro sitios que dicen el
+ * mismo numero es exactamente como se consigue que digan numeros distintos:
+ * de hecho paso, la celda de Ajustes se quedo devolviendo "0,5 kHz de CW"
+ * fijo mientras la chapa ya decia el ancho de verdad.
+ *
+ * `cola` es lo que va detras ("k", "kHz CW", ...) o 0 para nada. El buffer
+ * tiene que dar para 4 caracteres mas la cola mas el cierre.
+ */
+static void bw_format(char *buf, uint32_t hz, const char *cola)
+{
+    uint8_t i = 0U;
+
+    buf[i++] = (char)('0' + (char)((hz / 1000U) % 10U));
+    buf[i++] = ',';
+    buf[i++] = (char)('0' + (char)((hz % 1000U) / 100U));
+    if (cola) {
+        buf[i++] = ' ';
+        while (*cola != '\0') { buf[i++] = *cola++; }
+    }
+    buf[i] = '\0';
+}
+
+/*
+ * ETAPA 4: la cabecera en kHz con dos decimales.
+ *
+ * FALLO QUE ESTO ARREGLA: la cabecera mostraba los Hz agrupados de tres en
+ * tres ("7.200.000") y al lado ponia "MHz". Eso no era una etiqueta poco
+ * afortunada, era falso: 7.200.000 no son 7 millones de MHz. Lo puse yo en
+ * la etapa 2 y no lo vi hasta montar el render de la pantalla entera, con la
+ * regla del espectro debajo diciendo "kHz" y numeros que no se parecian a
+ * los de arriba.
+ *
+ * En kHz porque es la unidad que cubre bien todo el rango del aparato, de
+ * 30 kHz a 108 MHz: en MHz, onda larga saldria como "0,153000", y en Hz hay
+ * que contar grupos para saber en que banda estas. Dos decimales dan
+ * resolucion de 10 Hz, y el paso mas fino del aparato son 100 Hz, asi que no
+ * se pierde nada. Y ahora la cabecera y la regla del espectro hablan la
+ * misma unidad, que es como se comparan de un vistazo.
+ */
+static void tune_freq_format_khz(uint32_t hz, char *buf)
+{
+    uint32_t khz  = hz / 1000U;
+    uint32_t cent = (hz % 1000U) / 10U;   /* centesimas de kHz = decenas de Hz */
+    char num[12];
+    int8_t n = 0, i = 0, j;
+    uint32_t v = khz;
+
+    do { num[n++] = (char)('0' + (v % 10U)); v /= 10U; } while (v > 0U);
+
+    for (j = (int8_t)(n - 1); j >= 0; j--) {
+        buf[i++] = num[j];
+        if (j != 0 && (j % 3) == 0) { buf[i++] = '.'; }
+    }
+    buf[i++] = ',';
+    buf[i++] = (char)('0' + (cent / 10U));
+    buf[i++] = (char)('0' + (cent % 10U));
+    buf[i] = '\0';
+}
+
+/*
+ * Indice del caracter que el mando va a mover, dentro de la frecuencia ya
+ * formateada. El texto lleva puntos de millar y una coma decimal, asi que no
+ * vale contar posiciones a secas: hay que contar DIGITOS desde la derecha,
+ * saltandose los separadores.
+ *
+ * Para pasos que no son potencia de diez (12,5 kHz y 25 kHz) se subraya la
+ * decada mas significativa que tocan - la de 10 kHz -, que es la que el ojo
+ * espera ver moverse.
+ */
+static int8_t freq_highlight_index(const char *txt, uint32_t step_hz)
+{
+    int8_t n = -1;
+    int8_t i, cnt = 0;
+    uint32_t v = step_hz;
+
+    while (v >= 10U) { v /= 10U; n++; }
+    /* Tras el bucle n = digitos(paso) - 2, que es justo el indice del digito
+     * contando desde la derecha del texto: el texto empieza en las DECENAS
+     * de Hz (dos decimales de kHz), no en los Hz. Comprobado para los ocho
+     * pasos: 100 Hz -> el 100 Hz, 1 kHz -> el 1 kHz, 12,5 kHz -> la decada
+     * de 10 kHz, 1 MHz -> el 1 MHz. */
+
+    for (i = 0; txt[i] != '\0'; i++) { }
+    for (i = (int8_t)(i - 1); i >= 0; i--) {
+        if (txt[i] != '.' && txt[i] != ',' && txt[i] != ' ') {
+            if (cnt == n) { return i; }
+            cnt++;
+        }
+    }
+    return -1;
+}
+
+/*
+ * 1 si la entrada i de k_demod_modes[] es la que esta activa ahora
+ * mismo.
+ *
+ * Hace falta una funcion para esto porque el modo real NO identifica la
+ * entrada: USB, CW y RTTY-U son las tres USB por debajo, y LSB y RTTY-L
+ * las dos LSB. Lo que las distingue son los interruptores de encima, asi
+ * que la unica respuesta correcta mira los tres campos.
+ *
+ * Y esta en un sitio solo porque hacen falta dos: la etiqueta del boton
+ * de modo y la celda marcada en la pantalla de modos. Cuando la
+ * condicion vivia suelta en cada uno, la primera se quedo con la version
+ * corta -solo el modo- y por eso al elegir RTTY-L el boton seguia
+ * poniendo "LSB", que es el demodulador de debajo y no el modo que se
+ * acaba de elegir.
+ */
+static uint8_t demod_mode_entry_active(uint8_t i)
+{
+    uint8_t es_rtty = (uint8_t)(k_demod_modes[i].rtty_variant != RTTY_VARIANT_NONE);
+
+    return (uint8_t)(k_demod_modes[i].mode == demod_am_get_mode() &&
+                     es_rtty == rtty_get_enabled() &&
+                     k_demod_modes[i].cw == cw_get_enabled());
+}
+
+static const char *demod_mode_label(void)
+{
+    uint8_t i;
+    for (i = 0U; i < (uint8_t)DEMOD_MODE_ENTRY_COUNT; i++) {
+        if (demod_mode_entry_active(i)) { return k_demod_modes[i].label; }
+    }
+    return "?";
+}
+
+/* encoder_target_t y ui_knob_t llevan hoy el mismo orden, pero se traduce
+ * con un switch explicito y no con un cast: son dos enumeraciones de dos
+ * modulos distintos, y el dia que una crezca el cast fallaria en silencio. */
+static ui_knob_t top_knob_from_target(encoder_target_t t)
+{
+    switch (t) {
+    case ENCODER_TARGET_VOLUME:     return UI_KNOB_VOLUME;
+    case ENCODER_TARGET_BACKLIGHT:  return UI_KNOB_BACKLIGHT;
+    case ENCODER_TARGET_SCALE:      return s_scale_adjust_max ? UI_KNOB_SCALE_HI
+                                                              : UI_KNOB_SCALE_LO;
+    case ENCODER_TARGET_SQUELCH:    return UI_KNOB_SQUELCH;
+    case ENCODER_TARGET_SMOOTH:     return UI_KNOB_SMOOTH;
+    case ENCODER_TARGET_PGA:        return UI_KNOB_PGA;
+    case ENCODER_TARGET_NR:         return UI_KNOB_NR;
+    case ENCODER_TARGET_RTTY_SHIFT: return UI_KNOB_RTTY_SHIFT;
+    case ENCODER_TARGET_CW_TONE:    return UI_KNOB_CW_TONE;
+    case ENCODER_TARGET_TUNE:
+    default:                        return UI_KNOB_TUNE;
+    }
+}
+
+static char *top_u2s(char *b, uint32_t v)
+{
+    char t[12];
+    int n = 0, i = 0;
+    do { t[n++] = (char)('0' + (v % 10U)); v /= 10U; } while (v);
+    while (n) { b[i++] = t[--n]; }
+    b[i] = '\0';
+    return b;
+}
+
+static void top_sync(void)
+{
+    uint8_t first = 0U;
+    uint16_t mv;
+
+    tune_freq_format_khz(s_tune_hz, s_top_freq);
+    while (s_top_freq[first] == ' ') { first++; }   /* por si acaso: ya no rellena */
+    s_top.freq = &s_top_freq[first];
+    s_top.freq_digit = freq_highlight_index(s_top.freq,
+                                            k_tune_steps[s_tune_step_idx]);
+
+    s_top.mode  = demod_mode_label();
+    s_top.clock = s_time_text;
+
+    s_top.batt_pct = battery_get_percent();
+    mv = battery_get_millivolts();
+    {
+        int i = 0;
+        top_u2s(s_top_volts, mv / 1000U);
+        i = (s_top_volts[1] != '\0') ? 2 : 1;
+        s_top_volts[i++] = ',';
+        s_top_volts[i++] = (char)('0' + ((mv / 100U) % 10U));
+        s_top_volts[i++] = (char)('0' + ((mv / 10U) % 10U));
+        s_top_volts[i++] = ' ';
+        s_top_volts[i++] = 'V';
+        s_top_volts[i]   = '\0';
+    }
+    s_top.batt_volts = s_top_volts;
+
+    /* El S-meter del firmware da 0..12 segmentos; aqui hace falta la lectura
+     * en unidades S. Los 9 primeros segmentos son S1..S9 y el resto son dB
+     * por encima, a ~7 dB por segmento (ver smeter_draw()). */
+    if (s_top_segs > 9U) {
+        s_top.s_units = 10U;
+        s_top.over_db = (uint8_t)((s_top_segs - 9U) * 7U);
+    } else {
+        s_top.s_units = s_top_segs;
+        s_top.over_db = 0U;
+    }
+    s_top.dbm = s_top_dbm;
+    s_top.dbm_valid = s_top_dbm_valid;
+
+    /* El valor de CADA destino del mando, leido de las mismas variables que
+     * usaba aux_row_display_draw() antes de quedarse sin trabajo. */
+    s_top.knob = top_knob_from_target(s_encoder_target);
+    s_top.knob_value = s_top_knobval;
+    switch (s_encoder_target) {
+    case ENCODER_TARGET_TUNE:
+        s_top.knob_value = k_tune_step_labels_ui[s_tune_step_idx];
+        break;
+    case ENCODER_TARGET_VOLUME:
+        volume_format_ui(s_volume_db_x2, s_top_knobval);
+        break;
+    case ENCODER_TARGET_PGA:
+        volume_format_ui(s_pga_gain_db_x2, s_top_knobval);
+        break;
+    case ENCODER_TARGET_BACKLIGHT:
+        top_u2s(s_top_knobval, backlight_get_percent());
+        {
+            uint8_t i = 0U;
+            while (s_top_knobval[i] != '\0') { i++; }
+            s_top_knobval[i++] = ' ';
+            s_top_knobval[i++] = '%';
+            s_top_knobval[i]   = '\0';
+        }
+        break;
+    case ENCODER_TARGET_SCALE:
+        spectrum_db_format((int16_t)(s_scale_adjust_max ? s_db_max : s_db_min),
+                           s_top_knobval);
+        break;
+    case ENCODER_TARGET_SQUELCH:
+        spectrum_db_format((int16_t)demod_am_get_squelch_db(), s_top_knobval);
+        break;
+    case ENCODER_TARGET_SMOOTH:
+        top_u2s(s_top_knobval, (uint32_t)spectrum_smooth_pct_for_save());
+        {
+            uint8_t i = 0U;
+            while (s_top_knobval[i] != '\0') { i++; }
+            s_top_knobval[i++] = ' ';
+            s_top_knobval[i++] = '%';
+            s_top_knobval[i]   = '\0';
+        }
+        break;
+    case ENCODER_TARGET_NR:
+        top_u2s(s_top_knobval, (uint32_t)s_nr_strength);
+        break;
+    default:
+        s_top.knob_value = 0;
+        break;
+    }
+
+    s_top.agc   = k_agc_profile_labels[(uint8_t)demod_am_get_agc_profile()];
+    /* ETAPA 4: el ancho del filtro vuelve a la pantalla (ver ui_top_state_t::bw).
+     * Se formatea desde los Hz, no desde las siglas "4K0"/"2K3": "4,0 k" se lee
+     * igual de rapido y no hay que saberse una convencion. Solo en los modos
+     * donde lo elige el usuario; en NFM/WFM el ancho es fijo y anunciarlo como
+     * si fuera un ajuste seria mentir. */
+    {
+        demod_mode_t m = demod_am_get_mode();
+        if (cw_get_enabled()) {
+            /* El ancho de VERDAD del filtro de CW, que desde el 22/09/2026 lo
+             * elige el mismo selector que en los demas modos. Se pregunta al
+             * demodulador en vez de mirar la tabla: asi la chapa no puede
+             * decir una cosa distinta de la que esta puesta. */
+            bw_format(s_top_bw, (uint32_t)(demod_am_get_cw_bw_hz() + 0.5f), "k");
+            s_top.bw = s_top_bw;
+        } else if (m == DEMOD_MODE_AM || m == DEMOD_MODE_USB || m == DEMOD_MODE_LSB) {
+            bw_format(s_top_bw, k_audio_bw_hz[(uint8_t)demod_am_get_audio_bw()], "k");
+            s_top.bw = s_top_bw;
+        } else {
+            s_top.bw = 0;
+        }
+    }
+    s_top.nr_on = s_nr_on;
+    s_top.ovr   = (uint8_t)(s_rf_agc_enabled && (s_rf_agc_backoff_x2 > 0));
+    s_top.spk_muted = (uint8_t)(!s_speaker_pa_enabled);
+    s_top.sam_ppm = (s_top_sam[0] != '\0') ? s_top_sam : 0;
+}
+
+
+
+/* ===========================================================================
+ * ETAPA 4: barra de acciones
+ * =========================================================================== */
+/* Estado de las pantallas de menu, declarado aqui porque act_sync() -que
+ * decide que boton de la barra va iluminado- esta antes en el fichero. */
+typedef enum { CFG_AJUSTES = 0, CFG_BANDAS } cfg_pant_t;
+static cfg_pant_t  s_cfg_pant;
+static grid_pant_t s_grid_pant;
+
+/*
+ * La paleta de la interfaz. Vivia en User/gfx2.c, que es un fichero
+ * GENERADO desde el simulador; al regenerarlo se perdio la definicion y el
+ * enlazado se cayo. Su sitio es este: gfx2.c dibuja, no decide de que color.
+ *
+ * k_pal_oscura es la revision 1, la que se validó en la placa con la carta
+ * de grises (ver el historial: la "revision 2" salia de suponer que las
+ * proporciones de luminancia de una foto son fiables, y no lo son).
+ */
+const palette_t *g_pal = &k_pal_oscura;
+
+/*
+ * TEMAS - 22/09/2026, a peticion del dueno del proyecto.
+ *
+ * Un tema NO es solo la paleta de la interfaz: es la interfaz Y la del
+ * waterfall, que es medio panel. Tenerlas sueltas dejaba combinaciones
+ * que no pegan -una interfaz de grises calidos con un waterfall azul- y
+ * obligaba a acertar dos ajustes para que la pantalla fuera de una
+ * pieza. Aqui van emparejadas.
+ *
+ * "Paleta", en la pagina de Pantalla, sigue existiendo y sigue mandando:
+ * elegir un tema pone su waterfall, y despues se puede cambiar solo el
+ * waterfall si a uno le apetece otra cosa. El tema propone, no encierra.
+ *
+ * PENDIENTE: cual va con cada tema esta sin cerrar. La del rediseno se
+ * quito de aqui el 22/09/2026 mientras se buscaba una averia de audio en
+ * FM, para dejar la etapa 11 partida en dos y ver de que mitad venia. No
+ * se ha vuelto a meter todavia.
+ */
+typedef struct {
+    const char         *nombre;
+    const char         *desc;
+    const palette_t    *pal;
+    spectrum_palette_t  wf;
+} tema_t;
+
+static const tema_t k_temas[] = {
+    { "Oscura",      "La de siempre, con el waterfall clásico",
+      &k_pal_oscura,    SPECTRUM_PALETTE_CLASSIC },
+    { "Contrastada", "Negro real y saltos mayores, para pleno sol",
+      &k_pal_contraste, SPECTRUM_PALETTE_TURBO },
+    { "Ámbar",       "Grises cálidos, sin azul: para la noche",
+      &k_pal_ambar,     SPECTRUM_PALETTE_INFERNO },
+    { "Fría",        "Grises azulados, para luz de día",
+      &k_pal_fria,      SPECTRUM_PALETTE_VIRIDIS }
+};
+#define TEMA_COUNT (sizeof(k_temas) / sizeof(k_temas[0]))
+
+static ui_act_state_t s_act;
+static char           s_act_vol[10];
+static int8_t         s_act_press = -1;       /* boton bajo el dedo desde la pulsacion */
+
+/*
+ * EL ORDEN DE LA BARRA, EN UN SOLO SITIO.
+ *
+ * Cada entrada ata la casilla al widget que ya existe (el callback se elige
+ * comparando ese puntero, ver demo_button_callback) y al nombre que se pinta.
+ * Cambiar el orden es mover filas de esta tabla y nada mas: el valor que
+ * muestra cada casilla lo decide act_sync() mirando QUE BOTON es, no en que
+ * posicion esta, asi que no hay una segunda lista de la que acordarse.
+ *
+ * Orden actual, pedido por el dueno del proyecto: Bandas, Modo, Paso,
+ * Volumen, Ruido, Ajustes.
+ */
+static const struct {
+    ui_button_t *btn;
+    const char  *nombre;
+} k_act_slots[UI_ACT_N] = {
+    { &s_btn_bands, "Bandas"  },
+    { &s_btn_mode,  "Modo"    },
+    { &s_btn_step,  "Paso"    },
+    { &s_btn_vol,   "Volumen" },
+    { &s_btn_nr,    "Ruido"   },
+    { &s_btn_menu,  "Ajustes" },
+};
+
+/*
+ * Cada boton dice su valor actual. Se lee de las MISMAS variables que la
+ * pastilla del mando y la cabecera - no de una copia - para que no puedan
+ * discrepar.
+ */
+static void act_sync(void)
+{
+    uint8_t i;
+
+    volume_format_ui(s_volume_db_x2, s_act_vol);
+
+    for (i = 0U; i < UI_ACT_N; i++) {
+        const ui_button_t *b = k_act_slots[i].btn;
+
+        s_act.name[i]   = k_act_slots[i].nombre;
+        s_act.value[i]  = 0;
+        s_act.active[i] = 0U;
+
+        if (b == &s_btn_mode) {
+            s_act.value[i]  = demod_mode_label();
+            s_act.active[i] = (uint8_t)(s_menu_open && s_grid_pant == GRID_MODO);
+        } else if (b == &s_btn_step) {
+            s_act.value[i] = k_tune_step_labels_ui[s_tune_step_idx];
+        } else if (b == &s_btn_vol) {
+            s_act.value[i]  = s_act_vol;
+            s_act.active[i] = (uint8_t)(s_encoder_target == ENCODER_TARGET_VOLUME);
+        } else if (b == &s_btn_nr) {
+            s_act.value[i]  = s_nr_on ? "activo" : "apagado";
+            s_act.active[i] = s_nr_on;
+        } else if (b == &s_btn_menu) {
+            /* Se ilumina el boton de LA pantalla que esta abierta, no el de
+             * Ajustes siempre que haya algun menu: estando en Bandas se
+             * encendia Ajustes, que es justo decir donde NO estas. El detalle
+             * de un ajuste cuenta como Ajustes, que es de donde se llega. */
+            s_act.active[i] = (uint8_t)((s_menu_cfg_active && s_cfg_pant == CFG_AJUSTES)
+                                        || s_menu_detail_active);
+        } else if (b == &s_btn_bands) {
+            s_act.active[i] = (uint8_t)(s_menu_cfg_active && s_cfg_pant == CFG_BANDAS);
+        } else if (b == &s_btn_step) {
+            s_act.active[i] = (uint8_t)(s_menu_open && s_grid_pant == GRID_PASOS);
+        }
+        /* Bandas no tiene un valor que quepa en una linea: la banda ya esta
+         * implicita en la frecuencia de la cabecera. Se queda a una linea. */
+    }
+}
+
+static void act_draw(void)
+{
+    act_sync();
+    s_act.pressed = s_act_press;
+    ui_act_draw(&s_act);
+}
+
 /* Indexed directly by audio_bw_t (demod_am.h) - AUDIO_BW_4K0,
  * AUDIO_BW_2K3, AUDIO_BW_1K8 in that order. */
-static const char *k_audio_bw_labels[3] = { "4K0", "2K3", "1K8" };
 /* Indexed the same way (AUDIO_BW_4K0/2K3/1K8), but a completely
  * different set of filters, shown only while mode==WFM - see
  * demod_am_set_audio_bw()'s comment in demod_am.h for why the same
  * enum/tile now means two different things depending on mode. */
-static const char *k_wfm_audio_bw_labels[3] = { "15K", "8K0", "4K0" };
 
 /* Indexed directly by aic3204_rin_t (aic3204.h) - AIC3204_RIN_10K,
  * AIC3204_RIN_20K, AIC3204_RIN_40K in that order, same "index into a
@@ -3031,7 +3409,9 @@ static const char *k_wfm_audio_bw_labels[3] = { "15K", "8K0", "4K0" };
  * out to 0/-6/-12dB of relative input attenuation (each doubling of
  * Rin is a 6dB drop in the signal presented to the PGA), hence "ATT"
  * as the manual tile's name rather than "RIN". */
-static const char *k_att_labels[3] = { "0DB", "-6DB", "-12DB" };
+/* k_att_labels se fue con los tiles viejos (22/09/2026). Los rotulos que se
+ * ven ahora son k_att_nombres ("0 dB", "-6 dB", "-12 dB"), en la celda de
+ * Ajustes; estos eran las siglas en mayusculas del tile. */
 
 /* RTTY BAUD tile table (DIG page) - added 09/08/2026, per the project
  * owner. Cycles the bit rate through the common ham/commercial rates,
@@ -3043,6 +3423,16 @@ static const char *k_att_labels[3] = { "0DB", "-6DB", "-12DB" };
  * Starts at index 1 (50 baud) to match config.h's CONFIG_RTTY_BAUD
  * default - see menu_tile_rtty_baud_callback()'s comment. */
 static const float       k_rtty_baud_values[4] = { 45.45f, 50.0f, 75.0f, 100.0f };
+/*
+ * Siembras de velocidad ofrecidas. No es el rango que admite el
+ * decodificador -ese va de 5 a 45 PPM- sino los sitios razonables por
+ * donde empezar a buscar. 20 es el de por defecto y sirve para casi
+ * todo.
+ */
+static const uint8_t k_cw_wpm[] = { 12U, 16U, 20U, 25U, 30U, 36U };
+#define CW_WPM_OPCIONES (sizeof(k_cw_wpm) / sizeof(k_cw_wpm[0]))
+static uint8_t s_cw_wpm_idx = 2U;   /* 20 PPM, igual que CONFIG_CW_WPM_HINT */
+
 static const char *const k_rtty_baud_labels[4] = { "45.45", "50", "75", "100" };
 #define RTTY_BAUD_COUNT 4U
 static uint8_t s_rtty_baud_idx = 1U;
@@ -3054,6 +3444,35 @@ static uint8_t s_rtty_baud_idx = 1U;
  * number, so this is a second small table rather than deriving one
  * from the other. */
 static const uint32_t k_audio_bw_hz[3] = { 4000UL, 2300UL, 1800UL };
+
+/*
+ * Lo que significa el mismo selector de ancho CUANDO ESTAS EN CW - 22/09/2026.
+ *
+ * Antes en CW el selector no hacia nada: el filtro de CW estaba clavado en
+ * 500 Hz y la chapa de la barra mentia menos que las otras, pero el mando no
+ * servia para nada. Ahora las tres posiciones son tres anchos de CW.
+ *
+ * 1000 Hz para buscar por la banda, 500 para escuchar y 250 para sacar a
+ * alguien de debajo de otro. Mas estrecho de 250 con este numero de etapas
+ * empieza a alargar los puntos, que es peor que oir de mas.
+ *
+ * Mismo indice que k_audio_bw_hz: la posicion 0 es la mas ancha en los dos.
+ */
+static const uint32_t k_cw_bw_hz[3] = { 1000UL, 500UL, 250UL };
+
+/*
+ * Las dos tablas de ancho van indexadas por el MISMO audio_bw_t, asi que
+ * tienen que medir lo mismo y lo mismo que el enum. Si alguien anade un
+ * ancho a una y se olvida de la otra, esto no compila - que es justo lo que
+ * NO pasaba con la lista de paletas ni con la de modos, y las dos veces
+ * acabo en pantalla.
+ */
+_Static_assert(sizeof(k_cw_bw_hz) / sizeof(k_cw_bw_hz[0])
+               == sizeof(k_audio_bw_hz) / sizeof(k_audio_bw_hz[0]),
+               "k_cw_bw_hz y k_audio_bw_hz tienen que medir lo mismo");
+_Static_assert(sizeof(k_audio_bw_hz) / sizeof(k_audio_bw_hz[0])
+               == (size_t)AUDIO_BW_1K8 + 1U,
+               "las tablas de ancho no cubren todo audio_bw_t");
 
 /*
  * Cycles SLOW -> MEDIUM -> FAST -> SLOW and redraws s_btn_agc_profile
@@ -3093,9 +3512,11 @@ static void agc_profile_cycle(void)
     debug_print("agc: profile now ");
     debug_print(k_agc_profile_labels[(uint8_t)p]);
     debug_print("\n");
-
-    s_btn_agc_profile.label = k_agc_profile_labels[(uint8_t)p];
-    ui_button_draw(&s_btn_agc_profile);
+    /* ETAPA 2/3: el aspecto lo lleva el chip de ui_top.c. Pintar el boton
+     * aqui era lo que soltaba un recuadro cian sobre la barra de estado al
+     * cambiar el AGC desde el menu. */
+    top_sync();
+    ui_top_draw_status(&s_top);
 }
 
 /* Unlike the bottom-bar buttons (which toggle or jump straight to a
@@ -3113,123 +3534,13 @@ static void agc_profile_button_callback(void *widget, ui_event_t event, void *us
     }
 }
 
-static void badge_draw(uint16_t x, uint16_t y, const char *label,
-                        uint8_t on, uint16_t on_bg)
-{
-    uint16_t bg = on ? on_bg : GFX_COLOR_DARKGRAY;
-    uint16_t fg = on ? GFX_COLOR_BLACK : GFX_COLOR_GRAY;
-    uint16_t tw = gfx_text_width(label, 2);
-
-    gfx_fill_rect(x, y, BADGE_W, BADGE_H, bg);
-    gfx_rect(x, y, BADGE_W, BADGE_H, GFX_COLOR_GRAY);
-    gfx_text((uint16_t)(x + (BADGE_W - tw) / 2), (uint16_t)(y + 6), label, fg, bg, 2);
-}
-
+/* ETAPA 2: este readout pasa a ui_top.c. Se conserva el nombre y todas
+ * las llamadas existentes, y solo cambia lo que hace por dentro - asi el
+ * cambio se revierte tocando una funcion, sin perseguir call sites. */
 static void badges_draw(void)
 {
-    /* BW's label: NFM shows its own ACTUAL, fixed channel-filter -3dB
-     * corner (see demod_am.c's NFM_CHF_COEFFS comment) - not
-     * adjustable, purely informative. WFM (01/09/2026: now genuinely
-     * adjustable, see demod_am_set_audio_bw()'s comment in demod_am.h)
-     * and AM/USB/LSB both show the currently SELECTED audio filter
-     * width, just from two different label sets for the same
-     * underlying s_audio_bw value - see demod_wfm_process_raw()'s own
-     * WFM_ALPF_WIDE/NORM/NARROW_COEFFS selection in demod_am.c. */
-    demod_mode_t mode = demod_am_get_mode();
-    const char *bw_label;
-    uint8_t bw_interactive;
-
-    switch (mode) {
-    case DEMOD_MODE_NFM: bw_label = "6K3"; bw_interactive = 0U; break; /* NFM_CHF_COEFFS, ~6.25kHz */
-    case DEMOD_MODE_WFM: bw_label = k_wfm_audio_bw_labels[(uint8_t)demod_am_get_audio_bw()];
-                          bw_interactive = 1U; break;
-    default:              bw_label = k_audio_bw_labels[(uint8_t)demod_am_get_audio_bw()];
-                           bw_interactive = 1U; break;
-    }
-
-    badge_draw(BADGE_COL(0), BADGE_Y0, "NR",  s_nr_on, GFX_COLOR_GREEN);
-    /* ATT badge (07/09/2026, per the project owner - replaces the old
-     * SPT badge in this slot; SPT's own menu tile/feature is
-     * untouched, only this top-strip slot was repurposed since there
-     * was no room left elsewhere) - shows the ACTIVE front-end
-     * attenuation (s_rf_agc_rin_level, shared by the manual ATT tile
-     * and the RF-level auto-AGC's own Rin escalation - see
-     * menu_tile_att_callback()'s and rf_agc_escalate_rin()'s
-     * comments, both drive the SAME variable so this one badge always
-     * reflects whichever of the two last changed it). Three states:
-     * gray at 10k/0dB (off, matches every other badge's "nothing
-     * active" convention), YELLOW at 20k/-6dB, ORANGE at 40k/-12dB -
-     * a deliberately stronger color for the deeper cut, and distinct
-     * from OVR's RED (reserved for "actively reducing gain right
-     * now") since attenuation staying engaged isn't itself an
-     * urgent/acting state the way OVR's red is. */
-    {
-        uint16_t att_color = (s_rf_agc_rin_level >= (uint8_t)AIC3204_RIN_40K) ? GFX_COLOR_ORANGE : GFX_COLOR_YELLOW;
-
-        badge_draw(BADGE_COL(1), BADGE_Y0, "ATT", (uint8_t)(s_rf_agc_rin_level != 0U), att_color);
-    }
-    badge_draw(BADGE_COL(2), BADGE_Y0, "AGC", 1U, GFX_COLOR_GREEN);
-    /* s_btn_agc_profile is a real ui_button_t (see its declaration),
-     * not a badge_draw() call - keep its label in sync with the
-     * current profile and redraw it here too, so it stays correct
-     * even if badges_draw() is called from somewhere other than the
-     * button's own callback (e.g. after a MODE change). */
-    s_btn_agc_profile.label = k_agc_profile_labels[(uint8_t)demod_am_get_agc_profile()];
-    ui_button_draw(&s_btn_agc_profile);
-    /* s_btn_audio_bw: same "real ui_button_t, kept in sync here" deal
-     * as s_btn_agc_profile above - see its declaration and
-     * audio_bw_button_callback()'s comment. bw_interactive only
-     * changes the VISUAL "is this live" cue (cyan when it does
-     * something, dimmer gray otherwise, mirroring badge_draw()'s own
-     * on/off convention) - the button stays touchable either way,
-     * audio_bw_button_callback() itself is what actually gates whether
-     * tapping it does anything in NFM/WFM. */
-    s_btn_audio_bw.label = bw_label;
-    s_btn_audio_bw.bg = bw_interactive ? GFX_COLOR_CYAN : GFX_COLOR_DARKGRAY;
-    s_btn_audio_bw.fg = bw_interactive ? GFX_COLOR_BLACK : GFX_COLOR_GRAY;
-    ui_button_draw(&s_btn_audio_bw);
-    /* OVR badge: three states via badge_draw()'s existing on/on_bg
-     * API, no changes needed there - "on" (bright vs. gray) now
-     * tracks s_rf_agc_enabled itself (the master switch) rather than
-     * just the backoff amount, so RF-AGC being ON reads as a color
-     * even while it isn't currently reducing anything; the COLOR then
-     * tells the two enabled sub-states apart: GREEN while enabled and
-     * not currently backing off gain, RED while it's actively
-     * reducing PGA/Rin against a strong signal (same red-when-acting
-     * behavior this badge always had) - per the project owner
-     * (07/09/2026: "OVR en verde cuando este activado el RFAGC, y OVR
-     * [en rojo] cuando actue como esta ahora"). Disabled (gray) is
-     * unchanged from before. */
-    {
-        uint16_t ovr_color = (s_rf_agc_backoff_x2 > 0) ? GFX_COLOR_RED : GFX_COLOR_GREEN;
-
-        badge_draw(BADGE_COL(5), BADGE_Y0, "OVR", s_rf_agc_enabled, ovr_color);
-    }
-    /* RATE badge, added 01/09/2026 per the project owner - shows the
-     * ACTUAL active sample rate at a glance, display-only (the actual
-     * control for the non-WFM case is the RATE tile on the HW
-     * settings page - see menu_tile_rate_callback()'s comment). WFM
-     * always runs its own fixed 192kHz path regardless of
-     * s_nonwfm_use_48k (see demod_am_set_active_rate()'s own comment
-     * on why WFM is unaffected either way) - shown here in cyan, a
-     * third, neutral color distinct from the 96K/48K pair below,
-     * since 192K isn't really "default" or "a deliberate departure"
-     * the way 96K/48K are relative to EACH OTHER - it's simply
-     * whatever WFM always uses.
-     *
-     * "on" is unconditionally 1 here since this always shows valid,
-     * current information rather than an on/off state - the color
-     * itself carries the meaning instead: green for 96K (the
-     * default), yellow for 48K (a deliberate departure from it,
-     * worth a glance of attention, same convention this project
-     * already uses for its other non-default-state badges). */
-    if (demod_am_get_mode() == DEMOD_MODE_WFM) {
-        badge_draw(BADGE_COL(6), BADGE_Y0, "192K", 1U, GFX_COLOR_CYAN);
-    } else {
-        badge_draw(BADGE_COL(6), BADGE_Y0, s_nonwfm_use_48k ? "48K" : "96K",
-                   1U, s_nonwfm_use_48k ? GFX_COLOR_YELLOW : GFX_COLOR_GREEN);
-    }
-    speaker_icon_draw(); /* 07/09/2026 - piggybacks on every existing badges_draw() call site, see its own comment */
+    top_sync();
+    ui_top_draw_status(&s_top);
 }
 
 /*
@@ -3420,8 +3731,9 @@ static void badges_draw(void)
  * readouts at MODE_X/STEP_X/VOL_X are all >= MODE_X), so there's
  * nothing this zone could steal a touch from.
  */
-#define FREQ_TAP_X1 MODE_X
-#define FREQ_TAP_Y1 TOP_H
+/* 22/09/2026: FREQ_TAP_X1/Y1 ya no existen - la zona la da
+ * ui_top_freq_hit(), ver su llamada en demo_touch_poll(). Se quedaba
+ * anclada a MODE_X, que es geometria de la cabecera vieja. */
 
 /*
  * Top-bar tap zone for the clock-setting keypad (08/09/2026) - the
@@ -3436,7 +3748,6 @@ static void badges_draw(void)
  * nothing else sits right of the clock in this bar.
  */
 #define TIME_TAP_X1 (uint16_t)(TIME_X - 10)
-#define TIME_TAP_Y2 36 /* clock text bottom (~TIME_Y+21 at scale 3) plus a few px margin, still short of BATT_Y(40) */
 
 
 /*
@@ -3585,211 +3896,141 @@ static uint32_t spec_zoom_full_span_hz(void)
 #define SPEC_SCALE_TEXT_SIZE 2 /* was 1 - bumped 03/08/2026, per the
                                  * project owner: "casi no se ve" */
 
-static void spec_span_labels_draw(void)
+static spec_chrome_t s_chrome;      /* lo ultimo que se dibujo */
+static uint8_t       s_chrome_init = 0U;
+
+/*
+ * ETAPA 3b: recoge de la radio lo que necesita el chrome del espectro.
+ * Mismo patron que top_sync(): el dibujo no consulta el estado de la radio,
+ * se le pasa ya resuelto, para que spec_chrome.c compile igual en el
+ * simulador de host.
+ */
+static void chrome_sync(spec_chrome_t *c)
 {
-    uint32_t full_span_hz;
-    int32_t half_span_hz;
-    uint32_t panel_center_hz;
-    uint8_t i;
+    uint32_t full_span_hz = spec_zoom_full_span_hz();
+    uint32_t panel_center_hz = s_tune_hz;
+    demod_mode_t mode = demod_am_get_mode();
 
-    /* *** 01/09/2026: rate-aware via spec_zoom_full_span_hz() *** -
-     * see that function's own comment for the full "why" (this used
-     * to hardcode 96000 for SPEC_ZOOM_1X, silently wrong once AM/USB/
-     * LSB/NFM's real rate became selectable between 96kHz/48kHz). */
-    full_span_hz = spec_zoom_full_span_hz();
-    half_span_hz = (int32_t)(full_span_hz / 2U);
-
-    /* See this function's PANEL-CENTER FREQUENCY comment above - same
-     * condition sdr_spectrum_waterfall_tick() uses for
-     * center_mark_offset_px. s_tune_hz > demod_if_offset_hz() always
-     * holds here (TUNE_MIN_HZ=30kHz > either possible offset -
-     * 24kHz @ 96kHz, or the smaller 12kHz @ 48kHz - was 100kHz before
-     * 01/09/2026, lowered to reach DCF77/similar LF stations, still
-     * comfortably above this invariant's floor either way - see
-     * TUNE_MIN_HZ's own comment), so the subtraction below never
-     * underflows. */
-    panel_center_hz = s_tune_hz;
+    /* Misma condicion que usa sdr_spectrum_waterfall_tick() para
+     * center_mark_offset_px: con low-IF activo el centro del PANEL no es la
+     * frecuencia sintonizada, esta Fs/4 por debajo. */
     if (s_spec_zoom == SPEC_ZOOM_1X && demod_am_get_if_offset_active()) {
         panel_center_hz = s_tune_hz - demod_if_offset_hz();
+        c->demod_px = (int16_t)(SPC_TRACE_W / 4U);
+    } else {
+        c->demod_px = 0;
     }
 
-    /* Clear the whole scale strip (ticks + labels) in one go, then
-     * the horizontal baseline the ticks hang from. Taller than the
-     * old single-height-1 row to fit SPEC_SCALE_TEXT_SIZE's bigger
-     * glyphs. */
-    gfx_fill_rect(0, (uint16_t)(SPEC_Y + SPEC_H - 24), MAIN_W, 24, GFX_COLOR_BLACK);
-    gfx_line(1, (uint16_t)(SPEC_Y + SPEC_H - 20),
-              (uint16_t)(MAIN_W - 2), (uint16_t)(SPEC_Y + SPEC_H - 20),
-              GFX_COLOR_DARKGRAY);
+    c->db_min    = s_db_min;
+    c->db_max    = s_db_max;
+    c->center_hz = panel_center_hz;
+    c->span_hz   = full_span_hz;
+    c->cmap      = spectrum_colormap_lut();
 
-    /* Same condition/derivation as sdr_spectrum_waterfall_tick()'s
-     * center_mark_offset_px (see this function's PANEL-CENTER
-     * FREQUENCY comment above): when low-IF down-mix is active, the
-     * ACTUAL demod point sits at +DEMOD_IF_OFFSET_HZ = +full_span_hz/4
-     * relative to the true FFT/panel center - i.e. exactly the k=+1
-     * grid point below (off_hz = k*half_span_hz/2 = full_span_hz/4 at
-     * k=1), the same "right-quarter" pixel column the red marker line
-     * and the demodulated-bandwidth tint already use on the spectrum
-     * itself. Marking k=0 (dead panel center) red there was wrong -
-     * that column shows the LO's own frequency, not the demodulated
-     * station - see "el punto de demodulacion en 3/4", 07/09/2026.
-     * Without low-IF (WFM, or any zoom other than 1X - zoom_process_
-     * block() already re-centers on s_tune_hz before decimating, same
-     * as center_mark_offset_px's own ZOOM case), panel_center_hz IS
-     * s_tune_hz and the true center (k=0) is the right one to mark,
-     * unchanged from before. */
-    {
-        int32_t demod_k = (s_spec_zoom == SPEC_ZOOM_1X && demod_am_get_if_offset_active()) ? 1 : 0;
-
-    for (i = 0; i < 5U; i++) {
-        /* i=0..4 -> k=-2..+2 -> off_hz = k * half_span_hz/2, i.e. left
-         * edge, left-quarter, center, right-quarter, right edge -
-         * evenly spaced in Hz (and therefore in pixels too, since the
-         * Hz->px mapping is linear). half_span_hz/2 is always exact
-         * for every full_span_hz above (96000/48000/24000/12000, was
-         * 48000/24000/12000/6000 before AM/SSB/NFM moved to 96kHz, and
-         * 192000/96000/48000/24000 before that - all divide cleanly by
-         * 4 total either way), so no rounding to worry about. */
-        int32_t k = (int32_t)i - 2;
-        int32_t off_hz = k * (half_span_hz / 2);
-        int32_t px = (int32_t)(((int64_t)SPEC_TRACE_W * off_hz) / (int64_t)full_span_hz);
-        uint16_t cx = (uint16_t)((int32_t)(MAIN_W / 2) + px);
-        int64_t freq_i64 = (int64_t)panel_center_hz + (int64_t)off_hz;
-        int64_t khz_i64;
-        char buf[FREQ_FIELD_CHARS + 1];
-        const char *label;
-        uint16_t label_color = (k == demod_k) ? GFX_COLOR_RED : GFX_COLOR_WHITE;
-        uint16_t tw;
-        int32_t tx;
-        uint8_t s;
-
-        gfx_line(cx, (uint16_t)(SPEC_Y + SPEC_H - 24),
-                  cx, (uint16_t)(SPEC_Y + SPEC_H - 20), GFX_COLOR_DARKGRAY);
-
-        if (freq_i64 < 0) { freq_i64 = 0; } /* see this function's
-                                              * comment - a label-only
-                                              * clamp, not a tuning
-                                              * limit */
-        khz_i64 = freq_i64 / 1000; /* drop the last 3 digits */
-        tune_freq_format((uint32_t)khz_i64, buf);
-        /* Skip the leading space-padding tune_freq_format() adds for
-         * its fixed-width title-bar use - here each label is
-         * individually centered, so the field doesn't need to stay a
-         * constant width the way the live readout does. */
-        for (s = 0; buf[s] == ' ' && s < FREQ_FIELD_CHARS; s++) { }
-        label = &buf[s];
-
-        tw = gfx_text_width(label, SPEC_SCALE_TEXT_SIZE);
-        tx = (int32_t)cx - (int32_t)(tw / 2U);
-        if (tx < 0) { tx = 0; }
-        if (tx > (int32_t)(MAIN_W - tw)) { tx = (int32_t)(MAIN_W - tw); }
-        gfx_text((uint16_t)tx, (uint16_t)(SPEC_Y + SPEC_H - 18), label,
-                  label_color, GFX_COLOR_BLACK, SPEC_SCALE_TEXT_SIZE);
+    if (mode == DEMOD_MODE_USB) {
+        c->band = SPC_BAND_UPPER;
+    } else if (mode == DEMOD_MODE_LSB) {
+        c->band = SPC_BAND_LOWER;
+    } else if (mode == DEMOD_MODE_AM) {
+        c->band = SPC_BAND_BOTH;
+    } else {
+        c->band = SPC_BAND_NONE;   /* NFM/WFM: el ancho no lo elige el usuario */
     }
-    }
+    c->band_hz = k_audio_bw_hz[(uint8_t)demod_am_get_audio_bw()];
 }
 
-static void menu_tile_agc_refresh(void)
+/*
+ * ETAPA 3b: se conserva el nombre y las once llamadas que ya existian, y
+ * solo cambia lo que hace por dentro - la regla la dibuja ahora
+ * spec_chrome.c con las fuentes proporcionales, en su propia franja, y sin
+ * pisar la traza (antes la franja empezaba en SPEC_Y+SPEC_H-24 = 320 y la
+ * traza acababa en 321, asi que la traza le comia dos filas en cada frame).
+ */
+/*
+ * QUIEN PUEDE PINTAR EN LA ZONA DEL ESPECTRO - 22/09/2026.
+ *
+ * Por el dueno del proyecto: "si entro a ajustes y salgo se ve bien hasta
+ * que vuelve a salir la regla... basicamente sale cuando toco el encoder o
+ * la pantalla".
+ *
+ * Y era exactamente eso. La regla de frecuencias se repinta cada vez que
+ * cambia la sintonia -girar el mando, tocar el espectro para sintonizar-, y
+ * esas dos llamadas no miraban QUE hay dibujado ahi ahora mismo. En CW o en
+ * RTTY la zona del espectro la ocupa el panel digital, asi que cada toque
+ * estampaba la regla de 96 kHz de RF encima del texto decodificado. Con el
+ * menu abierto pasaba lo mismo.
+ *
+ * El guardia va AQUI DENTRO y no en las llamadas, por el mismo motivo que ya
+ * explica spec_chrome_tick(): son mas de diez sitios y olvidar uno no da
+ * error de compilacion, da una regla encima de otra cosa.
+ *
+ * Al no poder pintar se apunta que la chapa esta sucia (s_chrome_init = 0),
+ * y asi el primer frame del espectro normal la repinta entera en vez de
+ * comparar contra un estado que nunca llego a la pantalla.
+ */
+static uint8_t chrome_puede_pintar(void)
 {
-    const char *p = k_agc_profile_labels[(uint8_t)demod_am_get_agc_profile()];
-
-    s_menu_tile_agc_buf[0] = 'A'; s_menu_tile_agc_buf[1] = 'G';
-    s_menu_tile_agc_buf[2] = 'C'; s_menu_tile_agc_buf[3] = ' ';
-    s_menu_tile_agc_buf[4] = p[0]; s_menu_tile_agc_buf[5] = p[1];
-    s_menu_tile_agc_buf[6] = p[2]; s_menu_tile_agc_buf[7] = '\0';
-    s_menu_tile_agc.label = s_menu_tile_agc_buf;
-    ui_button_draw(&s_menu_tile_agc);
-}
-
-static void menu_tile_squelch_refresh(void)
-{
-    char db[FREQ_FIELD_CHARS + 1];
-    uint8_t i;
-
-    spectrum_db_format((int16_t)demod_am_get_squelch_db(), db);
-    for (i = 0; db[i] == ' ' && i < (FREQ_FIELD_CHARS - 7U); i++) { }
-    s_menu_tile_squelch_buf[0] = 'S'; s_menu_tile_squelch_buf[1] = 'Q';
-    s_menu_tile_squelch_buf[2] = 'L'; s_menu_tile_squelch_buf[3] = ' ';
-    {
-        uint8_t j = 4U;
-        uint8_t k;
-        for (k = i; db[k] != '\0' && j < 15U; k++, j++) {
-            s_menu_tile_squelch_buf[j] = db[k];
-        }
-        s_menu_tile_squelch_buf[j] = '\0';
+    if (digi_panel_active() || s_menu_open) {
+        s_chrome_init = 0U;
+        return 0U;
     }
-    s_menu_tile_squelch.label = s_menu_tile_squelch_buf;
-    ui_button_draw(&s_menu_tile_squelch);
+    return 1U;
 }
 
-static void menu_tile_backlight_refresh(void)
+static void spec_span_labels_draw(void)
 {
-    uint8_t pct = backlight_get_percent();
-    char digits[4];
-    uint8_t dpos = 3U;
-    uint8_t i, j;
-
-    digits[dpos] = '\0';
-    do {
-        digits[--dpos] = (char)('0' + (pct % 10U));
-        pct /= 10U;
-    } while (pct > 0U && dpos > 0U);
-
-    s_menu_tile_backlight_buf[0] = 'B';
-    s_menu_tile_backlight_buf[1] = 'L';
-    s_menu_tile_backlight_buf[2] = ' ';
-    j = 3U;
-    for (i = dpos; digits[i] != '\0'; i++) {
-        s_menu_tile_backlight_buf[j++] = digits[i];
-    }
-    s_menu_tile_backlight_buf[j++] = '%';
-    s_menu_tile_backlight_buf[j] = '\0';
-
-    s_menu_tile_backlight.label = s_menu_tile_backlight_buf;
-    ui_button_draw(&s_menu_tile_backlight);
+    if (!chrome_puede_pintar()) { return; }
+    chrome_sync(&s_chrome);
+    s_chrome_init = 1U;
+    spec_chrome_draw_ruler(&s_chrome);
 }
 
-static void menu_tile_volume_refresh(void)
+/* Repintado completo: canaleta de dB, regla y leyenda de color. */
+static void spec_chrome_full_draw(void)
 {
-    char db[FREQ_FIELD_CHARS + 1];
-    uint8_t i;
-
-    volume_format(s_volume_db_x2, db);
-    for (i = 0; db[i] == ' ' && i < (FREQ_FIELD_CHARS - 7U); i++) { }
-    s_menu_tile_volume_buf[0] = 'V'; s_menu_tile_volume_buf[1] = 'O';
-    s_menu_tile_volume_buf[2] = 'L'; s_menu_tile_volume_buf[3] = ' ';
-    {
-        uint8_t j = 4U;
-        uint8_t k;
-        for (k = i; db[k] != '\0' && j < 15U; k++, j++) {
-            s_menu_tile_volume_buf[j] = db[k];
-        }
-        s_menu_tile_volume_buf[j] = '\0';
-    }
-    s_menu_tile_volume.label = s_menu_tile_volume_buf;
-    ui_button_draw(&s_menu_tile_volume);
+    if (!chrome_puede_pintar()) { return; }
+    chrome_sync(&s_chrome);
+    s_chrome_init = 1U;
+    spec_chrome_draw(&s_chrome);
 }
 
-static void menu_tile_pga_refresh(void)
+/*
+ * Repintado POR COMPARACION, una vez por frame.
+ *
+ * La alternativa era llamar al repintado desde cada sitio que cambia la
+ * escala, el zoom, la sintonia, el modo o la paleta. Eso son mas de diez
+ * sitios y olvidar uno no da error de compilacion: da un eje que dice -80
+ * donde pone -60. Comparar cuesta seis comparaciones por frame y no se
+ * puede olvidar.
+ */
+static void spec_chrome_tick(void)
 {
-    char db[FREQ_FIELD_CHARS + 1];
-    uint8_t i;
+    spec_chrome_t nueva;
 
-    volume_format(s_pga_gain_db_x2, db);
-    for (i = 0; db[i] == ' ' && i < (FREQ_FIELD_CHARS - 7U); i++) { }
-    s_menu_tile_pga_buf[0] = 'P'; s_menu_tile_pga_buf[1] = 'G';
-    s_menu_tile_pga_buf[2] = 'A'; s_menu_tile_pga_buf[3] = ' ';
-    {
-        uint8_t j = 4U;
-        uint8_t k;
-        for (k = i; db[k] != '\0' && j < 15U; k++, j++) {
-            s_menu_tile_pga_buf[j] = db[k];
-        }
-        s_menu_tile_pga_buf[j] = '\0';
+    /* Hoy este no llega a correr con el panel digital delante -el bucle
+     * principal ya elige entre una cosa y la otra-, pero se comprueba igual:
+     * asi "quien puede pintar aqui" se responde en un solo sitio y deja de
+     * depender de que el reparto de mas arriba siga siendo el que es. */
+    if (!chrome_puede_pintar()) { return; }
+
+    chrome_sync(&nueva);
+    if (!s_chrome_init) {
+        s_chrome = nueva;
+        s_chrome_init = 1U;
+        spec_chrome_draw(&s_chrome);
+        return;
     }
-    s_menu_tile_pga.label = s_menu_tile_pga_buf;
-    ui_button_draw(&s_menu_tile_pga);
+    if (spec_chrome_axis_changed(&s_chrome, &nueva)) {
+        s_chrome = nueva;
+        spec_chrome_draw_axis(&s_chrome);
+    }
+    if (spec_chrome_ruler_changed(&s_chrome, &nueva)) {
+        s_chrome = nueva;
+        spec_chrome_draw_ruler(&s_chrome);
+    }
+    s_chrome = nueva;
 }
+
 
 /*
  * Applies the CURRENT effective PGA gain (ceiling - backoff) to the
@@ -3881,210 +4122,9 @@ static void rf_agc_deescalate_rin(void)
     debug_print_dec("rf_agc: de-escalated Rin, level now (0=10k/1=20k/2=40k)", (uint32_t)s_rf_agc_rin_level);
 }
 
-/*
- * RFAGC grid tile - plain ON/OFF (cyan/darkgray), nothing else.
- *
- * Used to also show the live backoff amount ("-x.xDB") directly on
- * the tile, redrawn from rf_agc_poll() every time the backoff
- * changed - REMOVED 07/08/2026, per the project owner, after testing
- * turned up real screen corruption: rf_agc_poll() runs in the
- * background with no idea what's currently showing in MENU_AREA, so
- * that redraw could land while some OTHER sub-screen (e.g. the PGA
- * detail view, mid-adjustment) was on screen, painting this tile's
- * stale grid-coordinate graphics right over live content - exactly
- * the class of bug menu_tile_bw_callback()'s own guard comment
- * already flagged as a risk, just actually triggered in practice
- * because this is the first control that redraws itself from a
- * continuous background timer instead of a one-off user action.
- *
- * The live indicator moved to the OVR badge (badges_draw(), always
- * safe to redraw from anywhere - see its own comment) instead. This
- * tile now only ever redraws from contexts that are provably safe:
- * menu_grid_show() building the RADIO page, and this tile's own
- * tap callback.
- */
-static void menu_tile_rfagc_refresh(void)
-{
-    if (s_rf_agc_enabled) {
-        s_menu_tile_rfagc.label = "RFAGC ON";
-        s_menu_tile_rfagc.fg = GFX_COLOR_BLACK;
-        s_menu_tile_rfagc.bg = GFX_COLOR_CYAN;
-    } else {
-        s_menu_tile_rfagc.label = "RFAGC OFF";
-        s_menu_tile_rfagc.fg = GFX_COLOR_WHITE;
-        s_menu_tile_rfagc.bg = GFX_COLOR_DARKGRAY;
-    }
-    ui_button_draw(&s_menu_tile_rfagc);
-}
 
-/* NR (Spectral Subtraction strength, AM/USB/LSB only - see nr_ss.h and
- * demod_am.c's NR INTEGRATION comment). Raw 0-4095 label, no unit
- * suffix - see aux_row_display_draw()'s NR branch for why. Shows the
- * STORED value regardless of the current demod mode - same "harmless
- * to pre-set outside the mode it applies to" philosophy as BW (see
- * menu_tile_bw_callback()'s comment) - it just won't audibly do
- * anything until you're in AM/USB/LSB, and even then only while the
- * bottom bar's NR button (s_nr_on) has it switched on. */
-static void menu_tile_nr_refresh(void)
-{
-    uint16_t v = s_nr_strength;
-    char digits[5]; /* up to 4 digits (0-4095) + NUL */
-    uint8_t dpos = 4U;
-    uint8_t i, j;
 
-    digits[dpos] = '\0';
-    do {
-        digits[--dpos] = (char)('0' + (v % 10U));
-        v /= 10U;
-    } while (v > 0U && dpos > 0U);
 
-    s_menu_tile_nr_buf[0] = 'N';
-    s_menu_tile_nr_buf[1] = 'R';
-    s_menu_tile_nr_buf[2] = ' ';
-    j = 3U;
-    for (i = dpos; digits[i] != '\0'; i++) {
-        s_menu_tile_nr_buf[j++] = digits[i];
-    }
-    s_menu_tile_nr_buf[j] = '\0';
-
-    s_menu_tile_nr.label = s_menu_tile_nr_buf;
-    ui_button_draw(&s_menu_tile_nr);
-}
-
-/* SHIFT (DIG page) live value - "SHFT nnnnHZ", same digit-extraction
- * shape as menu_tile_nr_refresh() just above, with a fixed "SHFT "
- * prefix (4 chars + space) instead of "NR " so it still reads clearly
- * abbreviated within the 159px tile at text_scale 2. */
-static void menu_tile_rtty_shift_refresh(void)
-{
-    uint16_t v = (uint16_t)(rtty_get_shift_hz() + 0.5f);
-    char digits[5];
-    uint8_t dpos = 4U;
-    uint8_t i, j;
-
-    digits[dpos] = '\0';
-    do { digits[--dpos] = (char)('0' + (v % 10U)); v /= 10U; } while (v > 0U && dpos > 0U);
-
-    s_menu_tile_rtty_shift_buf[0] = 'S'; s_menu_tile_rtty_shift_buf[1] = 'H';
-    s_menu_tile_rtty_shift_buf[2] = 'F'; s_menu_tile_rtty_shift_buf[3] = 'T';
-    s_menu_tile_rtty_shift_buf[4] = ' ';
-    j = 5U;
-    for (i = dpos; digits[i] != '\0'; i++) { s_menu_tile_rtty_shift_buf[j++] = digits[i]; }
-    s_menu_tile_rtty_shift_buf[j] = '\0';
-
-    s_menu_tile_rtty_shift.label = s_menu_tile_rtty_shift_buf;
-    ui_button_draw(&s_menu_tile_rtty_shift);
-}
-
-static void menu_tile_nb_refresh(void)
-{
-    /* "SPT n" - n is s_spec_smooth_passes, always a single digit
-     * (0-3, see SPECTRUM_LINE_SMOOTH_MAX), so no digit-extraction loop
-     * needed here unlike menu_tile_smooth_refresh()'s percentage. */
-    s_menu_tile_nb_buf[0] = 'S'; s_menu_tile_nb_buf[1] = 'P'; s_menu_tile_nb_buf[2] = 'T';
-    s_menu_tile_nb_buf[3] = ' ';
-    s_menu_tile_nb_buf[4] = (char)('0' + s_spec_smooth_passes);
-    s_menu_tile_nb_buf[5] = '\0';
-    s_menu_tile_nb.label = s_menu_tile_nb_buf;
-    ui_button_draw(&s_menu_tile_nb);
-}
-
-static void menu_tile_smooth_refresh(void)
-{
-    uint8_t v = (uint8_t)(s_spectrum_smooth_alpha * 100.0f + 0.5f);
-    char digits[4];
-    uint8_t dpos = 3U;
-    uint8_t i, j;
-
-    digits[dpos] = '\0';
-    do {
-        digits[--dpos] = (char)('0' + (v % 10U));
-        v /= 10U;
-    } while (v > 0U && dpos > 0U);
-
-    s_menu_tile_smooth_buf[0] = 'S'; s_menu_tile_smooth_buf[1] = 'M';
-    s_menu_tile_smooth_buf[2] = 'H'; s_menu_tile_smooth_buf[3] = ' ';
-    j = 4U;
-    for (i = dpos; digits[i] != '\0'; i++) {
-        s_menu_tile_smooth_buf[j++] = digits[i];
-    }
-    s_menu_tile_smooth_buf[j++] = '%';
-    s_menu_tile_smooth_buf[j] = '\0';
-
-    s_menu_tile_smooth.label = s_menu_tile_smooth_buf;
-    ui_button_draw(&s_menu_tile_smooth);
-}
-
-static void menu_tile_spec_style_refresh(void)
-{
-    const char *v;
-    uint8_t j = 4U;
-    uint8_t i;
-
-    switch (spectrum_get_style()) {
-    case SPECTRUM_STYLE_LINE:    v = "LINE"; break;
-    case SPECTRUM_STYLE_OUTLINE: v = "OUTL"; break;
-    case SPECTRUM_STYLE_HEATMAP:
-    default:                     v = "HEAT"; break;
-    }
-
-    s_menu_tile_spec_style_buf[0] = 'S'; s_menu_tile_spec_style_buf[1] = 'P';
-    s_menu_tile_spec_style_buf[2] = 'C'; s_menu_tile_spec_style_buf[3] = ' ';
-    for (i = 0; v[i] != '\0'; i++) {
-        s_menu_tile_spec_style_buf[j++] = v[i];
-    }
-    s_menu_tile_spec_style_buf[j] = '\0';
-
-    s_menu_tile_spec_style.label = s_menu_tile_spec_style_buf;
-    ui_button_draw(&s_menu_tile_spec_style);
-}
-
-static void menu_tile_palette_refresh(void)
-{
-    const char *v;
-    uint8_t j = 4U;
-    uint8_t i;
-
-    switch (spectrum_get_palette()) {
-    case SPECTRUM_PALETTE_FIRE:          v = "FIRE"; break;
-    case SPECTRUM_PALETTE_VIRIDIS:       v = "VIRI"; break;
-    case SPECTRUM_PALETTE_GRAYSCALE:     v = "GRAY"; break;
-    case SPECTRUM_PALETTE_TURBO:         v = "TURB"; break;
-    case SPECTRUM_PALETTE_INFERNO:       v = "INFR"; break;
-    case SPECTRUM_PALETTE_MAGMA:         v = "MAGM"; break;
-    case SPECTRUM_PALETTE_PLASMA:        v = "PLAS"; break;
-    case SPECTRUM_PALETTE_GQRX:          v = "GQRX"; break;
-    case SPECTRUM_PALETTE_ELECTRIC:      v = "ELEC"; break;
-    case SPECTRUM_PALETTE_CLASSIC_GREEN: v = "CLGR"; break;
-    case SPECTRUM_PALETTE_SMOKE:         v = "SMOK"; break;
-    case SPECTRUM_PALETTE_TEMPER_COLORS: v = "TEMP"; break;
-    case SPECTRUM_PALETTE_VIVID:         v = "VIVD"; break;
-    case SPECTRUM_PALETTE_WEBSDR:        v = "WEB"; break;
-    case SPECTRUM_PALETTE_CLASSIC:
-    default:                             v = "CLAS"; break;
-    }
-
-    s_menu_tile_palette_buf[0] = 'P'; s_menu_tile_palette_buf[1] = 'A';
-    s_menu_tile_palette_buf[2] = 'L'; s_menu_tile_palette_buf[3] = ' ';
-    for (i = 0; v[i] != '\0'; i++) {
-        s_menu_tile_palette_buf[j++] = v[i];
-    }
-    s_menu_tile_palette_buf[j] = '\0';
-
-    s_menu_tile_palette.label = s_menu_tile_palette_buf;
-    ui_button_draw(&s_menu_tile_palette);
-}
-
-/* TRC - HEATMAP trace white/color-matched toggle (08/09/2026) - plain
- * ON/OFF label, same shape as SPK's - see
- * spectrum_set_heatmap_trace_white()'s comment in spectrum.h. "OFF"
- * is the DEFAULT and means color-matched (no separate highlight at
- * all, reads as ON meaning "the white highlight is on"). */
-static void menu_tile_trace_refresh(void)
-{
-    s_menu_tile_trace.label = spectrum_get_heatmap_trace_white() ? "TRC WHT" : "TRC CLR";
-    ui_button_draw(&s_menu_tile_trace);
-}
 
 static void menu_tile_trace_callback(void *widget, ui_event_t event, void *user_data)
 {
@@ -4096,7 +4136,6 @@ static void menu_tile_trace_callback(void *widget, ui_event_t event, void *user_
         spectrum_set_heatmap_trace_white(next);
         debug_print("spectrum: heatmap trace now ");
         debug_print(next ? "WHITE\n" : "color-matched\n");
-        menu_tile_trace_refresh();
         if (s_settings_ready_for_autosave) { settings_mark_dirty(); }
     }
 }
@@ -4107,7 +4146,6 @@ static void menu_tile_agc_callback(void *widget, ui_event_t event, void *user_da
     (void)user_data;
     if (event == UI_EVENT_RELEASE) {
         agc_profile_cycle(); /* updates s_btn_agc_profile too - harmless, it's just not visible right now */
-        menu_tile_agc_refresh();
     }
 }
 
@@ -4119,7 +4157,6 @@ static void menu_tile_nb_callback(void *widget, ui_event_t event, void *user_dat
         s_spec_smooth_passes = (uint8_t)((s_spec_smooth_passes + 1U) % (SPECTRUM_LINE_SMOOTH_MAX + 1U));
         spectrum_set_line_smooth(s_spec_smooth_passes); /* live - no re-init needed */
         debug_print_dec("spectrum line smooth passes", s_spec_smooth_passes);
-        menu_tile_nb_refresh();
     }
 }
 
@@ -4136,6 +4173,7 @@ static void menu_tile_spec_style_callback(void *widget, ui_event_t event, void *
     if (event == UI_EVENT_RELEASE) {
         spectrum_style_t next;
         const char *name;
+        (void)name;
 
         switch (spectrum_get_style()) {
         case SPECTRUM_STYLE_HEATMAP: next = SPECTRUM_STYLE_LINE;    name = "LINE\n";    break;
@@ -4146,53 +4184,7 @@ static void menu_tile_spec_style_callback(void *widget, ui_event_t event, void *
         spectrum_set_style(next);
         debug_print("spectrum: style now ");
         debug_print(name);
-        menu_tile_spec_style_refresh();
         if (s_settings_ready_for_autosave) { settings_mark_dirty(); } /* 07/09/2026 - was missing, see settings.h's comment */
-    }
-}
-
-/* PALETTE - same "plain cycle, stay on the grid" shape as SPC just
- * above (15 states now (08/09/2026, after the project owner uploaded
- * SDR++'s real colormap JSON files - see spectrum_palette_t's own
- * comment in spectrum.h) - still a plain cycle rather than a detail
- * view: there's nothing to DIAL IN, just a fixed list to step
- * through, same reasoning that applied at 4 states). */
-static void menu_tile_palette_callback(void *widget, ui_event_t event, void *user_data)
-{
-    (void)widget;
-    (void)user_data;
-    if (event == UI_EVENT_RELEASE) {
-        spectrum_palette_t next;
-        const char *name;
-
-        /* Order matches spectrum_palette_t's own declaration order in
-         * spectrum.h - CLASSIC/FIRE/VIRIDIS/GRAYSCALE first (unchanged
-         * from before), then the rest of SDR++'s named set in the
-         * order their JSON files were uploaded, ending back at
-         * CLASSIC. */
-        switch (spectrum_get_palette()) {
-        case SPECTRUM_PALETTE_CLASSIC:       next = SPECTRUM_PALETTE_FIRE;          name = "FIRE\n";          break;
-        case SPECTRUM_PALETTE_FIRE:          next = SPECTRUM_PALETTE_VIRIDIS;       name = "VIRIDIS\n";       break;
-        case SPECTRUM_PALETTE_VIRIDIS:       next = SPECTRUM_PALETTE_GRAYSCALE;     name = "GRAYSCALE\n";     break;
-        case SPECTRUM_PALETTE_GRAYSCALE:     next = SPECTRUM_PALETTE_TURBO;         name = "TURBO\n";         break;
-        case SPECTRUM_PALETTE_TURBO:         next = SPECTRUM_PALETTE_INFERNO;       name = "INFERNO\n";       break;
-        case SPECTRUM_PALETTE_INFERNO:       next = SPECTRUM_PALETTE_MAGMA;         name = "MAGMA\n";         break;
-        case SPECTRUM_PALETTE_MAGMA:         next = SPECTRUM_PALETTE_PLASMA;        name = "PLASMA\n";        break;
-        case SPECTRUM_PALETTE_PLASMA:        next = SPECTRUM_PALETTE_GQRX;          name = "GQRX\n";          break;
-        case SPECTRUM_PALETTE_GQRX:          next = SPECTRUM_PALETTE_ELECTRIC;      name = "ELECTRIC\n";      break;
-        case SPECTRUM_PALETTE_ELECTRIC:      next = SPECTRUM_PALETTE_CLASSIC_GREEN; name = "CLASSIC_GREEN\n"; break;
-        case SPECTRUM_PALETTE_CLASSIC_GREEN: next = SPECTRUM_PALETTE_SMOKE;         name = "SMOKE\n";         break;
-        case SPECTRUM_PALETTE_SMOKE:         next = SPECTRUM_PALETTE_TEMPER_COLORS; name = "TEMPER_COLORS\n"; break;
-        case SPECTRUM_PALETTE_TEMPER_COLORS: next = SPECTRUM_PALETTE_VIVID;         name = "VIVID\n";         break;
-        case SPECTRUM_PALETTE_VIVID:         next = SPECTRUM_PALETTE_WEBSDR;        name = "WEBSDR\n";        break;
-        case SPECTRUM_PALETTE_WEBSDR:
-        default:                             next = SPECTRUM_PALETTE_CLASSIC;       name = "CLASSIC\n";       break;
-        }
-        spectrum_set_palette(next);
-        debug_print("spectrum: palette now ");
-        debug_print(name);
-        menu_tile_palette_refresh();
-        if (s_settings_ready_for_autosave) { settings_mark_dirty(); }
     }
 }
 
@@ -4214,7 +4206,6 @@ static void menu_tile_palette_callback(void *widget, ui_event_t event, void *use
  * entry points can't drift out of sync with each other (same reasoning
  * agc_profile_cycle() already established for AGC's two entry points).
  */
-static void menu_tile_bw_refresh(void); /* forward decl - audio_bw_cycle() below calls it before its own definition */
 static void audio_bw_cycle(void)
 {
     audio_bw_t bw = demod_am_get_audio_bw();
@@ -4226,6 +4217,10 @@ static void audio_bw_cycle(void)
     default:            bw = AUDIO_BW_4K0; break;
     }
     demod_am_set_audio_bw(bw);
+    /* En CW el que manda es el filtro de CW, que es otro camino (ver
+     * ALPF_CW_STAGES en demod_am.c). El selector es el mismo para que no
+     * haya dos mandos de ancho, pero lo que aplica es distinto. */
+    demod_am_set_cw_bw_hz((float)k_cw_bw_hz[(uint8_t)bw]);
     debug_print("audio filter: now ");
     debug_print(k_audio_bw_labels[(uint8_t)bw]);
     debug_print("\n");
@@ -4252,29 +4247,9 @@ static void audio_bw_cycle(void)
      * guard settings_value_redraw() and friends already use, extended
      * with the page check the paged-grid redesign added. */
     if (s_menu_open && s_menu_page == MENU_PAGE_RADIO) {
-        menu_tile_bw_refresh();
     }
 }
 
-static void menu_tile_bw_refresh(void)
-{
-    /* Mode-dependent label set, same reasoning as badges_draw()'s WFM
-     * case - see demod_am_set_audio_bw()'s comment in demod_am.h. */
-    const char *v = (demod_am_get_mode() == DEMOD_MODE_WFM) ?
-        k_wfm_audio_bw_labels[(uint8_t)demod_am_get_audio_bw()] :
-        k_audio_bw_labels[(uint8_t)demod_am_get_audio_bw()];
-    uint8_t j = 3U;
-    uint8_t i;
-
-    s_menu_tile_bw_buf[0] = 'B'; s_menu_tile_bw_buf[1] = 'W'; s_menu_tile_bw_buf[2] = ' ';
-    for (i = 0; v[i] != '\0'; i++) {
-        s_menu_tile_bw_buf[j++] = v[i];
-    }
-    s_menu_tile_bw_buf[j] = '\0';
-
-    s_menu_tile_bw.label = s_menu_tile_bw_buf;
-    ui_button_draw(&s_menu_tile_bw);
-}
 
 static void menu_tile_bw_callback(void *widget, ui_event_t event, void *user_data)
 {
@@ -4294,32 +4269,6 @@ static void menu_tile_bw_callback(void *widget, ui_event_t event, void *user_dat
     }
 }
 
-/*
- * BAUD (DIG page) - cycles the RTTY bit rate through
- * k_rtty_baud_values[] (45.45->50->75->100->45.45), same "cycle
- * directly on tap, stay on the grid" treatment as BW/SPC above rather
- * than a DETAIL view - four fixed, well-known rates don't need a
- * turn-the-knob-to-any-value control, just a quick tap through the
- * short list, same reasoning as SPC's HEATMAP/LINE/OUTLINE cycle.
- * Unconditional same as BW - harmless to pre-set outside RTTY mode.
- */
-static void menu_tile_rtty_baud_refresh(void)
-{
-    const char *v = k_rtty_baud_labels[s_rtty_baud_idx];
-    uint8_t j = 5U;
-    uint8_t i;
-
-    s_menu_tile_rtty_baud_buf[0] = 'B'; s_menu_tile_rtty_baud_buf[1] = 'A';
-    s_menu_tile_rtty_baud_buf[2] = 'U'; s_menu_tile_rtty_baud_buf[3] = 'D';
-    s_menu_tile_rtty_baud_buf[4] = ' ';
-    for (i = 0; v[i] != '\0'; i++) {
-        s_menu_tile_rtty_baud_buf[j++] = v[i];
-    }
-    s_menu_tile_rtty_baud_buf[j] = '\0';
-
-    s_menu_tile_rtty_baud.label = s_menu_tile_rtty_baud_buf;
-    ui_button_draw(&s_menu_tile_rtty_baud);
-}
 
 static void menu_tile_rtty_baud_callback(void *widget, ui_event_t event, void *user_data)
 {
@@ -4331,7 +4280,6 @@ static void menu_tile_rtty_baud_callback(void *widget, ui_event_t event, void *u
         debug_print("rtty: baud now ");
         debug_print(k_rtty_baud_labels[s_rtty_baud_idx]);
         debug_print("\n");
-        menu_tile_rtty_baud_refresh();
     }
 }
 
@@ -4353,32 +4301,13 @@ static void audio_bw_button_callback(void *widget, ui_event_t event, void *user_
 
         if (mode == DEMOD_MODE_AM || mode == DEMOD_MODE_USB || mode == DEMOD_MODE_LSB
             || mode == DEMOD_MODE_WFM) {
-            audio_bw_cycle();
+            audio_bw_cycle();   /* en CW cambia el ancho del filtro de CW */
         } else {
             debug_print("audio filter: BW badge tap ignored - not in AM/USB/LSB/WFM\n");
         }
     }
 }
 
-static void menu_tile_zoom_refresh(void)
-{
-    const char *v = (s_spec_zoom == SPEC_ZOOM_8X) ? "8X" :
-                     (s_spec_zoom == SPEC_ZOOM_4X) ? "4X" :
-                     (s_spec_zoom == SPEC_ZOOM_2X) ? "2X" : "1X";
-    uint8_t j = 5U;
-    uint8_t i;
-
-    s_menu_tile_zoom_buf[0] = 'Z'; s_menu_tile_zoom_buf[1] = 'O';
-    s_menu_tile_zoom_buf[2] = 'O'; s_menu_tile_zoom_buf[3] = 'M';
-    s_menu_tile_zoom_buf[4] = ' ';
-    for (i = 0; v[i] != '\0'; i++) {
-        s_menu_tile_zoom_buf[j++] = v[i];
-    }
-    s_menu_tile_zoom_buf[j] = '\0';
-
-    s_menu_tile_zoom.label = s_menu_tile_zoom_buf;
-    ui_button_draw(&s_menu_tile_zoom);
-}
 
 /* ZOOM cycles 1X -> 2X -> 4X -> 8X -> 1X, same "direct cycle, stay on
  * the grid" behavior as AGC/SPT/SPEC - see spec_zoom_t's comment for
@@ -4396,7 +4325,6 @@ static void menu_tile_zoom_callback(void *widget, ui_event_t event, void *user_d
         default:            s_spec_zoom = SPEC_ZOOM_1X; break;
         }
         debug_print_dec("spectrum: zoom now", (uint32_t)1U << (uint8_t)s_spec_zoom);
-        menu_tile_zoom_refresh();
     }
 }
 
@@ -4538,6 +4466,10 @@ static int16_t s_rx_lock_check_q[SDR_RX_BLOCK_SAMPLES_MAX];
  * looks corrupted (or never arrived within the timeout - treated the
  * same as corrupted, since either way this lock attempt isn't
  * trustworthy), 0 if it looks like plausible real signal. */
+/* Herramienta de diagnostico: se compila siempre pero hoy no la llama nadie
+ * (su punto de uso esta detras de un #if desactivado). Se marca como
+ * posiblemente sin usar en vez de borrarla, para no perder el codigo. */
+__attribute__((unused))
 static uint8_t rx_capture_looks_corrupted(void)
 {
     uint32_t start_ms = g_msticks;
@@ -4609,9 +4541,48 @@ static uint8_t rx_capture_looks_corrupted(void)
  * sequence (needed there too - see this file's earlier declaration
  * comment for the full "birdie escape hatch" reasoning).
  */
+/*
+ * GANANCIA DE ENTRADA EN VHF - 22/09/2026.
+ *
+ * Por el dueno del proyecto, midiendo con una emisora de FM comercial: "si
+ * en ganancia de entrada pongo 28,5 dB la radio empieza a oirse por encima
+ * del ruido, si llego al tope 47,5 se oye perfectamente". Y el S-meter se
+ * mueve, o sea que la señal LLEGA: lo que falta es nivel a la entrada del
+ * codec, no antena.
+ *
+ * Eso es perdida del mezclador en VHF, y ningun cambio de software la
+ * recupera: a 100 MHz el conmutador del QSD trabaja a 400 MHz y su
+ * eficiencia de apertura se desploma. Lo que SI puede hacer el firmware es
+ * dejar de obligarte a subir el mando cada vez que entras en WFM.
+ *
+ * Asi que WFM usa el tope de ganancia y punto. No hay nada que recordar
+ * porque no hay nada que elegir: la medida dice que hace falta todo lo que
+ * hay. Y lo que se guarda en CONFIG.CSV es s_pga_hf_x2, tu ajuste de
+ * SIEMPRE, no el valor vivo - si no, pasar por WFM con el autoguardado
+ * activo te dejaria 47,5 dB puestos en HF la proxima vez que encendieras.
+ * Es el mismo fallo que tenia el atenuador antes del suelo manual.
+ */
+static int16_t s_pga_hf_x2 = -1;   /* -1 = aun sin inicializar */
+
 static void apply_demod_mode(demod_mode_t mode)
 {
     uint8_t will_be_wfm = (mode == DEMOD_MODE_WFM) ? 1U : 0U;
+    uint8_t era_wfm = (demod_am_get_mode() == DEMOD_MODE_WFM) ? 1U : 0U;
+
+    if (s_pga_hf_x2 < 0) { s_pga_hf_x2 = s_pga_gain_db_x2; }
+
+    if (will_be_wfm && !era_wfm) {
+        s_pga_hf_x2 = s_pga_gain_db_x2;   /* guarda lo tuyo antes de pisarlo */
+        s_pga_gain_db_x2 = (int16_t)PGA_MAX_X2;
+        rf_agc_apply_pga();
+        debug_print("pga: WFM, al tope por perdida de VHF\n");
+    } else if (!will_be_wfm && era_wfm) {
+        s_pga_gain_db_x2 = s_pga_hf_x2;
+        rf_agc_apply_pga();
+        debug_print_dec("pga: fuera de WFM, restaurado a x2", (uint32_t)s_pga_gain_db_x2);
+    } else if (!will_be_wfm) {
+        s_pga_hf_x2 = s_pga_gain_db_x2;   /* fuera de WFM, lo vivo ES lo tuyo */
+    }
     aic3204_rate_t desired_rate = will_be_wfm ? AIC3204_RATE_192K :
         (s_nonwfm_use_48k ? AIC3204_RATE_48K : AIC3204_RATE_96K);
 
@@ -4857,6 +4828,38 @@ static void menu_tile_rtty_shift_callback(void *widget, ui_event_t event, void *
 }
 
 /*
+ * Tono del CW: rango continuo, asi que abre la pantalla de detalle con
+ * el mando y los botones grandes, igual que el desplazamiento del RTTY.
+ * Es el ajuste que de verdad se toca, porque sintonizar CW consiste en
+ * mover el pitido hasta el tono al que escucha el detector, y a veces es
+ * mas comodo mover el detector que el mando.
+ */
+static void menu_tile_cw_tone_callback(void *widget, ui_event_t event, void *user_data)
+{
+    (void)widget;
+    (void)user_data;
+    if (event == UI_EVENT_RELEASE) { menu_detail_show(ENCODER_TARGET_CW_TONE); }
+}
+
+/*
+ * Velocidad: una casilla que cicla, no una pantalla de detalle, y a
+ * proposito. Esto NO fija la velocidad: el decodificador la mide y la
+ * persigue solo, y esto solo dice por donde empieza a buscar. Darle una
+ * pantalla con "-" y "+" invitaria a ajustarlo finamente, que es tiempo
+ * perdido: de 10 a 45 PPM engancha solo partiendo de 20.
+ */
+static void menu_tile_cw_wpm_callback(void *widget, ui_event_t event, void *user_data)
+{
+    (void)widget;
+    (void)user_data;
+    if (event == UI_EVENT_RELEASE) {
+        s_cw_wpm_idx = (uint8_t)((s_cw_wpm_idx + 1U) % CW_WPM_OPCIONES);
+        cw_set_wpm_hint((float)k_cw_wpm[s_cw_wpm_idx]);
+        settings_value_redraw();
+    }
+}
+
+/*
  * RFAGC tile: a plain toggle (per the project owner, "como el botón
  * NR"), not a detail view - there's nothing to dial in, just on/off.
  * Turning OFF immediately drops any active backoff AND Rin escalation,
@@ -4875,9 +4878,13 @@ static void menu_tile_rfagc_callback(void *widget, ui_event_t event, void *user_
         debug_print(s_rf_agc_enabled ? "rf_agc: on\n" : "rf_agc: off\n");
         if (!s_rf_agc_enabled) {
             s_rf_agc_backoff_x2 = 0;
-            if (s_rf_agc_rin_level != 0U) {
-                s_rf_agc_rin_level = 0U;
-                aic3204_set_input_impedance(AIC3204_RIN_10K);
+            /* Vuelve al SUELO, no a cero: "apagado" significa "exactamente
+             * lo que dicen los mandos manuales", y el atenuador es uno de
+             * ellos. Antes apagar el AGC te tiraba la atenuacion que habias
+             * elegido a mano. */
+            if (s_rf_agc_rin_level != s_att_suelo) {
+                s_rf_agc_rin_level = s_att_suelo;
+                aic3204_set_input_impedance((aic3204_rin_t)s_rf_agc_rin_level);
                 rf_agc_mute_for_transition(); /* Rin change - see its own comment for why this needs a mute */
             }
         }
@@ -4889,60 +4896,10 @@ static void menu_tile_rfagc_callback(void *widget, ui_event_t event, void *user_
          * an active backoff straight to 0, so OVR should go dark
          * immediately rather than wait for the next poll), but cheap
          * enough to just always do it. */
-        menu_tile_rfagc_refresh();
         badges_draw();
     }
 }
 
-/*
- * ATT (RADIO page, slot 7) - manual, direct control of the AIC3204's
- * MIC_PGA input impedance (10k/20k/40k, i.e. 0/-6/-12dB of front-end
- * attenuation ahead of the PGA - see k_att_labels' comment and
- * aic3204_set_input_impedance()'s in aic3204.c). Same "CYCLE DIRECTLY
- * on tap, stay on this screen" shape as AGC/BW (menu_grid_show()'s
- * tile-behavior comment) rather than a DETAIL view: only 3 fixed
- * rungs, nothing to dial in.
- *
- * Shares s_rf_agc_rin_level with the RF-level auto-AGC (RFAGC tile/
- * rf_agc_poll()) as the single source of truth for the codec's
- * CURRENT Rin setting, the same way the manual PGA control
- * (s_pga_gain_db_x2) and RFAGC's own PGA backoff both feed into one
- * shared rf_agc_apply_pga() rather than fighting over two separate
- * variables. Unlike PGA gain, though, there's no "baseline plus
- * backoff" math for Rin - rf_agc_escalate_rin()/rf_agc_deescalate_rin()
- * step s_rf_agc_rin_level up/down directly - so this tile just does
- * the same thing manually, one step per tap. That means an ATT
- * selection made here can get walked away from by rf_agc_poll() on
- * its own schedule WHILE RFAGC is switched on (escalating further on
- * a clip, or deescalating back down once things go quiet): this tile
- * is really only meaningful as a fixed, sticky choice with RFAGC
- * turned OFF. Nothing stops tapping it with RFAGC on - it applies the
- * change immediately either way - but the project owner should treat
- * that as "the auto system may well overwrite this again shortly"
- * rather than a persistent override, unless/until RFAGC's own logic
- * is taught to respect a manual floor.
- *
- * Reuses rf_agc_mute_for_transition() around the switch for the same
- * reason rf_agc_escalate_rin()/rf_agc_deescalate_rin() do - Rin
- * switching is an abrupt analog reconnection, not soft-stepped like
- * the PGA gain register, so it pops without a brief mute.
- */
-static void menu_tile_att_refresh(void)
-{
-    const char *v = k_att_labels[s_rf_agc_rin_level];
-    uint8_t j = 4U;
-    uint8_t i;
-
-    s_menu_tile_att_buf[0] = 'A'; s_menu_tile_att_buf[1] = 'T';
-    s_menu_tile_att_buf[2] = 'T'; s_menu_tile_att_buf[3] = ' ';
-    for (i = 0; v[i] != '\0'; i++) {
-        s_menu_tile_att_buf[j++] = v[i];
-    }
-    s_menu_tile_att_buf[j] = '\0';
-
-    s_menu_tile_att.label = s_menu_tile_att_buf;
-    ui_button_draw(&s_menu_tile_att);
-}
 
 static void menu_tile_att_callback(void *widget, ui_event_t event, void *user_data)
 {
@@ -4950,51 +4907,19 @@ static void menu_tile_att_callback(void *widget, ui_event_t event, void *user_da
     (void)user_data;
 
     if (event == UI_EVENT_RELEASE) {
-        s_rf_agc_rin_level = (uint8_t)((s_rf_agc_rin_level + 1U) % 3U);
+        /* El toque mueve el SUELO, y se aplica ya: si estabas por encima
+         * porque el automatico habia escalado, bajar a lo que acabas de
+         * pedir es lo que se espera de un control manual. Si la senal lo
+         * pide, el AGC volvera a subir - pero desde aqui, no desde cero. */
+        s_att_suelo = (uint8_t)((s_att_suelo + 1U) % 3U);
+        s_rf_agc_rin_level = s_att_suelo;
         aic3204_set_input_impedance((aic3204_rin_t)s_rf_agc_rin_level);
         rf_agc_mute_for_transition();
-        debug_print_dec("att: manual Rin now (0=10k/1=20k/2=40k)", (uint32_t)s_rf_agc_rin_level);
-        menu_tile_att_refresh();
+        debug_print_dec("att: suelo manual ahora (0=10k/1=20k/2=40k)", (uint32_t)s_att_suelo);
         badges_draw(); /* 07/09/2026 - keeps the new top-strip ATT badge in sync with manual changes too, not just rf_agc_escalate_rin()/deescalate_rin()'s automatic ones */
     }
 }
 
-/*
- * IFBW (HW page, slot 4) - WFM's pre-discriminator channel filter
- * width, WIDE(96K, default, no filter)<->NARROW(80K) - see
- * demod_am_set_wfm_ifbw()'s comment in demod_am.h for what this
- * actually controls (the RAW baseband ahead of the discriminator, NOT
- * the demodulated audio - that's the BW tile/badge, a completely
- * separate control - see its own comment for the distinction). Lives
- * on HW rather than RADIO because RADIO is already full (8/8 - see
- * the "Settings grid PAGES" comment) and this is WFM-only anyway, same
- * "genuinely full elsewhere" reasoning DIG's own tiles already used
- * when they were split off RADIO. Two-state cycle (not a 3-way like
- * BW/ATT) - tap simply toggles, same shape as the RFAGC tile's
- * enable/disable. Unlike RFAGC/ATT, this ISN'T RADIO-page-gated by
- * mode (it's reachable and tappable even outside WFM, harmlessly - the
- * state only ever gets APPLIED in demod_wfm_process_raw(), same
- * "setting it elsewhere is a no-op until you're actually in WFM"
- * precedent as s_audio_bw's own comment in demod_am.h), so there's no
- * need to hide or grey it out on other pages/modes.
- */
-static void menu_tile_ifbw_refresh(void)
-{
-    const char *v = (demod_am_get_wfm_ifbw() == WFM_IFBW_NARROW) ? "80K" : "96K";
-    uint8_t j = 5U;
-    uint8_t i;
-
-    s_menu_tile_ifbw_buf[0] = 'I'; s_menu_tile_ifbw_buf[1] = 'F';
-    s_menu_tile_ifbw_buf[2] = 'B'; s_menu_tile_ifbw_buf[3] = 'W';
-    s_menu_tile_ifbw_buf[4] = ' ';
-    for (i = 0; v[i] != '\0'; i++) {
-        s_menu_tile_ifbw_buf[j++] = v[i];
-    }
-    s_menu_tile_ifbw_buf[j] = '\0';
-
-    s_menu_tile_ifbw.label = s_menu_tile_ifbw_buf;
-    ui_button_draw(&s_menu_tile_ifbw);
-}
 
 static void menu_tile_ifbw_callback(void *widget, ui_event_t event, void *user_data)
 {
@@ -5006,20 +4931,9 @@ static void menu_tile_ifbw_callback(void *widget, ui_event_t event, void *user_d
 
         demod_am_set_wfm_ifbw(bw);
         debug_print(bw == WFM_IFBW_NARROW ? "wfm ifbw: now 80K (narrow)\n" : "wfm ifbw: now 96K (wide/off)\n");
-        menu_tile_ifbw_refresh();
     }
 }
 
-/*
- * SAGC (HW page, slot 5) - spectrum/waterfall auto-scale toggle, see
- * s_spec_agc_enabled's declaration comment for the full design.
- * Two-state cycle, same shape as the RFAGC/IFBW tiles.
- */
-static void menu_tile_specagc_refresh(void)
-{
-    s_menu_tile_specagc.label = s_spec_agc_enabled ? "SAGC ON" : "SAGC OFF";
-    ui_button_draw(&s_menu_tile_specagc);
-}
 
 static void menu_tile_specagc_callback(void *widget, ui_event_t event, void *user_data)
 {
@@ -5029,59 +4943,9 @@ static void menu_tile_specagc_callback(void *widget, ui_event_t event, void *use
     if (event == UI_EVENT_RELEASE) {
         s_spec_agc_enabled = (uint8_t)(s_spec_agc_enabled ? 0U : 1U);
         debug_print(s_spec_agc_enabled ? "spectrum AGC: on\n" : "spectrum AGC: off\n");
-        menu_tile_specagc_refresh();
     }
 }
 
-/*
- * RATE (HW page, slot 6) - AM/USB/LSB/NFM sample rate, 96K(default)
- * <-> 48K - see s_nonwfm_use_48k's declaration comment (near main())
- * for the full "birdie escape hatch" reasoning. WFM is untouched
- * either way - this only affects the non-WFM rate choice.
- *
- * Unlike RFAGC/IFBW/SAGC, tapping this needs to force an IMMEDIATE
- * live reconfigure if a non-WFM mode is already running - just
- * flipping s_nonwfm_use_48k wouldn't do anything audible until the
- * NEXT mode change, which defeats the point of a quick A/B toggle for
- * bench testing. Calling apply_demod_mode() with the CURRENT mode
- * re-evaluates desired_rate against s_current_rate (see that
- * function's own comment) and runs the same full reinit a real mode
- * change would, without actually changing s_mode itself. While in
- * WFM, this still flips the stored preference (so it's ready
- * whenever you do switch out of WFM) but skips the live reconfigure
- * entirely, since desired_rate would still resolve to 192K regardless
- * of s_nonwfm_use_48k - calling apply_demod_mode() would be a
- * harmless no-op in that case anyway, but skipping it avoids the
- * debug log noise of a "reconfigure" that never actually changes
- * anything.
- *
- * *** 01/09/2026, apply_lo_tune(s_tune_hz) added same day - real bug
- * fix, per the project owner *** - demod_am_set_active_rate() (called
- * from inside apply_demod_mode()) changes demod_if_offset_hz()'s
- * return value (24kHz@96kHz vs 12kHz@48kHz - see that function's own
- * comment), but apply_demod_mode() itself never re-programs the LO -
- * that's ENTIRELY apply_lo_tune()'s job, a separate piece of state
- * (the MS5351/GD32 LO generator) that only gets touched when tuning
- * actually happens. Without this call, the LO stays at whatever
- * frequency it was last set to under the OLD offset - the display
- * still shows the right frequency, but the ACTUAL received signal
- * sits up to 12kHz off from where it's shown, until the next real
- * tune (encoder, keypad, band preset - anything that calls apply_lo_
- * tune() itself) happens to correct it. This exact "stale LO after a
- * rate change" bug already had a known-good fix pattern elsewhere in
- * this file - the MODE list picker's own selection handler already
- * follows apply_demod_mode() with apply_lo_tune(s_tune_hz) for exactly
- * this reason (entering/leaving WFM also changes demod_if_offset_hz(),
- * a pre-existing rate change this project already knew needed a
- * re-tune) - this tile's callback had simply never picked up that same
- * pairing when it was written, since RFAGC/IFBW/SAGC (the tiles it
- * was modeled on) don't touch anything LO-related at all.
- */
-static void menu_tile_rate_refresh(void)
-{
-    s_menu_tile_rate.label = s_nonwfm_use_48k ? "RATE 48K" : "RATE 96K";
-    ui_button_draw(&s_menu_tile_rate);
-}
 
 static void menu_tile_rate_callback(void *widget, ui_event_t event, void *user_data)
 {
@@ -5091,7 +4955,6 @@ static void menu_tile_rate_callback(void *widget, ui_event_t event, void *user_d
     if (event == UI_EVENT_RELEASE) {
         s_nonwfm_use_48k = (uint8_t)(s_nonwfm_use_48k ? 0U : 1U);
         debug_print(s_nonwfm_use_48k ? "nonwfm rate: 48K selected\n" : "nonwfm rate: 96K selected\n");
-        menu_tile_rate_refresh();
         badges_draw(); /* updates the RATE badge in the status strip - see its comment */
 
         if (demod_am_get_mode() != DEMOD_MODE_WFM) {
@@ -5108,26 +4971,6 @@ static void menu_tile_nr_callback(void *widget, ui_event_t event, void *user_dat
     if (event == UI_EVENT_RELEASE) { menu_detail_show(ENCODER_TARGET_NR); }
 }
 
-/*
- * INV (DIG page) - the station NORMAL/REVERSE convention toggle (see
- * rtty_set_station_inverted()'s comment in rtty.h for the DDK9 field
- * finding this exists for). Plain two-state toggle, same shape as
- * RFAGC/SPK just above/below - nothing to dial in, just flips one bit
- * and swaps mark/space live.
- */
-static void menu_tile_rtty_inv_refresh(void)
-{
-    if (rtty_get_station_inverted()) {
-        s_menu_tile_rtty_inv.label = "INV REV";
-        s_menu_tile_rtty_inv.fg = GFX_COLOR_BLACK;
-        s_menu_tile_rtty_inv.bg = GFX_COLOR_CYAN;
-    } else {
-        s_menu_tile_rtty_inv.label = "INV NORM";
-        s_menu_tile_rtty_inv.fg = GFX_COLOR_WHITE;
-        s_menu_tile_rtty_inv.bg = GFX_COLOR_DARKGRAY;
-    }
-    ui_button_draw(&s_menu_tile_rtty_inv);
-}
 
 static void menu_tile_rtty_inv_callback(void *widget, ui_event_t event, void *user_data)
 {
@@ -5135,24 +4978,9 @@ static void menu_tile_rtty_inv_callback(void *widget, ui_event_t event, void *us
     (void)user_data;
     if (event == UI_EVENT_RELEASE) {
         rtty_set_station_inverted(!rtty_get_station_inverted());
-        menu_tile_rtty_inv_refresh();
     }
 }
 
-/*
- * SPK (HW page, see speaker_pa_set_enabled()'s comment) - a direct
- * toggle, same "cycle right here, stay on this screen" behavior as
- * AGC/BW/ZOOM (see menu_grid_show()'s comment on tile behaviors), not
- * a DETAIL view: there's only one bit to flip, a whole separate
- * screen for it would be overkill. No live-value char buffer needed
- * (unlike AGC/SQUELCH/etc.) - only two possible strings, so the label
- * just points straight at one of the two literals below.
- */
-static void menu_tile_speaker_pa_refresh(void)
-{
-    s_menu_tile_speaker_pa.label = s_speaker_pa_enabled ? "SPK ON" : "SPK OFF";
-    ui_button_draw(&s_menu_tile_speaker_pa);
-}
 
 static void menu_tile_speaker_pa_callback(void *widget, ui_event_t event, void *user_data)
 {
@@ -5162,7 +4990,6 @@ static void menu_tile_speaker_pa_callback(void *widget, ui_event_t event, void *
         speaker_pa_set_enabled(!s_speaker_pa_enabled);
         debug_print("speaker PA: now ");
         debug_print(s_speaker_pa_enabled ? "ON\n" : "OFF (headphones only)\n");
-        menu_tile_speaker_pa_refresh();
         speaker_icon_draw(); /* 07/09/2026 - instant feedback, don't wait for some unrelated badges_draw() call elsewhere */
         if (s_settings_ready_for_autosave) { settings_mark_dirty(); } /* 07/09/2026 - was missing, see settings.h's comment */
     }
@@ -5215,7 +5042,7 @@ static void touch_calib_done_callback(const touch_calibration_t *cal)
      * pointless delay before something the user explicitly just did
      * gets persisted. */
     settings_save_now(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2, s_nonwfm_use_48k,
-                       s_pga_gain_db_x2, spectrum_smooth_pct_for_save(), s_speaker_pa_enabled, s_rf_agc_rin_level);
+                       s_pga_gain_db_x2, spectrum_smooth_pct_for_save(), s_speaker_pa_enabled, s_rf_agc_rin_level, s_tema_idx);
 }
 
 /*
@@ -5231,6 +5058,7 @@ static void menu_tile_cal_callback(void *widget, ui_event_t event, void *user_da
     (void)widget;
     (void)user_data;
     if (event == UI_EVENT_RELEASE) {
+        gfx_guard_top_set(0); /* el asistente pinta la pantalla entera, cabecera incluida; radio_screen_draw() la vuelve a armar al salir */
         touch_calib_start(touch_calib_done_callback);
     }
 }
@@ -5279,11 +5107,6 @@ static char s_cal_ppm_label[10] = "PPM";
  * just above).
  */
 #define CAL_PPM_SANITY_LIMIT_PPM 50.0f
-static void menu_tile_cal_ppm_refresh(void)
-{
-    s_menu_tile_cal_ppm.label = s_cal_ppm_label;
-    ui_button_draw(&s_menu_tile_cal_ppm);
-}
 
 static void menu_tile_cal_ppm_callback(void *widget, ui_event_t event, void *user_data)
 {
@@ -5301,7 +5124,6 @@ static void menu_tile_cal_ppm_callback(void *widget, ui_event_t event, void *use
             for (i = 0U; (i < 8U) && (msg[i] != '\0'); i++) { s_cal_ppm_label[i] = msg[i]; }
             s_cal_ppm_label[i] = '\0';
         }
-        menu_tile_cal_ppm_refresh();
         return;
     }
 
@@ -5317,7 +5139,6 @@ static void menu_tile_cal_ppm_callback(void *widget, ui_event_t event, void *use
                 for (i = 0U; (i < 8U) && (msg[i] != '\0'); i++) { s_cal_ppm_label[i] = msg[i]; }
                 s_cal_ppm_label[i] = '\0';
             }
-            menu_tile_cal_ppm_refresh();
             return;
         }
 
@@ -5336,7 +5157,7 @@ static void menu_tile_cal_ppm_callback(void *widget, ui_event_t event, void *use
             debug_print_dec("cal_ppm: new MS5351 xtal Hz", new_xtal_hz);
 
             settings_save_now(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2, s_nonwfm_use_48k,
-                       s_pga_gain_db_x2, spectrum_smooth_pct_for_save(), s_speaker_pa_enabled, s_rf_agc_rin_level);
+                       s_pga_gain_db_x2, spectrum_smooth_pct_for_save(), s_speaker_pa_enabled, s_rf_agc_rin_level, s_tema_idx);
 
             /* Show the applied correction (not the post-correction
              * residual, which would read ~0 and tell the user
@@ -5366,7 +5187,6 @@ static void menu_tile_cal_ppm_callback(void *widget, ui_event_t event, void *use
                     s_cal_ppm_label[i] = '\0';
                 }
             }
-            menu_tile_cal_ppm_refresh();
         }
     }
 }
@@ -5384,41 +5204,6 @@ static void menu_tile_exit_callback(void *widget, ui_event_t event, void *user_d
     (void)user_data;
     if (event == UI_EVENT_RELEASE) {
         menu_screen_close();
-    }
-}
-
-/*
- * Shared callback for the pager's PREV/NEXT tiles (column 0, rows 0
- * and 2) - see the "Settings grid PAGES" / PAGINATION comment on
- * s_menu_page's declaration for the full story of why this replaced
- * the old one-tile-per-page menu_page_select_callback() on 09/08/2026.
- * user_data carries the step direction as a plain (void*)(intptr_t)
- * +1/-1, same cast-through-a-pointer pattern menu_band_preset_callback()/
- * menu_step_preset_callback() use for their own index, just signed
- * this time. Wraps both directions (page 0's PREV lands on the last
- * page, the last page's NEXT wraps to 0) via the +MENU_PAGE_COUNT
- * before the modulo - avoids a signed-modulo-of-negative edge case
- * without needing an explicit if/else.
- */
-static void menu_page_step_callback(void *widget, ui_event_t event, void *user_data)
-{
-    int32_t dir = (int32_t)(intptr_t)user_data;
-
-    (void)widget;
-    if (event == UI_EVENT_RELEASE) {
-        int32_t next = ((int32_t)s_menu_page + dir + (int32_t)MENU_PAGE_COUNT) % (int32_t)MENU_PAGE_COUNT;
-
-        s_menu_page = (menu_page_t)next;
-        menu_grid_show();
-    }
-}
-
-static void menu_detail_back_callback(void *widget, ui_event_t event, void *user_data)
-{
-    (void)widget;
-    (void)user_data;
-    if (event == UI_EVENT_RELEASE) {
-        menu_grid_show(); /* back to the tile grid, menu stays open */
     }
 }
 
@@ -5441,35 +5226,1183 @@ static void menu_detail_back_callback(void *widget, ui_event_t event, void *user
  * tune_encoder_poll()'s comment) still gets you out without picking
  * anything.
  */
-static void menu_bands_show(void)
+/* ===========================================================================
+ * AJUSTES, MODO Y PASOS: todo sobre la misma rejilla
+ * ===========================================================================
+ *
+ * *** 22/09/2026, por el dueno del proyecto: "toda la parte de ajustes
+ * entera", "la ventana de modo tambien tienes que hacerla", "y la de pasos
+ * tambien" ***
+ *
+ * QUE HABIA
+ * ---------
+ * Cuatro pantallas distintas hechas con la fuente 5x7: la rejilla de ajustes
+ * (con una columna entera gastada en ANTERIOR / nombre de pagina / SIGUIENTE,
+ * es decir tres de las doce casillas para navegar), la lista de modos, la de
+ * pasos y la de bandas. Cada casilla decia una sigla y nada mas: "SPT 2",
+ * "TRC CLR", "RATE 96K". Para saber que valia un ajuste habia que entrar.
+ *
+ * QUE HAY AHORA
+ * -------------
+ * Una sola rejilla (ui_grid.c) para las cuatro, y cada casilla dice su NOMBRE
+ * y su VALOR ACTUAL. La navegacion baja a un pie de tres botones, asi que las
+ * doce casillas son doce ajustes y no nueve.
+ *
+ * COMO SE EVITA LA DUPLICACION
+ * ----------------------------
+ * Un ajuste se declara UNA vez en k_ajustes[] con su nombre, su pagina y un
+ * identificador. Lo que vale y lo que hace al tocarlo salen de dos funciones
+ * que reparten por ese identificador, y lo que HACEN es llamar a los
+ * callbacks que ya existian. Ni un solo ajuste se reimplementa aqui: si
+ * manana cambia el recorte de limites de la ganancia, cambia en un sitio.
+ */
+
+/* --- identificadores de ajuste --------------------------------------- */
+enum {
+    AJ_AGC = 0, AJ_SQL, AJ_VOL, AJ_BW, AJ_PGA, AJ_NR, AJ_RFAGC, AJ_ATT,
+    AJ_BRILLO, AJ_ESCALA, AJ_AUTOESC, AJ_SUAVIZ, AJ_ESTILO, AJ_ZOOM,
+    AJ_PALETA, AJ_TRAZA, AJ_CONTORNO,
+    AJ_ALTAVOZ, AJ_TASA, AJ_IFBW, AJ_TACTIL, AJ_CAL_TACTIL, AJ_CAL_PPM, AJ_DORMIR,
+    AJ_RTTY_SHIFT, AJ_RTTY_BAUD, AJ_RTTY_INV,
+    AJ_CW_TONO, AJ_CW_PPM, AJ_CW_AUTO,
+    AJ_TEMA, AJ_INFO
+};
+
+#define AJ_PAG_RADIO    0U
+#define AJ_PAG_PANTALLA 1U
+#define AJ_PAG_EQUIPO   2U
+#define AJ_PAG_DIGITAL  3U
+#define AJ_PAGINAS      4U
+
+typedef struct {
+    const char *nombre;
+    uint8_t     pagina;
+    uint8_t     id;
+} ajuste_t;
+
+/*
+ * El orden dentro de cada pagina es el de uso, no el alfabetico ni el
+ * historico: lo que se toca a menudo arriba a la izquierda, lo que se toca
+ * una vez en la vida (calibrar) abajo.
+ */
+static const ajuste_t k_ajustes[] = {
+    { "AGC",           AJ_PAG_RADIO,    AJ_AGC        },
+    { "Ancho",         AJ_PAG_RADIO,    AJ_BW         },
+    { "Volumen",       AJ_PAG_RADIO,    AJ_VOL        },
+    { "Silenciador",   AJ_PAG_RADIO,    AJ_SQL        },
+    { "Reducción",     AJ_PAG_RADIO,    AJ_NR         },
+    { "Ganancia",      AJ_PAG_RADIO,    AJ_PGA        },
+    { "AGC de RF",     AJ_PAG_RADIO,    AJ_RFAGC      },
+    { "Atenuador",     AJ_PAG_RADIO,    AJ_ATT        },
+
+    { "Escala",        AJ_PAG_PANTALLA, AJ_ESCALA     },
+    { "Autoescala",    AJ_PAG_PANTALLA, AJ_AUTOESC    },
+    { "Zoom",          AJ_PAG_PANTALLA, AJ_ZOOM       },
+    { "Paleta",        AJ_PAG_PANTALLA, AJ_PALETA     },
+    { "Estilo",        AJ_PAG_PANTALLA, AJ_ESTILO     },
+    { "Traza",         AJ_PAG_PANTALLA, AJ_TRAZA      },
+    { "Suavizado",     AJ_PAG_PANTALLA, AJ_SUAVIZ     },
+    { "Contorno",      AJ_PAG_PANTALLA, AJ_CONTORNO   },
+    /* Tema, 22/09/2026: la paleta de la interfaz, distinta de "Paleta",
+     * que son los colores del espectro. Entra aqui porque Brillo se ha
+     * ido a Equipo - la pagina estaba en 9 de 9 y no cabia nada. */
+    { "Tema",          AJ_PAG_PANTALLA, AJ_TEMA       },
+
+    { "Brillo",        AJ_PAG_EQUIPO,   AJ_BRILLO     },
+    { "Altavoz",       AJ_PAG_EQUIPO,   AJ_ALTAVOZ    },
+    { "Táctil",        AJ_PAG_EQUIPO,   AJ_TACTIL     },
+    { "Muestreo",      AJ_PAG_EQUIPO,   AJ_TASA       },
+    { "Filtro FM",     AJ_PAG_EQUIPO,   AJ_IFBW       },
+    { "Dormir",        AJ_PAG_EQUIPO,   AJ_DORMIR     },
+    { "Calibrar táctil", AJ_PAG_EQUIPO, AJ_CAL_TACTIL },
+    { "Calibrar PPM",  AJ_PAG_EQUIPO,   AJ_CAL_PPM    },
+    { "Información",   AJ_PAG_EQUIPO,   AJ_INFO       },
+
+    { "Desplazamiento",AJ_PAG_DIGITAL,  AJ_RTTY_SHIFT },
+    { "Baudios",       AJ_PAG_DIGITAL,  AJ_RTTY_BAUD  },
+    { "Inversión",     AJ_PAG_DIGITAL,  AJ_RTTY_INV   },
+
+    { "Tono CW",       AJ_PAG_DIGITAL,  AJ_CW_TONO    },
+    { "Velocidad CW",  AJ_PAG_DIGITAL,  AJ_CW_PPM     },
+    { "Autoenganche",  AJ_PAG_DIGITAL,  AJ_CW_AUTO    }
+};
+#define AJUSTE_COUNT (sizeof(k_ajustes) / sizeof(k_ajustes[0]))
+
+static const char *const k_aj_paginas[AJ_PAGINAS] = {
+    "Radio", "Pantalla", "Equipo", "Digital"
+};
+
+/* Nombres largos para lo que antes eran siglas de tres letras. */
+static const char *const k_agc_nombres[4]   = { "Sin AGC", "Lenta", "Media", "Rápida" };
+/* Los nombres largos de Ajustes y las siglas de la barra son la misma lista
+ * en dos formatos, indexada por el mismo perfil de AGC. */
+_Static_assert(sizeof(k_agc_nombres) / sizeof(k_agc_nombres[0])
+               == sizeof(k_agc_profile_labels) / sizeof(k_agc_profile_labels[0]),
+               "k_agc_nombres y k_agc_profile_labels tienen que medir lo mismo");
+static const char *const k_att_nombres[3]   = { "0 dB", "-6 dB", "-12 dB" };
+static const char *const k_tactil_nombres[3]= { "Sensible", "Normal", "Firme" };
+
+/* Buffer compartido por las celdas: se rellena una por una al construir la
+ * pagina, y ui_grid solo guarda el puntero, asi que cada celda necesita el
+ * suyo. Doce celdas por 16 caracteres son 192 bytes. */
+static char s_aj_val[UIG_CELLS][16];
+
+static void aj_u2s(char *b, uint32_t v) { top_u2s(b, v); }
+
+/* Texto del valor actual de un ajuste. Devuelve 0 si el ajuste no tiene
+ * valor (es una accion). */
+static const char *ajuste_valor(uint8_t id, char *buf)
 {
-    uint8_t i;
+    switch (id) {
+    case AJ_AGC:    return k_agc_nombres[(uint8_t)demod_am_get_agc_profile()];
+    case AJ_BW: {
+        demod_mode_t m = demod_am_get_mode();
+        if (cw_get_enabled()) {
+            /* 22/09/2026: aqui ponia "0,5 kHz de CW" fijo, que era honrado
+             * cuando el selector no hacia nada en CW y paso a ser mentira el
+             * dia que empezo a hacerlo: el sonido cambiaba y la celda seguia
+             * diciendo 0,5. Ahora se pregunta al demodulador, que es quien
+             * sabe el ancho que tiene puesto. */
+            bw_format(buf, (uint32_t)(demod_am_get_cw_bw_hz() + 0.5f), "kHz CW");
+            return buf;
+        }
+        if (m == DEMOD_MODE_AM || m == DEMOD_MODE_USB || m == DEMOD_MODE_LSB) {
+            bw_format(buf, k_audio_bw_hz[(uint8_t)demod_am_get_audio_bw()], "kHz");
+            return buf;
+        }
+        return "fijo";
+    }
+    case AJ_VOL:    volume_format_ui(s_volume_db_x2, buf); return buf;
+    case AJ_PGA:    volume_format_ui(s_pga_gain_db_x2, buf); return buf;
+    case AJ_SQL: {
+        int16_t db = (int16_t)demod_am_get_squelch_db();
+        uint8_t i = 0;
+        if (db < 0) { buf[i++] = '-'; db = (int16_t)(-db); }
+        aj_u2s(&buf[i], (uint32_t)db);
+        while (buf[i] != '\0') { i++; }
+        buf[i++] = ' '; buf[i++] = 'd'; buf[i++] = 'B'; buf[i] = '\0';
+        return buf;
+    }
+    case AJ_NR:     aj_u2s(buf, (uint32_t)s_nr_strength); return buf;
+    case AJ_RFAGC:  return s_rf_agc_enabled ? "Activo" : "Apagado";
+    case AJ_ATT:
+        /* Lo que se ensena es LO QUE HAS PEDIDO, no lo que el automatico
+         * este haciendo en este segundo: si no, la celda cambiaba sola y
+         * parecia que el boton no obedecia. Cuando el AGC de RF ha subido
+         * por encima de tu suelo se dice aparte, entre parentesis, que es
+         * informacion util y no un valor distinto del tuyo. */
+        if (s_rf_agc_rin_level > s_att_suelo) {
+            /* El buffer mas pequeno de los dos que llaman aqui es
+             * s_aj_val[][16], asi que el limite es 15 caracteres. El peor
+             * caso, "-12 dB (-12 dB)", son exactamente 15 - pero el limite
+             * se comprueba en cada paso en vez de fiarse de esa cuenta, que
+             * es justo lo que deja de ser cierto el dia que un rotulo
+             * cambie. */
+            const char *mio  = k_att_nombres[s_att_suelo];
+            const char *sube = k_att_nombres[s_rf_agc_rin_level];
+            uint8_t k = 0U, j;
+            for (j = 0U; mio[j]  != '\0' && k < 15U; j++) { buf[k++] = mio[j]; }
+            if (k < 15U) { buf[k++] = ' '; }
+            if (k < 15U) { buf[k++] = '('; }
+            for (j = 0U; sube[j] != '\0' && k < 15U; j++) { buf[k++] = sube[j]; }
+            if (k < 15U) { buf[k++] = ')'; }
+            buf[k] = '\0';
+            return buf;
+        }
+        return k_att_nombres[s_att_suelo];
 
-    gfx_fill_rect(MENU_AREA_X, MENU_AREA_Y, MENU_AREA_W, MENU_AREA_H, GFX_COLOR_BLACK);
-    gfx_rect(MENU_AREA_X, MENU_AREA_Y, MENU_AREA_W, MENU_AREA_H, GFX_COLOR_GRAY);
-    ui_screen_init(&s_menu_screen);
+    case AJ_BRILLO: {
+        uint8_t i;
+        aj_u2s(buf, backlight_get_percent());
+        for (i = 0U; buf[i] != '\0'; i++) { }
+        buf[i++] = ' '; buf[i++] = '%'; buf[i] = '\0';
+        return buf;
+    }
+    case AJ_ESCALA: {
+        /* "-110 / -20": los dos limites a la vez, que es como se piensa la
+         * escala; entrar solo hacia falta para moverlos. */
+        int16_t lo = (int16_t)s_db_min, hi = (int16_t)s_db_max;
+        uint8_t i = 0;
+        if (lo < 0) { buf[i++] = '-'; lo = (int16_t)(-lo); }
+        aj_u2s(&buf[i], (uint32_t)lo);
+        while (buf[i] != '\0') { i++; }
+        buf[i++] = ' '; buf[i++] = '/'; buf[i++] = ' ';
+        if (hi < 0) { buf[i++] = '-'; hi = (int16_t)(-hi); }
+        aj_u2s(&buf[i], (uint32_t)hi);
+        return buf;
+    }
+    case AJ_AUTOESC: return s_spec_agc_enabled ? "Activa" : "Apagada";
+    case AJ_SUAVIZ: {
+        uint8_t i;
+        aj_u2s(buf, (uint32_t)spectrum_smooth_pct_for_save());
+        for (i = 0U; buf[i] != '\0'; i++) { }
+        buf[i++] = ' '; buf[i++] = '%'; buf[i] = '\0';
+        return buf;
+    }
+    case AJ_CONTORNO: aj_u2s(buf, (uint32_t)s_spec_smooth_passes); return buf;
+    case AJ_ESTILO:
+        switch (spectrum_get_style()) {
+        case SPECTRUM_STYLE_HEATMAP: return "Relleno";
+        case SPECTRUM_STYLE_LINE:    return "Línea";
+        default:                     return "Contorno";
+        }
+    case AJ_ZOOM:
+        return (s_spec_zoom == SPEC_ZOOM_8X) ? "8x" :
+               (s_spec_zoom == SPEC_ZOOM_4X) ? "4x" :
+               (s_spec_zoom == SPEC_ZOOM_2X) ? "2x" : "1x";
+    case AJ_PALETA:
+        /* Sale de la tabla de spectrum.c, que es donde vive la lista. Esta
+         * misma celda mostraba "Clásica" para Templada, Viva y WebSDR
+         * porque aqui habia una copia a mano de la lista a la que le
+         * faltaban tres ramas. */
+        return spectrum_palette_nombre((uint8_t)spectrum_get_palette());
+    case AJ_TRAZA:   return spectrum_get_heatmap_trace_white() ? "Blanca" : "Del color";
 
-    for (i = 0; i < (uint8_t)BAND_PRESET_COUNT; i++) {
-        uint16_t col = i % 4U;
-        uint16_t row = i / 4U;
+    case AJ_ALTAVOZ: return s_speaker_pa_enabled ? "Activo" : "Mudo";
+    case AJ_TASA:    return s_nonwfm_use_48k ? "48 kHz" : "96 kHz";
+    case AJ_IFBW:    return (demod_am_get_wfm_ifbw() == WFM_IFBW_NARROW) ? "80 kHz" : "96 kHz";
+    case AJ_TACTIL:  return k_tactil_nombres[touch_get_firmeza() - 1U];
 
-        s_menu_band_tiles[i] = (ui_button_t){
-            MENU_TILE_COL(col), MENU_TILE_ROW(row), MENU_TILE_W, MENU_TILE_H,
-            k_band_presets[i].label, GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_band_preset_callback, (void *)(uintptr_t)i};
-        ui_screen_add_button(&s_menu_screen, &s_menu_band_tiles[i]);
+    case AJ_RTTY_SHIFT: {
+        uint8_t i;
+        aj_u2s(buf, (uint32_t)(rtty_get_shift_hz() + 0.5f));
+        for (i = 0U; buf[i] != '\0'; i++) { }
+        buf[i++] = ' '; buf[i++] = 'H'; buf[i++] = 'z'; buf[i] = '\0';
+        return buf;
+    }
+    case AJ_RTTY_BAUD: return k_rtty_baud_labels[s_rtty_baud_idx];
+
+    case AJ_CW_TONO: {
+        uint8_t i;
+        aj_u2s(buf, (uint32_t)(cw_get_pitch_hz() + 0.5f));
+        for (i = 0U; buf[i] != '\0'; i++) { }
+        buf[i++] = ' '; buf[i++] = 'H'; buf[i++] = 'z'; buf[i] = '\0';
+        return buf;
+    }
+    /*
+     * Se ensenan DOS numeros: el que se ha puesto y el que el
+     * decodificador esta midiendo ahora mismo, "20 / 24". El primero es
+     * por donde empieza a buscar y el segundo es lo que ha encontrado,
+     * y es el segundo el que dice si esta enganchado: si baila, no lo
+     * esta. Poner solo el ajustado seria ensenar el unico de los dos
+     * que no informa de nada.
+     */
+    case AJ_INFO:   return 0;   /* es una accion: abre su pantalla */
+    case AJ_CW_AUTO:
+        return cw_get_autotune() ? "Automático" : "Fijo en el tono";
+    case AJ_TEMA:   return k_temas[s_tema_idx].nombre;
+    case AJ_CW_PPM: {
+        uint8_t i;
+        aj_u2s(buf, (uint32_t)k_cw_wpm[s_cw_wpm_idx]);
+        for (i = 0U; buf[i] != '\0'; i++) { }
+        buf[i++] = ' '; buf[i++] = '/'; buf[i++] = ' ';
+        aj_u2s(&buf[i], (uint32_t)(cw_get_wpm() + 0.5f));
+        return buf;
+    }
+    case AJ_RTTY_INV:  return rtty_get_station_inverted() ? "Invertida" : "Normal";
+
+    default: return 0;   /* acciones: calibrar, dormir */
+    }
+}
+
+/* Lo que hace tocar un ajuste. Llama a los callbacks que ya existen. */
+static void ajuste_accion(uint8_t id)
+{
+    switch (id) {
+    case AJ_AGC:    menu_tile_agc_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_BW:     menu_tile_bw_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_RFAGC:  menu_tile_rfagc_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_ATT:    menu_tile_att_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_AUTOESC: menu_tile_specagc_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_ESTILO: menu_tile_spec_style_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_ZOOM:   menu_tile_zoom_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_PALETA: paleta_cambiar(); break;
+    case AJ_TRAZA:  menu_tile_trace_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_CONTORNO: menu_tile_nb_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_ALTAVOZ: menu_tile_speaker_pa_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_TASA:   menu_tile_rate_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_IFBW:   menu_tile_ifbw_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_RTTY_BAUD: menu_tile_rtty_baud_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_RTTY_INV:  menu_tile_rtty_inv_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_DORMIR:    menu_tile_sleep_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_CAL_TACTIL: menu_tile_cal_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_CAL_PPM:    menu_tile_cal_ppm_callback(0, UI_EVENT_RELEASE, 0); break;
+
+    case AJ_TACTIL: {
+        /* Sensible -> Normal -> Firme -> Sensible. El unico ajuste que no
+         * tenia celda antes: se anade con la funcion nueva de touch.c. */
+        uint8_t n = (uint8_t)(touch_get_firmeza() + 1U);
+        if (n > 3U) { n = 1U; }
+        touch_set_firmeza(n);
+        if (s_settings_ready_for_autosave) { settings_mark_dirty(); }
+        break;
     }
 
-    ui_screen_draw(&s_menu_screen);
+    /* Los que tienen un rango continuo abren la pantalla de detalle, donde
+     * estan el mando y los botones "-" y "+". */
+    case AJ_VOL: menu_tile_volume_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_SQL: menu_tile_squelch_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_PGA: menu_tile_pga_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_NR: menu_tile_nr_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_BRILLO: menu_tile_backlight_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_ESCALA: menu_tile_scale_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_SUAVIZ: menu_tile_smooth_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_RTTY_SHIFT: menu_tile_rtty_shift_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_CW_TONO:    menu_tile_cw_tone_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_CW_PPM:     menu_tile_cw_wpm_callback(0, UI_EVENT_RELEASE, 0); break;
+    case AJ_CW_AUTO:
+        cw_set_autotune((uint8_t)(cw_get_autotune() ? 0U : 1U));
+        settings_value_redraw();
+        break;
+    case AJ_TEMA:       tema_cambiar(); break;
+    case AJ_INFO:       grid_show(GRID_INFO); break;
+    default: break;
+    }
+}
+
+
+/* ===========================================================================
+ * PANTALLA DE AJUSTES (columna de categorias a la izquierda)
+ * ===========================================================================
+ * *** 22/09/2026, por el dueno del proyecto: le gustaba la maqueta inicial,
+ * "las 4 categorias a la izquierda, y luego ponerle los botones a la
+ * derecha" ***
+ *
+ * Sustituye a la rejilla paginada. Con paginas, ir de Radio a Equipo eran dos
+ * pulsaciones de "Siguiente" y leer la cabecera para saber donde estabas; con
+ * la columna, las cuatro categorias estan siempre a la vista y cambiar es un
+ * toque. Y sale gratis en sitio: la columna ocupa lo que ocupaba el pie, y
+ * las celdas pasan de 192x76 a 200x98 px.
+ *
+ * Las otras tres pantallas -bandas, modos y pasos- siguen en la rejilla
+ * paginada, que es lo que les va: son listas largas de cosas del mismo tipo,
+ * no cuatro grupos fijos.
+ */
+/* Las dos pantallas que usan la columna de categorias. Bandas se paso a este
+ * reparto el 22/09/2026, por el dueno del proyecto: "en la pantalla de bandas
+ * vamos a hacer lo mismo que en la de ajustes, menu lateral que marque la
+ * categoria". Con 16 celdas por familia, ninguna necesita paginar. */
+static ui_cfg_state_t s_cfg;
+static uint8_t        s_cfg_cat = 0U;
+static int8_t         s_cfg_cursor = 0;
+static int8_t         s_cfg_press = -1;
+static char           s_cfg_val[UIC_CELLS][20];
+
+/* Cuantas entradas tiene la pantalla activa y a que categoria pertenece cada
+ * una: lo unico que distingue ajustes de bandas dentro de este bloque. */
+static uint16_t cfg_total(void)
+{
+    return (s_cfg_pant == CFG_BANDAS) ? (uint16_t)BAND_PRESET_COUNT
+                                      : (uint16_t)AJUSTE_COUNT;
+}
+static uint8_t cfg_cat_de(uint16_t i)
+{
+    return (s_cfg_pant == CFG_BANDAS) ? k_band_presets[i].familia
+                                      : k_ajustes[i].pagina;
+}
+static uint8_t cfg_cats(void)
+{
+    return (s_cfg_pant == CFG_BANDAS) ? BAND_FAM_COUNT : AJ_PAGINAS;
+}
+
+/* Indice global de la celda `cel` de la categoria activa, o -1. */
+static int16_t cfg_indice(uint8_t cel)
+{
+    uint16_t i, total = cfg_total();
+    uint8_t  n = 0;
+
+    for (i = 0; i < total; i++) {
+        if (cfg_cat_de(i) != s_cfg_cat) { continue; }
+        if (n == cel) { return (int16_t)i; }
+        n++;
+    }
+    return -1;
+}
+
+static uint8_t cfg_cuantos(uint8_t cat)
+{
+    uint16_t i, total = cfg_total();
+    uint8_t  n = 0;
+
+    for (i = 0; i < total; i++) {
+        if (cfg_cat_de(i) == cat) { n++; }
+    }
+    return n;
+}
+
+static void cfg_fill(void)
+{
+    uint8_t i, n = 0, cats = cfg_cats();
+    uint16_t k, total = cfg_total();
+
+    for (i = 0U; i < UIC_CATS; i++) {
+        s_cfg.cat[i] = (i < cats)
+            ? ((s_cfg_pant == CFG_BANDAS) ? k_band_familias[i] : k_aj_paginas[i])
+            : "";
+    }
+    s_cfg.cats    = cats;
+    s_cfg.denso   = (uint8_t)(s_cfg_pant == CFG_BANDAS);
+    s_cfg.cat_sel = s_cfg_cat;
+    s_cfg.cursor  = s_cfg_cursor;
+    s_cfg.pressed = s_cfg_press;
+    s_cfg.marcada = 0xFFU;
+
+    for (k = 0; k < total && n < UIC_CELLS; k++) {
+        if (cfg_cat_de(k) != s_cfg_cat) { continue; }
+
+        if (s_cfg_pant == CFG_BANDAS) {
+            const band_preset_t *b = &k_band_presets[k];
+            uint8_t m;
+
+            s_cfg.cel[n].nombre = b->label;
+            s_cfg.cel[n].valor  = b->rango;
+            s_cfg.cel[n].extra  = "";
+            for (m = 0U; m < (uint8_t)DEMOD_MODE_ENTRY_COUNT; m++) {
+                if (k_demod_modes[m].mode == b->mode &&
+                    k_demod_modes[m].rtty_variant == RTTY_VARIANT_NONE &&
+                    !k_demod_modes[m].cw) {
+                    s_cfg.cel[n].extra = k_demod_modes[m].label;
+                    break;
+                }
+            }
+            if (b->freq_hz == s_tune_hz) { s_cfg.marcada = n; }
+        } else {
+            const ajuste_t *a = &k_ajustes[k];
+            const char *v = ajuste_valor(a->id, s_cfg_val[n]);
+
+            s_cfg.cel[n].nombre = a->nombre;
+            /* Los que son una accion y no un valor lo dicen, en vez de dejar
+             * el renglon vacio como si les faltara algo. */
+            s_cfg.cel[n].valor  = v ? v : "tocar";
+            s_cfg.cel[n].extra  = 0;
+        }
+        n++;
+    }
+    for (i = n; i < UIC_CELLS; i++) {
+        s_cfg.cel[i].nombre = "";
+        s_cfg.cel[i].valor  = "";
+        s_cfg.cel[i].extra  = 0;
+    }
+    s_cfg.n = n;
+}
+
+/*
+ * Cambia la paleta de la interfaz y repinta.
+ *
+ * Todo el nucleo grafico lee los colores a traves de g_pal, asi que
+ * cambiar el puntero y volver a pintar es literalmente todo lo que hay
+ * que hacer: ni un solo sitio de uso se toca. Era la razon por la que la
+ * paleta se hizo conmutable en su dia (ver el comentario de palette.h),
+ * y hasta hoy no habia forma de aprovecharlo sin recompilar.
+ *
+ * Se repinta la pantalla de ajustes, que es desde donde se toca. Lo que
+ * hay debajo -la pantalla principal- se repinta entero al cerrar el
+ * menu, asi que no hace falta hacer nada aqui por ella.
+ *
+ * NO SE GUARDA: al reiniciar vuelve a la oscura. Queda pendiente, y es
+ * una asimetria fea con el resto de los ajustes de esa pagina, que si
+ * persisten.
+ */
+/*
+ * Pone el tema i. Sin repintar: eso lo hace quien llama, que es el unico
+ * que sabe lo que hay en pantalla. Al arrancar no hay nada pintado.
+ */
+static void tema_aplicar(uint8_t i)
+{
+    if (i >= (uint8_t)TEMA_COUNT) { i = 0U; }
+    s_tema_idx = i;
+    g_pal = k_temas[i].pal;
+    spectrum_set_palette(k_temas[i].wf);
+    debug_print("tema: ");
+    debug_print(k_temas[i].nombre);
+    debug_print("\n");
+}
+
+/*
+ * Pasa al siguiente tema y repinta.
+ *
+ * Cicla en vez de abrir una pantalla de eleccion, y es a proposito: con
+ * cuatro temas, tocar y ver es mas rapido que entrar, elegir y salir. Y
+ * hay algo que una pantalla de eleccion no puede dar - al tocar, lo que
+ * se repinta es la pantalla donde estas, asi que ves el tema puesto
+ * sobre el sitio donde lo vas a usar y no sobre una lista de nombres.
+ *
+ * Todo el nucleo grafico lee los colores por g_pal, asi que cambiar el
+ * puntero y repintar es literalmente todo. Era para lo que se hizo
+ * conmutable la paleta en su dia (ver palette.h), y hasta hoy no habia
+ * forma de aprovecharlo sin recompilar.
+ */
+/*
+ * Siguiente paleta del espectro, en el sitio - 22/09/2026, por el dueno del
+ * proyecto: "un boton que sea la paleta del espectro y que vaya cambiando
+ * conforme le vas dando, igual que el de tema".
+ *
+ * El "igual que el de tema" es literal: mismo gesto, misma celda, mismo
+ * volver a la lista con el nombre nuevo puesto. La diferencia es que un tema
+ * repinta toda la pantalla porque cambia todos los colores de la interfaz, y
+ * una paleta solo cambia el espectro y la cascada, asi que basta con
+ * refrescar el valor de su propia celda.
+ *
+ * El "siguiente" sale de la tabla de spectrum.c. Antes era un switch de
+ * quince ramas escrito a mano aqui, y era una de las siete copias de la
+ * misma lista: anadir una paleta obligaba a acordarse de siete sitios, y a
+ * tres de ellas ya se les habia olvidado uno.
+ */
+static void paleta_cambiar(void)
+{
+    uint8_t n = spectrum_palette_count();
+    uint8_t i = (uint8_t)(((uint8_t)spectrum_get_palette() + 1U) % n);
+
+    spectrum_set_palette((spectrum_palette_t)i);
+    if (s_settings_ready_for_autosave) { settings_mark_dirty(); }
+    settings_value_redraw();
+}
+
+static void tema_cambiar(void)
+{
+    tema_aplicar((uint8_t)((s_tema_idx + 1U) % TEMA_COUNT));
+    if (s_settings_ready_for_autosave) { settings_mark_dirty(); }
+    cfg_fill();
+    ui_cfg_draw(&s_cfg);
+}
+
+static void cfg_show(cfg_pant_t p)
+{
+    if (p != s_cfg_pant) { s_cfg_pant = p; s_cfg_cat = 0U; s_cfg_cursor = 0; }
+    s_cfg_press = -1;
+    if (s_cfg_cursor >= (int8_t)cfg_cuantos(s_cfg_cat)) { s_cfg_cursor = 0; }
+    cfg_fill();
+    ui_cfg_draw(&s_cfg);
 
     s_menu_detail_active = 0U;
-    s_menu_bands_active = 1U;
-    s_menu_step_active = 0U;
-    s_menu_mode_active = 0U;
-    s_menu_freq_active = 0U;
-    s_menu_time_active = 0U;
-    s_menu_open = 1U; /* harmless if already 1 (opened from the grid); required when opened straight from s_btn_bands, same reasoning as menu_step_list_show()'s comment */
+    s_menu_bands_active  = 0U;
+    s_menu_step_active   = 0U;
+    s_menu_mode_active   = 0U;
+    s_menu_freq_active   = 0U;
+    s_menu_time_active   = 0U;
+    s_kbd_modo           = KBD_NADA;
+    s_grid_pant = GRID_NADA;   /* esta pantalla no es una rejilla paginada */
+    s_menu_cfg_active = 1U;
+    s_menu_bands_active = (uint8_t)(p == CFG_BANDAS);
+    s_menu_open = 1U;
+    /* La barra de abajo se repinta al ABRIR cualquier pantalla, no solo al
+     * cerrarla: el boton iluminado es el de la pantalla activa, y abrir una
+     * desde un sitio que no sea la propia barra (el teclado de frecuencia,
+     * por ejemplo) tambien lo cambia. Ponerlo aqui lo cubre por construccion.
+     */
+    act_draw();
+
+
+    /* El cursor del mando arranca donde estas, si esa celda esta a la vista. */
+    if (s_cfg.marcada != 0xFFU) {
+        s_cfg_cursor = (int8_t)s_cfg.marcada;
+        cfg_fill();
+        ui_cfg_draw(&s_cfg);
+    }
 }
+
+static void cfg_apply(uint8_t cel)
+{
+    int16_t k = cfg_indice(cel);
+
+    if (k < 0) { return; }
+    if (s_cfg_pant == CFG_BANDAS) {
+        menu_band_preset_callback(0, UI_EVENT_RELEASE, (void *)(uintptr_t)k);
+        return;
+    }
+    ajuste_accion(k_ajustes[k].id);
+    /* Los que cambian en el sitio se quedan aqui y refrescan; los que abren
+     * el detalle o una pantalla completa ya han cambiado de sitio. */
+    if (s_menu_cfg_active && !s_menu_detail_active && !s_screen_asleep) {
+        cfg_fill();
+        ui_cfg_draw(&s_cfg);
+    }
+}
+
+/* El mando recorre las celdas y, al llegar al final, salta de categoria: asi
+ * se pasa por los 27 ajustes de un tiron sin tener que tocar la columna. */
+static void cfg_cursor_move(int32_t d)
+{
+    while (d > 0) {
+        if (s_cfg_cursor + 1 < (int8_t)cfg_cuantos(s_cfg_cat)) {
+            s_cfg_cursor++;
+        } else if (s_cfg_cat + 1U < cfg_cats()) {
+            s_cfg_cat++; s_cfg_cursor = 0;
+        }
+        d--;
+    }
+    while (d < 0) {
+        if (s_cfg_cursor > 0) {
+            s_cfg_cursor--;
+        } else if (s_cfg_cat > 0U) {
+            s_cfg_cat--;
+            s_cfg_cursor = (int8_t)(cfg_cuantos(s_cfg_cat) - 1U);
+        }
+        d++;
+    }
+    cfg_fill();
+    ui_cfg_draw(&s_cfg);
+}
+
+static void cfg_touch(uint16_t x, uint16_t y, uint8_t pressed)
+{
+    if (pressed) {
+        if (s_cfg_press < 0) {
+            s_cfg_press = ui_cfg_hit(x, y);
+            if (s_cfg_press >= 0) { cfg_fill(); ui_cfg_draw_one(&s_cfg, s_cfg_press); }
+        }
+        return;
+    }
+    if (s_cfg_press < 0) { return; }
+    {
+        int8_t k = s_cfg_press;
+
+        s_cfg_press = -1;
+        cfg_fill();
+        ui_cfg_draw_one(&s_cfg, k);
+
+        if (k < UIC_CELLS) {
+            cfg_apply((uint8_t)k);
+        } else {
+            uint8_t cat = (uint8_t)(k - UIC_HIT_CAT0);
+            if (cat != s_cfg_cat) {
+                s_cfg_cat = cat;
+                s_cfg_cursor = 0;
+                cfg_fill();
+                ui_cfg_draw(&s_cfg);
+            }
+        }
+    }
+}
+
+/* ===========================================================================
+ * MOTOR DE PANTALLAS DE REJILLA
+ * ===========================================================================
+ * Cuatro pantallas -ajustes, bandas, modos y pasos- comparten estado, dibujo,
+ * paginacion, reparto de toques y navegacion con el mando. Lo unico propio de
+ * cada una son tres funciones cortas: cuantas paginas tiene, que pone en cada
+ * celda y que pasa al tocarla.
+ */
+static ui_grid_state_t  s_grid;
+static uint8_t          s_grid_page = 0U;
+static int8_t           s_grid_cursor = 0;
+static int8_t           s_grid_press = -1;
+
+/* Descripciones de modo y de paso: la sigla sola no dice nada a quien no se
+ * la sepa ya, y aqui hay sitio de sobra para la palabra entera. */
+/*
+ * Los pasos siguen teniendo sus textos en arrays paralelos a
+ * k_tune_steps[] -las etiquetas por un lado y las descripciones por
+ * otro- porque ahi no hay una estructura donde meterlos y el array de
+ * valores es un uint32_t pelado que usa media docena de sitios.
+ *
+ * Pero el fallo que se comio la pantalla de modos era exactamente este,
+ * asi que al menos que no pueda pasar en silencio: si alguien anade un
+ * paso y se olvida de un texto, esto no compila. Es una linea, y es la
+ * diferencia entre un error de compilacion y una pantalla que desaparece
+ * sin decir por que.
+ */
+static const char *const k_paso_desc[] = {
+    "Ajuste fino", "SSB", "Onda corta", "CB y onda media",
+    "Marina y 2 m", "Aeronáutica", "FM comercial", "Saltos grandes"
+};
+_Static_assert(sizeof(k_paso_desc) / sizeof(k_paso_desc[0]) == TUNE_STEP_COUNT,
+               "k_paso_desc[] tiene que tener una entrada por cada paso de k_tune_steps[]");
+_Static_assert(sizeof(k_tune_step_labels_ui) / sizeof(k_tune_step_labels_ui[0]) == TUNE_STEP_COUNT,
+               "k_tune_step_labels_ui[] tiene que tener una entrada por cada paso de k_tune_steps[]");
+
+/* ===========================================================================
+ * PANTALLA DE INFORMACION
+ * ===========================================================================
+ * *** 22/09/2026, a peticion del dueno del proyecto ***
+ *
+ * Solo se lee, no se toca nada. Reutiliza la rejilla comun, igual que
+ * modos y pasos: una pantalla de solo lectura no merece codigo propio.
+ *
+ * TODOS los numeros salen de donde estan de verdad, ninguno esta escrito
+ * a mano:
+ *
+ *   - La fecha es __DATE__/__TIME__, o sea el momento de compilar. No se
+ *     puede desincronizar del binario porque no hay nada que actualizar.
+ *   - El uso de memoria sale de los simbolos del enlazador, los mismos
+ *     con los que el arranque copia .data y .tcmram. La cuenta de flash
+ *     esta comprobada contra el tamano real del .bin: coincide byte a
+ *     byte.
+ *   - La temperatura es el sensor del propio micro. Ver
+ *     battery_get_chip_temp_c() para por que pone "del chip" y por que
+ *     el numero absoluto no es de fiar.
+ *
+ * El tope de flash que se ensena son 256 kB y no los 384 que da el mapa
+ * de memoria, porque el limite de verdad no es el enlazador: es el
+ * camino de actualizacion, que rellena la imagen a 0x40000 y le pega la
+ * firma detras. Ensenar 384 seria ensenar un margen que no existe.
+ */
+extern uint32_t _sdata, _edata, _sbss, _ebss, _stcmram, _etcmram, _sitcmram;
+
+#define INFO_FLASH_ORIGEN 0x08020000UL
+#define INFO_FLASH_TOPE   (256UL * 1024UL)   /* ver el comentario de arriba */
+#define INFO_SRAM_TOPE    (192UL * 1024UL)
+#define INFO_TCM_TOPE     (64UL  * 1024UL)
+
+/* "123,4 / 256 kB" a partir de bytes usados y tope en bytes. */
+static void info_kb(char *b, uint32_t usados, uint32_t tope)
+{
+    uint32_t e = usados / 1024U;
+    uint32_t d = ((usados % 1024U) * 10U) / 1024U;
+    uint8_t  i = 0U;
+
+    aj_u2s(b, e);
+    while (b[i] != '\0') { i++; }
+    b[i++] = ','; b[i++] = (char)('0' + d);
+    b[i++] = ' '; b[i++] = '/'; b[i++] = ' ';
+    aj_u2s(&b[i], tope / 1024U);
+    while (b[i] != '\0') { i++; }
+    b[i++] = ' '; b[i++] = 'k'; b[i++] = 'B'; b[i] = '\0';
+}
+
+/*
+ * __DATE__ llega como "Sep 22 2026" y __TIME__ como "18:43:11", en
+ * ingles y en el orden americano. Se le da la vuelta a mano a
+ * "22/09/2026 18:43" porque es lo que espera quien lo va a leer, y
+ * traducir tres letras es mas barato que acostumbrarse.
+ */
+static void info_fecha(char *b)
+{
+    static const char k_meses[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
+    const char *f = __DATE__;
+    const char *h = __TIME__;
+    uint8_t m, i = 0U;
+
+    for (m = 0U; m < 12U; m++) {
+        if (f[0] == k_meses[m * 3U] && f[1] == k_meses[m * 3U + 1U] &&
+            f[2] == k_meses[m * 3U + 2U]) {
+            break;
+        }
+    }
+    m++;   /* 1..12; si no se reconocio queda 13, que canta a la vista */
+
+    b[i++] = (f[4] == ' ') ? '0' : f[4];
+    b[i++] = f[5];
+    b[i++] = '/';
+    b[i++] = (char)('0' + (m / 10U));
+    b[i++] = (char)('0' + (m % 10U));
+    b[i++] = '/';
+    b[i++] = f[7]; b[i++] = f[8]; b[i++] = f[9]; b[i++] = f[10];
+    b[i++] = ' ';
+    b[i++] = h[0]; b[i++] = h[1]; b[i++] = ':'; b[i++] = h[3]; b[i++] = h[4];
+    b[i] = '\0';
+}
+
+enum { INFO_VERSION = 0, INFO_FECHA, INFO_MODELO, INFO_MICRO, INFO_FLASH,
+       INFO_SRAM, INFO_TCM, INFO_TEMP, INFO_BATT, INFO_COUNT };
+
+static const char *const k_info_nombres[INFO_COUNT] = {
+    "Versión", "Compilado", "Equipo", "Micro", "Flash", "SRAM", "TCM",
+    "Temp. del chip", "Batería"
+};
+
+static char s_info_val[UIG_CELLS][24];
+
+
+static const char *info_valor(uint8_t id, char *buf)
+{
+    switch (id) {
+    case INFO_VERSION: return CONFIG_FW_VERSION;
+    case INFO_FECHA:   info_fecha(buf); return buf;
+    case INFO_MODELO:  return "DEEPSDR 101";
+    case INFO_MICRO:   return "GD32F450VET6";
+    case INFO_FLASH:
+        info_kb(buf, ((uint32_t)&_sitcmram - INFO_FLASH_ORIGEN) +
+                     ((uint32_t)&_etcmram - (uint32_t)&_stcmram), INFO_FLASH_TOPE);
+        return buf;
+    case INFO_SRAM:
+        info_kb(buf, ((uint32_t)&_edata - (uint32_t)&_sdata) +
+                     ((uint32_t)&_ebss - (uint32_t)&_sbss), INFO_SRAM_TOPE);
+        return buf;
+    case INFO_TCM:
+        info_kb(buf, (uint32_t)&_etcmram - (uint32_t)&_stcmram, INFO_TCM_TOPE);
+        return buf;
+    case INFO_TEMP: {
+        int16_t t = battery_get_chip_temp_c();
+        uint8_t i = 0U;
+        if (t < 0) { buf[i++] = '-'; t = (int16_t)(-t); }
+        aj_u2s(&buf[i], (uint32_t)t);
+        while (buf[i] != '\0') { i++; }
+        buf[i++] = ' '; buf[i++] = '\xC2'; buf[i++] = '\xB0'; buf[i++] = 'C';
+        buf[i] = '\0';
+        return buf;
+    }
+    case INFO_BATT: {
+        uint8_t i = 0U;
+        aj_u2s(buf, battery_get_percent());
+        while (buf[i] != '\0') { i++; }
+        buf[i++] = ' '; buf[i++] = '%'; buf[i] = '\0';
+        return buf;
+    }
+    default: return "";
+    }
+}
+
+/* Numero de entradas de la pantalla activa. */
+static uint16_t grid_total(void)
+{
+    switch (s_grid_pant) {
+    case GRID_AJUSTES: return (uint16_t)AJUSTE_COUNT;
+    case GRID_BANDAS:  return (uint16_t)BAND_PRESET_COUNT;
+    case GRID_MODO:    return (uint16_t)DEMOD_MODE_ENTRY_COUNT;
+    case GRID_PASOS:   return (uint16_t)TUNE_STEP_COUNT;
+    case GRID_INFO:    return (uint16_t)INFO_COUNT;
+    default:           return 0U;
+    }
+}
+
+/* Familia/grupo de la entrada i, o 0 si la pantalla no agrupa. */
+static uint8_t grid_grupo(uint16_t i)
+{
+    switch (s_grid_pant) {
+    case GRID_AJUSTES: return k_ajustes[i].pagina;
+    case GRID_BANDAS:  return k_band_presets[i].familia;
+    default:           return 0U;
+    }
+}
+
+static const char *grid_grupo_nombre(uint8_t g)
+{
+    switch (s_grid_pant) {
+    case GRID_AJUSTES: return k_aj_paginas[g];
+    case GRID_BANDAS:  return k_band_familias[g];
+    case GRID_MODO:    return "Modo";
+    case GRID_PASOS:   return "Paso de sintonía";
+    case GRID_INFO:    return "Información";
+    default:           return "";
+    }
+}
+
+/*
+ * Primera entrada, numero de entradas y grupo de la pagina pedida.
+ *
+ * Las paginas no mezclan grupos: se recorre la tabla acumulando tramos del
+ * mismo grupo y cada tramo se parte en paginas de UIG_CELLS. Calcularlo en
+ * vez de escribirlo a mano es lo que permite anadir un ajuste o una banda sin
+ * tocar nada mas.
+ */
+static uint8_t grid_page_info(uint8_t pagina, uint16_t *primero, uint8_t *n, uint8_t *grupo)
+{
+    uint16_t i = 0, total = grid_total();
+    uint8_t  p = 0;
+
+    while (i < total) {
+        uint8_t  g = grid_grupo(i);
+        uint16_t run = 0, off = 0;
+
+        while (i + run < total && grid_grupo((uint16_t)(i + run)) == g) { run++; }
+        while (off < run) {
+            uint16_t quedan = (uint16_t)(run - off);
+            uint8_t  cuantas = (uint8_t)((quedan > UIG_CELLS) ? UIG_CELLS : quedan);
+            if (p == pagina) {
+                if (primero) { *primero = (uint16_t)(i + off); }
+                if (n)       { *n = cuantas; }
+                if (grupo)   { *grupo = g; }
+                return 1U;
+            }
+            p++;
+            off = (uint16_t)(off + cuantas);
+        }
+        i = (uint16_t)(i + run);
+    }
+    return 0U;
+}
+
+static uint8_t grid_page_count(void)
+{
+    uint8_t p = 0;
+    while (grid_page_info(p, 0, 0, 0)) { p++; }
+    return p;
+}
+
+/* Rellena s_grid con la pagina actual. */
+static void grid_fill(void)
+{
+    uint8_t  grupo = 0, n = 0, i;
+    uint16_t primero = 0;
+
+    if (!grid_page_info(s_grid_page, &primero, &n, &grupo)) {
+        s_grid_page = 0U;
+        if (!grid_page_info(0U, &primero, &n, &grupo)) { n = 0U; }
+    }
+
+    s_grid.titulo  = grid_grupo_nombre(grupo);
+    s_grid.pagina  = s_grid_page;
+    s_grid.paginas = grid_page_count();
+    s_grid.n       = n;
+    s_grid.pressed = s_grid_press;
+    s_grid.cursor  = s_grid_cursor;
+    s_grid.marcada = 0xFFU;
+
+    s_grid.nav[0] = "Anterior";  s_grid.nav_on[0] = (uint8_t)(s_grid_page > 0U);
+    s_grid.nav[1] = "Siguiente"; s_grid.nav_on[1] = (uint8_t)(s_grid_page + 1U < s_grid.paginas);
+
+    for (i = 0U; i < UIG_CELLS; i++) {
+        s_grid.cel[i].l1 = "";
+        s_grid.cel[i].l2 = "";
+        s_grid.cel[i].l3 = 0;
+
+        if (i >= n) { continue; }
+
+        switch (s_grid_pant) {
+        case GRID_AJUSTES: {
+            const ajuste_t *a = &k_ajustes[primero + i];
+            const char *v = ajuste_valor(a->id, s_aj_val[i]);
+            s_grid.cel[i].l1 = a->nombre;
+            /* Los ajustes que son una accion y no un valor lo dicen, en vez
+             * de dejar el renglon vacio como si les faltara algo. */
+            s_grid.cel[i].l2 = v ? v : "tocar para hacerlo";
+            break;
+        }
+        case GRID_BANDAS: {
+            const band_preset_t *b = &k_band_presets[primero + i];
+            uint8_t m;
+            s_grid.cel[i].l1 = b->label;
+            s_grid.cel[i].l2 = b->rango;
+            s_grid.cel[i].l3 = "";
+            for (m = 0U; m < (uint8_t)DEMOD_MODE_ENTRY_COUNT; m++) {
+                if (k_demod_modes[m].mode == b->mode &&
+                    k_demod_modes[m].rtty_variant == RTTY_VARIANT_NONE &&
+                    !k_demod_modes[m].cw) {
+                    s_grid.cel[i].l3 = k_demod_modes[m].label;
+                    break;
+                }
+            }
+            if (b->freq_hz == s_tune_hz) { s_grid.marcada = i; }
+            break;
+        }
+        case GRID_MODO: {
+            uint16_t k = (uint16_t)(primero + i);
+            s_grid.cel[i].l1 = k_demod_modes[k].label;
+            s_grid.cel[i].l2 = k_demod_modes[k].desc;
+            /* rtty.h no expone en que variante esta, asi que se deduce:
+             * RTTY encendido significa que la entrada activa es una de las
+             * dos de teletipo, y cual de las dos lo decide la banda lateral.
+             * Es exactamente la informacion que hay, sin inventar un getter
+             * nuevo en el modulo de RTTY para una etiqueta de pantalla. */
+            /* Misma condicion que la etiqueta del boton de modo, y por
+             * eso la misma funcion: ver demod_mode_entry_active(). */
+            if (demod_mode_entry_active((uint8_t)k)) { s_grid.marcada = i; }
+            break;
+        }
+        case GRID_INFO: {
+            uint8_t id = (uint8_t)(primero + i);
+            s_grid.cel[i].l1 = k_info_nombres[id];
+            s_grid.cel[i].l2 = info_valor(id, s_info_val[i]);
+            break;
+        }
+        case GRID_PASOS: {
+            uint16_t k = (uint16_t)(primero + i);
+            s_grid.cel[i].l1 = k_tune_step_labels_ui[k];
+            s_grid.cel[i].l2 = k_paso_desc[k];
+            if (k == s_tune_step_idx) { s_grid.marcada = i; }
+            break;
+        }
+        default: break;
+        }
+    }
+}
+
+/* Que pasa al elegir la celda `cel` de la pagina actual. */
+static void grid_apply(uint8_t cel)
+{
+    uint16_t primero = 0;
+    uint8_t  n = 0;
+
+    if (!grid_page_info(s_grid_page, &primero, &n, 0) || cel >= n) { return; }
+
+    switch (s_grid_pant) {
+    case GRID_AJUSTES:
+        ajuste_accion(k_ajustes[primero + cel].id);
+        /* Los ajustes que cambian en el sitio se quedan en la rejilla y
+         * refrescan su celda; los que abren el detalle ya han cambiado de
+         * pantalla y no hay que repintar nada debajo. */
+        if (s_grid_pant == GRID_AJUSTES && !s_menu_detail_active && !s_screen_asleep) {
+            grid_fill();
+            ui_grid_draw(&s_grid);
+        }
+        break;
+    case GRID_BANDAS:
+        menu_band_preset_callback(0, UI_EVENT_RELEASE, (void *)(uintptr_t)(primero + cel));
+        break;
+    case GRID_MODO:
+        menu_mode_preset_callback(0, UI_EVENT_RELEASE, (void *)(uintptr_t)(primero + cel));
+        break;
+    case GRID_PASOS:
+        menu_step_preset_callback(0, UI_EVENT_RELEASE, (void *)(uintptr_t)(primero + cel));
+        break;
+    default: break;
+    }
+}
+
+static void grid_show(grid_pant_t p)
+{
+    s_grid_pant = p;
+    s_grid_page = 0U;
+    s_grid_cursor = 0;
+    s_grid_press = -1;
+
+    /* El cursor del mando arranca en la celda marcada si la hay, para que
+     * girar una vez lleve a la de al lado y no al principio de todo. Hay que
+     * rellenar antes para saber cual es. */
+    grid_fill();
+    if (s_grid.marcada != 0xFFU) { s_grid_cursor = (int8_t)s_grid.marcada; }
+    grid_fill();
+    ui_grid_draw(&s_grid);
+
+    /* s_menu_screen se deja vacia: estas pantallas no usan widgets de ui.c.
+     * Inicializarla evita que un toque herede los botones de la anterior. */
+
+    s_menu_cfg_active    = 0U;
+    s_menu_detail_active = 0U;
+    s_menu_bands_active  = (uint8_t)(p == GRID_BANDAS);
+    s_menu_step_active   = (uint8_t)(p == GRID_PASOS);
+    s_menu_mode_active   = (uint8_t)(p == GRID_MODO);
+    s_menu_freq_active   = 0U;
+    s_menu_time_active   = 0U;
+    s_kbd_modo           = KBD_NADA;
+    s_menu_open = 1U;
+    /* La barra de abajo se repinta al ABRIR cualquier pantalla, no solo al
+     * cerrarla: el boton iluminado es el de la pantalla activa, y abrir una
+     * desde un sitio que no sea la propia barra (el teclado de frecuencia,
+     * por ejemplo) tambien lo cambia. Ponerlo aqui lo cubre por construccion.
+     */
+    act_draw();
+}
+
+/* Mueve el cursor del mando, saltando de pagina por los extremos. */
+static void grid_cursor_move(int32_t d)
+{
+    uint8_t n = 0;
+
+    while (d > 0) {
+        (void)grid_page_info(s_grid_page, 0, &n, 0);
+        if (s_grid_cursor + 1 < (int8_t)n) {
+            s_grid_cursor++;
+        } else if (s_grid_page + 1U < grid_page_count()) {
+            s_grid_page++; s_grid_cursor = 0;
+        }
+        d--;
+    }
+    while (d < 0) {
+        if (s_grid_cursor > 0) {
+            s_grid_cursor--;
+        } else if (s_grid_page > 0U) {
+            s_grid_page--;
+            (void)grid_page_info(s_grid_page, 0, &n, 0);
+            s_grid_cursor = (int8_t)(n - 1U);
+        }
+        d++;
+    }
+    grid_fill();
+    ui_grid_draw(&s_grid);
+}
+
+/* Reparto de un toque dentro de una pantalla de rejilla. */
+static void grid_touch(uint16_t x, uint16_t y, uint8_t pressed)
+{
+    if (pressed) {
+        if (s_grid_press < 0) {
+            s_grid_press = ui_grid_hit(x, y);
+            /* Con una sola pagina no se dibuja el pie (ver ui_grid.c), asi
+             * que tampoco se toca: modos y pasos caben enteros de una vez. */
+            if (s_grid_press >= UIG_CELLS && grid_page_count() <= 1U) {
+                s_grid_press = -1;
+            }
+            if (s_grid_press >= 0) {
+                grid_fill();
+                ui_grid_draw_one(&s_grid, s_grid_press);
+            }
+        }
+        return;
+    }
+    if (s_grid_press < 0) { return; }
+    {
+        int8_t k = s_grid_press;
+
+        s_grid_press = -1;
+        grid_fill();
+        ui_grid_draw_one(&s_grid, k);
+
+        if (k < UIG_CELLS) {
+            grid_apply((uint8_t)k);
+        } else if (k == UIG_HIT_PREV) {
+            if (s_grid_page > 0U) {
+                s_grid_page--; s_grid_cursor = 0;
+                grid_fill(); ui_grid_draw(&s_grid);
+            }
+        } else if (k == UIG_HIT_NEXT) {
+            if (s_grid_page + 1U < grid_page_count()) {
+                s_grid_page++; s_grid_cursor = 0;
+                grid_fill(); ui_grid_draw(&s_grid);
+            }
+        }
+    }
+}
+
+static uint8_t grid_activa(void)
+{
+    return (uint8_t)(s_grid_pant != GRID_NADA && s_menu_open && !s_menu_detail_active
+                     && !s_menu_freq_active && !s_menu_time_active);
+}
+
+/*
+ * LOS BOTONES DE LA BARRA SE COMPORTAN COMO PESTAÑAS
+ * --------------------------------------------------
+ * *** 22/09/2026, por el dueno del proyecto: "el boton cerrar no hace falta,
+ * tiene que volverse a la principal si pulso ajustes", "y lo mismo en bandas
+ * y modo", "y en pasos" ***
+ *
+ * Pulsar el boton de la pantalla que ya esta abierta vuelve a la principal;
+ * pulsar el de otra cambia a esa. Es como se comporta cualquier barra de
+ * pestañas, y aqui ademas ya se estaba anunciando asi: el boton se resalta
+ * mientras su pantalla esta abierta.
+ *
+ * Con esto, el boton "Cerrar" que habia dentro de cada pantalla sobra - hacia
+ * lo mismo que otro boton que esta siempre a la vista, y obligaba a buscarlo
+ * dentro en vez de salir por donde entraste.
+ *
+ * GRID_NADA significa aqui "la pantalla de ajustes", que no es una rejilla
+ * paginada sino la de la columna de categorias (ui_cfg.c).
+ */
+static void accion_pantalla(grid_pant_t p)
+{
+    uint8_t abierta;
+
+    if (p == GRID_NADA) {
+        abierta = (uint8_t)(s_menu_cfg_active && s_cfg_pant == CFG_AJUSTES);
+    } else if (p == GRID_BANDAS) {
+        abierta = (uint8_t)(s_menu_cfg_active && s_cfg_pant == CFG_BANDAS);
+    } else {
+        abierta = (uint8_t)(s_menu_open && s_grid_pant == p);
+    }
+
+    /* Estando en el detalle de un ajuste, el boton "Ajustes" devuelve a la
+     * rejilla en vez de salir del todo: es un nivel mas adentro, no otra
+     * pantalla. Los demas botones si sacan. */
+    if (p == GRID_NADA && s_menu_detail_active) {
+        menu_grid_show();
+        return;
+    }
+    if (abierta) {
+        menu_screen_close();
+        return;
+    }
+    if (p == GRID_NADA)        { menu_grid_show(); }
+    else if (p == GRID_BANDAS) { menu_bands_show(); }
+    else                       { grid_show(p); }
+}
+
+/* Se conservan por los sitios que abren estas pantallas desde fuera de la
+ * barra de acciones (aplicar una banda desde el teclado de frecuencia, por
+ * ejemplo). Los botones de la barra usan accion_pantalla(). */
+static void menu_bands_show(void) { cfg_show(CFG_BANDAS); }
+
 
 /*
  * STEP / MODE picker lists - added 01/08/2026 per the project owner:
@@ -5525,6 +6458,13 @@ static void menu_mode_preset_callback(void *widget, ui_event_t event, void *user
          * unambiguously mean "I'm done with RTTY", not leave the
          * decoder/scope silently running against audio that's no
          * longer even SSB. */
+        /* CW: mismo trato que el RTTY, y con la misma regla de que
+         * elegir un modo llano lo apaga sin preguntar. Va aparte del
+         * switch de abajo para que quede claro que son dos interruptores
+         * independientes y que ninguno se queda encendido por descuido
+         * al pasar al otro. */
+        cw_set_enabled(k_demod_modes[idx].cw);
+
         switch (k_demod_modes[idx].rtty_variant) {
         case RTTY_VARIANT_NORMAL:
             rtty_set_mark_space_hz(CONFIG_RTTY_MARK_HZ, CONFIG_RTTY_SPACE_HZ);
@@ -5558,91 +6498,9 @@ static void menu_mode_preset_callback(void *widget, ui_event_t event, void *user
     }
 }
 
-static void menu_step_list_show(void)
-{
-    uint8_t i;
 
-    gfx_fill_rect(MENU_AREA_X, MENU_AREA_Y, MENU_AREA_W, MENU_AREA_H, GFX_COLOR_BLACK);
-    gfx_rect(MENU_AREA_X, MENU_AREA_Y, MENU_AREA_W, MENU_AREA_H, GFX_COLOR_GRAY);
-    ui_screen_init(&s_menu_screen);
 
-    for (i = 0; i < (uint8_t)TUNE_STEP_COUNT; i++) {
-        uint16_t col = i % 4U;
-        uint16_t row = i / 4U;
-        /* Highlight the currently-active step so it's obvious at a
-         * glance which one turning the knob would have cycled to
-         * next under the old behavior. */
-        uint8_t cur = (i == s_tune_step_idx);
 
-        s_menu_step_tiles[i] = (ui_button_t){
-            MENU_TILE_COL(col), MENU_TILE_ROW(row), MENU_TILE_W, MENU_TILE_H,
-            k_tune_step_labels[i],
-            cur ? GFX_COLOR_BLACK : GFX_COLOR_WHITE,
-            cur ? GFX_COLOR_CYAN  : GFX_COLOR_DARKGRAY,
-            GFX_COLOR_GRAY,
-            2, 0, 1, menu_step_preset_callback, (void *)(uintptr_t)i};
-        ui_screen_add_button(&s_menu_screen, &s_menu_step_tiles[i]);
-    }
-
-    s_menu_detail_back = (ui_button_t){
-        MENU_TILE_COL(0), MENU_TILE_ROW(2), MENU_TILE_W, MENU_TILE_H,
-        "BACK", GFX_COLOR_BLACK, GFX_COLOR_YELLOW, GFX_COLOR_WHITE,
-        3, 0, 1, menu_tile_exit_callback, NULL};
-    ui_screen_add_button(&s_menu_screen, &s_menu_detail_back);
-
-    ui_screen_draw(&s_menu_screen);
-
-    s_menu_detail_active = 0U;
-    s_menu_bands_active = 0U;
-    s_menu_mode_active = 0U;
-    s_menu_step_active = 1U;
-    s_menu_freq_active = 0U;
-    s_menu_time_active = 0U;
-    s_menu_open = 1U; /* opened straight from the bottom bar, not the grid - unlike BANDS, nothing else sets this first */
-    debug_print("menu: step picker opened\n");
-}
-
-static void menu_mode_list_show(void)
-{
-    uint8_t i;
-    demod_mode_t cur_mode = demod_am_get_mode();
-
-    gfx_fill_rect(MENU_AREA_X, MENU_AREA_Y, MENU_AREA_W, MENU_AREA_H, GFX_COLOR_BLACK);
-    gfx_rect(MENU_AREA_X, MENU_AREA_Y, MENU_AREA_W, MENU_AREA_H, GFX_COLOR_GRAY);
-    ui_screen_init(&s_menu_screen);
-
-    for (i = 0; i < (uint8_t)DEMOD_MODE_ENTRY_COUNT; i++) {
-        uint16_t col = i % 4U;
-        uint16_t row = i / 4U;
-        uint8_t cur = (k_demod_modes[i].mode == cur_mode);
-
-        s_menu_mode_tiles[i] = (ui_button_t){
-            MENU_TILE_COL(col), MENU_TILE_ROW(row), MENU_TILE_W, MENU_TILE_H,
-            k_demod_modes[i].label,
-            cur ? GFX_COLOR_BLACK : GFX_COLOR_WHITE,
-            cur ? GFX_COLOR_CYAN  : GFX_COLOR_DARKGRAY,
-            GFX_COLOR_GRAY,
-            2, 0, 1, menu_mode_preset_callback, (void *)(uintptr_t)i};
-        ui_screen_add_button(&s_menu_screen, &s_menu_mode_tiles[i]);
-    }
-
-    s_menu_detail_back = (ui_button_t){
-        MENU_TILE_COL(0), MENU_TILE_ROW(2), MENU_TILE_W, MENU_TILE_H,
-        "BACK", GFX_COLOR_BLACK, GFX_COLOR_YELLOW, GFX_COLOR_WHITE,
-        3, 0, 1, menu_tile_exit_callback, NULL};
-    ui_screen_add_button(&s_menu_screen, &s_menu_detail_back);
-
-    ui_screen_draw(&s_menu_screen);
-
-    s_menu_detail_active = 0U;
-    s_menu_bands_active = 0U;
-    s_menu_step_active = 0U;
-    s_menu_mode_active = 1U;
-    s_menu_freq_active = 0U;
-    s_menu_time_active = 0U;
-    s_menu_open = 1U;
-    debug_print("menu: mode picker opened\n");
-}
 
 /*
  * --- Frequency-entry keypad ----------------------------------------------
@@ -5662,75 +6520,13 @@ static void menu_mode_list_show(void)
  * wanting the exact integer Hz value directly (e.g. from a frequency
  * counter reading).
  */
+/* 22/09/2026: lo que habia aqui pintaba la lectura a mano con gfx.c. Ahora
+ * la compone kbd_lectura_freq() y la dibuja gfx2/ui_kbd.c; esto se queda
+ * como el nombre por el que la llaman las funciones de entrada de abajo, que
+ * no tienen por que saber quien dibuja. */
 static void freq_keypad_readout_draw(void)
 {
-    /* FREQ_ENTRY_MAX_DIGITS(9) digits + 1 decimal point + NUL - same
-     * fixed-width-field reasoning as tune_freq_format()'s comment:
-     * always clear/redraw the WHOLE field so a shorter new value
-     * can't leave a ghost digit from a longer old one (e.g. CLR after
-     * typing 5 digits). */
-    char buf[FREQ_ENTRY_MAX_DIGITS + 1U + 1U];
-    uint8_t i;
-    uint8_t n;
-    uint32_t v;
-
-    gfx_fill_rect(MENU_AREA_X, (uint16_t)(MENU_AREA_Y + 8),
-                  MENU_AREA_W, FREQ_KEYPAD_READOUT_H, GFX_COLOR_BLACK);
-
-    if (s_freq_entry_digits == 0U && s_freq_entry_point_pos == FREQ_ENTRY_NO_POINT) {
-        /* Nothing typed yet - a lone placeholder rather than "0", so
-         * it doesn't look like a real (zero) frequency was entered. */
-        gfx_text((uint16_t)(MENU_AREA_X + 16), (uint16_t)(MENU_AREA_Y + 16),
-                 "------", GFX_COLOR_GRAY, GFX_COLOR_BLACK, 4);
-        return;
-    }
-
-    /* Print exactly s_freq_entry_digits characters (leading zeros
-     * preserved, not collapsed away) rather than "however many
-     * nonzero digits v has" - the decimal-point insertion below
-     * relies on the printed digit COUNT matching s_freq_entry_digits
-     * exactly, and this also just displays what was actually typed
-     * (e.g. "0" "6" "2" "1" now shows as 0621, not a silently-shorter
-     * 621). */
-    i = (uint8_t)sizeof(buf) - 1U;
-    buf[i] = '\0';
-    v = s_freq_entry_value;
-    n = s_freq_entry_digits;
-    while (n > 0U) {
-        buf[--i] = (char)('0' + (v % 10U));
-        v /= 10U;
-        n--;
-    }
-    if (s_freq_entry_point_pos != FREQ_ENTRY_NO_POINT) {
-        /* Insert '.' after the first s_freq_entry_point_pos of the
-         * digits just written. digit_start..digit_start+digits-1 is
-         * the digit string as filled above; open one new slot in
-         * FRONT of it (new_start = digit_start-1, always valid since
-         * buf is sized for exactly MAX_DIGITS+point+NUL, so there's
-         * always at least one spare slot), copy the first point_pos
-         * digits down into that widened range, then drop the point
-         * into the gap that copy leaves behind at new_start+point_pos
-         * - the digits AFTER the point were never touched and are
-         * already sitting exactly where they need to be, one to the
-         * right of where they started. (A previous version of this
-         * shifted from the OLD digit_start using the OLD point_at as
-         * the loop bound, which is off by the very slot being
-         * inserted - it silently copied the string's own NUL
-         * terminator forward over the point character, which is why
-         * the point never actually showed up until another digit was
-         * typed - confirmed and fixed 01/09/2026.) */
-        uint8_t digit_start = i;
-        uint8_t new_start = (uint8_t)(digit_start - 1U);
-        uint8_t k;
-
-        for (k = 0U; k < s_freq_entry_point_pos; k++) {
-            buf[new_start + k] = buf[digit_start + k];
-        }
-        buf[new_start + s_freq_entry_point_pos] = '.';
-        i = new_start;
-    }
-    gfx_text((uint16_t)(MENU_AREA_X + 16), (uint16_t)(MENU_AREA_Y + 16),
-             &buf[i], GFX_COLOR_CYAN, GFX_COLOR_BLACK, 5);
+    kbd_lectura_draw();
 }
 
 static void menu_freq_keypad_digit_callback(void *widget, ui_event_t event, void *user_data)
@@ -5859,74 +6655,8 @@ static void menu_freq_keypad_accept_callback(void *widget, ui_event_t event, voi
 
 static void menu_freq_keypad_show(void)
 {
-    static const struct {
-        uint8_t col, row;
-        const char *label;
-        uint16_t fg, bg;
-        ui_callback_t cb;
-        uintptr_t user_data;
-    } k_keys[15] = {
-        /* row0: 1 2 3 DEL */
-        {0, 0, "1",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_freq_keypad_digit_callback, 1},
-        {1, 0, "2",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_freq_keypad_digit_callback, 2},
-        {2, 0, "3",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_freq_keypad_digit_callback, 3},
-        {3, 0, "DEL",GFX_COLOR_BLACK, GFX_COLOR_ORANGE,   menu_freq_keypad_del_callback,   0},
-        /* row1: 4 5 6 CLR */
-        {0, 1, "4",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_freq_keypad_digit_callback, 4},
-        {1, 1, "5",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_freq_keypad_digit_callback, 5},
-        {2, 1, "6",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_freq_keypad_digit_callback, 6},
-        {3, 1, "CLR",GFX_COLOR_BLACK, GFX_COLOR_ORANGE,   menu_freq_keypad_clr_callback,   0},
-        /* row2: 7 8 9 (col3 = shared BACK widget, added separately below) */
-        {0, 2, "7",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_freq_keypad_digit_callback, 7},
-        {1, 2, "8",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_freq_keypad_digit_callback, 8},
-        {2, 2, "9",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_freq_keypad_digit_callback, 9},
-        /* row3: . 0 KHZ MHZ - was HZ/0/KHZ/MHZ until 01/09/2026, see
-         * menu_freq_keypad_accept_callback()'s comment for why the
-         * HZ (multiplier=1) accept button became a decimal point
-         * instead. */
-        {0, 3, ".",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_freq_keypad_point_callback,  0},
-        {1, 3, "0",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_freq_keypad_digit_callback,  0},
-        {2, 3, "KHZ",GFX_COLOR_BLACK, GFX_COLOR_CYAN,     menu_freq_keypad_accept_callback, 1000UL},
-        {3, 3, "MHZ",GFX_COLOR_BLACK, GFX_COLOR_CYAN,     menu_freq_keypad_accept_callback, 1000000UL},
-    };
-    uint8_t i;
-
-    gfx_fill_rect(MENU_AREA_X, MENU_AREA_Y, MENU_AREA_W, MENU_AREA_H, GFX_COLOR_BLACK);
-    gfx_rect(MENU_AREA_X, MENU_AREA_Y, MENU_AREA_W, MENU_AREA_H, GFX_COLOR_GRAY);
-    ui_screen_init(&s_menu_screen);
-
-    s_freq_entry_value = 0U;
-    s_freq_entry_digits = 0U;
-    s_freq_entry_point_pos = FREQ_ENTRY_NO_POINT;
-    freq_keypad_readout_draw();
-
-    for (i = 0; i < 15U; i++) {
-        s_menu_freq_tiles[i] = (ui_button_t){
-            FREQ_KEYPAD_COL(k_keys[i].col), FREQ_KEYPAD_ROW(k_keys[i].row),
-            FREQ_KEYPAD_TILE_W, FREQ_KEYPAD_TILE_H,
-            k_keys[i].label, k_keys[i].fg, k_keys[i].bg, GFX_COLOR_GRAY,
-            3, 0, 1, k_keys[i].cb, (void *)k_keys[i].user_data};
-        ui_screen_add_button(&s_menu_screen, &s_menu_freq_tiles[i]);
-    }
-
-    /* BACK: row2, col3 - shared widget/callback, same as STEP/MODE's
-     * picker lists (see menu_mode_list_show()'s use of it, just above). */
-    s_menu_detail_back = (ui_button_t){
-        FREQ_KEYPAD_COL(3), FREQ_KEYPAD_ROW(2), FREQ_KEYPAD_TILE_W, FREQ_KEYPAD_TILE_H,
-        "BACK", GFX_COLOR_BLACK, GFX_COLOR_YELLOW, GFX_COLOR_WHITE,
-        3, 0, 1, menu_tile_exit_callback, NULL};
-    ui_screen_add_button(&s_menu_screen, &s_menu_detail_back);
-
-    ui_screen_draw(&s_menu_screen);
-
-    s_menu_detail_active = 0U;
-    s_menu_bands_active = 0U;
-    s_menu_step_active = 0U;
-    s_menu_mode_active = 0U;
-    s_menu_freq_active = 1U;
-    s_menu_time_active = 0U;
-    s_menu_open = 1U; /* opened straight from the top bar, not the grid - same as STEP/MODE */
-    debug_print("menu: frequency keypad opened\n");
+    kbd_show(KBD_FREQ);
+    debug_print("menu: teclado de frecuencia abierto\n");
 }
 
 /*
@@ -5955,7 +6685,6 @@ static void menu_freq_keypad_show(void)
 #define TIME_ENTRY_MAX_DIGITS 4U
 static uint16_t s_time_entry_value = 0U;
 static uint8_t  s_time_entry_digits = 0U;
-static ui_button_t s_menu_time_tiles[13];
 
 /*
  * Readout draw - same fixed-field-repaint shape as
@@ -5986,37 +6715,11 @@ static ui_button_t s_menu_time_tiles[13];
  * was typed, in order; this just reads it back out per-slot instead
  * of re-splitting the whole number as if it were already complete.
  */
+/* Igual que freq_keypad_readout_draw(): el formato de casillas con rayas se
+ * ha mudado a kbd_lectura_hora(), con su porque. */
 static void time_keypad_readout_draw(void)
 {
-    static const uint16_t k_pow10[TIME_ENTRY_MAX_DIGITS] = {1U, 10U, 100U, 1000U};
-    char buf[6];
-    uint8_t i;
-
-    gfx_fill_rect(MENU_AREA_X, (uint16_t)(MENU_AREA_Y + 8),
-                  MENU_AREA_W, FREQ_KEYPAD_READOUT_H, GFX_COLOR_BLACK);
-
-    if (s_time_entry_digits == 0U) {
-        gfx_text((uint16_t)(MENU_AREA_X + 16), (uint16_t)(MENU_AREA_Y + 16),
-                 "--:--", GFX_COLOR_GRAY, GFX_COLOR_BLACK, 5);
-        return;
-    }
-
-    for (i = 0U; i < TIME_ENTRY_MAX_DIGITS; i++) {
-        uint8_t slot = (i < 2U) ? i : (uint8_t)(i + 1U); /* skip buf[2], reserved for ':' */
-
-        if (i < s_time_entry_digits) {
-            uint16_t divisor = k_pow10[s_time_entry_digits - 1U - i];
-            uint16_t digit = (s_time_entry_value / divisor) % 10U;
-
-            buf[slot] = (char)('0' + digit);
-        } else {
-            buf[slot] = '-'; /* not typed yet */
-        }
-    }
-    buf[2] = ':';
-    buf[5] = '\0';
-    gfx_text((uint16_t)(MENU_AREA_X + 16), (uint16_t)(MENU_AREA_Y + 16),
-             buf, GFX_COLOR_CYAN, GFX_COLOR_BLACK, 5);
+    kbd_lectura_draw();
 }
 
 static void menu_time_keypad_digit_callback(void *widget, ui_event_t event, void *user_data)
@@ -6108,70 +6811,261 @@ static void menu_time_keypad_accept_callback(void *widget, ui_event_t event, voi
     }
 }
 
-static void menu_time_keypad_show(void)
+/* ===========================================================================
+ * TECLADO NUMERICO (etapa 19)
+ * ===========================================================================
+ * Las dos pantallas de teclado -frecuencia y hora- eran lo ultimo que
+ * quedaba dibujado con gfx.c, o sea con el aspecto de antes del rediseno.
+ * Ahora las pinta gfx2/ui_kbd.c, que no sabe de frecuencias ni de horas:
+ * recibe rotulos y una lectura ya formateada.
+ *
+ * LO QUE NO CAMBIA es como se teclea. Las funciones de entrada de mas abajo
+ * -digito, coma, borrar, vaciar y las de aceptar- se quedan tal cual, con sus
+ * comentarios y sus casos raros ya resueltos (el punto que se comia su propio
+ * terminador, el "0424" que parecia capturar las 00:42, el intermedio en
+ * uint64_t para que 9 cifras por un millon no desborden). Reescribirlas
+ * habria sido tirar todo eso para volver a encontrarlo.
+ * =========================================================================== */
+
+static ui_kbd_state_t s_kbd;
+static kbd_modo_t     s_kbd_modo = KBD_NADA;  /* declaracion tentativa arriba */
+static int8_t         s_kbd_press = -1;
+static char           s_kbd_lectura[16];
+
+/* Los rotulos. En espanol y en palabras, no "DEL/CLR/BACK/SET": el sitio da
+ * de sobra y "Vaciar" no hay que aprenderselo. */
+static const char *const k_kbd_freq_rot[UIK_KEYS] = {
+    "1", "2", "3", "Borrar",
+    "4", "5", "6", "Vaciar",
+    "7", "8", "9", "Volver",
+    ",", "0", "kHz", "MHz",
+};
+static const uint8_t k_kbd_freq_tipo[UIK_KEYS] = {
+    UIK_DIGITO, UIK_DIGITO, UIK_DIGITO, UIK_BORRA,
+    UIK_DIGITO, UIK_DIGITO, UIK_DIGITO, UIK_BORRA,
+    UIK_DIGITO, UIK_DIGITO, UIK_DIGITO, UIK_VUELVE,
+    UIK_DIGITO, UIK_DIGITO, UIK_ACEPTA, UIK_ACEPTA,
+};
+static const char *const k_kbd_hora_rot[UIK_KEYS] = {
+    "1", "2", "3", "Borrar",
+    "4", "5", "6", "Vaciar",
+    "7", "8", "9", "Volver",
+    0,   "0", "Poner en hora", 0,
+};
+static const uint8_t k_kbd_hora_tipo[UIK_KEYS] = {
+    UIK_DIGITO, UIK_DIGITO, UIK_DIGITO, UIK_BORRA,
+    UIK_DIGITO, UIK_DIGITO, UIK_DIGITO, UIK_BORRA,
+    UIK_DIGITO, UIK_DIGITO, UIK_DIGITO, UIK_VUELVE,
+    UIK_NADA,   UIK_DIGITO, UIK_ACEPTA, UIK_NADA,
+};
+
+/* La cifra que hay en cada tecla, para no volver a escribir el mapa en el
+ * reparto de toques. 0xFF = esta tecla no es una cifra. */
+static const uint8_t k_kbd_digito[UIK_KEYS] = {
+    1U, 2U, 3U, 0xFFU,
+    4U, 5U, 6U, 0xFFU,
+    7U, 8U, 9U, 0xFFU,
+    0xFFU, 0U, 0xFFU, 0xFFU,
+};
+
+static uint8_t kbd_activa(void)
 {
-    static const struct {
-        uint8_t col, row;
-        const char *label;
-        uint16_t fg, bg;
-        ui_callback_t cb;
-        uintptr_t user_data;
-    } k_keys[13] = {
-        /* row0: 1 2 3 DEL */
-        {0, 0, "1",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback, 1},
-        {1, 0, "2",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback, 2},
-        {2, 0, "3",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback, 3},
-        {3, 0, "DEL",GFX_COLOR_BLACK, GFX_COLOR_ORANGE,   menu_time_keypad_del_callback,   0},
-        /* row1: 4 5 6 CLR */
-        {0, 1, "4",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback, 4},
-        {1, 1, "5",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback, 5},
-        {2, 1, "6",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback, 6},
-        {3, 1, "CLR",GFX_COLOR_BLACK, GFX_COLOR_ORANGE,   menu_time_keypad_clr_callback,   0},
-        /* row2: 7 8 9 (col3 = shared BACK widget, added separately below) */
-        {0, 2, "7",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback, 7},
-        {1, 2, "8",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback, 8},
-        {2, 2, "9",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback, 9},
-        /* row3: (col0 unused) 0 (col2 unused) SET */
-        {1, 3, "0",  GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, menu_time_keypad_digit_callback,  0},
-        {3, 3, "SET",GFX_COLOR_BLACK, GFX_COLOR_CYAN,     menu_time_keypad_accept_callback, 0},
-    };
-    uint8_t i;
+    return (uint8_t)(s_kbd_modo != KBD_NADA && s_menu_open);
+}
 
-    gfx_fill_rect(MENU_AREA_X, MENU_AREA_Y, MENU_AREA_W, MENU_AREA_H, GFX_COLOR_BLACK);
-    gfx_rect(MENU_AREA_X, MENU_AREA_Y, MENU_AREA_W, MENU_AREA_H, GFX_COLOR_GRAY);
-    ui_screen_init(&s_menu_screen);
+/* --- la lectura, cada modo a su manera ------------------------------------ */
 
-    s_time_entry_value = 0U;
-    s_time_entry_digits = 0U;
-    time_keypad_readout_draw();
+/* Frecuencia: las cifras tal y como se han tecleado, ceros de delante
+ * incluidos, con la coma donde se puso. Es lo mismo que hacia el dibujo
+ * anterior; lo que cambia es que ahora se deja escrito en una cadena en vez
+ * de pintarse a mano. */
+static void kbd_lectura_freq(void)
+{
+    char tmp[FREQ_ENTRY_MAX_DIGITS + 1U];
+    uint32_t v = s_freq_entry_value;
+    uint8_t n = s_freq_entry_digits;
+    uint8_t i = n, k = 0U, j;
 
-    for (i = 0; i < 13U; i++) {
-        s_menu_time_tiles[i] = (ui_button_t){
-            FREQ_KEYPAD_COL(k_keys[i].col), FREQ_KEYPAD_ROW(k_keys[i].row),
-            FREQ_KEYPAD_TILE_W, FREQ_KEYPAD_TILE_H,
-            k_keys[i].label, k_keys[i].fg, k_keys[i].bg, GFX_COLOR_GRAY,
-            3, 0, 1, k_keys[i].cb, (void *)k_keys[i].user_data};
-        ui_screen_add_button(&s_menu_screen, &s_menu_time_tiles[i]);
+    if (s_freq_entry_digits == 0U && s_freq_entry_point_pos == FREQ_ENTRY_NO_POINT) {
+        s_kbd_lectura[0] = '\0';
+        return;
     }
 
-    /* BACK: row2, col3 - shared widget/callback, same reuse as the
-     * frequency keypad's own BACK just above. */
-    s_menu_detail_back = (ui_button_t){
-        FREQ_KEYPAD_COL(3), FREQ_KEYPAD_ROW(2), FREQ_KEYPAD_TILE_W, FREQ_KEYPAD_TILE_H,
-        "BACK", GFX_COLOR_BLACK, GFX_COLOR_YELLOW, GFX_COLOR_WHITE,
-        3, 0, 1, menu_tile_exit_callback, NULL};
-    ui_screen_add_button(&s_menu_screen, &s_menu_detail_back);
+    tmp[n] = '\0';
+    while (i > 0U) { tmp[--i] = (char)('0' + (v % 10U)); v /= 10U; }
 
-    ui_screen_draw(&s_menu_screen);
+    for (j = 0U; j < n; j++) {
+        if (s_freq_entry_point_pos != FREQ_ENTRY_NO_POINT && j == s_freq_entry_point_pos) {
+            s_kbd_lectura[k++] = ',';
+        }
+        s_kbd_lectura[k++] = tmp[j];
+    }
+    /* Una coma sin cifras detras todavia: se ensena igual, que si no el
+     * teclazo no parece haber entrado. */
+    if (s_freq_entry_point_pos != FREQ_ENTRY_NO_POINT && s_freq_entry_point_pos >= n) {
+        s_kbd_lectura[k++] = ',';
+    }
+    s_kbd_lectura[k] = '\0';
+}
 
+/* Hora: cada cifra en SU casilla, con raya en las que faltan. Ver el
+ * comentario de la version anterior: mostrar el valor recalculado en cada
+ * tecla hacia que "0","4","2" se leyera como 00:42 a medio escribir. */
+static void kbd_lectura_hora(void)
+{
+    static const uint16_t k_pot10[TIME_ENTRY_MAX_DIGITS] = {1U, 10U, 100U, 1000U};
+    uint8_t i;
+
+    if (s_time_entry_digits == 0U) { s_kbd_lectura[0] = '\0'; return; }
+
+    for (i = 0U; i < TIME_ENTRY_MAX_DIGITS; i++) {
+        uint8_t slot = (i < 2U) ? i : (uint8_t)(i + 1U);  /* el hueco 2 es el ':' */
+        if (i < s_time_entry_digits) {
+            uint16_t div = k_pot10[s_time_entry_digits - 1U - i];
+            s_kbd_lectura[slot] = (char)('0' + (char)((s_time_entry_value / div) % 10U));
+        } else {
+            s_kbd_lectura[slot] = '-';
+        }
+    }
+    s_kbd_lectura[2] = ':';
+    s_kbd_lectura[5] = '\0';
+}
+
+static void kbd_lectura_draw(void)
+{
+    if (s_kbd_modo == KBD_FREQ) { kbd_lectura_freq(); }
+    else                        { kbd_lectura_hora(); }
+    s_kbd.lectura = s_kbd_lectura;
+    if (!s_screen_asleep) { ui_kbd_draw_lectura(&s_kbd); }
+}
+
+static void kbd_show(kbd_modo_t modo)
+{
+    uint8_t i;
+
+    s_kbd_modo  = modo;
+    s_kbd_press = -1;
+    s_kbd.pressed = -1;
+    s_kbd.cursor  = -1;
+    s_kbd.unidad  = 0;
+
+    if (modo == KBD_FREQ) {
+        s_freq_entry_value = 0U;
+        s_freq_entry_digits = 0U;
+        s_freq_entry_point_pos = FREQ_ENTRY_NO_POINT;
+        s_kbd.titulo = "Frecuencia";
+        s_kbd.pista  = "teclea y elige la unidad";
+        for (i = 0U; i < UIK_KEYS; i++) {
+            s_kbd.tecla[i] = k_kbd_freq_rot[i];
+            s_kbd.tipo[i]  = k_kbd_freq_tipo[i];
+        }
+    } else {
+        s_time_entry_value = 0U;
+        s_time_entry_digits = 0U;
+        s_kbd.titulo = "Hora";
+        s_kbd.pista  = "cuatro cifras seguidas, HHMM";
+        for (i = 0U; i < UIK_KEYS; i++) {
+            s_kbd.tecla[i] = k_kbd_hora_rot[i];
+            s_kbd.tipo[i]  = k_kbd_hora_tipo[i];
+        }
+    }
+
+    if (s_kbd_modo == KBD_FREQ) { kbd_lectura_freq(); } else { kbd_lectura_hora(); }
+    s_kbd.lectura = s_kbd_lectura;
+
+    /* Esta pantalla no usa widgets de ui.c. Inicializar s_menu_screen evita
+     * que un toque herede los botones de la pantalla anterior - lo mismo que
+     * hace grid_show(). */
+    ui_kbd_draw(&s_kbd);
+
+    s_grid_pant          = GRID_NADA;
+    s_menu_cfg_active    = 0U;
     s_menu_detail_active = 0U;
-    s_menu_bands_active = 0U;
-    s_menu_step_active = 0U;
-    s_menu_mode_active = 0U;
-    s_menu_freq_active = 0U;
-    s_menu_time_active = 1U;
-    s_menu_open = 1U; /* opened straight from the top bar, not the grid - same as FREQ */
-    debug_print("menu: clock keypad opened\n");
+    s_menu_bands_active  = 0U;
+    s_menu_step_active   = 0U;
+    s_menu_mode_active   = 0U;
+    s_menu_freq_active   = (uint8_t)(modo == KBD_FREQ);
+    s_menu_time_active   = (uint8_t)(modo == KBD_HORA);
+    s_menu_open = 1U;
+}
+
+/* Que hace cada tecla. Las cifras y las acciones se despachan por el mapa de
+ * arriba; las de aceptar dependen del modo. */
+static void kbd_apply(uint8_t i)
+{
+    uint8_t d = k_kbd_digito[i];
+
+    if (d != 0xFFU) {
+        if (s_kbd_modo == KBD_FREQ) {
+            menu_freq_keypad_digit_callback(0, UI_EVENT_RELEASE, (void *)(uintptr_t)d);
+        } else {
+            menu_time_keypad_digit_callback(0, UI_EVENT_RELEASE, (void *)(uintptr_t)d);
+        }
+        return;
+    }
+
+    switch (i) {
+    case 3U:  /* Borrar */
+        if (s_kbd_modo == KBD_FREQ) { menu_freq_keypad_del_callback(0, UI_EVENT_RELEASE, 0); }
+        else                        { menu_time_keypad_del_callback(0, UI_EVENT_RELEASE, 0); }
+        break;
+    case 7U:  /* Vaciar */
+        if (s_kbd_modo == KBD_FREQ) { menu_freq_keypad_clr_callback(0, UI_EVENT_RELEASE, 0); }
+        else                        { menu_time_keypad_clr_callback(0, UI_EVENT_RELEASE, 0); }
+        break;
+    case 11U: /* Volver */
+        menu_tile_exit_callback(0, UI_EVENT_RELEASE, 0);
+        break;
+    case 12U: /* coma, solo en frecuencia */
+        if (s_kbd_modo == KBD_FREQ) { menu_freq_keypad_point_callback(0, UI_EVENT_RELEASE, 0); }
+        break;
+    case 14U: /* kHz, o "Poner en hora" */
+        if (s_kbd_modo == KBD_FREQ) {
+            menu_freq_keypad_accept_callback(0, UI_EVENT_RELEASE, (void *)(uintptr_t)1000UL);
+        } else {
+            menu_time_keypad_accept_callback(0, UI_EVENT_RELEASE, 0);
+        }
+        break;
+    case 15U: /* MHz */
+        if (s_kbd_modo == KBD_FREQ) {
+            menu_freq_keypad_accept_callback(0, UI_EVENT_RELEASE, (void *)(uintptr_t)1000000UL);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+/* Reparto de un toque dentro del teclado - misma forma que grid_touch(): se
+ * decide en la pulsacion y se respeta hasta la suelta, porque en este panel
+ * las coordenadas de la suelta no son de fiar. */
+static void kbd_touch(uint16_t x, uint16_t y, uint8_t pressed)
+{
+    if (pressed) {
+        if (s_kbd_press < 0) {
+            int8_t k = ui_kbd_hit(x, y);
+            if (k >= 0 && s_kbd.tipo[k] != (uint8_t)UIK_NADA) {
+                s_kbd_press = k;
+                s_kbd.pressed = k;
+                ui_kbd_draw_one(&s_kbd, k);
+            }
+        }
+        return;
+    }
+    if (s_kbd_press < 0) { return; }
+    {
+        int8_t k = s_kbd_press;
+        s_kbd_press = -1;
+        s_kbd.pressed = -1;
+        ui_kbd_draw_one(&s_kbd, k);
+        kbd_apply((uint8_t)k);
+    }
+}
+
+static void menu_time_keypad_show(void)
+{
+    kbd_show(KBD_HORA);
+    debug_print("menu: teclado de hora abierto\n");
 }
 
 /*
@@ -6229,7 +7123,15 @@ static void menu_time_keypad_show(void)
 #define MENU_DETAIL_TITLE_Y  112
 #define MENU_DETAIL_HINT_Y   144
 #define MENU_DETAIL_VALUE_CLEAR_Y 166
-#define MENU_DETAIL_VALUE_CLEAR_H 184
+/* *** 22/09/2026: la banda que se borra ya no ocupa todo el ancho ni todo el
+ * alto *** - los botones "-" y "+" viven a los lados y el "LO / HI" justo
+ * debajo, y el borrado de ancho completo los habria borrado en cada refresco
+ * del valor (es decir, en cada clic). Se recorta al hueco central que ocupa
+ * de verdad el numero. Mismo fallo que el recuadro azul del AGC, en otro
+ * sitio: pintar mas de lo que hace falta. */
+#define MENU_DETAIL_VALUE_CLEAR_H 136
+#define MENU_DETAIL_VALUE_CLEAR_X (uint16_t)(MENU_DETAIL_PM_X0 + MENU_DETAIL_PM_W + 8)
+#define MENU_DETAIL_VALUE_CLEAR_W (uint16_t)(MENU_DETAIL_PM_X1 - 8 - MENU_DETAIL_VALUE_CLEAR_X)
 #define MENU_DETAIL_VALUE_Y  237 /* centers a scale-6 (42px tall) line in the clear band above: 166+(184-42)/2 */
 #define MENU_DETAIL_SCALE_LABEL_Y 180
 #define MENU_DETAIL_SCALE_VALUE_Y 230
@@ -6238,184 +7140,147 @@ static void menu_time_keypad_show(void)
 #define MENU_DETAIL_BACK_W 220
 #define MENU_DETAIL_BACK_H 56
 
+/* Solo el numero: es lo unico que cambia al girar el mando o pulsar "-"/"+",
+ * y repintar la pantalla entera 30 veces mientras se mantiene el dedo se
+ * notaria. En escala cambia tambien el titulo al alternar LO/HI, asi que ahi
+ * se repinta todo. */
 static void menu_detail_value_redraw(void)
 {
-    gfx_fill_rect(MENU_AREA_X, MENU_DETAIL_VALUE_CLEAR_Y, MENU_AREA_W, MENU_DETAIL_VALUE_CLEAR_H, GFX_COLOR_BLACK);
+    static uint8_t s_alt_ant = 0xFFU;
+
+    det_sync();
+    if (s_menu_detail_target == ENCODER_TARGET_SCALE &&
+        s_alt_ant != s_scale_adjust_max) {
+        s_alt_ant = s_scale_adjust_max;
+        ui_det_draw(&s_det);
+        return;
+    }
+    ui_det_draw_valor(&s_det);
+}
+
+/* ===========================================================================
+ * PANTALLA DE UN AJUSTE (ETAPA 6, rehecha con gfx2)
+ * ===========================================================================
+ * Antes esta pantalla estaba dibujada con la fuente 5x7 a escala 6 y decia
+ * "TURN KNOB TO ADJUST". Ahora es la misma tipografia que el resto, el valor
+ * va en la fuente de cifras grande y los dos objetivos tactiles son los mas
+ * grandes de la interfaz. Lo que hacen no cambia: meten un detente en la cola
+ * del mando (ver encoder_inject_detents()), asi que corre el mismo codigo de
+ * siempre con los mismos topes.
+ */
+static void det_sync(void)
+{
+    s_det.pie    = 0;
+    s_det.alt    = 0;
+    s_det.alt_on = 0U;
+    s_det.pressed = s_det_press;
 
     switch (s_menu_detail_target) {
-    case ENCODER_TARGET_SQUELCH: {
-        char buf[FREQ_FIELD_CHARS + 1];
-        uint16_t vw;
-        uint8_t i;
-
-        spectrum_db_format((int16_t)demod_am_get_squelch_db(), buf);
-        for (i = 0; buf[i] == ' ' && i < (FREQ_FIELD_CHARS - 7U); i++) { }
-        vw = gfx_text_width(&buf[i], 6);
-        gfx_text((uint16_t)((MENU_AREA_W - vw) / 2), MENU_DETAIL_VALUE_Y, &buf[i], GFX_COLOR_CYAN, GFX_COLOR_BLACK, 6);
+    case ENCODER_TARGET_VOLUME:
+        s_det.titulo = "Volumen";
+        s_det.valor  = ajuste_valor(AJ_VOL, s_det_val);
         break;
-    }
-    case ENCODER_TARGET_BACKLIGHT: {
-        char buf[8];
-        uint8_t pos = 7U;
-        uint8_t v = backlight_get_percent();
-        uint16_t vw;
-
-        buf[pos] = '\0';
-        buf[--pos] = '%';
-        do { buf[--pos] = (char)('0' + (v % 10U)); v /= 10U; } while (v > 0U && pos > 0U);
-        while (pos > 0U) { buf[--pos] = ' '; }
-        vw = gfx_text_width(buf, 6);
-        gfx_text((uint16_t)((MENU_AREA_W - vw) / 2), MENU_DETAIL_VALUE_Y, buf, GFX_COLOR_CYAN, GFX_COLOR_BLACK, 6);
+    case ENCODER_TARGET_SQUELCH:
+        s_det.titulo = "Silenciador";
+        s_det.valor  = ajuste_valor(AJ_SQL, s_det_val);
         break;
-    }
-    case ENCODER_TARGET_VOLUME: {
-        char buf[FREQ_FIELD_CHARS + 1];
-        uint16_t vw;
-        uint8_t i;
-
-        volume_format(s_volume_db_x2, buf);
-        for (i = 0; buf[i] == ' ' && i < (FREQ_FIELD_CHARS - 7U); i++) { }
-        vw = gfx_text_width(&buf[i], 6);
-        gfx_text((uint16_t)((MENU_AREA_W - vw) / 2), MENU_DETAIL_VALUE_Y, &buf[i], GFX_COLOR_CYAN, GFX_COLOR_BLACK, 6);
+    case ENCODER_TARGET_PGA:
+        s_det.titulo = "Ganancia de entrada";
+        s_det.valor  = ajuste_valor(AJ_PGA, s_det_val);
+        s_det.pie    = "PGA del códec, 0 a 47,5 dB";
         break;
-    }
-    case ENCODER_TARGET_PGA: {
-        /* Same volume_format() reuse as aux_row_display_draw()'s PGA
-         * branch - see its comment on why the always-non-negative
-         * "+" sign is correct here, not a formatting bug. */
-        char buf[FREQ_FIELD_CHARS + 1];
-        uint16_t vw;
-        uint8_t i;
-
-        volume_format(s_pga_gain_db_x2, buf);
-        for (i = 0; buf[i] == ' ' && i < (FREQ_FIELD_CHARS - 7U); i++) { }
-        vw = gfx_text_width(&buf[i], 6);
-        gfx_text((uint16_t)((MENU_AREA_W - vw) / 2), MENU_DETAIL_VALUE_Y, &buf[i], GFX_COLOR_CYAN, GFX_COLOR_BLACK, 6);
+    case ENCODER_TARGET_NR:
+        s_det.titulo = "Reducción de ruido";
+        s_det.valor  = ajuste_valor(AJ_NR, s_det_val);
         break;
-    }
-    case ENCODER_TARGET_SMOOTH: {
-        char buf[8];
-        uint8_t pos = 7U;
-        uint8_t v = (uint8_t)(s_spectrum_smooth_alpha * 100.0f + 0.5f);
-        uint16_t vw;
-
-        buf[pos] = '\0';
-        buf[--pos] = '%';
-        do { buf[--pos] = (char)('0' + (v % 10U)); v /= 10U; } while (v > 0U && pos > 0U);
-        while (pos > 0U) { buf[--pos] = ' '; }
-        vw = gfx_text_width(buf, 6);
-        gfx_text((uint16_t)((MENU_AREA_W - vw) / 2), MENU_DETAIL_VALUE_Y, buf, GFX_COLOR_CYAN, GFX_COLOR_BLACK, 6);
+    case ENCODER_TARGET_BACKLIGHT:
+        s_det.titulo = "Brillo";
+        s_det.valor  = ajuste_valor(AJ_BRILLO, s_det_val);
         break;
-    }
-    case ENCODER_TARGET_NR: {
-        /* Raw 0-4095 field, no unit suffix - see aux_row_display_draw()'s
-         * NR branch for why. Up to 4 digits, space-padded left same as
-         * every other detail-view field here. */
-        char buf[8];
-        uint8_t pos = 7U;
-        uint16_t v = s_nr_strength;
-        uint16_t vw;
-
-        buf[pos] = '\0';
-        do { buf[--pos] = (char)('0' + (v % 10U)); v /= 10U; } while (v > 0U && pos > 0U);
-        while (pos > 0U) { buf[--pos] = ' '; }
-        vw = gfx_text_width(buf, 6);
-        gfx_text((uint16_t)((MENU_AREA_W - vw) / 2), MENU_DETAIL_VALUE_Y, buf, GFX_COLOR_CYAN, GFX_COLOR_BLACK, 6);
+    case ENCODER_TARGET_SMOOTH:
+        s_det.titulo = "Suavizado";
+        s_det.valor  = ajuste_valor(AJ_SUAVIZ, s_det_val);
+        s_det.pie    = "cuánto se promedia entre fotogramas";
         break;
-    }
-    case ENCODER_TARGET_RTTY_SHIFT: {
-        /* Same "raw value, no negative direction" shape as NR just
-         * above, but with an "Hz" suffix instead of "%" - shift is
-         * always a positive separation, see rtty_get_shift_hz(). */
-        char buf[10];
-        uint8_t pos = 9U;
-        uint16_t v = (uint16_t)(rtty_get_shift_hz() + 0.5f);
-        uint16_t vw;
-
-        buf[pos] = '\0';
-        buf[--pos] = 'z';
-        buf[--pos] = 'H';
-        do { buf[--pos] = (char)('0' + (v % 10U)); v /= 10U; } while (v > 0U && pos > 0U);
-        while (pos > 0U) { buf[--pos] = ' '; }
-        vw = gfx_text_width(buf, 6);
-        gfx_text((uint16_t)((MENU_AREA_W - vw) / 2), MENU_DETAIL_VALUE_Y, buf, GFX_COLOR_CYAN, GFX_COLOR_BLACK, 6);
+    case ENCODER_TARGET_RTTY_SHIFT:
+        s_det.titulo = "Desplazamiento RTTY";
+        s_det.valor  = ajuste_valor(AJ_RTTY_SHIFT, s_det_val);
         break;
-    }
+    case ENCODER_TARGET_CW_TONE:
+        s_det.titulo = "Tono de CW";
+        s_det.valor  = ajuste_valor(AJ_CW_TONO, s_det_val);
+        break;
     case ENCODER_TARGET_SCALE: {
-        char lo[FREQ_FIELD_CHARS + 1];
-        char hi[FREQ_FIELD_CHARS + 1];
-        uint8_t li, hi_i;
-        uint16_t lo_fg = s_scale_adjust_max ? GFX_COLOR_GRAY  : GFX_COLOR_BLACK;
-        uint16_t lo_bg = s_scale_adjust_max ? GFX_COLOR_BLACK : GFX_COLOR_CYAN;
-        uint16_t hi_fg = s_scale_adjust_max ? GFX_COLOR_BLACK : GFX_COLOR_GRAY;
-        uint16_t hi_bg = s_scale_adjust_max ? GFX_COLOR_CYAN  : GFX_COLOR_BLACK;
-
-        spectrum_db_format((int16_t)s_db_min, lo);
-        spectrum_db_format((int16_t)s_db_max, hi);
-        for (li = 0; lo[li] == ' ' && li < (FREQ_FIELD_CHARS - 7U); li++) { }
-        for (hi_i = 0; hi[hi_i] == ' ' && hi_i < (FREQ_FIELD_CHARS - 7U); hi_i++) { }
-
-        gfx_text(90, MENU_DETAIL_SCALE_LABEL_Y, "LO", GFX_COLOR_GRAY, GFX_COLOR_BLACK, 3);
-        gfx_text(60, MENU_DETAIL_SCALE_VALUE_Y, &lo[li], lo_fg, lo_bg, 4);
-        gfx_text(460, MENU_DETAIL_SCALE_LABEL_Y, "HI", GFX_COLOR_GRAY, GFX_COLOR_BLACK, 3);
-        gfx_text(430, MENU_DETAIL_SCALE_VALUE_Y, &hi[hi_i], hi_fg, hi_bg, 4);
+        /* El numero grande es el limite que se esta moviendo, y el pie dice
+         * cual es y donde queda el otro: sin eso, dos pantallas identicas con
+         * numeros distintos no dicen cual estas tocando. */
+        int16_t v = (int16_t)(s_scale_adjust_max ? s_db_max : s_db_min);
+        uint8_t i = 0;
+        if (v < 0) { s_det_val[i++] = '-'; v = (int16_t)(-v); }
+        top_u2s(&s_det_val[i], (uint32_t)v);
+        s_det.titulo = s_scale_adjust_max ? "Escala: límite alto"
+                                          : "Escala: límite bajo";
+        s_det.valor  = s_det_val;
+        s_det.alt    = "Cambiar a LO / HI";
+        s_det.alt_on = s_scale_adjust_max;
         break;
     }
     default:
+        s_det.titulo = "";
+        s_det.valor  = "";
         break;
+    }
+}
+
+/* Reparto de un toque dentro de la pantalla de un ajuste. */
+static void det_touch(uint16_t x, uint16_t y, uint8_t pressed)
+{
+    if (pressed) {
+        if (s_det_press < 0) {
+            s_det_press = ui_det_hit(x, y);
+            if (s_det_press >= 0) { det_sync(); ui_det_draw(&s_det); }
+        }
+        return;
+    }
+    if (s_det_press < 0) { return; }
+    {
+        int8_t k = s_det_press;
+
+        s_det_press = -1;
+        det_sync();
+        ui_det_draw(&s_det);
+
+        switch (k) {
+        case UID_HIT_MENOS:  encoder_inject_detents(-1); break;
+        case UID_HIT_MAS:    encoder_inject_detents(1);  break;
+        case UID_HIT_ALT:
+            /* Solo existe en escala; en las demas ese medio pie es "Volver",
+             * que ya lo coge la otra mitad. */
+            if (s_menu_detail_target == ENCODER_TARGET_SCALE) {
+                encoder_inject_press();
+            } else {
+                menu_grid_show();
+            }
+            break;
+        case UID_HIT_VOLVER: menu_grid_show(); break;
+        default: break;
+        }
     }
 }
 
 static void menu_detail_show(encoder_target_t target)
 {
-    const char *title;
-    const char *hint;
-
     s_encoder_target = target;
     s_menu_detail_target = target;
     s_menu_detail_active = 1U;
+    s_menu_cfg_active = 0U;
+    s_det_press = -1;
 
-    switch (target) {
-    case ENCODER_TARGET_SQUELCH:   title = "SQUELCH";   hint = "TURN KNOB TO ADJUST";  break;
-    case ENCODER_TARGET_BACKLIGHT: title = "BACKLIGHT"; hint = "TURN KNOB TO ADJUST";  break;
-    case ENCODER_TARGET_VOLUME:    title = "VOLUME";    hint = "TURN KNOB TO ADJUST";  break;
-    case ENCODER_TARGET_PGA:       title = "PGA GAIN";  hint = "TURN KNOB TO ADJUST";  break;
-    case ENCODER_TARGET_NR:        title = "NOISE RED"; hint = "TURN KNOB TO ADJUST";  break;
-    case ENCODER_TARGET_SMOOTH:    title = "SMOOTH";    hint = "TURN KNOB TO ADJUST";  break;
-    case ENCODER_TARGET_RTTY_SHIFT: title = "RTTY SHIFT"; hint = "TURN KNOB TO ADJUST"; break;
-    case ENCODER_TARGET_SCALE:     title = "SCALE";     hint = "PRESS KNOB: LO OR HI"; break;
-    default:                        title = "";          hint = "";                     break;
-    }
+    det_sync();
+    ui_det_draw(&s_det);
 
-    /* Only clear/redraw MENU_AREA (see menu_grid_show()'s comment) -
-     * same border treatment as the grid, for visual continuity
-     * between the two levels of this one screen. */
-    gfx_fill_rect(MENU_AREA_X, MENU_AREA_Y, MENU_AREA_W, MENU_AREA_H, GFX_COLOR_BLACK);
-    gfx_rect(MENU_AREA_X, MENU_AREA_Y, MENU_AREA_W, MENU_AREA_H, GFX_COLOR_GRAY);
-    ui_screen_init(&s_menu_screen);
-
-    {
-        uint16_t tw = gfx_text_width(title, 4);
-        gfx_text((uint16_t)((MENU_AREA_W - tw) / 2), MENU_DETAIL_TITLE_Y, title, GFX_COLOR_WHITE, GFX_COLOR_BLACK, 4);
-    }
-    {
-        uint16_t hw = gfx_text_width(hint, 2);
-        gfx_text((uint16_t)((MENU_AREA_W - hw) / 2), MENU_DETAIL_HINT_Y, hint, GFX_COLOR_GRAY, GFX_COLOR_BLACK, 2);
-    }
-
-    s_menu_detail_back = (ui_button_t){
-        MENU_DETAIL_BACK_X, MENU_DETAIL_BACK_Y, MENU_DETAIL_BACK_W, MENU_DETAIL_BACK_H,
-        "BACK", GFX_COLOR_BLACK, GFX_COLOR_YELLOW, GFX_COLOR_WHITE,
-        3, 0, 1, menu_detail_back_callback, NULL};
-    ui_screen_add_button(&s_menu_screen, &s_menu_detail_back);
-    ui_button_draw(&s_menu_detail_back);
-
-    menu_detail_value_redraw();
-
+    /* Esta pantalla tampoco usa widgets de ui.c. */
     s_menu_open = 1U;
-    debug_print("menu: detail view opened for ");
-    debug_print(title);
-    debug_print("\n");
 }
 
 /*
@@ -6441,351 +7306,34 @@ static void settings_value_redraw(void)
     }
 }
 
+/*
+ * ETAPA 6: la rejilla de ajustes.
+ *
+ * Se conserva el nombre y las tres llamadas que ya existian (abrir el menu, y
+ * volver desde el detalle o desde una lista) y solo cambia lo que hace por
+ * dentro: ahora es la rejilla comun, con los 27 ajustes repartidos en cuatro
+ * paginas y cada celda diciendo su valor.
+ *
+ * Las ~230 lineas que habia aqui montando 27 ui_button_t a mano, pagina por
+ * pagina y con una columna entera gastada en navegar, se van enteras: esa
+ * informacion vive ahora en k_ajustes[], que es una tabla.
+ */
 static void menu_grid_show(void)
 {
-    /* Only clear/redraw the confined area (MENU_AREA_*) - the top
-     * bar, right column, and bottom button bar stay exactly as they
-     * were, never touched. A bordered rect (same bg/border colors
-     * s_spectrum_panel already uses) makes it visually read as "this
-     * panel, replaced" rather than a random black hole. Redrawn in
-     * full on EVERY call, including a page switch (see this file's
-     * "Settings grid PAGES" comment) - simplest way to guarantee a
-     * page that just lost a tile (e.g. switching RADIO -> HW) never
-     * leaves a stale tile behind from the previous page. */
-    gfx_fill_rect(MENU_AREA_X, MENU_AREA_Y, MENU_AREA_W, MENU_AREA_H, GFX_COLOR_BLACK);
-    gfx_rect(MENU_AREA_X, MENU_AREA_Y, MENU_AREA_W, MENU_AREA_H, GFX_COLOR_GRAY);
-    ui_screen_init(&s_menu_screen);
-
-    /*
-     * --- Pager column (col 0, all 3 rows) --------------------------
-     * PREV (row 0) / current page name (row 1, informational) / NEXT
-     * (row 2) - see this file's PAGINATION comment for why this
-     * replaced the old one-tile-per-page selector on 09/08/2026.
-     * Visually distinct from every option tile: ORANGE instead of the
-     * CYAN(cycle)/DARKGRAY(opens detail)/YELLOW(exit) palette the
-     * right-hand side uses, same as the old page tiles were. PREV/NEXT
-     * always render the same BLACK-fill/ORANGE-outline "tap me" look
-     * (there's no "already selected" state for a step button); the
-     * row-1 label instead gets the old selector's solid ORANGE-fill
-     * look, since it's now the one telling you where you are.
-     */
-    s_menu_page_prev = (ui_button_t){
-        MENU_TILE_COL(0), MENU_TILE_ROW(0), MENU_TILE_W, MENU_TILE_H,
-        "PREV", GFX_COLOR_ORANGE, GFX_COLOR_BLACK, GFX_COLOR_ORANGE,
-        2, 0, 1, menu_page_step_callback, (void *)(intptr_t)(-1)};
-    s_menu_page_label = (ui_button_t){
-        MENU_TILE_COL(0), MENU_TILE_ROW(1), MENU_TILE_W, MENU_TILE_H,
-        k_menu_page_names[s_menu_page], GFX_COLOR_BLACK, GFX_COLOR_ORANGE, GFX_COLOR_ORANGE,
-        2, 0, 0, NULL, NULL}; /* enabled=0 - informational, not a step button, see ui_screen_add_button()'s comment in ui.c */
-    s_menu_page_next = (ui_button_t){
-        MENU_TILE_COL(0), MENU_TILE_ROW(2), MENU_TILE_W, MENU_TILE_H,
-        "NEXT", GFX_COLOR_ORANGE, GFX_COLOR_BLACK, GFX_COLOR_ORANGE,
-        2, 0, 1, menu_page_step_callback, (void *)(intptr_t)(1)};
-    ui_screen_add_button(&s_menu_screen, &s_menu_page_prev);
-    ui_screen_add_button(&s_menu_screen, &s_menu_page_label);
-    ui_screen_add_button(&s_menu_screen, &s_menu_page_next);
-
-    /*
-     * --- EXIT (slot 8, row2/col3) - fixed on every page ------------
-     * Neither a cycler nor a detail-opener - just closes the whole
-     * menu (menu_screen_close()), same as before the redesign.
-     */
-    s_menu_tile_exit = (ui_button_t){
-        MENU_OPT_COL(MENU_OPT_EXIT_SLOT), MENU_OPT_ROW(MENU_OPT_EXIT_SLOT), MENU_TILE_W, MENU_TILE_H,
-        "EXIT", GFX_COLOR_BLACK, GFX_COLOR_YELLOW, GFX_COLOR_WHITE,
-        2, 0, 1, menu_tile_exit_callback, NULL};
-    ui_screen_add_button(&s_menu_screen, &s_menu_tile_exit);
-
-    /*
-     * --- Page options (slots 0-7) -----------------------------------
-     * See this file's "Settings grid PAGES" comment for the full
-     * RADIO/UI/HW slot assignment. Only the tiles belonging to the
-     * CURRENTLY selected page get positioned/added/refreshed here -
-     * every s_menu_tile_* struct is shared across pages (same static
-     * storage it always had), so leaving an inactive page's tiles
-     * untouched this call is what keeps their stale coordinates from
-     * ever being drawn onto the wrong page.
-     */
-    switch (s_menu_page) {
-    case MENU_PAGE_RADIO:
-        s_menu_tile_agc = (ui_button_t){
-            MENU_OPT_COL(0), MENU_OPT_ROW(0), MENU_TILE_W, MENU_TILE_H,
-            "AGC", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_agc_callback, NULL};
-        s_menu_tile_squelch = (ui_button_t){
-            MENU_OPT_COL(1), MENU_OPT_ROW(1), MENU_TILE_W, MENU_TILE_H,
-            "SQUELCH", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_squelch_callback, NULL};
-        s_menu_tile_volume = (ui_button_t){
-            MENU_OPT_COL(2), MENU_OPT_ROW(2), MENU_TILE_W, MENU_TILE_H,
-            "VOL", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_volume_callback, NULL};
-        /* BW: cycles the AM/SSB audio filter width 4K0/2K3/1K8 (see
-         * menu_tile_bw_callback()'s comment). */
-        s_menu_tile_bw = (ui_button_t){
-            MENU_OPT_COL(3), MENU_OPT_ROW(3), MENU_TILE_W, MENU_TILE_H,
-            "BW", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_bw_callback, NULL};
-        /* PGA: AIC3204 MIC_PGA analog input gain (0-47.5dB) - see
-         * aic3204_set_pga_gain_db()'s comment. */
-        s_menu_tile_pga = (ui_button_t){
-            MENU_OPT_COL(4), MENU_OPT_ROW(4), MENU_TILE_W, MENU_TILE_H,
-            "PGA", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_pga_callback, NULL};
-        /* NR: Spectral Subtraction noise reduction strength (0-100%),
-         * AM/USB/LSB only - see nr_ss.h and demod_am.c's NR
-         * INTEGRATION comment. Fills slot 5 - 1 slot (7) still free. */
-        s_menu_tile_nr = (ui_button_t){
-            MENU_OPT_COL(5), MENU_OPT_ROW(5), MENU_TILE_W, MENU_TILE_H,
-            "NR", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_nr_callback, NULL};
-        /* RFAGC: RF-level (analog PGA) auto-AGC toggle, added
-         * 07/08/2026 - see s_rf_agc_enabled's declaration comment.
-         * Fills slot 6 - slot 7 still free. */
-        s_menu_tile_rfagc = (ui_button_t){
-            MENU_OPT_COL(6), MENU_OPT_ROW(6), MENU_TILE_W, MENU_TILE_H,
-            "RFAGC", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_rfagc_callback, NULL};
-        /* ATT: manual AIC3204 input attenuator (Rin 10k/20k/40k =
-         * 0/-6/-12dB), added 01/09/2026 - see
-         * menu_tile_att_callback()'s comment. Fills slot 7 - RADIO is
-         * now 8/8. */
-        s_menu_tile_att = (ui_button_t){
-            MENU_OPT_COL(7), MENU_OPT_ROW(7), MENU_TILE_W, MENU_TILE_H,
-            "ATT", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_att_callback, NULL};
-
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_agc);
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_squelch);
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_volume);
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_bw);
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_pga);
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_nr);
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_rfagc);
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_att);
-
-        ui_screen_draw(&s_menu_screen);
-        /* ui_screen_draw() just painted each tile with its STATIC
-         * label ("AGC", "SQUELCH", ...) via ui_button_draw()'s normal
-         * single-line render - immediately overpaint the ones that
-         * need a live value with the real content. */
-        menu_tile_agc_refresh();
-        menu_tile_squelch_refresh();
-        menu_tile_volume_refresh();
-        menu_tile_bw_refresh();
-        menu_tile_pga_refresh();
-        menu_tile_nr_refresh();
-        menu_tile_rfagc_refresh();
-        menu_tile_att_refresh();
-        break;
-
-    case MENU_PAGE_UI:
-        s_menu_tile_backlight = (ui_button_t){
-            MENU_OPT_COL(0), MENU_OPT_ROW(0), MENU_TILE_W, MENU_TILE_H,
-            "BL", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_backlight_callback, NULL};
-        /* SCALE's GRID tile shows no live value (two numbers, LO+HI,
-         * don't fit this single-string tile format cleanly) - just a
-         * static label. Its DETAIL view (menu_detail_value_redraw())
-         * DOES show both, side by side. */
-        s_menu_tile_scale = (ui_button_t){
-            MENU_OPT_COL(1), MENU_OPT_ROW(1), MENU_TILE_W, MENU_TILE_H,
-            "SCALE", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_scale_callback, NULL};
-        s_menu_tile_nb = (ui_button_t){
-            MENU_OPT_COL(2), MENU_OPT_ROW(2), MENU_TILE_W, MENU_TILE_H,
-            "SPT", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_nb_callback, NULL};
-        s_menu_tile_smooth = (ui_button_t){
-            MENU_OPT_COL(3), MENU_OPT_ROW(3), MENU_TILE_W, MENU_TILE_H,
-            "SMOOTH", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_smooth_callback, NULL};
-        /* SPC: the spectrum trace style cycle (HEATMAP->LINE->
-         * OUTLINE) - see spectrum_set_style()'s comment in
-         * spectrum.h. */
-        s_menu_tile_spec_style = (ui_button_t){
-            MENU_OPT_COL(4), MENU_OPT_ROW(4), MENU_TILE_W, MENU_TILE_H,
-            "SPC", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_spec_style_callback, NULL};
-        /* ZOOM: spectrum/waterfall zoom (1x/2x/4x/8x) - see
-         * spec_zoom_t's comment. */
-        s_menu_tile_zoom = (ui_button_t){
-            MENU_OPT_COL(5), MENU_OPT_ROW(5), MENU_TILE_W, MENU_TILE_H,
-            "ZOOM", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_zoom_callback, NULL};
-        /* PAL: spectrum/waterfall color palette cycle (15 states, see
-         * spectrum_set_palette()'s comment in spectrum.h). Takes the
-         * first of the two previously-empty slots here. */
-        s_menu_tile_palette = (ui_button_t){
-            MENU_OPT_COL(6), MENU_OPT_ROW(6), MENU_TILE_W, MENU_TILE_H,
-            "PAL", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_palette_callback, NULL};
-        /* TRC: HEATMAP trace white/color-matched toggle - see
-         * spectrum_set_heatmap_trace_white()'s comment in spectrum.h.
-         * Takes the last of the two previously-empty slots here. */
-        s_menu_tile_trace = (ui_button_t){
-            MENU_OPT_COL(7), MENU_OPT_ROW(7), MENU_TILE_W, MENU_TILE_H,
-            "TRC", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_trace_callback, NULL};
-
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_backlight);
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_scale);
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_nb);
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_smooth);
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_spec_style);
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_zoom);
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_palette);
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_trace);
-
-        ui_screen_draw(&s_menu_screen);
-        menu_tile_backlight_refresh();
-        menu_tile_nb_refresh();
-        menu_tile_smooth_refresh();
-        menu_tile_spec_style_refresh();
-        menu_tile_zoom_refresh();
-        menu_tile_palette_refresh();
-        menu_tile_trace_refresh();
-        break;
-
-    case MENU_PAGE_HW:
-        /* SPK: speaker PA enable/mute (PB7 - UNCONFIRMED, see
-         * speaker_pa_set_enabled()'s comment). Slots 2-7 still
-         * intentionally empty, reserved for future hardware-related
-         * settings. */
-        s_menu_tile_speaker_pa = (ui_button_t){
-            MENU_OPT_COL(0), MENU_OPT_ROW(0), MENU_TILE_W, MENU_TILE_H,
-            "SPK", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_speaker_pa_callback, NULL};
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_speaker_pa);
-
-        /* SLEEP: added 10/08/2026 - screen_sleep_enter()'s one-shot
-         * action tile, same YELLOW "leaves the current view" styling
-         * as EXIT (fitting: it closes the whole menu too, on the way
-         * to blanking everything else) rather than the
-         * CYAN(cycle)/DARKGRAY(detail) palette the rest of the grid
-         * uses, so it reads as a bigger step than an ordinary setting.
-         * No _refresh() needed - there's nothing left on screen to
-         * repaint the instant this fires. */
-        s_menu_tile_sleep = (ui_button_t){
-            MENU_OPT_COL(1), MENU_OPT_ROW(1), MENU_TILE_W, MENU_TILE_H,
-            "SLEEP", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_WHITE,
-            2, 0, 1, menu_tile_sleep_callback, NULL};
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_sleep);
-
-        /* CAL: touch screen calibration wizard - see touch_calib.h and
-         * menu_tile_cal_callback()'s comment. Same YELLOW "leaves the
-         * current view" styling as SLEEP/EXIT: it takes over the whole
-         * screen too, just temporarily instead of until the encoder
-         * wakes it. Slots 3-7 still intentionally empty. */
-        s_menu_tile_cal = (ui_button_t){
-            MENU_OPT_COL(2), MENU_OPT_ROW(2), MENU_TILE_W, MENU_TILE_H,
-            "CAL", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_WHITE,
-            2, 0, 1, menu_tile_cal_callback, NULL};
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_cal);
-
-        /* PPM: MS5351 crystal PPM calibration - see
-         * menu_tile_cal_ppm_callback()'s comment. Same YELLOW
-         * "one-shot action" styling as SLEEP/CAL rather than the
-         * cycle/detail palette, and reuses "PPM" as its resting
-         * label - menu_tile_cal_ppm_refresh() overwrites it with the
-         * applied correction (or a rejection reason) right after a
-         * tap. Slots 4-7 still intentionally empty. */
-        s_menu_tile_cal_ppm = (ui_button_t){
-            MENU_OPT_COL(3), MENU_OPT_ROW(3), MENU_TILE_W, MENU_TILE_H,
-            "PPM", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_WHITE,
-            2, 0, 1, menu_tile_cal_ppm_callback, NULL};
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_cal_ppm);
-
-        /* IFBW: WFM pre-discriminator channel filter width, added
-         * 01/09/2026 - see menu_tile_ifbw_callback()'s comment. Fills
-         * slot 4 - slots 5-7 still intentionally empty. */
-        s_menu_tile_ifbw = (ui_button_t){
-            MENU_OPT_COL(4), MENU_OPT_ROW(4), MENU_TILE_W, MENU_TILE_H,
-            "IFBW", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_ifbw_callback, NULL};
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_ifbw);
-
-        /* SAGC: spectrum/waterfall auto-scale toggle, added
-         * 01/09/2026 - see menu_tile_specagc_callback()'s comment.
-         * Fills slot 5. */
-        s_menu_tile_specagc = (ui_button_t){
-            MENU_OPT_COL(5), MENU_OPT_ROW(5), MENU_TILE_W, MENU_TILE_H,
-            "SAGC", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_specagc_callback, NULL};
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_specagc);
-
-        /* RATE: AM/USB/LSB/NFM sample rate 96K/48K toggle, added
-         * 01/09/2026 - see menu_tile_rate_callback()'s comment. Fills
-         * slot 6 - slot 7 still intentionally empty. */
-        s_menu_tile_rate = (ui_button_t){
-            MENU_OPT_COL(6), MENU_OPT_ROW(6), MENU_TILE_W, MENU_TILE_H,
-            "RATE", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_rate_callback, NULL};
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_rate);
-
-        ui_screen_draw(&s_menu_screen);
-        menu_tile_speaker_pa_refresh();
-        menu_tile_cal_ppm_refresh();
-        menu_tile_ifbw_refresh();
-        menu_tile_specagc_refresh();
-        menu_tile_rate_refresh();
-        break;
-
-    case MENU_PAGE_DIG:
-        /* SHIFT/BAUD/INV - RTTY parameters that no longer fit on
-         * RADIO once it hit 8/8 (see s_menu_tile_rtty_shift's
-         * declaration comment). Slots 3-7 intentionally empty - room
-         * to grow DIG with future digital modes (PSK31 and similar). */
-        s_menu_tile_rtty_shift = (ui_button_t){
-            MENU_OPT_COL(0), MENU_OPT_ROW(0), MENU_TILE_W, MENU_TILE_H,
-            "SHIFT", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_rtty_shift_callback, NULL};
-        s_menu_tile_rtty_baud = (ui_button_t){
-            MENU_OPT_COL(1), MENU_OPT_ROW(1), MENU_TILE_W, MENU_TILE_H,
-            "BAUD", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_rtty_baud_callback, NULL};
-        s_menu_tile_rtty_inv = (ui_button_t){
-            MENU_OPT_COL(2), MENU_OPT_ROW(2), MENU_TILE_W, MENU_TILE_H,
-            "INV", GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_GRAY,
-            2, 0, 1, menu_tile_rtty_inv_callback, NULL};
-
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_rtty_shift);
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_rtty_baud);
-        ui_screen_add_button(&s_menu_screen, &s_menu_tile_rtty_inv);
-
-        ui_screen_draw(&s_menu_screen);
-        menu_tile_rtty_shift_refresh();
-        menu_tile_rtty_baud_refresh();
-        menu_tile_rtty_inv_refresh();
-        break;
-
-    default:
-        /* Should never actually be reached (s_menu_page only ever
-         * takes one of the MENU_PAGE_COUNT values above) - safety net
-         * so an out-of-range value still paints SOMETHING (the page
-         * selector column + EXIT tile already added above) rather
-         * than leaving the options area in an inconsistent state. */
-        ui_screen_draw(&s_menu_screen);
-        break;
-    }
-
-    s_menu_detail_active = 0U;
-    s_menu_bands_active = 0U;
-    s_menu_step_active = 0U;
-    s_menu_mode_active = 0U;
-    s_menu_freq_active = 0U;
-    s_menu_time_active = 0U;
-    s_menu_open = 1U;
+    cfg_show(CFG_AJUSTES);
 }
 
-static void menu_screen_open(void)
-{
-    menu_grid_show();
-    debug_print("menu: settings screen opened\n");
-}
 
 static void menu_screen_close(void)
 {
+    /* La barra de acciones se repinta SIEMPRE al salir de un menu, no solo
+     * cuando quien cierra sabe que ha cambiado algo. Elegir una banda cambia
+     * el modo y el paso, y el boton "Modo" se quedaba con el valor viejo
+     * (visto por el dueno del proyecto, 22/09/2026). Ponerlo aqui lo cubre
+     * para todas las pantallas a la vez, en vez de acordarse en cada
+     * callback. */
+    s_grid_pant = GRID_NADA;
+    s_menu_cfg_active = 0U;
     s_menu_open = 0U;
     s_menu_detail_active = 0U;
     s_menu_bands_active = 0U;
@@ -6833,7 +7381,10 @@ static void menu_screen_close(void)
      * INSIDE the spectrum panel and gets wiped by the menu's black
      * fill same as the border does - restore it too, zoom-aware in
      * case the ZOOM tile was used while the menu was open. */
-    spec_span_labels_draw();
+    spec_chrome_full_draw(); /* ETAPA 3b: la canaleta y la leyenda tambien se han quedado tapadas por el menu */
+    top_sync();
+    ui_top_draw(&s_top);     /* frecuencia, modo y chips, por si la pantalla los cambio */
+    act_draw();              /* ver el comentario de arriba: el boton "Modo" */
     debug_print("menu: settings screen closed\n");
 }
 
@@ -6859,6 +7410,7 @@ static void screen_sleep_enter(void)
     if (s_menu_open) {
         menu_screen_close(); /* leaves nothing stale registered in s_menu_screen behind for when the menu next opens */
     }
+    gfx_guard_top_set(0); /* aqui si queremos borrar el panel entero, cabecera incluida */
     gfx_fill_screen(GFX_COLOR_BLACK); /* one-time write - see this function's comment, not the ongoing traffic sleep exists to stop */
     backlight_sleep();
     s_screen_asleep = 1U;
@@ -7027,7 +7579,7 @@ static void rf_agc_poll(void)
              * time for a real external attenuator or a lower manual
              * PGA ceiling. */
         }
-    } else if ((s_rf_agc_backoff_x2 > 0 || s_rf_agc_rin_level > 0U)
+    } else if ((s_rf_agc_backoff_x2 > 0 || s_rf_agc_rin_level > s_att_suelo)
                && (now - s_rf_agc_last_clip_ms) >= RF_AGC_RELEASE_COOLDOWN_MS
                && (now - s_rf_agc_last_action_ms) >= RF_AGC_ATTACK_COOLDOWN_MS) {
         if (s_rf_agc_backoff_x2 > 0) {
@@ -7046,8 +7598,14 @@ static void rf_agc_poll(void)
              * there's room to keep recovering PGA-side on the NEXT
              * release step instead of needing a second Rin step right
              * away. */
-            rf_agc_deescalate_rin();
-            s_rf_agc_last_action_ms = now;
+            /* Solo hasta el suelo que haya pedido el usuario: por debajo de
+             * ahi el automatico no manda. Sin esta condicion, poner -12 en
+             * una banda tranquila duraba lo que tardara el primer ciclo de
+             * recuperacion. */
+            if (s_rf_agc_rin_level > s_att_suelo) {
+                rf_agc_deescalate_rin();
+                s_rf_agc_last_action_ms = now;
+            }
         }
         /* Deliberately NOT resetting s_rf_agc_last_clip_ms here - the
          * NEXT recovery step still has to wait out the same
@@ -7069,7 +7627,7 @@ static void rf_agc_poll(void)
  *
  * Now drawn into the SAME screen region the normal waterfall panel
  * occupies (WF_PANEL_Y downward) - the waterfall itself is frozen the
- * whole time the RTTY scope is showing anyway (see rtty_scope_active()'s
+ * whole time the RTTY scope is showing anyway (see digi_panel_active()'s
  * comment: sdr_spectrum_waterfall_tick() simply isn't called), so that
  * space was sitting idle. ALSO ENLARGED beyond the waterfall's native
  * 76px by reclaiming part of the scope's own trace height too - see
@@ -7100,16 +7658,28 @@ static void rf_agc_poll(void)
  *     oldest line dropped) instead of wrapping/overwriting - a real
  *     scrollback feel instead of the old ticker's single-line slide.
  */
-#define RTTY_TEXT_PANEL_H  144U /* exactly RTTY_TEXT_ROWS*RTTY_TEXT_LINE_H, no leftover slack - see both below */
+/* Cabecera (boton de borrar + chapa de velocidad) mas los ocho renglones.
+ * Los tres numeros salen de ui_digi.h, que es quien dibuja: asi el alto que
+ * reserva main.c no puede quedarse desfasado del que usa el modulo. */
+#define RTTY_TEXT_PANEL_H  (uint16_t)(UDG_HDR_H + UDG_ROWS * UDG_LINE_H)
 #define RTTY_TEXT_PANEL_Y  (uint16_t)((WF_PANEL_Y + WATERFALL_ROWS + 4U) - RTTY_TEXT_PANEL_H)
 #define RTTY_SCOPE_GAP_H   2U /* thin gap between the scope trace and the text panel, same idea as WF_PANEL_Y's own "64+280+2" gap from the normal spectrum panel */
 #define RTTY_SCOPE_TRACE_H (uint16_t)(RTTY_TEXT_PANEL_Y - SPEC_Y - RTTY_SCOPE_GAP_H) /* 358 - 144 - 2 = 212, replaces the old SPEC_H-based bar_area_h */
 
 #define RTTY_TEXT_SCALE    2U
-#define RTTY_TEXT_LINE_H   18U /* 7px glyph (gfx_font.h's GFX_FONT_HEIGHT) * scale 2 = 14, +4 leading */
+#define RTTY_TEXT_LINE_H   ((uint16_t)UDG_LINE_H)
 #define RTTY_TEXT_CHAR_W   12U /* (5+1)px * scale 2 - mirrors gfx.c's own per-glyph step formula (gfx_font.h isn't included outside gfx.c, so this is a plain literal like RTTY_TEXT_COLS' comment already is) */
 #define RTTY_TEXT_COLS     66U /* MAIN_W(800) / RTTY_TEXT_CHAR_W = 66 - was 56 (MAIN_W=676) before the status-strip redesign widened MAIN_W to the full screen */
-#define RTTY_TEXT_ROWS     8U  /* RTTY_TEXT_PANEL_H / RTTY_TEXT_LINE_H, exact */
+#define RTTY_TEXT_ROWS     ((uint16_t)UDG_ROWS)
+
+/*
+ * El panel lo dibuja ahora gfx2/ui_digi.c (etapa 20). Esto es lo que se le
+ * pasa: los ocho renglones, la chapa de estado y el boton de borrar. Se
+ * rellena justo antes de cada dibujo desde la rejilla de abajo, que sigue
+ * siendo la que mandan los decodificadores.
+ */
+static ui_digi_state_t s_digi;
+static char            s_digi_chip[16];
 
 static char    s_rtty_text_grid[RTTY_TEXT_ROWS][RTTY_TEXT_COLS + 1U]; /* +1 NUL per row */
 static uint8_t s_rtty_text_row_len[RTTY_TEXT_ROWS];
@@ -7148,6 +7718,69 @@ static uint8_t s_rtty_text_full_redraw = 1U; /* starts 1 so the very first draw 
  * closing the menu while already in RTTY must NOT wipe the
  * scrollback, only repaint it, see rtty_text_force_redraw() below).
  */
+/* 22/09/2026: CW_CLR_X/Y/W/H se fueron con el boton. Su sitio y su tamano
+ * los decide ahora ui_digi.c (UDG_BTN_*), que es quien lo dibuja y quien
+ * resuelve su toque - antes eran dos copias de la misma geometria. */
+
+/*
+ * Un color del tema en el formato que pide gfx.c.
+ *
+ * Las rayas de sintonia del osciloscopio se dibujan con gfx_vline(), que
+ * escribe RGB565 directo al panel, y llevaban colores fijos -cian, naranja,
+ * gris- de antes de que hubiera temas. Con un tema ambar o frio esas tres
+ * rayas eran lo unico en pantalla que no se enteraba del cambio.
+ */
+static uint16_t color_tema(uint32_t hex)
+{
+    return gfx2_to565((uint8_t)((hex >> 16) & 0xFFU),
+                      (uint8_t)((hex >> 8) & 0xFFU),
+                      (uint8_t)(hex & 0xFFU));
+}
+
+/* Borra la zona de los modos digitales con el fondo del tema. */
+static void digi_borra(gfx2_surf_t *s, void *ctx)
+{
+    (void)ctx;
+    gfx2_fill(s, 0, (int16_t)SPEC_Y, (int16_t)MAIN_W,
+              (int16_t)((RTTY_TEXT_PANEL_Y + RTTY_TEXT_PANEL_H) - SPEC_Y),
+              gfx2_rgb(PAL_SURF_0));
+}
+
+/* Pasa la rejilla al estado que entiende ui_digi.c. Una sola funcion para
+ * que no haya dos sitios decidiendo que renglon va donde. */
+static void digi_sync(void)
+{
+    uint8_t r;
+
+    s_digi.y = (int16_t)RTTY_TEXT_PANEL_Y;
+    s_digi.h = (int16_t)RTTY_TEXT_PANEL_H;
+    for (r = 0U; r < RTTY_TEXT_ROWS; r++) {
+        s_digi.fila[r] = (s_rtty_text_row_len[r] > 0U) ? s_rtty_text_grid[r] : 0;
+    }
+
+    s_digi.btn   = "Borrar";
+    /* btn_press NO se toca aqui: lo pone el reparto de toques, que es quien
+     * sabe si el dedo esta encima. digi_sync() corre en cada cuadro y lo
+     * borraria en el siguiente. */
+
+    if (cw_get_enabled()) {
+        uint32_t w = (uint32_t)(cw_get_wpm() + 0.5f);
+        uint8_t i = 0U;
+
+        if (w > 99U) { w = 99U; }
+        if (w >= 10U) { s_digi_chip[i++] = (char)('0' + (w / 10U)); }
+        s_digi_chip[i++] = (char)('0' + (w % 10U));
+        s_digi_chip[i++] = ' '; s_digi_chip[i++] = 'p';
+        s_digi_chip[i++] = 'p'; s_digi_chip[i++] = 'm';
+        s_digi_chip[i] = '\0';
+        s_digi.chip = s_digi_chip;
+        s_digi.enganchado = cw_get_decode_ok();
+    } else {
+        s_digi.chip = 0;
+        s_digi.enganchado = 0U;
+    }
+}
+
 static void rtty_text_panel_reset(void)
 {
     uint8_t r;
@@ -7159,7 +7792,8 @@ static void rtty_text_panel_reset(void)
     s_rtty_text_cur_row = 0U;
     s_rtty_text_cur_col = 0U;
     s_rtty_text_last_was_eol = 1U;
-    gfx_fill_rect(0, RTTY_TEXT_PANEL_Y, MAIN_W, RTTY_TEXT_PANEL_H, GFX_COLOR_BLACK);
+    digi_sync();
+    ui_digi_draw_texto(&s_digi);
     s_rtty_text_draw_row = 0U;
     s_rtty_text_draw_col = 0U;
     s_rtty_text_full_redraw = 0U; /* just painted blank directly above - nothing left pending */
@@ -7216,8 +7850,32 @@ static void rtty_text_putc(char c)
 {
     uint8_t row;
 
+    /*
+     * Dos motivos para saltar de linea, y hacen falta los dos.
+     *
+     * El de siempre: se acabaron las columnas de la rejilla, que es lo que
+     * cabe en memoria.
+     *
+     * Y desde la etapa 20, que el renglon YA NO CABE A LO ANCHO. El panel se
+     * dibuja con tipografia proporcional, asi que 66 caracteres pueden ser
+     * 450 px de minusculas estrechas o 996 de mayusculas anchas - medido:
+     * 66 "W" dan 996 px en una pantalla de 800. Sin esta comprobacion, una
+     * linea de indicativos en mayusculas se cortaria por la derecha y el
+     * final desapareceria sin avisar.
+     *
+     * Se mide el renglon ya escrito mas el caracter que entra, no el
+     * renglon entero despues: asi el que provoca el salto se escribe en la
+     * linea nueva y no se pierde.
+     */
     if (s_rtty_text_cur_col >= RTTY_TEXT_COLS) {
         rtty_text_newline();
+    } else if (s_rtty_text_cur_col > 0U) {
+        char uno[2];
+        uno[0] = c; uno[1] = '\0';
+        if (gfx2_text_w(s_rtty_text_grid[s_rtty_text_cur_row], &font_ui_14b)
+            + gfx2_text_w(uno, &font_ui_14b) > (int16_t)(MAIN_W - 12)) {
+            rtty_text_newline();
+        }
     }
     row = s_rtty_text_cur_row;
     s_rtty_text_grid[row][s_rtty_text_cur_col] = c;
@@ -7272,38 +7930,36 @@ static void rtty_text_push(char c)
  */
 static void rtty_text_panel_draw(void)
 {
-    if (s_rtty_text_full_redraw) {
-        uint8_t r;
+    digi_sync();
 
-        gfx_fill_rect(0, RTTY_TEXT_PANEL_Y, MAIN_W, RTTY_TEXT_PANEL_H, GFX_COLOR_BLACK);
-        for (r = 0; r < RTTY_TEXT_ROWS; r++) {
-            if (s_rtty_text_row_len[r] > 0U) {
-                gfx_text(4, (uint16_t)(RTTY_TEXT_PANEL_Y + 4U + (uint16_t)r * RTTY_TEXT_LINE_H),
-                         s_rtty_text_grid[r], GFX_COLOR_GREEN, GFX_COLOR_BLACK, RTTY_TEXT_SCALE);
-            }
-        }
+    if (s_rtty_text_full_redraw) {
+        ui_digi_draw_texto(&s_digi);
         s_rtty_text_full_redraw = 0U;
         s_rtty_text_draw_row = s_rtty_text_cur_row;
         s_rtty_text_draw_col = s_rtty_text_cur_col;
         return;
     }
 
-    while (s_rtty_text_draw_row != s_rtty_text_cur_row || s_rtty_text_draw_col != s_rtty_text_cur_col) {
-        if (s_rtty_text_draw_col >= s_rtty_text_row_len[s_rtty_text_draw_row]) {
-            /* This row is fully drawn already (a newline happened,
-             * without a scroll - see rtty_text_newline()) - move on to
-             * the next one. That row's length is FINAL at this point
-             * (rtty_text_putc() only ever appends to the CURRENT row),
-             * so there's nothing left behind to catch up on. */
-            s_rtty_text_draw_row++;
-            s_rtty_text_draw_col = 0U;
-            continue;
-        }
-        gfx_char((uint16_t)(4U + (uint16_t)s_rtty_text_draw_col * RTTY_TEXT_CHAR_W),
-                 (uint16_t)(RTTY_TEXT_PANEL_Y + 4U + (uint16_t)s_rtty_text_draw_row * RTTY_TEXT_LINE_H),
-                 s_rtty_text_grid[s_rtty_text_draw_row][s_rtty_text_draw_col],
-                 GFX_COLOR_GREEN, GFX_COLOR_BLACK, RTTY_TEXT_SCALE);
-        s_rtty_text_draw_col++;
+    /*
+     * Por RENGLONES, no por caracteres.
+     *
+     * La version anterior dibujaba UN glifo en su hueco, que con la fuente
+     * de ancho fijo se sabia cual era sin medir nada. Con tipografia
+     * proporcional el hueco depende de lo que haya escrito antes en la
+     * linea, asi que se redibuja la linea entera.
+     *
+     * Sale barato: 800x18 px por caracter, y a 20 palabras por minuto son
+     * diez caracteres por segundo. El espectro repinta 800x208 treinta veces
+     * por segundo al lado de esto.
+     */
+    while (s_rtty_text_draw_row != s_rtty_text_cur_row) {
+        ui_digi_draw_fila(&s_digi, s_rtty_text_draw_row);
+        s_rtty_text_draw_row++;
+        s_rtty_text_draw_col = 0U;
+    }
+    if (s_rtty_text_draw_col != s_rtty_text_cur_col) {
+        ui_digi_draw_fila(&s_digi, s_rtty_text_draw_row);
+        s_rtty_text_draw_col = s_rtty_text_cur_col;
     }
 }
 
@@ -7354,6 +8010,47 @@ static void rtty_poll(void)
 }
 
 /*
+ * Saca el texto decodificado del CW al MISMO panel y al MISMO UART que
+ * el RTTY, con la misma acumulacion por lineas. Es una funcion aparte de
+ * rtty_poll() y no una rama dentro de ella por la razon que da el propio
+ * comentario de rtty_poll(): cada decodificador tiene su anillo de
+ * salida con su propia cola, y de cada anillo tiene que tirar uno solo.
+ * Dos anillos, dos funciones. Lo que comparten es el destino.
+ *
+ * No hace falta comprobar si el CW esta encendido: si no lo esta, su
+ * anillo esta vacio y el bucle no da ni una vuelta.
+ */
+static void cw_poll(void)
+{
+    static char line[64];
+    static uint8_t line_len = 0U;
+    char c;
+
+    while (cw_get_char(&c)) {
+        rtty_text_push(c);
+
+        if (c == '\r' || c == '\n') {
+            if (line_len > 0U) {
+                line[line_len] = '\0';
+                debug_print("cw: ");
+                debug_print(line);
+                debug_print("\n");
+                line_len = 0U;
+            }
+        } else if (line_len < (uint8_t)(sizeof(line) - 1U)) {
+            line[line_len] = c;
+            line_len++;
+        } else {
+            line[line_len] = '\0';
+            debug_print("cw: ");
+            debug_print(line);
+            debug_print("\n");
+            line_len = 0U;
+        }
+    }
+}
+
+/*
  * Clears the spectrum panel once, on the transition INTO the scope
  * from the normal spectrum (see that call site's comment) - never
  * per-frame. Unlike the old hand-rolled bar-diff renderer this used
@@ -7372,7 +8069,32 @@ static void rtty_poll(void)
  */
 static void rtty_scope_panel_reset(void)
 {
-    gfx_fill_rect(0, SPEC_Y, MAIN_W, RTTY_SCOPE_TRACE_H, GFX_COLOR_BLACK);
+    /*
+     * Se borra HASTA EL FINAL DEL PANEL DE TEXTO, no solo la altura de la
+     * traza (22/09/2026, viendo una foto de CW real).
+     *
+     * El motivo: la regla de frecuencias del espectro normal vive en
+     * y=318, que cae DENTRO de la banda que ocupa el panel de texto
+     * (280..424). Al entrar en un modo digital el espectro deja de
+     * dibujarse -y con el la regla-, pero los pixeles que dejo pintados
+     * la ultima vez se quedan ahi: el panel de texto escribe encima sin
+     * borrar el fondo entero, asi que las cifras de la regla asomaban
+     * ENTRE los renglones del texto decodificado. En la foto se leia el
+     * QSO con "13.956  13.980  14.004" atravesado por la mitad.
+     *
+     * Y ademas esas cifras eran mentira ahi: son frecuencias de radio, y
+     * lo que hay encima en un modo digital es un espectro de AUDIO.
+     *
+     * Borrar de mas es gratis porque justo despues repintan los dos
+     * dueños de la zona: la traza y el texto, este ultimo con
+     * rtty_text_panel_reset() o rtty_text_force_redraw() segun el caso.
+     */
+    /* 22/09/2026: era un gfx_fill_rect() a negro puro. Con temas claros u
+     * oscuros distintos eso dejaba un rectangulo negro donde el resto de la
+     * pantalla es del color del tema; ahora se borra con el fondo del tema. */
+    gfx2_render(0, (int16_t)SPEC_Y, (int16_t)MAIN_W,
+                (int16_t)((RTTY_TEXT_PANEL_Y + RTTY_TEXT_PANEL_H) - SPEC_Y),
+                digi_borra, 0);
 }
 
 /*
@@ -7385,7 +8107,37 @@ static void rtty_scope_panel_reset(void)
  * and means flipping RTTY on/off or changing mode swaps the panel
  * back and forth automatically, no extra plumbing needed.
  */
-static uint8_t rtty_scope_active(void)
+static uint8_t digi_panel_active(void)
+{
+    demod_mode_t m = demod_am_get_mode();
+    return (uint8_t)((m == DEMOD_MODE_USB || m == DEMOD_MODE_LSB) &&
+                     (rtty_get_enabled() || cw_get_enabled()));
+}
+
+/*
+ * 1 cuando el MANDO deja de sintonizar y pasa a mover las dos
+ * frecuencias del RTTY. Solo en RTTY.
+ *
+ * Esto es una pregunta DISTINTA de digi_panel_active(), aunque durante
+ * meses la respuesta fuera la misma y una sola funcion sirviera para las
+ * dos. Al llegar el CW dejaron de coincidir, y usar la misma dejo el
+ * mando muerto en CW: se lo llevaba la rama del RTTY a mover un
+ * mark/space que en CW no pinta nada, y encima se comia la pulsacion,
+ * asi que tampoco habia forma de salir girando.
+ *
+ * Y no coinciden por una razon de uso, no por un detalle de
+ * implementacion. En RTTY las dos frecuencias son una convencion fija y
+ * lo que se ajusta al vuelo es el detector, asi que el mando se dedica a
+ * eso. En CW el tono es una preferencia personal que se pone una vez
+ * -esta en Ajustes, con su pantalla y sus botones- y lo que se mueve
+ * todo el rato es la frecuencia: sintonizar CW es correr la emisora
+ * hasta que el pitido cae en el tono. O sea que en CW el mando tiene que
+ * sintonizar, que es justo lo contrario.
+ *
+ * Que la respuesta de dos preguntas coincida hoy no las convierte en la
+ * misma pregunta. Este fallo es de esa familia.
+ */
+static uint8_t rtty_encoder_grabs_tuning(void)
 {
     demod_mode_t m = demod_am_get_mode();
     return (uint8_t)((m == DEMOD_MODE_USB || m == DEMOD_MODE_LSB) && rtty_get_enabled());
@@ -7394,7 +8146,7 @@ static uint8_t rtty_scope_active(void)
 /*
  * Draws the RTTY tuning scope trace into the TOP RTTY_SCOPE_TRACE_H px
  * of the normal spectrum panel's area (SPEC_Y/MAIN_W) - see
- * rtty_scope_active() for when this replaces the normal spectrum
+ * digi_panel_active() for when this replaces the normal spectrum
  * instead of sdr_spectrum_waterfall_tick(), and this block's own
  * comment (right above RTTY_TEXT_PANEL_H) for how that height and the
  * text panel below it split the combined SPEC_Y..(WF_PANEL_Y+
@@ -7452,6 +8204,14 @@ static uint8_t rtty_scope_active(void)
  * dirty-flag gating (see s_rtty_text_dirty's comment) rather than the
  * old ticker's unconditional every-frame repaint.
  */
+/* Boton de borrar el texto, arriba a la izquierda del panel digital.
+ * 96x26 px son 11,2 x 3,0 mm: estrecho de alto para lo que pide un dedo
+ * en resistivo, pero es una accion que se hace de vez en cuando y que no
+ * duele si hay que repetir el toque - al reves que las de la barra, que
+ * se usan a cada rato. */
+/* Las cuatro constantes del boton de borrar subieron aqui arriba con la
+ * etapa 20: digi_sync() las necesita y esta por delante. */
+
 #define RTTY_SCOPE_DB_FLOOR -60.0f
 static void rtty_scope_draw(void)
 {
@@ -7485,21 +8245,166 @@ static void rtty_scope_draw(void)
                   0,        /* center_mark_offset_px - no meaningful "LO" in audio-domain, dead center is fine/harmless */
                   0, 0, 0); /* band_active off - mark/space already have their own dedicated lines below */
 
-    mark_x  = (uint16_t)((rtty_get_mark_hz()  / nyquist_hz) * (float)MAIN_W);
-    space_x = (uint16_t)((rtty_get_space_hz() / nyquist_hz) * (float)MAIN_W);
-    if (mark_x < MAIN_W)  { gfx_vline(mark_x,  bar_y, bar_area_h, GFX_COLOR_CYAN); }
-    if (space_x < MAIN_W) { gfx_vline(space_x, bar_y, bar_area_h, GFX_COLOR_ORANGE); }
+    /* En CW hay UNA frecuencia que mirar, no dos: el tono al que escucha
+     * el detector. Sintonizar es mover el pico hasta esa raya, que es
+     * exactamente el mismo gesto que en RTTY con sus dos. */
+    if (cw_get_enabled()) {
+        /*
+         * DOS rayas, y la que importa es la de escuchar.
+         *
+         * La cian marca donde el decodificador esta escuchando DE VERDAD,
+         * o sea la sonda a la que se ha enganchado. La gris marca el tono
+         * ajustado, que es solo el centro de la busqueda.
+         *
+         * Antes habia una sola raya, en el tono ajustado, y era una
+         * mentira util: daba a entender que habia que llevar el pico
+         * hasta ahi, cuando lo que hace falta es acercarlo a la ventana.
+         * Con las dos se ve de un vistazo que el decodificador ya ha
+         * cuadrado solo, y cuanto habria que mover el mando para que
+         * ademas el pitido suene al tono preferido.
+         */
+        uint16_t nom_x = (uint16_t)((cw_get_pitch_hz() / nyquist_hz) * (float)MAIN_W);
+        mark_x = (uint16_t)((cw_get_detect_hz() / nyquist_hz) * (float)MAIN_W);
+        if (nom_x  < MAIN_W && nom_x != mark_x) {
+            gfx_vline(nom_x, bar_y, bar_area_h, color_tema(PAL_INK_MUTE));
+        }
+        if (mark_x < MAIN_W) { gfx_vline(mark_x, bar_y, bar_area_h, color_tema(PAL_ACCENT)); }
+    } else {
+        mark_x  = (uint16_t)((rtty_get_mark_hz()  / nyquist_hz) * (float)MAIN_W);
+        space_x = (uint16_t)((rtty_get_space_hz() / nyquist_hz) * (float)MAIN_W);
+        if (mark_x < MAIN_W)  { gfx_vline(mark_x,  bar_y, bar_area_h, color_tema(PAL_ACCENT)); }
+        if (space_x < MAIN_W) { gfx_vline(space_x, bar_y, bar_area_h, color_tema(PAL_WARN)); }
+    }
+
+    /*
+     * En CW, la velocidad medida y si esta enganchado o no, arriba a la
+     * derecha del osciloscopio.
+     *
+     * Esto no es adorno. Un decodificador de CW puede estar sacando
+     * letras perfectamente plausibles a partir de ruido, y desde fuera
+     * no se distingue de uno que esta leyendo de verdad. Los dos datos
+     * que lo dicen son estos: si la velocidad se queda quieta en un
+     * numero razonable, esta leyendo; si baila, no. Y el punto verde se
+     * enciende cuando lo que llega tiene forma de Morse, que es la misma
+     * condicion que decide si sale texto o no.
+     *
+     * Se dibuja sobre el trazo, que spectrum_draw() acaba de repintar
+     * entero, asi que no hace falta borrar lo de antes.
+     */
+    /*
+     * Boton de BORRAR el texto decodificado.
+     *
+     * Vive aqui dentro y no en la barra de acciones de abajo por dos
+     * razones. Una, que la barra esta llena y cuadrada al pixel: 2 + 6
+     * botones de 126 + 5 huecos de 8 + 2 = 800 exactos, y meter un
+     * septimo obliga a recalcularlo todo para un boton que solo sirve en
+     * dos modos de nueve. Y dos, que aqui esta donde se usa: al lado del
+     * texto que borra.
+     *
+     * Se dibuja DESPUES de la traza a proposito. spectrum_draw() repinta
+     * todas las columnas en cada cuadro, asi que cualquier cosa pintada
+     * antes desaparece; este orden es el mismo que ya seguia el
+     * indicador de velocidad de justo debajo.
+     */
+    /*
+     * NI el boton NI la chapa se repintan por frame - 22/09/2026, por el
+     * dueno del proyecto: "los ppm y el boton borrar parpadean".
+     *
+     * Parpadeaban porque estaban ENCIMA del trazo y spectrum_draw() repinta
+     * el trazo entero en cada cuadro: cada frame los borraba y volvian a
+     * salir justo despues. Ahora viven en la cabecera del panel de texto,
+     * fuera de lo que repinta el trazo, asi que basta con dibujarlos cuando
+     * de verdad cambian: el boton al pulsarlo y al repintar el panel, y la
+     * chapa solo cuando cambia lo que dice.
+     */
+    digi_sync();
+    {
+        static char s_chip_visto[16] = "";
+        static uint8_t s_eng_visto = 0xFFU;
+        if (s_digi.chip &&
+            (strcmp(s_chip_visto, s_digi.chip) != 0 || s_eng_visto != s_digi.enganchado)) {
+            uint8_t i;
+            for (i = 0U; i < sizeof s_chip_visto - 1U && s_digi.chip[i]; i++) {
+                s_chip_visto[i] = s_digi.chip[i];
+            }
+            s_chip_visto[i] = '\0';
+            s_eng_visto = s_digi.enganchado;
+            ui_digi_draw_chip(&s_digi);
+        }
+    }
 
     rtty_text_panel_draw();
 }
 
 
+/*
+ * DETENTES Y PULSACIONES INYECTADOS DESDE EL TACTIL
+ * -------------------------------------------------
+ * Los botones "-" y "+" de la pantalla de detalle no reimplementan el ajuste:
+ * meten detentes en la misma cola que el mando y dejan que corra el codigo de
+ * siempre. Asi el recorte de limites, el refresco del valor y el marcado para
+ * guardar son literalmente los mismos, no una copia parecida que un dia se
+ * queda atras. Vale para los ocho destinos sin escribir uno solo de ellos.
+ */
+static int32_t s_inject_detents = 0;
+static uint8_t s_inject_press   = 0U;
+
+static void encoder_inject_detents(int32_t d) { s_inject_detents += d; }
+static void encoder_inject_press(void)        { s_inject_press = 1U; }
+
 static void tune_encoder_poll(void)
 {
-    int32_t detents    = encoder_take_delta();
-    uint8_t press       = encoder_take_press();
+    int32_t detents    = encoder_take_delta() + s_inject_detents;
+    uint8_t press       = (uint8_t)(encoder_take_press() | s_inject_press);
     uint8_t long_press  = encoder_take_long_press();
+
+    s_inject_detents = 0;
+    s_inject_press   = 0U;
     uint8_t changed = 0;
+
+    /*
+     * APRETAR Y GIRAR = MOVER EL DIGITO DE SINTONIA
+     *
+     * Recuperado del firmware de serie, que lo tenia y este no: estando por
+     * ejemplo en 7.124 kHz con paso de 1 kHz, el mando mueve el 4; si se
+     * aprieta el mando y se gira, el foco salta al 2, y entonces el mando
+     * mueve el 2 sin tocar el 4.
+     *
+     * Lo que cambia por dentro es el indice de paso (k_tune_steps), que es
+     * exactamente "que digito mueve el mando" - la cabecera ya subraya ese
+     * digito desde la etapa 2, asi que el gesto se ve en el numero grande
+     * mientras se hace, que es lo que lo hacia util en el original.
+     *
+     * Va lo PRIMERO, antes incluso de la pulsacion larga, y hace return: si
+     * el boton esta apretado y ademas ha llegado un detente, el usuario esta
+     * haciendo este gesto y ninguna otra interpretacion es razonable. La
+     * llamada a encoder_consume_press() evita que la suelta posterior
+     * dispare ademas la pulsacion corta (que en TUNE significa justo
+     * cambiar el paso, asi que sin esto el gesto se pasaria de rosca en uno
+     * al levantar el dedo).
+     *
+     * Solo en TUNE. En los demas destinos del mando el boton ya significa
+     * otra cosa en cada uno (ver las ramas de abajo), y anadir un gesto
+     * global encima seria justo el tipo de cosa que hace que un mando deje
+     * de ser predecible.
+     */
+    if (detents != 0 && encoder_button_down() &&
+        s_encoder_target == ENCODER_TARGET_TUNE) {
+        int32_t idx = (int32_t)s_tune_step_idx + detents;
+
+        encoder_consume_press();
+        /* Sin envolver: llegar al extremo y seguir girando se queda ahi, en
+         * vez de saltar del paso mas fino al mas grueso de golpe - un salto
+         * de 100 Hz a 1 MHz por un detente de mas es de los errores que
+         * cuesta deshacer. */
+        if (idx < 0) { idx = 0; }
+        if (idx > (int32_t)TUNE_STEP_COUNT - 1) { idx = (int32_t)TUNE_STEP_COUNT - 1; }
+        if ((uint8_t)idx != s_tune_step_idx) {
+            set_tune_step_idx((uint8_t)idx);
+            if (!s_menu_open) { step_display_draw(); }
+        }
+        return;
+    }
 
     /*
      * While the RTTY scope is showing AND the settings menu is
@@ -7523,7 +8428,7 @@ static void tune_encoder_poll(void)
      * as rtty_scope_draw() not checking s_menu_open, just on the input
      * side instead of the display side.
      */
-    if (rtty_scope_active() && !s_menu_open) {
+    if (rtty_encoder_grabs_tuning() && !s_menu_open) {
         if (detents != 0) {
             float step = (float)detents * CONFIG_RTTY_ENCODER_STEP_HZ;
             float mark  = rtty_get_mark_hz()  + step;
@@ -7544,6 +8449,34 @@ static void tune_encoder_poll(void)
             debug_print_dec("rtty: space Hz now", (uint32_t)space);
         }
         return;
+    }
+
+    /*
+     * Pantallas de rejilla (ajustes, bandas, modos, pasos): el mando tambien.
+     * Girar mueve el recuadro de seleccion por las celdas -saltando de pagina
+     * al llegar al final, asi que se recorren las 39 bandas o los 27 ajustes
+     * de un tiron- y pulsar entra en la que este señalada. El dedo y el mando
+     * hacen lo mismo, que es el requisito.
+     *
+     * Va antes que la pulsacion larga porque esta se queda como esta: larga
+     * = salir, desde cualquier pantalla.
+     */
+    if (s_menu_cfg_active && !s_menu_detail_active && !long_press) {
+        if (detents != 0) { cfg_cursor_move(detents); }
+        if (press)        { cfg_apply((uint8_t)s_cfg_cursor); }
+        if (detents != 0 || press) { return; }
+    }
+
+    if (grid_activa() && !long_press) {
+        if (detents != 0) {
+            grid_cursor_move(detents);
+        }
+        if (press) {
+            grid_apply((uint8_t)s_grid_cursor);
+        }
+        if (detents != 0 || press) {
+            return;
+        }
     }
 
     /* Long-press: unconditionally hands the knob back to TUNE and, if
@@ -7649,6 +8582,28 @@ static void tune_encoder_poll(void)
                 settings_value_redraw();
                 if (s_settings_ready_for_autosave) { settings_mark_dirty(); } /* 07/09/2026 - was missing, so PGA changes never actually reached CONFIG.CSV, see settings.h's comment */
             }
+        }
+        return;
+    }
+
+    if (s_encoder_target == ENCODER_TARGET_CW_TONE) {
+        /* Misma cortesia que el resto: el boton sigue cambiando el paso
+         * de sintonia aunque el giro este dedicado a otra cosa. */
+        if (press) {
+            set_tune_step_idx((uint8_t)((s_tune_step_idx + 1U) % TUNE_STEP_COUNT));
+            if (!s_menu_open) { step_display_draw(); }
+        }
+
+        if (detents != 0) {
+            /* 10 Hz por detente. El recorte de limites vive dentro de
+             * cw_set_pitch_hz(), no aqui: un rango repetido en dos sitios
+             * es un rango que un dia deja de coincidir. */
+            cw_set_pitch_hz(cw_get_pitch_hz() + (float)detents * 10.0f);
+            /* El filtro de audio va detras del tono: si no, se quedaria
+             * centrado donde estaba y el pitido se saldria del filtro
+             * justo al intentar colocarlo. */
+            demod_am_set_cw_filter_hz(cw_get_pitch_hz());
+            settings_value_redraw();
         }
         return;
     }
@@ -7820,7 +8775,8 @@ static void tune_encoder_poll(void)
     }
 
     if (detents != 0) {
-        int64_t f = (int64_t)s_tune_hz + (int64_t)detents * (int64_t)k_tune_steps[s_tune_step_idx];
+        int64_t f = tune_mueve_pasos((int64_t)s_tune_hz, detents,
+                                     (int64_t)k_tune_steps[s_tune_step_idx]);
 
         if (f < (int64_t)TUNE_MIN_HZ) {
             f = (int64_t)TUNE_MIN_HZ;
@@ -7888,6 +8844,7 @@ static void tune_encoder_poll(void)
 static void demo_button_callback(void *widget, ui_event_t event, void *user_data)
 {
     ui_button_t *btn = (ui_button_t *)widget;
+    (void)btn;
     (void)user_data;
 
     if (event == UI_EVENT_RELEASE) {
@@ -7909,7 +8866,9 @@ static void demo_button_callback(void *widget, ui_event_t event, void *user_data
             /* Opens the picker list (menu_step_list_show()) instead of
              * cycling directly - see its comment. Applying a choice
              * there closes the menu itself; nothing else to do here. */
-            menu_step_list_show();
+            /* Pestaña: si ya esta abierta, se vuelve a la principal. Ver
+             * accion_pantalla(). */
+            accion_pantalla(GRID_PASOS);
         } else if (widget == &s_btn_nr) {
             /* Restored to its real job 03/08/2026, now that Spectral
              * Subtraction NR actually exists (nr_ss.h) - the
@@ -7939,7 +8898,7 @@ static void demo_button_callback(void *widget, ui_event_t event, void *user_data
              * s_menu_open itself (see its comment), so there's nothing
              * else to do here - applying a preset closes the menu on
              * its own too (menu_band_preset_callback()). */
-            menu_bands_show();
+            accion_pantalla(GRID_BANDAS);
         } else if (widget == &s_btn_menu) {
             /* Opens the settings menu screen (menu_screen_open()) -
              * replaces the old TUNE -> BACKLIGHT -> SCALE -> SQUELCH
@@ -7950,13 +8909,13 @@ static void demo_button_callback(void *widget, ui_event_t event, void *user_data
              * s_encoder_target itself is untouched here - each tile's
              * own callback sets it (or leaves it alone, for AGC/SPT
              * which act immediately instead). */
-            menu_screen_open();
+            accion_pantalla(GRID_NADA); /* GRID_NADA = la de ajustes, ver accion_pantalla() */
         } else if (widget == &s_btn_mode) {
             /* Opens the picker list (menu_mode_list_show()) instead of
              * cycling directly - see its comment alongside
              * menu_step_list_show(). Applying a choice there closes
              * the menu itself; nothing else to do here. */
-            menu_mode_list_show();
+            accion_pantalla(GRID_MODO);
         }
     }
 }
@@ -7964,90 +8923,95 @@ static void demo_button_callback(void *widget, ui_event_t event, void *user_data
 static void radio_screen_draw(void)
 {
     uint8_t i;
-    static const char *k_btn_labels[6] = { "MODE", "VOL", "STEP", "NR", "BANDS", "MENU" };
-    ui_button_t *k_btns[6];
 
-    k_btns[0] = &s_btn_mode;
-    k_btns[1] = &s_btn_vol;
-    k_btns[2] = &s_btn_step;
-    k_btns[3] = &s_btn_nr;
-    k_btns[4] = &s_btn_bands;
-    k_btns[5] = &s_btn_menu;
+    /* Esta funcion SI puede pintar la pantalla entera: es la que la
+     * reconstruye. Se desarma la banda reservada para el borrado inicial y
+     * se vuelve a armar al final, cuando la cabecera ya esta puesta. Ver
+     * gfx_guard_top_set() en gfx.h. */
+    gfx_guard_top_set(0);
 
     gfx_fill_screen(GFX_COLOR_BLACK);
-    ui_screen_init(&s_demo_screen);
 
     /* Top bar: freq/mode/step/vol/time/battery live here, drawn by
      * their own readout functions after the panels. */
+    /* hidden=1: la cabecera la pinta ui_top.c entera. El panel se queda
+     * registrado por su geometria, pero ya no rellena nada. */
     s_title_panel = (ui_panel_t){0, 0, GFX_SCREEN_WIDTH, TOP_H,
-                                  GFX_COLOR_DARKGRAY, GFX_COLOR_DARKGRAY};
-    ui_screen_add_panel(&s_demo_screen, &s_title_panel);
+                                  GFX_COLOR_DARKGRAY, GFX_COLOR_DARKGRAY, 1};
 
     /* Main display column: spectrum over waterfall. */
+    /* Sin borde (borde == fondo, ver ui_panel_draw): ese rectangulo gris de
+     * 1 px lo pisan por la izquierda la canaleta de los ejes y por abajo la
+     * regla, asi que en la placa no se veia un marco sino dos rayas sueltas.
+     * Un marco a medias es peor que ninguno, y el diseno nuevo separa zonas
+     * con fondo y aire, no con lineas. */
     s_spectrum_panel = (ui_panel_t){0, SPEC_Y, MAIN_W, SPEC_H,
-                                     GFX_COLOR_BLACK, GFX_COLOR_GRAY};
-    ui_screen_add_panel(&s_demo_screen, &s_spectrum_panel);
+                                     GFX_COLOR_BLACK, GFX_COLOR_BLACK};
 
+    /* Sin borde, misma razon que s_spectrum_panel justo arriba. */
     s_waterfall_panel = (ui_panel_t){0, WF_PANEL_Y, MAIN_W,
-                                      (uint16_t)(WATERFALL_ROWS + 4), GFX_COLOR_BLACK, GFX_COLOR_GRAY};
-    ui_screen_add_panel(&s_demo_screen, &s_waterfall_panel);
+                                      (uint16_t)(WATERFALL_ROWS + 4), GFX_COLOR_BLACK, GFX_COLOR_BLACK};
 
     /* Status strip (S-meter + SNR + badges drawn on top afterwards) -
      * replaces the old right-hand column panel (s_rcol_panel, removed
      * 01/09/2026) - see STATUS_STRIP_Y/H's declaration comment. */
+    /* hidden=1, misma razon que s_title_panel: la barra de estado la pinta
+     * ui_top_draw_status(). */
     s_status_strip_panel = (ui_panel_t){0, STATUS_STRIP_Y, MAIN_W, STATUS_STRIP_H,
-                                         GFX_COLOR_BLACK, GFX_COLOR_GRAY};
-    ui_screen_add_panel(&s_demo_screen, &s_status_strip_panel);
+                                         GFX_COLOR_BLACK, GFX_COLOR_GRAY, 1};
 
     /* Bottom bar: 6 buttons. enabled=1 set explicitly - if omitted, a
      * freshly declared ui_button_t defaults to enabled=0 (C zero-
      * initialization) and ui_screen_touch() would ignore it even
      * though it draws fine. MODE gets the yellow "primary" styling. */
-    for (i = 0; i < 6U; i++) {
-        uint16_t x = (uint16_t)(BTNBAR_GAP + i * (BTNBAR_BTN_W + BTNBAR_GAP));
-        uint16_t fg = (i == 0U) ? GFX_COLOR_BLACK : GFX_COLOR_WHITE;
-        uint16_t bg = (i == 0U) ? GFX_COLOR_YELLOW : GFX_COLOR_DARKGRAY;
-        uint16_t border = (i == 0U) ? GFX_COLOR_BLACK : GFX_COLOR_WHITE;
-
-        *k_btns[i] = (ui_button_t){x, BTNBAR_Y, BTNBAR_BTN_W, BTNBAR_BTN_H,
-                                    k_btn_labels[i], fg, bg, border,
-                                    2, 0, 1, demo_button_callback, NULL};
-        ui_screen_add_button(&s_demo_screen, k_btns[i]);
+    /*
+     * ETAPA 4: los seis botones ya NO se registran en s_demo_screen.
+     *
+     * Siguen existiendo como ui_button_t porque demo_button_callback()
+     * distingue cual le ha llamado comparando el puntero, y esa logica -que
+     * es toda la funcionalidad de la barra- no se toca. Lo que cambia es
+     * quien los dibuja (ui_act.c, con nombres y valores) y quien decide que
+     * boton ha tocado el dedo (ui_act_hit(), que ademas reparte los huecos
+     * entre botones vecinos en vez de dejarlos muertos).
+     *
+     * Registrarlos ADEMAS en la pantalla haria que cada toque disparase el
+     * callback dos veces: una por ui_screen_touch() y otra por el reparto
+     * nuevo. hidden=1 es cinturon y tirantes por si alguien los vuelve a
+     * registrar sin darse cuenta.
+     */
+    for (i = 0; i < UI_ACT_N; i++) {
+        /* Geometria a CERO, y no una copia de la de ui_act.h: estos widgets ya
+         * no se dibujan ni se consultan para nada espacial. Repetir aqui las
+         * coordenadas seria dejar una segunda fuente de verdad que nadie usa
+         * y que se queda desfasada en silencio - que es justo lo que acaba de
+         * pasar al mover la barra (estas lineas seguian con el margen viejo).
+         * hidden=1 ademas garantiza que, si alguien los vuelve a registrar sin
+         * darse cuenta, no pinten un rectangulo en la esquina. */
+        *k_act_slots[i].btn = (ui_button_t){0, 0, 0, 0,
+                                    k_act_slots[i].nombre,
+                                    GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_WHITE,
+                                    2, 0, 1, demo_button_callback, NULL, 1};
     }
 
-    /* AGC profile badge/button (see its declaration + badges_draw()'s
-     * comment) - lives in the badge grid, not the bottom bar, but is
-     * registered here alongside the other 6 buttons for the same
-     * reason: ui_screen_add_button() is what makes ui_screen_touch()
-     * actually hit-test it. Position matches badges_draw()'s BADGE_X1/
-     * row1 exactly (same constants, defined earlier in this file).
-     * Same cyan "on" look the BW badge used to have here, since this
-     * is always "live", never a dark/disabled state. */
-    s_btn_agc_profile = (ui_button_t){
-        BADGE_COL(3), BADGE_Y0,
-        BADGE_W, BADGE_H,
-        k_agc_profile_labels[(uint8_t)demod_am_get_agc_profile()],
-        GFX_COLOR_BLACK, GFX_COLOR_CYAN, GFX_COLOR_GRAY,
-        2, 0, 1, agc_profile_button_callback, NULL};
-    ui_screen_add_button(&s_demo_screen, &s_btn_agc_profile);
+    /* 22/09/2026: aqui se rellenaban s_btn_agc_profile y s_btn_audio_bw, dos
+     * widgets de ui.c que desde la etapa 4 ya no se registraban en ninguna
+     * pantalla. Servian de caja para un puntero a funcion y una etiqueta que
+     * nadie leia: los toques de esos dos chips los enruta ui_top_hit() y
+     * llama a sus callbacks directamente (ver demo_touch_poll()). */
 
-    /* BW badge/button (see its declaration + badges_draw()'s comment)
-     * - same "real widget, not just badge_draw()" treatment as
-     * s_btn_agc_profile just above, same reason (ui_screen_add_button()
-     * is what makes ui_screen_touch() actually hit-test it). Position
-     * matches badges_draw()'s BADGE_X0/row2 exactly. Initial fg/bg here
-     * are just a starting guess (cyan, "interactive") - badges_draw()
-     * overwrites both every time it runs, based on the CURRENT mode,
-     * before this is ever visible to anyone. */
-    s_btn_audio_bw = (ui_button_t){
-        BADGE_COL(4), BADGE_Y0,
-        BADGE_W, BADGE_H,
-        k_audio_bw_labels[(uint8_t)demod_am_get_audio_bw()],
-        GFX_COLOR_BLACK, GFX_COLOR_CYAN, GFX_COLOR_GRAY,
-        2, 0, 1, audio_bw_button_callback, NULL};
-    ui_screen_add_button(&s_demo_screen, &s_btn_audio_bw);
 
-    ui_screen_draw(&s_demo_screen);
+
+    /*
+     * 22/09/2026: esto era ui_screen_draw(&s_demo_screen), que recorria una
+     * lista de widgets registrados. De esa lista solo quedaban los cuatro
+     * marcos de aqui abajo -los botones y las etiquetas se fueron con el
+     * rediseno-, asi que se dibujan directamente y desaparece la maquinaria
+     * de registro: dos estructuras de 132 bytes en RAM y la mitad de ui.c.
+     */
+    ui_panel_draw(&s_title_panel);
+    ui_panel_draw(&s_spectrum_panel);
+    ui_panel_draw(&s_waterfall_panel);
+    ui_panel_draw(&s_status_strip_panel);
 
     /* Static labels drawn once, bypassing the screen (no touch, no
      * state): panadapter span labels. Span: 192kHz I/Q sampling ->
@@ -8065,7 +9029,7 @@ static void radio_screen_draw(void)
      * shrinking the strip further. The segmented bar reads as a
      * signal meter on its own, especially sitting right next to the
      * SNR readout - the caption wasn't carrying its weight anymore. */
-    spec_span_labels_draw();
+    spec_chrome_full_draw(); /* ETAPA 3b: canaleta + regla + leyenda */
 
     /* Dynamic readouts, first paint. */
     freq_display_draw();
@@ -8076,6 +9040,12 @@ static void radio_screen_draw(void)
     battery_display_draw();
     smeter_draw(0);
     badges_draw();
+    act_draw();   /* ETAPA 4: barra de acciones */
+
+    /* A partir de aqui, y < SPEC_Y es de ui_top.c y de nadie mas. Cualquier
+     * dibujo por gfx.c que caiga ahi se recorta en silencio en vez de dejar
+     * un recuadro encima de la cabecera. */
+    gfx_guard_top_set(SPEC_Y);
 }
 
 /*
@@ -8158,28 +9128,134 @@ static void radio_screen_draw(void)
  * the same frequency grid. TUNE_MIN_HZ/MAX_HZ still clamp the
  * (rounded) result, same as every other tuning path.
  */
+/*
+ * TOCAR UNA SEÑAL Y CAER ENCIMA - etapa 21, 22/09/2026.
+ *
+ * Por el dueno del proyecto: "me gustaria hacer clickable el espectro, que yo
+ * vea una señal, le clicke y vaya a ella".
+ *
+ * Tocar el espectro ya sintonizaba desde hace tiempo, pero con dos cosas que
+ * hacian que no se notara:
+ *
+ * 1. EL MAPA ESTABA MAL. Se usaba `x - MAIN_W/2` sobre un ancho de
+ *    SPEC_TRACE_W, o sea que se daba por hecho que la traza ocupa los 800 px
+ *    centrada en 400. No: empieza en SPC_TRACE_X = 40 y mide 756, asi que su
+ *    centro esta en 418. Eran 18 px de desplazamiento fijo mas un error de
+ *    escala - unos 2,3 kHz con el span de 96 kHz. Tocabas la señal y caias al
+ *    lado, que es justo lo que hace pensar que la funcion no existe.
+ *
+ * 2. SE REDONDEABA AL PASO DE SINTONIA. Con el paso en 1 kHz, hasta 500 Hz
+ *    mas de error. En AM da igual; en CW te deja fuera del filtro.
+ *
+ * Ahora el toque BUSCA la señal alrededor del dedo en los mismos datos que
+ * estas viendo dibujados (spec_snap.c, probado en sim/snaptest.c) y:
+ *   - si encuentra una, cae en su frecuencia exacta, sin redondear, porque
+ *     redondear seria deshacer justo lo que se acaba de afinar;
+ *   - si no encuentra nada, se comporta como siempre: donde apuntaste,
+ *     redondeado al paso. Tocar un hueco vacio para moverse ahi sigue
+ *     funcionando.
+ *
+ * Y cae donde hay que caer para OIRLA, que no es lo mismo que donde esta:
+ *   - AM/SAM/NFM/WFM: encima de la portadora.
+ *   - CW: el tono tiene que salir al pitch ajustado, asi que el VFO va un
+ *     pitch por debajo (en USB) o por encima (en LSB) del tono.
+ *   - USB/LSB: no hay portadora y el pico esta en MEDIO de la voz; se cae en
+ *     el borde de la señal, que es donde se pone el VFO en banda lateral.
+ */
+/*
+ * MOVER LA SINTONIA N PASOS, VOLVIENDO A LA REJILLA - 22/09/2026.
+ *
+ * Por el dueno del proyecto: "me ha dejado la freq en 7.112,03 y el 3 no soy
+ * capaz de dejarlo en cero".
+ *
+ * Y no podia. Lo rompi yo en la etapa 21: al tocar una señal en el espectro
+ * se cae en su frecuencia EXACTA, sin redondear -que es justo lo que se
+ * queria-, y eso deja el VFO fuera de la rejilla del paso. Como el mando
+ * hacia "frecuencia + paso" sin mas, 7.112,03 pasaba a 7.113,03 y de ahi a
+ * 7.114,03: los 30 Hz de mas no se iban NUNCA por mucho que girases.
+ *
+ * Un mando de sintonia no suma el paso: va al SIGUIENTE MULTIPLO del paso.
+ * Asi el primer clic desde una frecuencia rara cae en la rejilla y los
+ * siguientes se quedan en ella, que es como se comporta cualquier radio.
+ * Y no estorba a lo del espectro: ahi se sigue cayendo exacto, y en cuanto
+ * tocas el mando vuelves a numeros redondos.
+ *
+ * Lo comprueba sim/rejilla.c con el caso que lo destapo.
+ */
+static int64_t tune_mueve_pasos(int64_t f, int32_t pasos, int64_t paso_hz)
+{
+    int64_t resto;
+
+    if (paso_hz <= 0 || pasos == 0) { return f; }
+
+    resto = f % paso_hz;
+    if (resto < 0) { resto += paso_hz; }
+
+    if (resto != 0) {
+        /* Fuera de la rejilla: el primer clic la usa para volver a ella, no
+         * para sumar un paso entero. Hacia arriba se sube al multiplo de
+         * encima y hacia abajo al de debajo, asi que un clic siempre mueve
+         * en el sentido que has girado. */
+        f -= resto;
+        if (pasos > 0) { f += paso_hz; pasos--; }
+        else           { pasos++; }
+    }
+    return f + (int64_t)pasos * paso_hz;
+}
+
 static void spec_tap_tune_to_x(uint16_t x)
 {
     uint32_t full_span_hz = spec_zoom_full_span_hz();
     uint32_t panel_center_hz = s_tune_hz;
-    int32_t px = (int32_t)x - (int32_t)(MAIN_W / 2);
-    int64_t off_hz;
-    int64_t f;
+    demod_mode_t modo = demod_am_get_mode();
+    int32_t px;
+    float bin, bin_snap;
+    uint8_t enganchado = 0U;
+    int64_t off_hz, f;
     int64_t step_hz = (int64_t)k_tune_steps[s_tune_step_idx];
 
     if (s_spec_zoom == SPEC_ZOOM_1X && demod_am_get_if_offset_active()) {
         panel_center_hz = s_tune_hz - demod_if_offset_hz();
     }
 
-    off_hz = ((int64_t)px * (int64_t)full_span_hz) / (int64_t)SPEC_TRACE_W;
+    /* Pixel DENTRO de la traza, no de la pantalla. */
+    px = (int32_t)x - (int32_t)SPC_TRACE_X;
+    if (px < 0) { px = 0; }
+    if (px > (int32_t)SPC_TRACE_W - 1) { px = (int32_t)SPC_TRACE_W - 1; }
+
+    /* Px -> bin, con el mismo reparto que usa spectrum_draw() para dibujar. */
+    bin = ((float)px * (float)FFT_BINS_IQ) / (float)SPC_TRACE_W;
+
+    if (s_db_frame_listo) {
+        snap_modo_t sm = SNAP_PICO;
+        /* En CW el tono es un pico, asi que se busca como tal aunque el modo
+         * de fondo sea banda lateral. */
+        if (!cw_get_enabled()) {
+            if (modo == DEMOD_MODE_USB) { sm = SNAP_USB; }
+            else if (modo == DEMOD_MODE_LSB) { sm = SNAP_LSB; }
+        }
+        bin_snap = spec_snap_bin(s_db_frame, FFT_BINS_IQ, bin, sm, &enganchado);
+    } else {
+        bin_snap = bin;
+    }
+
+    /* Bin -> Hz. El bin del centro es FFT_BINS_IQ/2 (el array va
+     * fftshifteado, el VFO en el centro). */
+    off_hz = (int64_t)(((double)bin_snap - (double)(FFT_BINS_IQ / 2U))
+                       * (double)full_span_hz / (double)FFT_BINS_IQ);
     f = (int64_t)panel_center_hz + off_hz;
 
-    if (step_hz > 0) {
-        /* Round to nearest multiple of step_hz - not truncate - so a
-         * tap just past the halfway point to the next step rounds UP
-         * to it rather than always landing short. f is always >= 0 in
-         * practice (TUNE_MIN_HZ is well above zero), but the rem<0
-         * fixup keeps this correct even if that ever changed. */
+    if (enganchado && cw_get_enabled()) {
+        /* Que el tono salga al pitch elegido en vez de a cero batido, que es
+         * inaudible. En USB el audio es (RF - VFO), asi que el VFO va por
+         * debajo; en LSB al reves. */
+        int64_t pitch = (int64_t)(cw_get_pitch_hz() + 0.5f);
+        f += (modo == DEMOD_MODE_LSB) ? pitch : -pitch;
+    }
+
+    if (!enganchado && step_hz > 0) {
+        /* Sin señal debajo: como siempre, al multiplo mas cercano del paso.
+         * Con señal NO se redondea - ver el comentario de arriba. */
         int64_t rem = f % step_hz;
 
         if (rem < 0) { rem += step_hz; }
@@ -8195,6 +9271,8 @@ static void spec_tap_tune_to_x(uint16_t x)
         apply_lo_tune(s_tune_hz);
         freq_display_draw();
         spec_span_labels_draw();
+        debug_print_dec(enganchado ? "espectro: enganchado a Hz"
+                                   : "espectro: sin señal, Hz", s_tune_hz);
     }
 }
 
@@ -8229,7 +9307,7 @@ static void spec_drag_tune_apply(uint16_t x, uint16_t prev_x, float *hz_accum)
     }
     *hz_accum -= (float)steps * step_hz;
 
-    f = (int64_t)s_tune_hz + (int64_t)steps * (int64_t)step_hz;
+    f = tune_mueve_pasos((int64_t)s_tune_hz, steps, step_hz);
 
     if (f < (int64_t)TUNE_MIN_HZ) { f = (int64_t)TUNE_MIN_HZ; }
     if (f > (int64_t)TUNE_MAX_HZ) { f = (int64_t)TUNE_MAX_HZ; }
@@ -8323,6 +9401,13 @@ static void demo_touch_poll(void)
      * for the clock-setting keypad (08/09/2026) - see TIME_TAP_X1/Y2's
      * and menu_time_keypad_show()'s comments. */
     static uint8_t s_time_tap_active = 0U;
+    /* s_borrar_tap: el boton de borrar el texto decodificado, misma
+     * forma que las dos zonas de arriba. Ver CW_CLR_X y su dibujo en
+     * rtty_scope_draw(). */
+    static uint8_t s_borrar_tap = 0U;
+    /* Chip de la barra de estado bajo el dedo desde la pulsacion, o
+     * UI_TOP_HIT_NONE. Ver ui_top_hit() en ui_top.h. */
+    static ui_top_hit_t s_chip_tap = UI_TOP_HIT_NONE;
     uint16_t x = 0, y = 0;
     uint8_t pressed = touch_read(&x, &y);
 
@@ -8346,7 +9431,30 @@ static void demo_touch_poll(void)
          * s_spec_drag_moved both reset here too - a fresh gesture
          * starts clean, regardless of whatever a previous one left
          * behind. */
-        s_spec_drag_active = (uint8_t)(!s_touch_owner_is_menu
+        /*
+         * Borrar el texto decodificado. Se comprueba ANTES que el
+         * arrastre del espectro y lo excluye, porque la caja del boton
+         * cae dentro del panel y si no el arrastre se quedaria el gesto
+         * y el boton no respondiria nunca. Mismo patron de "se decide en
+         * la pulsacion y se respeta hasta la suelta" que las zonas de la
+         * frecuencia y el reloj, y por el mismo motivo: en este panel
+         * resistivo las coordenadas de la suelta no son de fiar.
+         */
+        /* La zona la da ui_digi.c, que es quien dibuja el boton, en vez de
+         * repetir aqui su rectangulo: era la tercera copia de la misma
+         * geometria y la que se quedaria vieja el dia que el boton se mueva. */
+        s_borrar_tap = (uint8_t)(!s_touch_owner_is_menu && !s_menu_open
+            && digi_panel_active()
+            && ui_digi_boton_hit(&s_digi, x, y));
+        if (s_borrar_tap) {
+            /* Retorno visual en la PULSACION, como en el resto de zonas: en
+             * un tactil que pide fuerza, un boton que no se hunde invita a
+             * un segundo toque. */
+            s_digi.btn_press = 1U;
+            ui_digi_draw_boton(&s_digi);
+        }
+
+        s_spec_drag_active = (uint8_t)(!s_touch_owner_is_menu && !s_borrar_tap
             && x < MAIN_W && y >= SPEC_Y && y < (uint16_t)(SPEC_Y + SPEC_H));
         s_spec_drag_prev_x = x;
         s_spec_tap_start_x = x;
@@ -8363,7 +9471,15 @@ static void demo_touch_poll(void)
          * open) - only excluded while a gesture already claimed by
          * the menu or the spectrum drag, which can't happen here
          * anyway since this zone is geometrically disjoint from both. */
-        s_freq_tap_active = (uint8_t)(x < FREQ_TAP_X1 && y < FREQ_TAP_Y1);
+        /* 22/09/2026: la zona la decide ui_top.c, que es quien dibuja la
+         * cabecera y por tanto quien sabe donde acaba la frecuencia. La
+         * constante que habia aqui, FREQ_TAP_X1 = MODE_X = 396, era la X del
+         * rotulo de modo en la cabecera de ANTES del rediseno; el chip de
+         * modo de ahora va pegado al "kHz" y acaba bastante antes, asi que
+         * quedaba una franja de barra vacia a su derecha que seguia abriendo
+         * el teclado de frecuencia - y con los ajustes abiertos eso es una
+         * pantalla que no se ha pedido. Ver ui_top_freq_hit(). */
+        s_freq_tap_active = ui_top_freq_hit(x, y);
 
         /* Clock keypad tap zone (08/09/2026) - see TIME_TAP_X1/Y2's
          * own comment for why this needs its own tighter box rather
@@ -8373,14 +9489,64 @@ static void demo_touch_poll(void)
          * panel (both start at SPEC_Y, well below TIME_TAP_Y2) - same
          * "allowed even while s_menu_open" reasoning as the frequency
          * zone just above. */
-        s_time_tap_active = (uint8_t)(x >= TIME_TAP_X1 && y < TIME_TAP_Y2);
+        /* 22/09/2026: igual que la zona de la frecuencia de aqui arriba, la
+         * decide ui_top.c. TIME_TAP_X1 valia TIME_X - 10 = 680, la X del
+         * reloj en la cabecera de ANTES del rediseno; el reloj de ahora va
+         * alineado a la derecha y su texto empieza en 726, asi que quedaban
+         * 46 px de barra vacia que abrian el teclado de la hora. Es lo que
+         * pasaba al tocar "entre LSB y la hora". Ver ui_top_clock_hit(). */
+        s_time_tap_active = ui_top_clock_hit(x, y);
+
+        /* ETAPA 4: chips de la barra de estado. Se decide en la PULSACION y
+         * se respeta toda la gesticulacion, igual que las zonas de arriba y
+         * por el mismo motivo: en este panel resistivo las coordenadas de la
+         * SUELTA no son de fiar.
+         *
+         * No se permite con el menu abierto: los chips siguen visibles (la
+         * barra de estado nunca se tapa) pero el menu tiene sus propias
+         * celdas para lo mismo, y dejar dos caminos vivos a la vez para el
+         * mismo ajuste es como se consigue que uno de los dos se quede sin
+         * refrescar. */
+        s_chip_tap = s_menu_open ? UI_TOP_HIT_NONE : ui_top_hit(x, y);
+
+        /* ETAPA 4: barra de acciones. Sigue viva con el menu abierto, igual
+         * que antes - vive por debajo de MENU_AREA, no la tapa nunca. El
+         * retorno visual se pinta AQUI, en la pulsacion, que es lo que en un
+         * tactil que pide fuerza evita el segundo toque de mas. */
+        s_act_press = ui_act_hit(x, y);
+        if (s_act_press >= 0) {
+            act_sync();
+            s_act.pressed = s_act_press;
+            ui_act_draw_one(&s_act, (uint8_t)s_act_press);
+        }
     }
 
-    if (s_touch_owner_is_menu) {
-        ui_screen_touch(&s_menu_screen, x, y, pressed);
-    } else {
-        ui_screen_touch(&s_demo_screen, x, y, pressed);
+    if (s_menu_detail_active && s_touch_owner_is_menu) {
+        det_touch(x, y, pressed);
+    } else if (s_menu_cfg_active && s_touch_owner_is_menu) {
+        cfg_touch(x, y, pressed);
+    } else if (kbd_activa() && s_touch_owner_is_menu) {
+        /* Teclado de frecuencia o de hora (etapa 19). Va antes de la rejilla
+         * porque ocupa la misma zona y las dos no pueden estar abiertas a la
+         * vez - kbd_show() apaga la rejilla y grid_show() apaga el teclado. */
+        kbd_touch(x, y, pressed);
+    } else if (grid_activa() && s_touch_owner_is_menu) {
+        /* Ajustes, bandas, modos y pasos: el mismo reparto para las cuatro.
+         * Se decide en la pulsacion y se respeta hasta la suelta, misma razon
+         * que el resto de zonas: en este panel las coordenadas de la suelta
+         * no son de fiar. */
+        grid_touch(x, y, pressed);
     }
+    /* 22/09/2026: aqui habia dos ramas mas que pasaban el toque a
+     * ui_screen_touch(). Ese reparto solo mira los widgets que se hayan
+     * registrado con ui_screen_add_button(), y desde que el teclado dejo de
+     * usarlos (etapa 19) no queda ninguno registrado en ninguna pantalla: las
+     * dos ramas eran una llamada que recorria una lista vacia.
+     *
+     * Lo que queda de ui.c son los paneles -los marcos del espectro y de la
+     * cascada-, que si dibujan. Las zonas tactiles vivas son las de ui_act.c,
+     * ui_cfg.c, ui_det.c, ui_grid.c, ui_kbd.c y ui_top.c, todas con su propia
+     * funcion de acierto, y las de arriba de esta misma funcion. */
 
     /*
      * SPEC_TAP_MOVE_THRESHOLD_PX: total travel from s_spec_tap_start_x
@@ -8418,12 +9584,81 @@ static void demo_touch_poll(void)
         s_spec_drag_prev_x = x;
     }
 
+    if (s_act_press >= 0 && !pressed) {
+        int8_t idx = s_act_press;
+
+        /* Se apaga el resaltado ANTES de llamar al callback: varios de ellos
+         * abren una pantalla que repinta media pantalla (Ajustes, Bandas), y
+         * si se hace despues el boton se queda encendido debajo. */
+        s_act_press = -1;
+        act_sync();
+        s_act.pressed = -1;
+        ui_act_draw_one(&s_act, (uint8_t)idx);
+
+        demo_button_callback(k_act_slots[idx].btn, UI_EVENT_RELEASE, NULL);
+        /* El valor que muestra el boton casi siempre acaba de cambiar (modo,
+         * paso, ruido...), asi que se repinta la barra entera - son 6 botones
+         * y una sola ventana EXMC por banda. */
+        act_draw();
+    }
+
+    if (s_chip_tap != UI_TOP_HIT_NONE && !pressed) {
+        /*
+         * Un toque en un chip hace EXACTAMENTE lo mismo que la celda del menu
+         * con ese nombre: avanza al siguiente valor. Es lo que pediste para
+         * la pantalla de ajustes ("si toco AGC una vez tiene que cambiar a
+         * media"), aplicado tambien aqui.
+         *
+         * Se llaman los callbacks que ya existen, no una copia de su logica:
+         * cada uno de ellos ademas de cambiar el valor refresca la celda del
+         * menu y marca los ajustes para guardar. Reimplementar el "avanza
+         * uno" aqui habria dejado fuera esas dos cosas sin que se note hasta
+         * mucho despues.
+         */
+        switch (s_chip_tap) {
+        case UI_TOP_HIT_AGC:
+            agc_profile_button_callback(0, UI_EVENT_RELEASE, 0);
+            break;
+        case UI_TOP_HIT_BW:
+            audio_bw_button_callback(0, UI_EVENT_RELEASE, 0);
+            break;
+        case UI_TOP_HIT_NR:
+            /* Mismo par de lineas que el boton NR de la barra de abajo
+             * (demo_button_callback()): el estado y el modulo de DSP van
+             * siempre juntos. */
+            s_nr_on = s_nr_on ? 0U : 1U;
+            nr_ss_set_enabled(s_nr_on);
+            badges_draw();
+            break;
+        case UI_TOP_HIT_SPK:
+            /* El chip "MUDO" solo existe cuando lo esta: tocarlo solo puede
+             * querer decir "desmutea". */
+            speaker_pa_set_enabled(1U);
+            top_sync();
+            ui_top_draw_status(&s_top);
+            break;
+        default:
+            break;   /* SOBRECARGA es un aviso, no un boton */
+        }
+    }
+
     if (s_freq_tap_active && !pressed) {
         menu_freq_keypad_show();
     }
 
     if (s_time_tap_active && !pressed) {
         menu_time_keypad_show();
+    }
+
+    if (s_borrar_tap && !pressed) {
+        s_digi.btn_press = 0U;
+        ui_digi_draw_boton(&s_digi);
+        /* Borra el contenido y marca para repintar: es la misma funcion
+         * que se usa al entrar en un modo digital desde otro, asi que no
+         * hay una segunda forma de dejar el panel limpio que un dia se
+         * comporte distinto. */
+        rtty_text_panel_reset();
+        debug_print("texto digital: borrado a mano\n");
     }
 
     if (s_spec_drag_active && !pressed && !s_spec_drag_moved) {
@@ -8442,6 +9677,13 @@ static void demo_touch_poll(void)
         s_spec_drag_moved = 0U;
         s_freq_tap_active = 0U;
         s_time_tap_active = 0U;
+        s_borrar_tap = 0U;
+        s_chip_tap = UI_TOP_HIT_NONE;
+        s_act_press = -1;
+        s_grid_press = -1;
+        s_kbd_press = -1;
+        s_det_press = -1;
+        s_cfg_press = -1;
     }
 }
 
@@ -8513,6 +9755,7 @@ static float   s_db[FFT_BINS_IQ]; /* fftshifted: VFO at the center index */
 static void debug_print_dec_signed(const char *label, int32_t val)
 {
     char buf[12];
+    (void)buf;
     int i = 11;
     uint32_t uval;
     uint8_t negative = 0;
@@ -8792,14 +10035,17 @@ static void sdr_spectrum_waterfall_tick(void)
 #define SPECTRUM_FRAME_MS        33U /* ~30 fps */
 #define SPECTRUM_MAX_FFT_PER_FRAME 6U
 
-    static float    s_db_frame[FFT_BINS_IQ]; /* frame-averaged dB */
+    /* s_db_frame subio a fichero (22/09/2026): es EXACTAMENTE lo que se ve
+     * dibujado, y el toque en el espectro necesita mirarlo para caer sobre
+     * la señal. Sigue siendo el mismo almacenamiento estatico. */
     static float    s_db_sum[FFT_BINS_IQ];
     static uint32_t s_db_count = 0U;
     static uint32_t s_next_frame_ms = 0U;
-    static uint16_t line[WATERFALL_WIDTH];
+    static uint8_t line[WATERFALL_WIDTH];   /* indices de colormap, no color */
     static uint32_t s_frame_count = 0U;
     uint32_t t_fft0, t_fft1, t_spec0, t_spec1, t_wf0, t_wf1;
     uint32_t fft_us = 0U;
+    (void)fft_us;
     uint16_t x, n;
     int16_t i_min, i_max, q_min, q_max;
     uint32_t bi;
@@ -8991,11 +10237,12 @@ static void sdr_spectrum_waterfall_tick(void)
          * site. */
         for (bi = 0; bi < FFT_BINS_IQ; bi++) {
             s_db_frame[bi] = s_db_smooth[bi];
+            s_db_frame_listo = 1U;
         }
     }
 
     if (s_spec_agc_enabled) {
-        spec_agc_apply(s_db_frame);
+        spec_agc_step(s_db_frame, FFT_BINS_IQ, &s_db_min, &s_db_max);
     }
 
     t_spec0 = DWT->CYCCNT;
@@ -9114,10 +10361,14 @@ static void sdr_spectrum_waterfall_tick(void)
             }
         }
 
+        /* ETAPA 3b: los ejes, por comparacion - ver spec_chrome_tick(). Va
+         * ANTES de la traza para que, si la escala ha cambiado en este
+         * frame, el numero nuevo y la traza nueva salgan a la vez. */
+        spec_chrome_tick();
+
         spectrum_draw(s_db_frame, FFT_BINS_IQ,
-                      SPEC_TRACE_X, (uint16_t)(SPEC_Y + 4),
-                      SPEC_TRACE_W,
-                      (uint16_t)(SPEC_H - 4 - 20 - 2),
+                      SPC_TRACE_X, SPC_TRACE_Y,
+                      SPC_TRACE_W, SPC_TRACE_H,
                       s_db_min, s_db_max,
                       center_mark_offset_px,
                       band_active, band_lo_offset_px, band_hi_offset_px);
@@ -9133,10 +10384,10 @@ static void sdr_spectrum_waterfall_tick(void)
      * vertically between the two views. */
     for (x = 0; x < WATERFALL_WIDTH; x++) {
         uint32_t bin = ((uint32_t)x * FFT_BINS_IQ) / WATERFALL_WIDTH;
-        line[x] = spectrum_colormap(s_db_frame[bin], s_db_min, s_db_max);
+        line[x] = spectrum_colormap_index(s_db_frame[bin], s_db_min, s_db_max);
     }
     waterfall_push_line(line);
-    waterfall_blit(SPEC_TRACE_X, WF_Y);
+    waterfall_blit(SPEC_TRACE_X, WF_Y, spectrum_colormap_lut());
     t_wf1 = DWT->CYCCNT;
     } /* !s_menu_open - see this block's opening comment above */
 
@@ -9147,7 +10398,9 @@ static void sdr_spectrum_waterfall_tick(void)
     s_frame_count++;
     if (!s_menu_open && (s_frame_count % 30U) == 0U) {
         uint32_t spec_us = (uint32_t)(((uint64_t)(t_spec1 - t_spec0)) * 1000000U / SystemCoreClock);
+        (void)spec_us;
         uint32_t wf_us   = (uint32_t)(((uint64_t)(t_wf1 - t_wf0)) * 1000000U / SystemCoreClock);
+        (void)wf_us;
         debug_print_dec("sdr_tick: last fft (us)", fft_us);
         debug_print_dec("sdr_tick: spectrum_draw (us)", spec_us);
         debug_print_dec("sdr_tick: waterfall push+blit (us)", wf_us);
@@ -9177,7 +10430,9 @@ static void sdr_spectrum_waterfall_tick(void)
              * catching something closer to intermittent.
              */
             uint32_t rx_ferr_n = sdr_rx_get_ferr_count();
+            (void)rx_ferr_n;
             uint32_t tx_ferr_n = gd32_i2s_get_tx_ferr_count();
+            (void)tx_ferr_n;
             sdr_rx_reset_ferr_count();
             gd32_i2s_reset_tx_ferr_count();
             debug_print_dec("sdr_tick: RX (SPI1) FERR count since last check", rx_ferr_n);
@@ -9392,5 +10647,3 @@ void HardFault_Handler(void)
         __NOP();
     }
 }
-
-

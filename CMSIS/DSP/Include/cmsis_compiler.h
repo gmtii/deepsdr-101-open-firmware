@@ -75,7 +75,7 @@ struct __attribute__((packed)) T_UINT32 { uint32_t v; };
  * define it ourselves. Guarded so this is a no-op if core_cm4.h was
  * already included first in this translation unit. */
 #ifndef __CORTEX_M
-#define __CORTEX_M  (0x04U)
+#define __CORTEX_M  (0x04)   /* mismo token que core_cm4.h: si difiere (0x04U), redefinir avisa */
 #endif
 
 /* core_cmInstr.h / core_cm4_simd.h (this project's vendor CMSIS-Core)

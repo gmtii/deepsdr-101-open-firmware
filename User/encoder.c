@@ -51,6 +51,20 @@ static uint8_t          s_ab_prev   = 0; /* last sampled (A<<1)|B     */
 static uint8_t          s_btn_integ = 0; /* debounce integrator, ms   */
 static uint8_t          s_btn_state = 0; /* debounced level, 0 = idle (button is active HIGH) */
 static uint16_t         s_btn_held_ms = 0; /* ms held since the current debounced press started; only meaningful while s_btn_state==1 */
+/*
+ * 1 = la pulsacion que hay en curso YA se ha usado para otra cosa (girar
+ * el mando con el boton apretado), asi que al soltar no se reporta ni
+ * pulsacion corta ni larga.
+ *
+ * Por que hace falta: el gesto "aprieta y gira" del firmware original
+ * termina siempre en una suelta, y esa suelta, sin esto, dispararia ademas
+ * lo que signifique la pulsacion corta - cambiar el paso de sintonia, que
+ * es justo lo que el gesto acaba de estar ajustando. Se marca desde el
+ * bucle principal (encoder_consume_press) en cuanto llega el primer detente
+ * con el boton apretado, y se limpia sola en el siguiente flanco de
+ * pulsacion.
+ */
+static volatile uint8_t s_btn_consumed = 0;
 
 static uint8_t ab_read(void)
 {
@@ -116,8 +130,12 @@ void encoder_tick(void)
             s_btn_integ = 0;
             if (s_btn_state == 1U) { /* active high: 0->1 = press started */
                 s_btn_held_ms = 0;
+                s_btn_consumed = 0U; /* pulsacion nueva, aun sin usar */
             } else { /* 1->0 = released - classify now that the hold time is known */
-                if (s_btn_held_ms >= BTN_LONG_PRESS_MS) {
+                if (s_btn_consumed) {
+                    /* se gasto girando: ni corta ni larga - ver
+                     * s_btn_consumed */
+                } else if (s_btn_held_ms >= BTN_LONG_PRESS_MS) {
                     s_long_presses++;
                 } else {
                     s_presses++;
@@ -125,6 +143,16 @@ void encoder_tick(void)
             }
         }
     }
+}
+
+uint8_t encoder_button_down(void)
+{
+    return s_btn_state;
+}
+
+void encoder_consume_press(void)
+{
+    s_btn_consumed = 1U;
 }
 
 int32_t encoder_take_delta(void)

@@ -1,8 +1,49 @@
 #include "gfx.h"
 #include "gfx_font.h"
 
+/*
+ * BANDA SUPERIOR RESERVADA (guard)
+ * --------------------------------
+ * A partir de la etapa 2, la franja de y=0 a y=GFX_GUARD_TOP-1 (cabecera +
+ * barra de estado) la dibuja ui_top.c con gfx2, que escribe al panel por su
+ * cuenta y NO pasa por este fichero. Todo lo demas de la interfaz -los
+ * widgets de ui.c, los readouts antiguos, los badges- si pasa por aqui.
+ *
+ * El problema que resuelve esto: bastaba con que UNA llamada vieja siguiera
+ * pintando ahi para que apareciera un recuadro plano encima de la cabecera
+ * nueva (el caso que se vio en hardware: al cambiar el AGC desde el menu
+ * salia un rectangulo cian durante un segundo, porque ui_button_draw()
+ * rellenaba el rectangulo del boton con su color de fondo). Ir caso por caso
+ * no cierra el problema: cualquier codigo futuro puede volver a abrirlo.
+ *
+ * Asi que se recorta aqui, en el unico sitio por el que pasan todas: cuatro
+ * primitivas (pixel, fill_rect, blit, fill_screen) son el embudo de gfx_hline,
+ * gfx_vline, gfx_rect, gfx_line, gfx_char y gfx_text. Con el guard armado, un
+ * dibujo que cae entero en la banda no hace NINGUN acceso al bus, y uno que
+ * la cruza se recorta a la parte de abajo.
+ *
+ * Arranca a 0 (desactivado) para que las pantallas que se apoderan de todo el
+ * panel -el asistente de calibracion del tactil, el borrado al dormir, la
+ * regla de calibracion de altura- sigan funcionando igual. main.c lo arma al
+ * final de radio_screen_draw() y lo desarma antes de esas.
+ */
+static uint16_t s_guard_top = 0U;
+
+void gfx_guard_top_set(uint16_t rows)
+{
+    s_guard_top = (rows > GFX_SCREEN_HEIGHT) ? GFX_SCREEN_HEIGHT : rows;
+}
+
+uint16_t gfx_guard_top(void)
+{
+    return s_guard_top;
+}
+
 void gfx_pixel(uint16_t x, uint16_t y, uint16_t color)
 {
+    if (y < s_guard_top) {
+        return;
+    }
     rm68120_set_window(x, y, x, y);
     rm68120_write_data(color);
 }
@@ -13,6 +54,15 @@ void gfx_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t colo
 
     if (w == 0 || h == 0) {
         return;
+    }
+
+    if (y < s_guard_top) {
+        uint16_t skip = (uint16_t)(s_guard_top - y);
+        if (skip >= h) {
+            return;          /* cae entero en la banda reservada */
+        }
+        y = s_guard_top;
+        h = (uint16_t)(h - skip);
     }
 
     rm68120_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
@@ -46,6 +96,14 @@ void gfx_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color)
 
 void gfx_fill_screen(uint16_t color)
 {
+    if (s_guard_top != 0U) {
+        /* Respeta la banda reservada: borra solo de ahi para abajo. Quien
+         * quiera borrar el panel ENTERO (dormir, calibrar) desarma el guard
+         * primero - ver gfx_guard_top_set(). */
+        gfx_fill_rect(0, s_guard_top, GFX_SCREEN_WIDTH,
+                      (uint16_t)(GFX_SCREEN_HEIGHT - s_guard_top), color);
+        return;
+    }
     rm68120_fill_screen(color);
 }
 
@@ -99,6 +157,16 @@ void gfx_blit(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pi
 
     if (w == 0 || h == 0 || pixels == NULL) {
         return;
+    }
+
+    if (y < s_guard_top) {
+        uint16_t skip = (uint16_t)(s_guard_top - y);
+        if (skip >= h) {
+            return;
+        }
+        pixels += (uint32_t)skip * (uint32_t)w;  /* salta las filas recortadas */
+        y = s_guard_top;
+        h = (uint16_t)(h - skip);
     }
 
     rm68120_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));

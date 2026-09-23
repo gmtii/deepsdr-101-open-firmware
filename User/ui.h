@@ -52,6 +52,13 @@ typedef struct {
     uint16_t x, y, w, h;
     uint16_t bg;
     uint16_t border; /* usar bg para "sin borde" */
+    /* 1 = registrado en la pantalla (por su geometria y su orden) pero NO se
+     * pinta. Mismo motivo y mismas reglas que ui_button_t::hidden: la franja
+     * de arriba la dibuja ui_top.c, y el relleno plano de estos dos paneles
+     * era un repintado de 800x64 + 800x40 encima de la cabecera nueva en cada
+     * redibujado completo. VA AL FINAL: los inicializadores de main.c son
+     * posicionales. */
+    uint8_t  hidden;
 } ui_panel_t;
 
 typedef struct {
@@ -73,13 +80,23 @@ typedef struct ui_button_s {
     uint8_t  enabled;  /* 0 = no reacciona a toques (se sigue pintando, ver ui_button_draw) */
     ui_callback_t on_event; /* NULL si no se quiere callback (widget solo visual) */
     void *user_data;
+    /*
+     * 1 = NO se pinta, pero SIGUE siendo tocable. Para botones cuyo aspecto
+     * lo dibuja ahora otro modulo (ui_top.c) y de los que solo interesa
+     * conservar la zona de toque: sin esto, ui_button_draw() rellenaba su
+     * rectangulo con su color de fondo - un recuadro cian - encima de la
+     * barra de estado nueva cada vez que el boton se pulsaba o refrescaba.
+     *
+     * VA AL FINAL A PROPOSITO: los 43 inicializadores de este tipo en
+     * main.c son POSICIONALES, asi que meter el campo en medio rompia todos
+     * menos los dos que lo necesitaban. Al final, los que no lo mencionan
+     * simplemente lo dejan a 0.
+     */
+    uint8_t  hidden;
 } ui_button_t;
 
 /* --- Dibujo de widgets sueltos (sin pasar por ui_screen_t) --- */
 void ui_panel_draw(const ui_panel_t *panel);
-void ui_button_draw(const ui_button_t *btn);
-void ui_label_draw(const ui_label_t *label);
-uint8_t ui_button_hit(const ui_button_t *btn, uint16_t px, uint16_t py);
 
 /* --- Registro de pantalla + despacho de toques --- */
 typedef enum {
@@ -100,20 +117,15 @@ typedef struct {
                               el ultimo PRESS, o -1 si no hay ninguno */
 } ui_screen_t;
 
-void ui_screen_init(ui_screen_t *screen);
 
 /* Registran el widget (por puntero, el screen NO se queda con una copia)
  * y lo pintan en orden de insercion (los añadidos despues quedan
  * "encima" a la hora de hacer hit-test si se solapan). Devuelven 1 si se
  * pudo añadir, 0 si el screen ya esta lleno (UI_SCREEN_MAX_WIDGETS). */
-uint8_t ui_screen_add_panel(ui_screen_t *screen, ui_panel_t *panel);
-uint8_t ui_screen_add_label(ui_screen_t *screen, ui_label_t *label);
-uint8_t ui_screen_add_button(ui_screen_t *screen, ui_button_t *button);
 
 /* Dibuja todos los widgets registrados, en orden de insercion. Llamar
  * una vez al construir la pantalla (equivalente a lo que hacia
  * demo_screen_draw() pintando cada widget a mano). */
-void ui_screen_draw(ui_screen_t *screen);
 
 /* Despacha un evento de toque a los botones registrados. x,y en
  * coordenadas de pantalla (mismas unidades que gfx.c). pressed=1
@@ -121,7 +133,6 @@ void ui_screen_draw(ui_screen_t *screen);
  * flancos), pressed=0 en el evento de "dedo levantado". Gestiona el
  * estado PRESS/RELEASE/CANCEL descrito arriba y solo redibuja el boton
  * cuyo estado visual cambia. */
-void ui_screen_touch(ui_screen_t *screen, uint16_t x, uint16_t y, uint8_t pressed);
 
 #endif /* UI_H */
 

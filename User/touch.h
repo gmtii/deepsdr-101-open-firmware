@@ -106,6 +106,15 @@ void touch_get_calibration(touch_calibration_t *out);
  * el driver responde, no para coordenadas reales. */
 uint8_t touch_read(uint16_t *x, uint16_t *y);
 
+/*
+ * Cuantas lecturas seguidas y estables hacen falta para dar un toque por
+ * bueno: 1 = sensible, 2 = normal (por defecto), 3 = firme. Ver el
+ * comentario largo en touch.c. Cambiarlo reinicia la cuenta en curso, asi
+ * que nunca deja un toque a medio confirmar.
+ */
+void    touch_set_firmeza(uint8_t n);
+uint8_t touch_get_firmeza(void);
+
 /* Vuelca por UART (debug_print) una lectura cruda etiquetada, pensado
  * para el primer bring-up: tocar cada esquina del panel y comprobar que
  * los valores cambian de forma coherente antes de fiarse de nada mas. */

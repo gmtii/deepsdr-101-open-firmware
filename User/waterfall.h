@@ -39,7 +39,11 @@
  * capa de SDR/DSP mas adelante.
  */
 
-#define WATERFALL_WIDTH  796  /* main display column width - full screen (800) minus a
+/* ETAPA 3b: 796 -> 756. Los 40 px de la izquierda son ahora la canaleta de
+ * los ejes (ver spec_chrome.h), que espectro y waterfall comparten para que
+ * las dos vistas sigan empezando en la misma columna. 756 es divisible por
+ * 4, requisito del marcador de +Fs/4. De paso libera 3 KB de RAM. */
+#define WATERFALL_WIDTH  756  /* main display column width - full screen (800) minus a
                                   4px panel border (2px each side), see main.c's
                                   radio layout constants. Was 672 (screen minus a
                                   124px right-hand status column) until 01/09/2026,
@@ -62,16 +66,28 @@ void waterfall_init(void);
  * y "desplaza" el resto. Desde el rediseño en anillo (30/07/2026) es
  * O(WATERFALL_WIDTH): solo mueve un indice y copia la fila nueva, sin
  * memmove del buffer completo. */
-void waterfall_push_line(const uint16_t *line);
+/*
+ * CAMBIO DE ALMACENAMIENTO: el historial guarda INDICES de colormap de 8
+ * bits, no RGB565 de 16. El color se aplica al volcar, atravesando la LUT
+ * que devuelve spectrum_colormap_lut().
+ *
+ * Por que: 796 x 72 x 2 = 112 KB era la mayor reserva de RAM del firmware
+ * con diferencia. A 1 byte por celda son 56 KB, y esos 56 KB son los que
+ * pagan la banda compositora de gfx2 y aun sobran.
+ *
+ * Y de regalo, cambiar de paleta ahora repinta TODO el historial en vez de
+ * solo las filas nuevas.
+ */
+void waterfall_push_line(const uint8_t *line);
 
 /* Vuelca el buffer completo a la GRAM en (x,y). No hace falta llamarlo en
  * cada push_line si se prefiere desacoplar tasa de actualizacion de datos
  * vs. tasa de refresco de pantalla. */
-void waterfall_blit(uint16_t x, uint16_t y);
+void waterfall_blit(uint16_t x, uint16_t y, const uint16_t *lut);
 
 /* Acceso directo a una fila del buffer (0 = mas reciente/arriba), por si
  * se necesita pintar encima (cursores, marcadores de frecuencia, etc.)
  * sin pasar por waterfall_push_line(). NULL si row fuera de rango. */
-uint16_t *waterfall_row(uint16_t row);
+uint8_t *waterfall_row(uint16_t row);
 
 #endif /* WATERFALL_H */

@@ -107,6 +107,8 @@ typedef struct {
     uint8_t      backlight_pct;       /* 0-100, see backlight.h - backlight_set_percent() clamps up to its own floor */
     uint8_t      have_att_rin_level;
     uint8_t      att_rin_level;       /* 0=10k/1=20k/2=40k - aic3204_rin_t, see main.c's s_rf_agc_rin_level */
+    uint8_t      have_tema_idx;
+    uint8_t      tema_idx;            /* indice en k_temas[] de main.c: paleta de la interfaz + paleta del waterfall */
 } settings_loaded_t;
 
 /* Reads CONFIG.CSV (if present) and:
@@ -161,7 +163,8 @@ void settings_mark_dirty(void);
  * settings.c reads those two straight from backlight_get_percent()/
  * spectrum_get_style() itself (see this file's header comment). */
 void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k,
-                    int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled, uint8_t att_rin_level);
+                    int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled, uint8_t att_rin_level,
+                    uint8_t tema_idx);
 
 /* Saves immediately, no debounce - for events that are already
  * naturally rare/deliberate (the touch calibration wizard finishing
@@ -170,6 +173,7 @@ void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, au
  * before the thing the user just did for its own sake gets persisted.
  * Same four trailing parameters as settings_poll() above. */
 void settings_save_now(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k,
-                        int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled, uint8_t att_rin_level);
+                        int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled, uint8_t att_rin_level,
+                    uint8_t tema_idx);
 
 #endif /* SETTINGS_H */

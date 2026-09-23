@@ -69,6 +69,26 @@ void encoder_tick(void);
  * over, not lost. */
 int32_t encoder_take_delta(void);
 
+/*
+ * Nivel del boton ya antirrebotado: 1 mientras esta apretado.
+ *
+ * Para gestos de "apretar y girar a la vez". Las tres funciones
+ * encoder_take_*() reportan EVENTOS al soltar, que es lo correcto para un
+ * clic pero no sirve para saber si el boton esta apretado AHORA, que es lo
+ * que necesita un gesto combinado.
+ */
+uint8_t encoder_button_down(void);
+
+/*
+ * Marca la pulsacion en curso como ya usada: al soltar no se reportara ni
+ * corta ni larga.
+ *
+ * Se llama en cuanto un gesto combinado se da por iniciado. Sin esto, el
+ * gesto "apretar y girar" acabaria disparando ademas la accion de la
+ * pulsacion corta al levantar el dedo.
+ */
+void encoder_consume_press(void);
+
 /* Returns 1 exactly once per debounced SHORT button press (held less
  * than the long-press threshold - see encoder.c's BTN_LONG_PRESS_MS). */
 uint8_t encoder_take_press(void);

@@ -185,6 +185,27 @@ typedef enum {
  * are new additions from that same upload (also exact). FIRE remains
  * this project's own invention - it isn't in SDR++'s set.
  */
+/*
+ * La lista de paletas, recorrible - 22/09/2026.
+ *
+ * Antes la misma lista estaba escrita siete veces por el firmware (los dos
+ * switch de build_lut(), el rotulo del tile, el nombre en ajustes, el ciclo
+ * del boton, y el guardar y el leer de CONFIG.CSV), y tres paletas ya se
+ * mostraban con el nombre de otra porque a una de las siete copias le
+ * faltaba su rama. Ahora la lista vive en una sola tabla dentro de
+ * spectrum.c y esto es la ventana a esa tabla: quien necesite nombres,
+ * claves, el recuento o un color de muestra la recorre, no la copia.
+ *
+ * spectrum_palette_muestra() da un color de CUALQUIER paleta sin cambiar la
+ * que esta puesta, que es lo que permite ensenar las quince a la vez en la
+ * pantalla de paletas sin que el espectro parpadee.
+ */
+uint8_t     spectrum_palette_count(void);
+const char *spectrum_palette_nombre(uint8_t i);   /* "Clasica verde" */
+const char *spectrum_palette_clave(uint8_t i);    /* "CLASSIC_GREEN" */
+uint16_t    spectrum_palette_muestra(uint8_t i, uint8_t idx); /* idx 0..255 */
+int16_t     spectrum_palette_de_clave(const char *s, uint32_t n); /* -1 si no es ninguna */
+
 void spectrum_set_palette(spectrum_palette_t palette);
 spectrum_palette_t spectrum_get_palette(void);
 
@@ -215,6 +236,19 @@ uint8_t spectrum_get_line_smooth(void);
  * is fine for per-COLUMN use, e.g. coloring a waterfall line - just
  * never call it per pixel). */
 uint16_t spectrum_colormap(float db, float db_min, float db_max);
+
+/*
+ * Las dos mitades de spectrum_colormap(), por separado.
+ *
+ * spectrum_colormap() ya era internamente "normaliza el dB a 0..255 y mira
+ * en una LUT". Partirlo permite que el waterfall guarde el INDICE (1 byte)
+ * en vez del color (2 bytes), lo que ahorra 56 KB de RAM en su historial.
+ *
+ * Efecto secundario util: al guardar el indice, cambiar de paleta repinta
+ * todo el historial y no solo las filas nuevas.
+ */
+uint8_t spectrum_colormap_index(float db, float db_min, float db_max);
+const uint16_t *spectrum_colormap_lut(void);
 
 /*
  * Draws `n_bins` dB values into the rectangle (x,y,w,h). Columns

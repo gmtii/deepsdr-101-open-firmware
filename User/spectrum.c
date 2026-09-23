@@ -427,46 +427,138 @@ static uint16_t palette_eval_temper_colors(float t) { return palette_lerp_stops(
 static uint16_t palette_eval_vivid(float t)         { return palette_lerp_stops(k_stops_vivid, 23U, t); }
 static uint16_t palette_eval_websdr(float t)        { return palette_lerp_stops(k_stops_websdr, 5U, t); }
 
+/* ===========================================================================
+ * LA TABLA DE PALETAS - 22/09/2026
+ * ===========================================================================
+ * Hasta hoy la misma lista de 15 paletas estaba escrita SIETE veces: las dos
+ * mitades de build_lut(), el rotulo del tile, el nombre en la pantalla de
+ * ajustes, el ciclo del boton, y el guardar y el leer de CONFIG.CSV. Siete
+ * sitios que hay que acordarse de tocar a la vez, y ninguno que avise si te
+ * olvidas de uno.
+ *
+ * No es una preocupacion teorica: tres paletas (Temper, Vivid y WebSDR) ya
+ * se estaban mostrando como "Clasica" en ajustes porque su rama faltaba en
+ * uno de los siete. Es el mismo fallo que dejo el modo CW invisible en la
+ * pantalla de modos.
+ *
+ * Asi que la lista vive AQUI y solo aqui. Todo lo demas -nombres, claves de
+ * fichero, el orden, el recuento, los colores de muestra- sale de esta tabla
+ * recorriendola. Anadir una paleta es anadir una fila.
+ *
+ * Los dos caminos de color siguen siendo los de siempre (ver la cabecera de
+ * este fichero): `tabla` para las seis que ya vienen con sus 256 entradas
+ * hechas, `eval` para las que se interpolan entre paradas. Una fila usa uno
+ * u otro, nunca los dos.
+ */
+typedef struct {
+    const char     *nombre;            /* para la pantalla: "Clasica verde" */
+    const char     *clave;             /* para CONFIG.CSV: "CLASSIC_GREEN"  */
+    const uint16_t *tabla;             /* 256 colores ya hechos, o 0        */
+    uint16_t      (*eval)(float);      /* generador, o 0                    */
+} spectrum_paleta_t;
+
+/* El orden de las filas ES el orden de spectrum_palette_t: la fila i
+ * describe la paleta i. Lo comprueba spectrum_palette_tabla_ok(). */
+static const spectrum_paleta_t k_paletas[] = {
+    { "Cl\xC3\xA1sica",       "CLASSIC",       0,           palette_eval_classic       },
+    { "Fuego",                "FIRE",          0,           palette_eval_fire          },
+    { "Viridis",              "VIRIDIS",       k_lut_viridis, 0                        },
+    { "Grises",               "GRAYSCALE",     0,           palette_eval_grayscale     },
+    { "Turbo",                "TURBO",         k_lut_turbo, 0                          },
+    { "Inferno",              "INFERNO",       k_lut_inferno, 0                        },
+    { "Magma",                "MAGMA",         k_lut_magma, 0                          },
+    { "Plasma",               "PLASMA",        k_lut_plasma, 0                         },
+    { "GQRX",                 "GQRX",          k_lut_gqrx,  0                          },
+    { "El\xC3\xA9" "ctrica",  "ELECTRIC",      0,           palette_eval_electric      },
+    { "Cl\xC3\xA1sica verde", "CLASSIC_GREEN", 0,           palette_eval_classic_green },
+    { "Humo",                 "SMOKE",         0,           palette_eval_smoke         },
+    { "Templada",             "TEMPER_COLORS", 0,           palette_eval_temper_colors },
+    { "Viva",                 "VIVID",         0,           palette_eval_vivid         },
+    { "WebSDR",               "WEBSDR",        0,           palette_eval_websdr        },
+};
+
+#define PALETA_COUNT ((uint8_t)(sizeof k_paletas / sizeof k_paletas[0]))
+
+/* La tabla y el enum tienen que ir a la par. Si alguien anade un valor al
+ * enum y se olvida de la fila, esto no compila - que es justo lo que no
+ * pasaba antes. */
+typedef char paleta_tabla_completa[(PALETA_COUNT == (uint8_t)(SPECTRUM_PALETTE_WEBSDR + 1)) ? 1 : -1];
+
+uint8_t spectrum_palette_count(void)
+{
+    return PALETA_COUNT;
+}
+
+const char *spectrum_palette_nombre(uint8_t i)
+{
+    return (i < PALETA_COUNT) ? k_paletas[i].nombre : "";
+}
+
+const char *spectrum_palette_clave(uint8_t i)
+{
+    return (i < PALETA_COUNT) ? k_paletas[i].clave : "";
+}
+
 /*
- * Six of SDR++'s palettes ship as exactly 256 stops already - see
- * this file's own header comment above for why those get memcpy()d
- * straight in rather than going through palette_lerp_stops() (or an
- * eval-per-index callback) like everything else. Checked first;
- * falls through to the eval-callback path below for every other
- * palette.
+ * Un color de una paleta CUALQUIERA, sin tocar la que esta puesta.
+ *
+ * Para que: la pantalla de paletas ensena una muestra del degradado de cada
+ * una, doce a la vez. Con spectrum_set_palette() habria que cambiar la
+ * paleta viva doce veces por pintada y dejarla como estaba - y mientras
+ * tanto el espectro y la cascada estarian leyendo la LUT equivocada.
+ *
+ * Las de tabla es un indice; las de eval se calculan al vuelo. Sale a unas
+ * pocas decenas de ciclos por color, y solo se llama al pintar la pantalla
+ * de paletas (unos 200 colores), no por pixel ni por columna.
+ */
+uint16_t spectrum_palette_muestra(uint8_t i, uint8_t idx)
+{
+    if (i >= PALETA_COUNT) { return 0U; }
+    if (k_paletas[i].tabla != 0) { return k_paletas[i].tabla[idx]; }
+    return k_paletas[i].eval((float)idx * (1.0f / 255.0f));
+}
+
+/*
+ * Clave de CONFIG.CSV -> indice, o -1 si no es ninguna.
+ *
+ * Compara la clave ENTERA, no un prefijo: la version anterior de esto
+ * probaba "CLASSIC" antes que "CLASSIC_GREEN" ordenando las ramas por
+ * longitud a mano, y un dia que se anadiera una clave nueva que empezara
+ * igual que otra volveria a fallar en silencio. Aqui el largo tiene que
+ * coincidir, asi que el orden de la tabla da igual.
+ */
+int16_t spectrum_palette_de_clave(const char *s, uint32_t n)
+{
+    uint8_t i;
+    for (i = 0U; i < PALETA_COUNT; i++) {
+        const char *c = k_paletas[i].clave;
+        uint32_t    j = 0U;
+        while (c[j] != '\0' && j < n && c[j] == s[j]) { j++; }
+        if (c[j] == '\0' && j == n) { return (int16_t)i; }
+    }
+    return -1;
+}
+
+/*
+ * Rellena s_lut con la paleta activa. Las seis que ya vienen con 256
+ * entradas se copian tal cual -es mas barato y mas fiel que interpolar una
+ * tabla que ya tiene un color por indice-; el resto se evalua.
  */
 static void build_lut(void)
 {
+    const spectrum_paleta_t *p;
     uint16_t i;
-    uint16_t (*eval)(float);
 
-    switch (s_palette) {
-    case SPECTRUM_PALETTE_GQRX:    memcpy(s_lut, k_lut_gqrx,    sizeof(s_lut)); s_lut_ready = 1U; return;
-    case SPECTRUM_PALETTE_INFERNO: memcpy(s_lut, k_lut_inferno, sizeof(s_lut)); s_lut_ready = 1U; return;
-    case SPECTRUM_PALETTE_MAGMA:   memcpy(s_lut, k_lut_magma,   sizeof(s_lut)); s_lut_ready = 1U; return;
-    case SPECTRUM_PALETTE_PLASMA:  memcpy(s_lut, k_lut_plasma,  sizeof(s_lut)); s_lut_ready = 1U; return;
-    case SPECTRUM_PALETTE_TURBO:   memcpy(s_lut, k_lut_turbo,   sizeof(s_lut)); s_lut_ready = 1U; return;
-    case SPECTRUM_PALETTE_VIRIDIS: memcpy(s_lut, k_lut_viridis, sizeof(s_lut)); s_lut_ready = 1U; return;
-    default: break;
-    }
+    p = &k_paletas[((uint8_t)s_palette < PALETA_COUNT) ? (uint8_t)s_palette : 0U];
 
-    switch (s_palette) {
-    case SPECTRUM_PALETTE_FIRE:          eval = palette_eval_fire;          break;
-    case SPECTRUM_PALETTE_GRAYSCALE:     eval = palette_eval_grayscale;     break;
-    case SPECTRUM_PALETTE_ELECTRIC:      eval = palette_eval_electric;      break;
-    case SPECTRUM_PALETTE_CLASSIC_GREEN: eval = palette_eval_classic_green; break;
-    case SPECTRUM_PALETTE_SMOKE:         eval = palette_eval_smoke;         break;
-    case SPECTRUM_PALETTE_TEMPER_COLORS: eval = palette_eval_temper_colors; break;
-    case SPECTRUM_PALETTE_VIVID:         eval = palette_eval_vivid;         break;
-    case SPECTRUM_PALETTE_WEBSDR:        eval = palette_eval_websdr;        break;
-    case SPECTRUM_PALETTE_CLASSIC:
-    default:                             eval = palette_eval_classic;       break;
+    if (p->tabla != 0) {
+        memcpy(s_lut, p->tabla, sizeof(s_lut));
+    } else {
+        for (i = 0; i < 256U; i++) {
+            s_lut[i] = p->eval((float)i * (1.0f / 255.0f));
+        }
     }
-
-    for (i = 0; i < 256U; i++) {
-        s_lut[i] = eval((float)i * (1.0f / 255.0f));
-    }
-    s_lut_ready = 1;
+    s_lut_ready = 1U;
 }
 
 void spectrum_init(void)
@@ -509,6 +601,29 @@ void spectrum_set_heatmap_trace_white(uint8_t white)
 uint8_t spectrum_get_heatmap_trace_white(void)
 {
     return s_heatmap_trace_white;
+}
+
+uint8_t spectrum_colormap_index(float db, float db_min, float db_max)
+{
+    float t;
+    int32_t idx;
+
+    if (db_max <= db_min) {
+        return 0U;
+    }
+    t = (db - db_min) / (db_max - db_min);
+    idx = (int32_t)(t * 255.0f);
+    if (idx < 0)   { idx = 0; }
+    if (idx > 255) { idx = 255; }
+    return (uint8_t)idx;
+}
+
+const uint16_t *spectrum_colormap_lut(void)
+{
+    if (!s_lut_ready) {
+        spectrum_init();
+    }
+    return s_lut;
 }
 
 uint16_t spectrum_colormap(float db, float db_min, float db_max)
@@ -562,8 +677,23 @@ uint16_t spectrum_colormap(float db, float db_min, float db_max)
  * never accidentally read as "this is the tint", or vice versa.
  * HEATMAP: RGB (40,0,60). LINE: RGB (34,0,52), slightly dimmer since
  * SPEC_LINE_BG is already non-black. */
-#define SPEC_COLOR_BAND_TINT      0x632CU /* 08/09/2026: changed from a warm amber to a medium gray (~150,150,150), per the project owner - same "red/warm clashes with the new palettes" reasoning as SPEC_COLOR_CENTER just above (amber sits close to several of the new hot-end palette colors too, e.g. FIRE/INFERNO/TURBO/GQRX). Gray stays neutral against all of them. */
-#define SPEC_LINE_BAND_TINT       0x5ACBU /* same reasoning as SPEC_COLOR_BAND_TINT just above, dimmed further (~90,90,90) to match LINE style's own generally darker palette (see SPEC_LINE_BG/GRID/TRACE) */
+/* ETAPA 3b: bajado de ~(150,150,150) a ~(66,66,66). Era un bloque gris
+ * claro que dominaba el panel entero; ahora que los BORDES del filtro se
+ * dibujan por encima de la senal (SPEC_COLOR_BAND_EDGE) el relleno ya no
+ * tiene que cargar con la informacion, solo insinuar la zona. */
+#define SPEC_COLOR_BAND_TINT      0x18E3U /* era 0x632C */
+#define SPEC_COLOR_BAND_TINT_OLD  0x632CU /* 08/09/2026: changed from a warm amber to a medium gray (~150,150,150), per the project owner - same "red/warm clashes with the new palettes" reasoning as SPEC_COLOR_CENTER just above (amber sits close to several of the new hot-end palette colors too, e.g. FIRE/INFERNO/TURBO/GQRX). Gray stays neutral against all of them. */
+/* ETAPA 3b: los BORDES del filtro, no su relleno. El tinte de arriba va
+ * por debajo de todo, asi que en cuanto hay senal desaparece - justo
+ * cuando mas falta hace saber si la emisora vecina cae dentro o fuera.
+ * Estas dos columnas van casi arriba del todo en prioridad (solo la traza
+ * les gana), asi que se ven ATRAVESANDO la senal. Color propio, un cian
+ * frio: es el unico elemento de la traza que no es ni blanco ni gris ni
+ * parte de la paleta de calor, asi que no se confunde con nada. */
+#define SPEC_COLOR_BAND_EDGE      0x2DFFU /* ~(48,188,255) */
+#define SPEC_LINE_BAND_EDGE       0x1CDDU /* la misma idea, apagada para el estilo LINE */
+
+#define SPEC_LINE_BAND_TINT       0x18E3U /* era 0x5ACB, misma razon */ /* same reasoning as SPEC_COLOR_BAND_TINT just above, dimmed further (~90,90,90) to match LINE style's own generally darker palette (see SPEC_LINE_BG/GRID/TRACE) */
 
 /* *** 01/09/2026: moved to TCM RAM *** - pure spectrum-rendering
  * working buffers, never DMA targets (only this file's own drawing
@@ -572,7 +702,15 @@ uint16_t spectrum_colormap(float db, float db_min, float db_max)
  * panel - SPEC_MAX_W was already 800, comfortably covering the new
  * width, so no size change was needed here, just relocating where
  * these already-existing buffers live). */
+/* En el GD32 estos buffers van a TCM RAM, que es donde hay sitio. En el
+ * simulador de host no existe esa seccion: sin el #if, gcc del PC no puede
+ * compilar este fichero, y compilarlo TAL CUAL es lo que hace que el render
+ * del simulador sea la traza de verdad y no una imitacion. */
+#if defined(__arm__)
 #define TCMRAM_BSS __attribute__((section(".tcmram")))
+#else
+#define TCMRAM_BSS
+#endif
 
 static float    s_col_ema[SPEC_MAX_W] TCMRAM_BSS;   /* smoothed dB per column      */
 #if SPECTRUM_PEAK_HOLD
@@ -891,6 +1029,7 @@ void spectrum_draw(const float *db, uint32_t n_bins,
         uint16_t grid_color  = (s_style == SPECTRUM_STYLE_HEATMAP) ? SPEC_COLOR_GRID : SPEC_LINE_GRID;
         uint16_t trace_color = (s_style == SPECTRUM_STYLE_HEATMAP) ? SPEC_COLOR_TRACE : SPEC_LINE_TRACE;
         uint16_t band_color  = (s_style == SPECTRUM_STYLE_HEATMAP) ? SPEC_COLOR_BAND_TINT : SPEC_LINE_BAND_TINT;
+        uint16_t band_edge   = (s_style == SPECTRUM_STYLE_HEATMAP) ? SPEC_COLOR_BAND_EDGE : SPEC_LINE_BAND_EDGE;
 
         for (row = 0; row < h; row++) {
             uint16_t level_from_bottom = (uint16_t)(h - row);
@@ -933,6 +1072,10 @@ void spectrum_draw(const float *db, uint32_t n_bins,
                     } else {
                         px = trace_color;
                     }
+                } else if (band_active && (col == band_col_lo || col == band_col_hi)) {
+                    /* ETAPA 3b: borde del filtro, por ENCIMA del relleno de
+                     * la barra - ver SPEC_COLOR_BAND_EDGE. */
+                    px = band_edge;
                 } else if (fill_enabled && bh > level_from_bottom) {
                     px = fill;                        /* inside the bar (HEATMAP/LINE only) */
 #if SPECTRUM_PEAK_HOLD

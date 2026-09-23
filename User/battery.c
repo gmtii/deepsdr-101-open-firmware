@@ -91,6 +91,46 @@ uint16_t battery_get_millivolts(void)
     return (uint16_t)(vbat_pin_mv + BATTERY_DIODE_DROP_MV);
 }
 
+int16_t battery_get_chip_temp_c(void)
+{
+    uint16_t raw;
+    int32_t  mv, t_x10;
+
+    /*
+     * El canal 16 (sensor de temperatura) y el 18 (VBAT) comparten
+     * ADC0, asi que hay que pedir el otro interruptor interno,
+     * reconfigurar el canal, convertir, y DEJARLO COMO ESTABA. Si no se
+     * restaura, la siguiente medida de bateria leeria el sensor de
+     * temperatura y daria un voltaje absurdo, que es el tipo de averia
+     * que aparece lejos de aqui y cuesta encontrar.
+     */
+    adc_channel_16_to_18(ADC_VBAT_CHANNEL_SWITCH, DISABLE);
+    adc_channel_16_to_18(ADC_TEMP_VREF_CHANNEL_SWITCH, ENABLE);
+    adc_regular_channel_config(ADC0, 0U, ADC_CHANNEL_16, ADC_SAMPLETIME_480);
+
+    adc_software_trigger_enable(ADC0, ADC_REGULAR_CHANNEL);
+    while (SET != adc_flag_get(ADC0, ADC_FLAG_EOC)) {
+        /* bloqueante y corto, mismo razonamiento que la bateria */
+    }
+    raw = adc_regular_data_read(ADC0);
+    adc_flag_clear(ADC0, ADC_FLAG_EOC);
+
+    /* restaurar la configuracion de bateria antes de hacer ninguna cuenta */
+    adc_channel_16_to_18(ADC_TEMP_VREF_CHANNEL_SWITCH, DISABLE);
+    adc_channel_16_to_18(ADC_VBAT_CHANNEL_SWITCH, ENABLE);
+    adc_regular_channel_config(ADC0, 0U, ADC_CHANNEL_18, ADC_SAMPLETIME_480);
+
+    /* T = (V25 - Vts) / pendiente + 25, con la hoja de datos: V25 =
+     * 1450 mV y pendiente 4,1 mV por grado. Se trabaja en decimas para
+     * no perder resolucion en enteros. */
+    mv    = ((int32_t)raw * 3300) / 4095;
+    t_x10 = (((1450 - mv) * 10) / 41) + 250;
+
+    if (t_x10 < -400) { t_x10 = -400; }   /* fuera de rango: algo va mal, */
+    if (t_x10 > 1500) { t_x10 = 1500; }   /* mejor un tope que un absurdo */
+    return (int16_t)(t_x10 / 10);
+}
+
 uint8_t battery_get_percent(void)
 {
     uint16_t mv = battery_get_millivolts();

@@ -418,6 +418,27 @@ void demod_am_set_audio_bw(audio_bw_t bw);
 audio_bw_t demod_am_get_audio_bw(void);
 
 /*
+ * Filtro de CW: paso banda de unos 500 Hz centrado en `centre_hz`,
+ * usado en lugar del selector de ancho mientras el decodificador de CW
+ * esta encendido. Es PARA EL OIDO: cw.c toma el audio antes de este
+ * filtro, asi que esto no afecta a lo que decodifica - ver el comentario
+ * completo junto a ALPF_CW_STAGES en demod_am.c.
+ *
+ * Llamarlo al cambiar el tono de CW. Al cambiar de frecuencia de
+ * muestreo se rehace solo.
+ */
+void  demod_am_set_cw_filter_hz(float centre_hz);
+float demod_am_get_cw_filter_hz(void);
+
+/*
+ * Ancho a -3 dB del filtro de CW, en Hz (22/09/2026). La falda la fija
+ * ALPF_CW_STAGES; ver su comentario en demod_am.c para por que cuatro
+ * etapas y de donde sale la Q.
+ */
+void  demod_am_set_cw_bw_hz(float bw_hz);
+float demod_am_get_cw_bw_hz(void);
+
+/*
  * WFM pre-discriminator channel filter width - added 01/09/2026, per
  * the project owner: a control over the RAW COMPLEX BASEBAND
  * bandwidth reaching the FM discriminator, completely separate from

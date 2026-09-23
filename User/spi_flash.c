@@ -300,8 +300,11 @@ void spi_flash_probe_dump(void)
     uint8_t sector0[512];
     char field[16];
     uint16_t bytes_per_sector;
+    (void)bytes_per_sector;
     uint8_t sectors_per_cluster;
+    (void)sectors_per_cluster;
     uint16_t reserved_sectors;
+    (void)reserved_sectors;
     uint32_t i;
 
     debug_print("\n--- spi_flash_probe_dump: DIAGNOSTIC ONLY, read-only, no writes ---\n");
@@ -348,6 +351,7 @@ void spi_flash_probe_dump(void)
     debug_print("  --- raw hex, first 96 bytes (BPB lives in here on both FAT16 and FAT32) ---\n");
     for (i = 0; i < 96U; i++) {
         char label[16];
+        (void)label;
         uint8_t n = 0U;
         uint32_t v = i;
         char tmp[6];
@@ -418,9 +422,12 @@ void spi_flash_probe_root_dir(void)
     for (i = 0; i < (sizeof(buf) / 32U); i++) {
         const uint8_t *entry = &buf[i * 32U];
         char name[13];
+        (void)name;
         uint8_t n = 0U, j;
         uint16_t first_cluster;
+        (void)first_cluster;
         uint32_t file_size;
+        (void)file_size;
 
         if (entry[0] == 0x00U) {
             debug_print("  (end of directory)\n");

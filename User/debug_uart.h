@@ -45,6 +45,16 @@ void debug_print_dec(const char *label, uint32_t val);
 #else
 
 #define debug_uart_init()             ((void)0)
+/*
+ * Con el UART apagado estos macros no expanden a nada, asi que las variables
+ * que solo se consumen aqui quedan "set but not used" y el compilador avisa.
+ *
+ * NO se arregla haciendo que los macros evaluen sus argumentos con (void)(x):
+ * hay llamadas cuyo argumento es sda_read(), una lectura real del bus I2C, y
+ * pasaria a ejecutarse en las compilaciones sin UART. Por eso cada sitio
+ * afectado lleva su propio (void)variable; - ver los "solo se consume desde
+ * debug_print*" repartidos por main.c, spi_flash.c y sdr_rx.c.
+ */
 #define debug_print(s)                ((void)0)
 #define debug_print_hex32(label, val) ((void)0)
 #define debug_print_hex16(label, val) ((void)0)

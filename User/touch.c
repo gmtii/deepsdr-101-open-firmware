@@ -334,7 +334,90 @@ static uint16_t clamp_u16(int32_t v, uint16_t max_exclusive)
     return (uint16_t)v;
 }
 
+/*
+ * FIRMEZA DEL TOQUE (22/09/2026, por el dueno del proyecto: "ajusta un poco
+ * el tactil, que ahora es demasiado delicado").
+ *
+ * Hasta ahora bastaba UNA lectura con el pin PENIRQ bajo para dar un toque
+ * por bueno. Sobre un panel resistivo barato eso convierte en pulsacion
+ * cualquier roce, cualquier apoyo del canto de la mano y cualquier glitch
+ * electrico - y desde que los objetivos tactiles son grandes y no hay zonas
+ * muertas, un roce cae casi siempre encima de algo.
+ *
+ * Ahora un toque tiene que confirmarse: s_confirmar lecturas seguidas, y
+ * ademas estables entre si (las dos ultimas a menos de TOUCH_JITTER_PX una de
+ * otra, ya en coordenadas de pantalla). Lo primero descarta el glitch de una
+ * muestra; lo segundo descarta el artefacto clasico del panel resistivo, que
+ * es un salto a una esquina mientras el dedo entra o sale.
+ *
+ * El numero de confirmaciones es ajustable desde los ajustes (celda
+ * "Tactil"): 1 = sensible, 2 = normal, 3 = firme. No se pone en tiempo
+ * porque el bucle principal no corre a ritmo fijo - a 30 fotogramas por
+ * segundo, 2 confirmaciones son unos 66 ms, que es menos que un toque
+ * deliberado (100-200 ms) y mas que un roce.
+ *
+ * La SUELTA no se filtra: soltar tarde es peor que soltar pronto, y el
+ * codigo de arriba ya decide la accion en la pulsacion, no en la suelta.
+ */
+#define TOUCH_JITTER_PX   40
+#define TOUCH_CONFIRM_MAX  3
+
+static uint8_t  s_confirmar = 2U;   /* por defecto, "normal" */
+static uint8_t  s_conf_n    = 0U;   /* lecturas buenas seguidas */
+static uint16_t s_conf_x    = 0U;
+static uint16_t s_conf_y    = 0U;
+
+void touch_set_firmeza(uint8_t n)
+{
+    if (n < 1U) { n = 1U; }
+    if (n > TOUCH_CONFIRM_MAX) { n = TOUCH_CONFIRM_MAX; }
+    s_confirmar = n;
+    s_conf_n = 0U;
+}
+
+uint8_t touch_get_firmeza(void)
+{
+    return s_confirmar;
+}
+
+static uint8_t touch_read_una(uint16_t *x, uint16_t *y);
+
 uint8_t touch_read(uint16_t *x, uint16_t *y)
+{
+    uint16_t px, py;
+
+    if (!touch_read_una(&px, &py)) {
+        s_conf_n = 0U;
+        return 0;
+    }
+
+    if (s_conf_n != 0U) {
+        int32_t dx = (int32_t)px - (int32_t)s_conf_x;
+        int32_t dy = (int32_t)py - (int32_t)s_conf_y;
+        if (dx < 0) { dx = -dx; }
+        if (dy < 0) { dy = -dy; }
+        if (dx > TOUCH_JITTER_PX || dy > TOUCH_JITTER_PX) {
+            /* Dio un salto: se reinicia la cuenta y se toma esta lectura como
+             * la primera de una serie nueva, en vez de descartarla - si el
+             * dedo se esta moviendo de verdad, la siguiente ya sera estable. */
+            s_conf_n = 0U;
+        }
+    }
+
+    s_conf_x = px;
+    s_conf_y = py;
+    if (s_conf_n < 0xFFU) { s_conf_n++; }
+
+    if (s_conf_n < s_confirmar) {
+        return 0;
+    }
+
+    *x = px;
+    *y = py;
+    return 1;
+}
+
+static uint8_t touch_read_una(uint16_t *x, uint16_t *y)
 {
     uint16_t raw_x, raw_y;
     int32_t val_x, val_y; /* scaled from the raw_x/raw_y HARDWARE channels respectively, BEFORE swap_xy relabels which one ends up as the final screen x vs y */

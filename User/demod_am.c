@@ -11,6 +11,8 @@
                      * decimate/interpolate instances it reuses. */
 #include "rtty.h" /* RTTY decoder, USB/LSB only - see this file's
                     * RTTY INTEGRATION comment. */
+#include "cw.h"   /* decodificador de CW, USB/LSB, se engancha en el
+                     * mismo sitio y sobre el mismo audio que el RTTY */
 #include "rtty_scope.h" /* dedicated audio-domain tuning scope for RTTY,
                            * see this file's RTTY INTEGRATION comment
                            * and rtty_scope.h's own "why a separate FFT"
@@ -878,6 +880,59 @@ static float32_t s_alpf_4k0_state[ALPF_4K0_STAGES * 4U];
 static float32_t s_alpf_2k3_state[ALPF_2K3_STAGES * 4U];
 static float32_t s_alpf_1k8_state[ALPF_1K8_STAGES * 4U];
 
+/*
+ * FILTRO DE CW - 22/09/2026, a peticion del dueno del proyecto.
+ *
+ * Paso banda de unos 500 Hz centrado en el tono de CW, que es lo que
+ * lleva cualquier radio de telegrafia y lo que le faltaba a esta: el
+ * filtro mas estrecho que habia eran 1800 Hz, o sea que en CW se oian
+ * todas las estaciones de un trozo de banda a la vez.
+ *
+ * ES PARA EL OIDO, NO PARA EL DECODIFICADOR, y conviene tenerlo claro:
+ * cw.c se alimenta de s_ssb_dec, que esta ANTES de este filtro en la
+ * cadena (ver el comentario de la integracion del CW), asi que esto no
+ * cambia ni para bien ni para mal lo que decodifica. Lo que cambia es
+ * poder encontrar la estacion de oido y no tener que hacerlo mirando el
+ * osciloscopio.
+ *
+ * Los coeficientes se calculan en marcha y no salen de una tabla, porque
+ * el centro sigue al tono ajustado y ese lo mueve el usuario. Formula de
+ * paso banda de Robert Bristow-Johnson con Q 0,9 en dos secciones, que
+ * medido da 499 Hz de anchura a -3 dB y ganancia 1,000 en el centro a
+ * las dos frecuencias de muestreo.
+ */
+/*
+ * CUATRO etapas, no dos - 22/09/2026, por el dueno del proyecto: "creo que
+ * hace falta un ancho mas estrecho para cw, porque escucho muchas senales a
+ * la vez".
+ *
+ * El ancho no era el unico problema, ni el principal. Medido con
+ * sim/cwbw.c, que evalua ESTOS coeficientes:
+ *
+ *   etapas   -3 dB     -20 dB    -40 dB
+ *      2     250 Hz    1167 Hz   3851 Hz
+ *      4     250 Hz     846 Hz   1725 Hz
+ *      6     250 Hz     769 Hz   1364 Hz
+ *
+ * O sea: con dos etapas, aunque estreches el filtro a 250 Hz, una senal a
+ * 1,9 kHz del tono sigue entrando a -40 dB, que se oye perfectamente de
+ * fondo. La falda es lo que decide cuantas senales escuchas a la vez, no el
+ * numero de -3 dB. Cuatro etapas la parten por la mitad; de seis en adelante
+ * ya casi no se gana.
+ *
+ * Cuesta dos biquads mas por muestra de audio. arm_biquad_cascade_df1_f32()
+ * son unos 10 ciclos por etapa y muestra: a 96 kHz, 2 Mciclos/s de 200, o
+ * sea un 1% del reloj, y solo en CW.
+ */
+#define ALPF_CW_STAGES 4U
+static arm_biquad_casd_df1_inst_f32 s_alpf_cw_inst;
+static float32_t s_alpf_cw_state[ALPF_CW_STAGES * 4U];
+static float32_t s_alpf_cw_coeffs[ALPF_CW_STAGES * 5U];
+static float     s_alpf_cw_hz = CONFIG_CW_PITCH_HZ;
+/* Ancho a -3 dB del filtro de CW. 500 Hz de partida, que es el ancho
+ * clasico de un filtro de CW de radio comercial. */
+static float     s_alpf_cw_bw = 500.0f;
+
 /* WFM audio LPF instance/state - separate from s_alpf_inst above
  * (NFM), see WFM_ALPF_COEFFS' comment for why. */
 static arm_biquad_casd_df1_inst_f32 s_wfm_ifbw_i_inst;
@@ -1260,6 +1315,23 @@ static void nr_ss_process_chunks(float32_t *buf, uint32_t n)
  * against a bounds check rather than requiring an exact n, genuinely
  * tolerant of either 32 or 64 as-is.)
  */
+/*
+ * Lo mismo que rtty_process_chunks() justo debajo, y por el mismo
+ * motivo: cw_process() tiene el mismo contrato estricto de bloque
+ * exacto, y si se le da otra cosa no hace nada en vez de decodificar
+ * medio bloque. Son dos funciones casi identicas a proposito: cada una
+ * respeta el contrato de SU modulo, y el dia que uno cambie de tamano de
+ * bloque no se lleva al otro por delante.
+ */
+static void cw_process_chunks(const float32_t *buf, uint32_t n)
+{
+    uint32_t off;
+
+    for (off = 0U; off + CW_BLOCK_SAMPLES <= n; off += CW_BLOCK_SAMPLES) {
+        cw_process(buf + off, CW_BLOCK_SAMPLES);
+    }
+}
+
 static void rtty_process_chunks(const float32_t *buf, uint32_t n)
 {
     uint32_t off;
@@ -1380,6 +1452,87 @@ wfm_ifbw_t demod_am_get_wfm_ifbw(void)
  * active).
  */
 static uint8_t s_active_rate_is_48k = 0U;
+
+/*
+ * Rediseña el filtro de CW centrado en `centre_hz`. Se llama al cambiar
+ * el tono, al cambiar de frecuencia de muestreo y al arrancar.
+ *
+ * Las dos secciones son identicas: en cascada dan un paso banda de
+ * cuarto orden. Ojo con el convenio de CMSIS, que espera a1 y a2 con el
+ * SIGNO CAMBIADO respecto a la formula habitual - es el mismo convenio
+ * que siguen las tablas de coeficientes de arriba.
+ */
+/*
+ * Monta el filtro de CW: un paso banda centrado en el tono, del ancho
+ * pedido, en ALPF_CW_STAGES etapas iguales.
+ *
+ * LA Q SALE DE UNA MEDIDA, NO DE UNA FORMULA DE LIBRO. La Q de UNA etapa no
+ * es f0/ancho cuando hay varias en serie: cada una estrecha a la siguiente.
+ * sim/cwbw.c calcula la respuesta exacta de la cascada y busca la Q que da
+ * el ancho pedido; el resultado es que
+ *
+ *     Q = 0,434 * f0 / ancho
+ *
+ * con cuatro etapas, y esa constante sale igual (0,4339 a 0,4347) para
+ * anchos de 150 a 1000 Hz y tonos de 400 a 1000 Hz. Por eso aqui hay una
+ * multiplicacion y no una tabla. Si algun dia se cambia ALPF_CW_STAGES hay
+ * que volver a medirla: para dos etapas valia 0,643.
+ */
+#define ALPF_CW_Q_K 0.434f
+
+static void alpf_cw_build(void)
+{
+    float fs = s_active_rate_is_48k ? 48000.0f : 96000.0f;
+    float Q  = ALPF_CW_Q_K * (s_alpf_cw_hz / s_alpf_cw_bw);
+    float w0, alpha, a0, b0n, a1n, a2n;
+    uint32_t k;
+
+    if (Q < 0.20f)  { Q = 0.20f; }
+    if (Q > 20.0f)  { Q = 20.0f; }
+
+    w0    = 2.0f * 3.14159265358979f * (s_alpf_cw_hz / fs);
+    alpha = sinf(w0) / (2.0f * Q);
+    a0    = 1.0f + alpha;
+    b0n   =  alpha / a0;
+    a1n   =  (2.0f * cosf(w0)) / a0;   /* signo ya cambiado, convenio CMSIS */
+    a2n   = -(1.0f - alpha) / a0;
+
+    for (k = 0U; k < ALPF_CW_STAGES; k++) {
+        s_alpf_cw_coeffs[k * 5U + 0U] =  b0n;
+        s_alpf_cw_coeffs[k * 5U + 1U] =  0.0f;
+        s_alpf_cw_coeffs[k * 5U + 2U] = -b0n;
+        s_alpf_cw_coeffs[k * 5U + 3U] =  a1n;
+        s_alpf_cw_coeffs[k * 5U + 4U] =  a2n;
+    }
+    arm_biquad_cascade_df1_init_f32(&s_alpf_cw_inst, ALPF_CW_STAGES,
+                                    s_alpf_cw_coeffs, s_alpf_cw_state);
+}
+
+void demod_am_set_cw_filter_hz(float centre_hz)
+{
+    if (centre_hz < 200.0f)  { centre_hz = 200.0f; }
+    if (centre_hz > 2000.0f) { centre_hz = 2000.0f; }
+    s_alpf_cw_hz = centre_hz;
+    alpf_cw_build();
+}
+
+/*
+ * Ancho a -3 dB. Los tres que ofrece la radio son 1000, 500 y 250 Hz; el
+ * limite de abajo no es un capricho: por debajo de unos 150 Hz el filtro
+ * empieza a alargar los puntos y el decodificador lo nota antes que el oido.
+ */
+void demod_am_set_cw_bw_hz(float bw_hz)
+{
+    if (bw_hz < 150.0f)  { bw_hz = 150.0f; }
+    if (bw_hz > 2000.0f) { bw_hz = 2000.0f; }
+    s_alpf_cw_bw = bw_hz;
+    alpf_cw_build();
+}
+
+float demod_am_get_cw_bw_hz(void) { return s_alpf_cw_bw; }
+
+float demod_am_get_cw_filter_hz(void) { return s_alpf_cw_hz; }
+
 
 static agc_profile_t s_agc_profile = AGC_PROFILE_MEDIUM;
 static float s_agc_release = AGC_RELEASE_MEDIUM_96K;
@@ -1541,7 +1694,13 @@ static float s_agc_peak;
  * demod_am_process_raw() (AM/USB/LSB/NFM) - WFM has its own separate
  * S-meter path (s_wfm_agc_peak) untouched by this. int16-ish full-
  * scale units, same as before; the UI converts to dB/S-units itself,
- * OUTSIDE the ISR. */
+ * OUTSIDE the ISR.
+ *
+ * *** 22/09/2026: WFM TAMBIEN lo escribe *** - demod_wfm_process_raw()
+ * rellena este mismo pico desde su propia I/Q filtrada de canal, en el mismo
+ * punto de la cadena y con las mismas unidades. Hasta entonces WFM no lo
+ * tocaba y el medidor marcaba S0 permanentemente. Ver el bloque S-METER EN
+ * WFM en esa funcion. */
 static float s_sig_peak;
 
 float demod_am_get_signal_peak(void)
@@ -1670,6 +1829,14 @@ void demod_am_init(void)
 
     nr_ss_init();
     rtty_init();
+    /* CW: aqui al lado del RTTY porque se alimenta del mismo sitio y en
+     * el mismo momento. El tono y la siembra de velocidad salen de
+     * config.h; nace apagado, como el RTTY, y lo enciende el modo CW del
+     * selector de modos. */
+    cw_init();
+    cw_set_pitch_hz(CONFIG_CW_PITCH_HZ);
+    cw_set_wpm_hint(CONFIG_CW_WPM_HINT);
+    demod_am_set_cw_filter_hz(CONFIG_CW_PITCH_HZ);
     rtty_scope_init();
     {
         uint32_t k;
@@ -1791,6 +1958,10 @@ void demod_am_set_active_rate(uint8_t is_48k)
         s_decim_factor = DECIM_FACTOR_96K;
         s_dec_block_samples = DEC_BLOCK_SAMPLES_96K;
     }
+    /* El de CW se calcula, no sale de tabla, asi que se rehace aqui con
+     * la tasa nueva - si no, al cambiar de 96 a 48 kHz el filtro se
+     * quedaria centrado al doble de frecuencia. */
+    demod_am_set_cw_filter_hz(s_alpf_cw_hz);
 
     /* SSB decimated chain. The decimate/interpolate inits VALIDATE
      * their arguments (blockSize%M, numTaps%L) and return a status -
@@ -2026,6 +2197,50 @@ void demod_wfm_process_raw(const int16_t *raw_interleaved)
     if (s_wfm_ifbw == WFM_IFBW_NARROW) {
         arm_biquad_cascade_df1_f32(&s_wfm_ifbw_i_inst, s_wfm_i_buf, s_wfm_i_buf, SDR_RX_BLOCK_SAMPLES_WFM);
         arm_biquad_cascade_df1_f32(&s_wfm_ifbw_q_inst, s_wfm_q_buf, s_wfm_q_buf, SDR_RX_BLOCK_SAMPLES_WFM);
+    }
+
+    /*
+     * S-METER EN WFM (22/09/2026, por el dueno del proyecto: "en WFM por
+     * que es S0 todo el rato?").
+     *
+     * Porque no lo actualizaba NADIE. s_sig_peak solo se escribia en
+     * demod_am_process_raw(), que es el camino de AM/USB/LSB/NFM; WFM tiene
+     * su propio camino y nunca pasaba por ahi, asi que el medidor se quedaba
+     * en el 0 del arranque para siempre. El comentario de
+     * demod_am_get_signal_peak() ya lo decia ("WFM has its own separate
+     * S-meter path") - pero ese otro camino, s_wfm_agc_peak, sigue el
+     * AUDIO de salida del discriminador, que en FM no dice nada del nivel de
+     * RF: la FM es de envolvente constante, una emisora fuerte y una debil
+     * dan la misma amplitud de audio y lo que cambia es el ruido. Usar eso
+     * de S-metro habria sido peor que no tener ninguno, porque marcaria
+     * segun lo que se este emitiendo en ese momento.
+     *
+     * Asi que se mide donde toca y donde lo mide el resto de modos: el
+     * modulo |I+jQ| de la senal compleja ya filtrada de canal, ANTES del
+     * discriminador. Mismo punto de la cadena, mismas unidades (las dos
+     * ramas parten del entero de 16 bits del ADC convertido a float sin
+     * normalizar), asi que la calibracion del medidor vale igual en WFM que
+     * en los demas.
+     *
+     * Se guarda el pico al CUADRADO y se hace UNA raiz por bloque en vez de
+     * 512: el bloque de WFM es el doble de largo que el de AM y esto va
+     * dentro de la ISR. Para que la caida siga siendo la misma en dB por
+     * segundo, la constante de relajacion se eleva tambien al cuadrado
+     * (pico *= r por muestra equivale a pico2 *= r*r), y se usa la de WFM,
+     * que es la que esta ajustada a 192 kHz. Va antes del reparto por perfil
+     * de AGC para que tambien funcione en MANUAL.
+     */
+    {
+        float sp2 = s_sig_peak * s_sig_peak;
+        float r2  = s_wfm_agc_release * s_wfm_agc_release;
+
+        for (n = 0; n < SDR_RX_BLOCK_SAMPLES_WFM; n++) {
+            float m2 = s_wfm_i_buf[n] * s_wfm_i_buf[n]
+                     + s_wfm_q_buf[n] * s_wfm_q_buf[n];
+            sp2 *= r2;
+            if (m2 > sp2) { sp2 = m2; }
+        }
+        s_sig_peak = sqrtf(sp2);
     }
 
     /* 1. Discriminate - delay-and-conjugate-multiply, straight on the
@@ -2464,13 +2679,30 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          */
         if (rtty_get_enabled()) {
             rtty_process_chunks(s_ssb_dec, s_dec_block_samples);
-            /* Same buffer, same reasoning as rtty_process() just above
-             * (raw pre-NR audio) - feeds the tuning scope's own
-             * accumulator. See rtty_scope.h for why this is a
-             * SEPARATE FFT from both fft.c's real-time one and
-             * rtty.c's own Goertzel detectors. Cheap: just an
-             * accumulate-into-a-ring, the actual FFT runs later from
-             * the main loop (rtty_scope_poll()), never here. */
+        }
+        /*
+         * CW, 21/09/2026. Mismo sitio, mismo buffer y mismas razones que
+         * el RTTY de justo arriba: audio SSB crudo antes de la reduccion
+         * de ruido, porque la reduccion esta pensada para que se entienda
+         * una voz y lo que hace con un tono estrecho no ayuda a un
+         * detector que vive de medir ese tono; y ya esta a 12 kHz, que es
+         * lo que este modulo quiere, asi que no se diezma dos veces.
+         * Tambien de solo lectura, tambien saltado del todo cuando esta
+         * apagado.
+         */
+        if (cw_get_enabled()) {
+            cw_process_chunks(s_ssb_dec, s_dec_block_samples);
+        }
+        /* El osciloscopio de sintonia lo comparten los dos: al RTTY le
+         * ensena donde caen las dos frecuencias y al CW donde cae el
+         * tono, que es exactamente lo que hay que mirar para sintonizar
+         * en cada caso. Se alimenta UNA vez, aunque nunca puedan estar
+         * los dos encendidos a la vez: si algun dia lo estuvieran, dos
+         * llamadas meterian el audio dos veces en el mismo acumulador.
+         * Ver rtty_scope.h para por que esta FFT es aparte de la del
+         * espectro. Barato: aqui solo se acumula en un anillo, la FFT
+         * corre luego desde el bucle principal. */
+        if (rtty_get_enabled() || cw_get_enabled()) {
             rtty_scope_feed(s_ssb_dec, s_dec_block_samples);
         }
 
@@ -2609,11 +2841,19 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
         } else {
             arm_biquad_casd_df1_inst_f32 *alpf;
 
-            switch (s_audio_bw) {
-            case AUDIO_BW_2K3: alpf = &s_alpf_2k3_inst; break;
-            case AUDIO_BW_1K8: alpf = &s_alpf_1k8_inst; break;
-            case AUDIO_BW_4K0:
-            default:            alpf = &s_alpf_4k0_inst; break;
+            if (cw_get_enabled()) {
+                /* En CW manda el filtro de CW y el selector de ancho no
+                 * pinta nada: pedir 4 kHz de audio en telegrafia no es
+                 * una preferencia, es no tener filtro. Ver
+                 * demod_am_set_cw_filter_hz(). */
+                alpf = &s_alpf_cw_inst;
+            } else {
+                switch (s_audio_bw) {
+                case AUDIO_BW_2K3: alpf = &s_alpf_2k3_inst; break;
+                case AUDIO_BW_1K8: alpf = &s_alpf_1k8_inst; break;
+                case AUDIO_BW_4K0:
+                default:            alpf = &s_alpf_4k0_inst; break;
+                }
             }
             arm_biquad_cascade_df1_f32(alpf, s_env, s_env, SDR_RX_BLOCK_SAMPLES);
         }

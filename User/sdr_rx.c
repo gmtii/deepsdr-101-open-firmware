@@ -180,6 +180,7 @@ static void sdr_rx_resync_spi(void)
 {
     volatile uint32_t discard;
     uint32_t stat_before, stat_after;
+    (void)stat_before;
 
     stat_before = SPI_STAT(SPI1);
     discard = SPI_DATA(SPI1);

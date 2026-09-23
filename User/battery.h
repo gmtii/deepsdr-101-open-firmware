@@ -57,4 +57,25 @@ uint16_t battery_get_millivolts(void);
  */
 uint8_t battery_get_percent(void);
 
+/*
+ * Temperatura del SENSOR INTERNO DEL MICRO, en grados enteros.
+ *
+ * Mide el die del GD32F450, no la habitacion: con la radio encendida da
+ * bastante mas que la temperatura ambiente, y esa diferencia es normal.
+ * Sirve para ver si el aparato se esta calentando de mas, que es para lo
+ * que esta, no para saber que tiempo hace.
+ *
+ * *** SIN CALIBRAR Y SIN COMPROBAR CONTRA UN TERMOMETRO ***. Usa los
+ * valores tipicos de la hoja de datos (1,45 V a 25 grados y 4,1 mV por
+ * grado) y estos sensores se van facilmente diez grados de un chip a
+ * otro sin una calibracion por unidad. O sea: la TENDENCIA es fiable,
+ * el numero absoluto no. Por eso en pantalla pone "del chip" y no
+ * "temperatura" a secas.
+ *
+ * Comparte el ADC0 con la medida de bateria y cambia de canal para leer,
+ * dejandolo como estaba al terminar. Solo desde el bucle principal,
+ * igual que battery_get_millivolts().
+ */
+int16_t battery_get_chip_temp_c(void);
+
 #endif /* BATTERY_H */

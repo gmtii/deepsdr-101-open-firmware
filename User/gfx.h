@@ -58,6 +58,16 @@ static inline uint16_t gfx_rgb565(uint8_t r, uint8_t g, uint8_t b)
 #define GFX_SCREEN_HEIGHT  480
 
 /* --- Primitivas de relleno / lineas rectas (rapidas, ventana unica) --- */
+/*
+ * Banda superior reservada. Con rows > 0, TODAS las primitivas de este
+ * fichero recortan lo que caiga en y < rows: la cabecera y la barra de
+ * estado las dibuja ui_top.c con gfx2, que no pasa por aqui, y asi ningun
+ * readout antiguo ni ningun widget de ui.c puede pintar encima. Ver el
+ * comentario largo en gfx.c. 0 = desactivado (valor de arranque).
+ */
+void gfx_guard_top_set(uint16_t rows);
+uint16_t gfx_guard_top(void);
+
 void gfx_pixel(uint16_t x, uint16_t y, uint16_t color);
 void gfx_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color);
 void gfx_hline(uint16_t x, uint16_t y, uint16_t w, uint16_t color);

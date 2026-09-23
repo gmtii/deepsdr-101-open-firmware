@@ -167,4 +167,31 @@
  * RTTY-L/RTTY-U turn it on - see rtty_get_enabled()'s callers. */
 #define CONFIG_RTTY_ENABLED_DEFAULT 0U
 
+/* ===================== DECODIFICADOR DE CW ============================
+ *
+ * Telegrafia Morse, 21/09/2026. Solo en USB/LSB, igual que el RTTY y por
+ * la misma razon: el CW se oye como UN tono dentro del paso de banda de
+ * una banda lateral. Ver demod_am.c, donde se engancha justo al lado del
+ * RTTY y sobre el mismo audio ya diezmado a 12 kHz.
+ *
+ * El tono es el que se quiere OIR: el operador sintoniza hasta que el
+ * pitido suena a esta frecuencia. 700 Hz es lo mas comun; a quien tenga
+ * el oido cansado en agudos le ira mejor 600, y a quien tenga ruido de
+ * red 800.
+ *
+ * La velocidad NO es un ajuste que mande: el decodificador la estima y
+ * la persigue solo. Esto es solo por donde empieza a buscar, y sirve
+ * para enganchar antes. Medido en el simulador: partiendo de 20 PPM
+ * decodifica bien de 10 a 45 PPM sin que nadie le diga nada.
+ */
+/* ===================== IDENTIDAD DEL FIRMWARE =========================
+ * Lo que sale en Ajustes -> Equipo -> Información. La fecha y la hora NO
+ * se ponen aqui: salen de __DATE__ y __TIME__, o sea del momento de
+ * compilar, y asi no hay forma de que digan una cosa y el binario sea
+ * otra. Esto es lo unico que hay que subir a mano al sacar version. */
+#define CONFIG_FW_VERSION  "Rediseño 11"
+
+#define CONFIG_CW_PITCH_HZ      700.0f
+#define CONFIG_CW_WPM_HINT       20.0f
+
 #endif /* CONFIG_H */
