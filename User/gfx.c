@@ -1,4 +1,5 @@
 #include "gfx.h"
+#include "lcd_dma.h"
 #include "gfx_font.h"
 
 /*
@@ -69,7 +70,10 @@ void gfx_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t colo
 
     n = (uint32_t)w * (uint32_t)h;
     while (n--) {
-        rm68120_write_data(color);
+        /* Sin llamada: ver rm68120_dato() en rm68120_exmc.h. En un bucle
+         * que escribe pixel a pixel, la llamada cuesta mas que la propia
+         * escritura. */
+        rm68120_dato(color);
     }
 }
 
@@ -151,6 +155,61 @@ void gfx_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color)
     }
 }
 
+/*
+ * VOLCADO QUE NO ESPERA. 25/09/2026.
+ *
+ * Igual que gfx_blit(), pero si hay DMA disponible arranca el envio y VUELVE
+ * ENSEGUIDA, para que el que llama pueda ir montando lo siguiente mientras
+ * el bus trabaja. Ahi esta toda la ganancia: el bus tarda lo mismo, pero la
+ * CPU deja de estar parada mirandolo.
+ *
+ * Devuelve 1 si hay un envio en marcha -y entonces `pixels` NO se puede
+ * tocar, ni el panel por ningun otro sitio, hasta llamar a
+ * gfx_blit_espera()-. Devuelve 0 si ya esta todo volcado (no habia DMA y se
+ * hizo por el camino de siempre), y entonces no hay nada que esperar.
+ *
+ * El recorte de arriba se hace AQUI y no en el que llama, por la misma razon
+ * de siempre: un recorte escrito en dos sitios acaba siendo dos recortes
+ * distintos.
+ */
+uint8_t gfx_blit_arranca(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pixels)
+{
+    if (w == 0 || h == 0 || pixels == NULL) {
+        return 0U;
+    }
+    if (y < s_guard_top) {
+        uint16_t skip = (uint16_t)(s_guard_top - y);
+        if (skip >= h) {
+            return 0U;
+        }
+        pixels += (uint32_t)skip * (uint32_t)w;
+        y = s_guard_top;
+        h = (uint16_t)(h - skip);
+    }
+
+    if (lcd_dma_hay()) {
+        rm68120_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
+        if (lcd_dma_manda(pixels, (uint32_t)w * (uint32_t)h)) {
+            return 1U;
+        }
+        /* No arranco: la ventana ya esta puesta, asi que se termina a mano
+         * aqui mismo en vez de volver a abrirla. */
+        {
+            uint32_t n = (uint32_t)w * (uint32_t)h, i;
+            for (i = 0; i < n; i++) { rm68120_dato(pixels[i]); }
+        }
+        return 0U;
+    }
+
+    gfx_blit(x, y, w, h, pixels);
+    return 0U;
+}
+
+uint8_t gfx_blit_espera(void)
+{
+    return lcd_dma_espera();
+}
+
 void gfx_blit(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pixels)
 {
     uint32_t n, i;
@@ -169,11 +228,22 @@ void gfx_blit(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pi
         h = (uint16_t)(h - skip);
     }
 
-    rm68120_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
+    {
+        /* Ver g_lcd_ciclos en rm68120_exmc.h: esto separa "empujar pixeles"
+         * de "decidir que pixel va donde". En el simulador las dos lecturas
+         * devuelven cero y el bucle queda igual. */
+        uint32_t t0 = rm68120_ciclo();
 
-    n = (uint32_t)w * (uint32_t)h;
-    for (i = 0; i < n; i++) {
-        rm68120_write_data(pixels[i]);
+        rm68120_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
+
+        n = (uint32_t)w * (uint32_t)h;
+        for (i = 0; i < n; i++) {
+            /* Sin llamada: ver rm68120_dato() en rm68120_exmc.h. En un bucle
+             * que escribe pixel a pixel, la llamada cuesta mas que la propia
+             * escritura. */
+            rm68120_dato(pixels[i]);
+        }
+        g_lcd_ciclos += rm68120_ciclo() - t0;
     }
 }
 

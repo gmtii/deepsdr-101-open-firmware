@@ -25,12 +25,35 @@
 #define UID_PIE_H    34
 #define UID_PIE_Y   (UIG_Y + UIG_H - UID_PIE_H - 4)   /* 384 */
 
+/*
+ * FILA DE AJUSTES RAPIDOS - 24/09/2026, a peticion del dueño del proyecto:
+ * "debajo de los Hz, tres botones que eran los tres BW fijos".
+ *
+ * Es el reparto que hace util un mando continuo: el mando afina, y estos
+ * tres devuelven de un toque a algo conocido. Sin ellos, volver a los 2,3
+ * kHz de siempre son veinte pulsaciones del "+".
+ *
+ * Van en la franja que queda LIBRE entre los dos botones grandes y el pie.
+ * Los grandes se llevan el toque hasta UID_BTN_Y + UID_BTN_H + 20 = 316 y
+ * el pie empieza en UID_PIE_Y - 8 = 376, asi que aqui hay 60 px de toque
+ * para un boton de 50 de alto: por encima de los 47 px de objetivo minimo
+ * de dedo que usa el resto de la interfaz.
+ */
+#define UID_PRE_N     3
+#define UID_PRE_Y    (UID_BTN_Y + UID_BTN_H + 24)     /* 320 */
+#define UID_PRE_H     50
+#define UID_PRE_X0   UID_BTN_X0                       /* alineados con los grandes */
+#define UID_PRE_GAP   8
+#define UID_PRE_W    (((UID_BTN_X1 + UID_BTN_W) - UID_BTN_X0 \
+                       - (UID_PRE_N - 1) * UID_PRE_GAP) / UID_PRE_N)
+
 #define UID_HIT_NONE   (-1)
 #define UID_HIT_MENOS    0
 #define UID_HIT_MAS      1
 #define UID_HIT_ALT      2   /* "LO / HI", solo en escala */
 #define UID_HIT_VOLVER   3
-#define UID_HIT_COUNT    4
+#define UID_HIT_PRE0     4   /* los tres ajustes rapidos, si los hay */
+#define UID_HIT_COUNT    (UID_HIT_PRE0 + UID_PRE_N)
 
 typedef struct {
     const char *titulo;
@@ -38,6 +61,10 @@ typedef struct {
     const char *pie;       /* linea de contexto bajo el valor, o 0 */
     const char *alt;       /* rotulo del boton central, o 0 si no lo hay */
     uint8_t     alt_on;    /* 1 = el boton central esta "activo" */
+    /* Los tres ajustes rapidos. Con preset[0] a 0 la fila no existe y la
+     * pantalla queda exactamente como estaba. */
+    const char *preset[UID_PRE_N];
+    int8_t      preset_on; /* cual esta puesto ahora mismo, o -1 */
     int8_t      pressed;   /* UID_HIT_*, o -1 */
 } ui_det_state_t;
 

@@ -290,7 +290,14 @@ void nr_ss_set_strength(uint16_t v)
      * original design had, not a special-cased bypass path.
      */
     th_nr_val = (NR_SS_NOISE_MAX - NR_SS_NOISE_MIN) * (float)v / 4096.0f + NR_SS_NOISE_MIN;
-    th_nr = powf(10.0f, th_nr_val);
+    /*
+     * 10^x se calcula con expf(x*ln10) y no con powf(10,x): powf es la
+     * funcion mas cara de la libreria -1.854 bytes de flash- y aqui era
+     * la UNICA llamada de todo el firmware. expf ya estaba enlazada por
+     * otros sitios, asi que esto sale gratis. El resultado en float es
+     * el mismo: powf(10,x) internamente hace justamente esto.
+     */
+    th_nr = expf(th_nr_val * 2.302585093f);
     s_inv_th = 1.0f / th_nr;
 }
 

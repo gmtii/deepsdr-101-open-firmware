@@ -60,6 +60,29 @@ void debug_print_dec(const char *label, uint32_t val);
 #define debug_print_hex16(label, val) ((void)0)
 #define debug_print_dec(label, val)   ((void)0)
 
+/*
+ * LAS VARIANTES "_always" DEL PROYECTO PADRE. 25/09/2026.
+ *
+ * Los modulos de HFDL las usan para trazas que ellos querian ver SIEMPRE,
+ * con el UART de depuracion apagado o encendido. En esta radio el UART no
+ * esta cableado a ningun sitio, asi que "siempre" seria escribir en un
+ * puerto que nadie lee, pagando ademas las cadenas de texto en flash.
+ *
+ * Se definen aqui, y no se tocan sus ficheros, por dos razones: para que el
+ * codigo del padre siga siendo el suyo -y se pueda volver a traer una
+ * version nueva sin rehacer el parche- y porque la alternativa era que el
+ * compilador las diera por implicitas, que es como estaban llegando: sin
+ * declarar, suponiendo "int f()", y sin comprobar ni argumentos ni retorno.
+ * Eso ya mordio una vez en este proyecto con backlight_sleep/wake.
+ *
+ * Si algun dia se cablea el UART y hace falta verlas, el sitio es este y
+ * son cuatro lineas.
+ */
+#define debug_print_always(s)                ((void)0)
+#define debug_print_hex32_always(label, val) ((void)0)
+#define debug_print_hex16_always(label, val) ((void)0)
+#define debug_print_dec_always(label, val)   ((void)0)
+
 #endif /* DEBUG_UART_ENABLED */
 
 #endif

@@ -16,6 +16,33 @@ unsigned long g_blend_calls = 0, g_rrcov_calls = 0, g_draw_calls = 0;
 /* La banda compositora. Unica reserva grande de este modulo. */
 static uint16_t s_band[GFX2_W * GFX2_BAND_H];
 
+/* Ver el comentario de gfx2_banda_coge() en la cabecera. */
+static uint8_t  s_band_cogida;
+static uint16_t s_band_choques;
+
+uint16_t *gfx2_banda_coge(void)
+{
+    if (s_band_cogida) {
+        if (s_band_choques < 0xFFFFU) { s_band_choques++; }
+        return (uint16_t *)0;
+    }
+    s_band_cogida = 1U;
+    return s_band;
+}
+
+void gfx2_banda_suelta(void)
+{
+    s_band_cogida = 0U;
+}
+
+uint16_t gfx2_banda_choques(void)
+{
+    return s_band_choques;
+}
+
+uint16_t gfx2_banda_filas(void) { return (uint16_t)GFX2_BAND_H; }
+uint32_t gfx2_banda_pixeles(void) { return (uint32_t)GFX2_W * (uint32_t)GFX2_BAND_H; }
+
 /* ------------------------------------------------------------------------
  * Mezcla
  * ------------------------------------------------------------------------ */
@@ -84,6 +111,13 @@ void gfx2_render(int16_t x, int16_t y, int16_t w, int16_t h,
     if (w <= 0 || h <= 0) return;
     if (w > GFX2_W) w = GFX2_W;
 
+    /* La banda es de este modulo pero ya no la usa solo este modulo: desde el
+     * 25/09/2026 spectrum_draw() tambien la pide, para montar el espectro por
+     * bandas en vez de fila a fila. Coger y soltar en vez de suponer. */
+    if (gfx2_banda_coge() == (uint16_t *)0) {
+        return;
+    }
+
     for (by = y; by < (int16_t)(y + h); by = (int16_t)(by + GFX2_BAND_H)) {
         gfx2_surf_t s;
         int16_t bh = (int16_t)((y + h) - by);
@@ -106,11 +140,13 @@ void gfx2_render(int16_t x, int16_t y, int16_t w, int16_t h,
         rm68120_set_window((uint16_t)x, (uint16_t)by,
                            (uint16_t)(x + w - 1), (uint16_t)(by + bh - 1));
         for (i = 0; i < n; i++) {
-            rm68120_write_data(s_band[i]);
+            rm68120_dato(s_band[i]);
         }
 
         if (s_pump) { s_pump(); }
     }
+
+    gfx2_banda_suelta();
 }
 
 void gfx2_render_screen(void (*draw)(gfx2_surf_t *s, void *ctx), void *ctx)
@@ -145,6 +181,65 @@ void gfx2_fill(gfx2_surf_t *s, int16_t x, int16_t y, int16_t w, int16_t h,
             uint16_t *row = &s->px[(int32_t)iy * s->w];
             for (ix = x0; ix < x1; ix++) row[ix] = blend(row[ix], c, 255);
         }
+    }
+}
+
+/*
+ * UNA RAYA DE CUALQUIER ANGULO - 28/09/2026, para el mapa del mundo.
+ *
+ * *** Por el dueño del proyecto: "me gustaria ponerle mapa a las señales
+ * ft8 que cazamos". ***
+ *
+ * Bresenham de toda la vida, con dos detalles que importan aqui:
+ *
+ * 1. RECORTA CONTRA LA BANDA, como todas las primitivas de este fichero,
+ *    y ademas SALE PRONTO. El dibujo corre una vez por banda -veinte para
+ *    la pantalla entera- y la costa del mundo son 1.762 puntos, o sea
+ *    35.000 rayas por cuadro si no se cortara nada. Con el recorte de
+ *    caja de abajo, cada banda solo recorre de verdad las que la tocan.
+ *
+ * 2. NO DIBUJA LA RAYA QUE CRUZA EL MAPA ENTERO. Eso no es cosa de esta
+ *    funcion sino de quien la llama: en un mapa plano, una costa que pasa
+ *    por el meridiano 180 -las Aleutianas, Chukotka, Fiyi- tiene un punto
+ *    en x=799 y el siguiente en x=0, y unirlos pinta una raya horizontal
+ *    de lado a lado. Ver mapa.c.
+ */
+void gfx2_line(gfx2_surf_t *s, int16_t x0, int16_t y0, int16_t x1, int16_t y1,
+               gfx2_rgba_t c)
+{
+    int32_t dx, dy, sx, sy, err;
+    int16_t ymin = (y0 < y1) ? y0 : y1;
+    int16_t ymax = (y0 < y1) ? y1 : y0;
+    int16_t xmin = (x0 < x1) ? x0 : x1;
+    int16_t xmax = (x0 < x1) ? x1 : x0;
+    uint16_t v;
+
+    /* Fuera de la banda: ni se empieza. */
+    if (ymax < s->y || ymin >= (int16_t)(s->y + s->h)) { return; }
+    if (xmax < s->x || xmin >= (int16_t)(s->x + s->w)) { return; }
+
+    v = gfx2_to565(c.r, c.g, c.b);
+    dx = (int32_t)((x1 > x0) ? (x1 - x0) : (x0 - x1));
+    dy = -(int32_t)((y1 > y0) ? (y1 - y0) : (y0 - y1));
+    sx = (x0 < x1) ? 1 : -1;
+    sy = (y0 < y1) ? 1 : -1;
+    err = dx + dy;
+
+    for (;;) {
+        int16_t px = (int16_t)(x0 - s->x);
+        int16_t py = (int16_t)(y0 - s->y);
+        int32_t e2;
+
+        if (px >= 0 && px < s->w && py >= 0 && py < s->h) {
+            uint16_t *pp = &s->px[(int32_t)py * s->w + px];
+
+            if (c.a >= 255) { *pp = v; }
+            else            { *pp = blend(*pp, c, 255); }
+        }
+        if (x0 == x1 && y0 == y1) { break; }
+        e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 = (int16_t)(x0 + sx); }
+        if (e2 <= dx) { err += dx; y0 = (int16_t)(y0 + sy); }
     }
 }
 
@@ -493,7 +588,7 @@ void gfx2_wf_blit(int16_t x, int16_t y, int16_t w, int16_t rows,
         rm68120_set_window((uint16_t)x, (uint16_t)(y + done),
                            (uint16_t)(x + w - 1), (uint16_t)(y + done + chunk - 1));
         n = (int32_t)w * chunk;
-        for (i = 0; i < n; i++) rm68120_write_data(s_band[i]);
+        for (i = 0; i < n; i++) rm68120_dato(s_band[i]);
 
         done = (int16_t)(done + chunk);
     }

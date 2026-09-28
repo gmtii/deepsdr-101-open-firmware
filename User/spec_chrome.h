@@ -71,6 +71,15 @@ typedef struct {
     spc_band_t  band;
     uint32_t    band_hz;        /* ancho del filtro de audio */
 
+    /*
+     * La regla en HERCIOS en vez de en kilohercios (23/09/2026). La pone a 1
+     * el analizador de audio, donde todo el eje cabe en unos pocos cientos
+     * de Hz: en kHz enteros, "0 0 0 0 0" no situa nada. Con esto la misma
+     * regla sirve para los dos, que es lo que permite que el analizador no
+     * necesite panel propio.
+     */
+    uint8_t     eje_en_hz;
+
     /* --- leyenda del waterfall --- */
     const uint16_t *cmap;       /* LUT de 256 entradas RGB565 */
 } spec_chrome_t;

@@ -45,11 +45,11 @@ static uint8_t fmt_dec(char *buf, int32_t v, uint8_t dec, uint8_t force_sign)
  * La frecuencia exacta al Hz ya esta en la cabecera, que es donde se mira
  * para sintonizar; la regla esta para situar lo que se ve, no para leer
  * el dial. */
-static void fmt_khz(char *buf, uint32_t hz)
+static void fmt_eje(char *buf, uint32_t hz, uint8_t en_hz)
 {
-    uint32_t khz = (hz + 500U) / 1000U;   /* redondeo, no truncado */
+    uint32_t v = en_hz ? hz : ((hz + 500U) / 1000U);   /* redondeo, no truncado */
     char num[16];
-    uint8_t n = fmt_dec(num, (int32_t)khz, 0, 0);
+    uint8_t n = fmt_dec(num, (int32_t)v, 0, 0);
     uint8_t i = 0, j;
 
     for (j = 0; j < n; j++) {
@@ -147,7 +147,7 @@ static void draw_ruler(gfx2_surf_t *s, void *ctx)
         gfx2_rgba_t col = is_demod ? gfx2_rgb(PAL_ACCENT) : gfx2_rgb(PAL_INK_MUTE);
 
         if (f < 0) { f = 0; }
-        fmt_khz(buf, (uint32_t)f);
+        fmt_eje(buf, (uint32_t)f, st->eje_en_hz);
 
         gfx2_vline(s, cx, SPC_RULER_Y, is_demod ? 7 : 4, col);
 
@@ -168,7 +168,8 @@ static void draw_ruler(gfx2_surf_t *s, void *ctx)
      * y puesto ademas al final de la regla se comia la etiqueta del borde
      * derecho. Un dato, un sitio. */
     gfx2_text_in(s, 0, (int16_t)(SPC_RULER_Y + 8), (int16_t)(SPC_GUT_W - 6),
-                 "kHz", &font_ui_14, gfx2_rgb(PAL_INK_MUTE), GFX2_ALIGN_R);
+                 st->eje_en_hz ? "Hz" : "kHz",
+                 &font_ui_14, gfx2_rgb(PAL_INK_MUTE), GFX2_ALIGN_R);
 }
 
 /* ---------------------------------------------------------------------

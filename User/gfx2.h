@@ -47,9 +47,114 @@
  * el codigo de dibujo por cada repintado. Se puede forzar desde la linea de
  * compilacion con -DGFX2_BAND_H=n.
  */
+/*
+ * ETAPA 5 (25/09/2026): 16 filas = 25 kB, bajando desde 24 = 37,5 kB.
+ *
+ * Los 12.800 bytes que se liberan son para FT8, que con todo dentro se
+ * pasaba de RAM por 4.460. Es la palanca mas barata que hay: los otros
+ * sitios donde queda memoria son la cascada -que ya la comparte con FT8
+ * por una union- y estrechar la ventana de FT8, que cuesta
+ * decodificaciones.
+ *
+ * LO QUE CUESTA. Menos filas por banda son mas bandas por repintado, o sea
+ * mas veces que se recorre el codigo de dibujo y mas ventanas abiertas en
+ * el panel. Medido en el simulador con sus contadores: el espectro pasa de
+ * 18 ventanas a 26 por fotograma, que a 17 accesos por ventana son 136
+ * accesos mas de 157.000 - menos del uno por mil. El montaje sube algo mas,
+ * del orden de un milisegundo, porque el coste por columna se paga una vez
+ * por banda.
+ *
+ * Un milisegundo de fotograma a cambio de que FT8 quepa. Se paga con gusto.
+ */
+/*
+ * ETAPA 6 (25/09/2026, el mismo dia por la tarde): 8 filas = 12,5 kB. O sea
+ * de vuelta a lo que habia en la etapa 1, y por una razon bonita.
+ *
+ * *** Por el dueno del proyecto, despues de comparar con el proyecto padre:
+ * "ok dale". ***
+ *
+ * DE DONDE VIENE. FT8 no tiene memoria propia: le pide prestado el buffer de
+ * la cascada. El proyecto padre guarda la cascada en RGB565 -dos bytes por
+ * punto, 114.624 en total- y por eso puede prestarle a FT8 sus 1.600 Hz de
+ * ventana enteros. Nosotros la guardamos como INDICES DE PALETA, un byte,
+ * 54.432... y esa optimizacion, que fue un acierto y que ahorro 56 kB, es
+ * justo la que nos dejaba la ventana a la mitad. No habia nada que copiarles:
+ * simplemente gastan el doble en cascada.
+ *
+ * Los 12.800 bytes que libera esta etapa son exactamente lo que faltaba para
+ * los 256 bins. Con ellos la ventana de FT8 llega a 1.600 Hz, que ademas es
+ * TODO lo que se puede ver: 1.600 Hz es el Nyquist del audio diezmado a
+ * 3.200, asi que a partir de aqui ensanchar no significa nada.
+ *
+ * LO QUE CUESTA, MEDIDO CON EL BANCO DEL ESPECTRO Y NO ESTIMADO:
+ *
+ *     banda 16 filas ....  26 ventanas de bus, 157.690 accesos
+ *     banda  8 filas ....  52 ventanas de bus, 158.132 accesos  (+0,3%)
+ *
+ * El trabajo de pixeles es el mismo; lo que se dobla es el numero de
+ * pasadas, y con el el coste por columna, que se paga una vez por banda.
+ * Seran un par de milisegundos sobre los ~20 del fotograma.
+ *
+ * Y NO LO PAGA FT8: en FT8 no se pinta espectro, el panel es texto. Lo pagan
+ * AM, SSB, RTTY y los demas, que es justo donde se noto el trabajo de hacer
+ * el fotograma rapido. Por eso esto se pregunto antes de hacerlo en vez de
+ * decidirlo solo.
+ */
+/*
+ * ETAPA 7 (25/09/2026, un rato despues): de vuelta a 16 filas, y sin
+ * devolver nada a cambio.
+ *
+ * *** Por el dueno del proyecto, probando la etapa 6 en antena: "estoy
+ * probando lsb en 7 mhz y se nota que ha bajado un poco la velocidad". ***
+ *
+ * O sea que el par de milisegundos que la etapa 6 daba por buenos se NOTAN.
+ * Lo vio en la radio, no en un banco, y eso manda.
+ *
+ * Lo que hizo falta para deshacerlo sin perder los 1.600 Hz fue arreglar el
+ * derroche que habia detras: FT8 guardaba una copia ENTERA de mag[] -23.808
+ * bytes- para poder decodificar mientras la captura siguiente escribia. Ahora
+ * se aparta lo NUEVO en vez de lo viejo, y para eso bastan 6.144 (ver `lado`
+ * en ft8_shared_ram.h). Los 17.664 que sobran devuelven estas ocho filas y
+ * aun dejan sitio.
+ *
+ * La leccion, que es la de siempre en este proyecto: cuando dos cosas se
+ * pelean por la memoria, antes de quitarle a una conviene mirar si la otra
+ * la esta gastando bien. Aqui no la estaba gastando bien.
+ */
 #ifndef GFX2_BAND_H
-#define GFX2_BAND_H 24
+#define GFX2_BAND_H 16
 #endif
+
+/* La banda compositora, prestada.
+ *
+ * Existe porque el volcado de la cascada por IPA (ver ipa_blit.h) necesita
+ * un destino en RAM donde el acelerador deje los pixeles ya convertidos a
+ * RGB565, y ese destino ya existe: es esta misma banda de 800 x GFX2_BAND_H
+ * que usa gfx2_wf_blit(). Darle otra seria pedir 37,5 kB mas de RAM para
+ * tener dos veces lo mismo.
+ *
+ * Se presta y se devuelve dentro de la misma llamada: quien la use no puede
+ * quedarse con el puntero de una vez para otra, porque entre medias la usa
+ * el dibujo normal. Por eso se pide con coge() y se devuelve con suelta(),
+ * en vez de tener un gfx2_banda() que la entregue a quien pase: el cerrojo
+ * convierte "no se usan a la vez" de promesa en condicion comprobada, que es
+ * la leccion que costo cara el 24/09/2026 con los borradores de spi_flash.c.
+ *
+ * coge() devuelve NULL si ya estaba cogida. Quien la pide TIENE que mirarlo. */
+uint16_t *gfx2_banda_coge(void);
+void      gfx2_banda_suelta(void);
+uint16_t  gfx2_banda_filas(void);
+/* Cuantos pixeles caben en la banda en total. Lo necesita quien la use para
+ * algo que no sea "una tira de GFX2_W de ancho" - por ejemplo el espectro,
+ * que la parte en dos mitades para montar una mientras el DMA envia la
+ * otra, y tiene que poder comprobar que las dos caben. */
+uint32_t  gfx2_banda_pixeles(void);
+
+/* Veces que alguien pidio la banda estando cogida, desde el arranque.
+ * Deberia ser cero para siempre: gfx2_render() la coge y la suelta dentro de
+ * la misma llamada, y spectrum_draw() se llama despues, nunca a la vez. Si
+ * esto no es cero, hay un camino nuevo que las solapa. */
+uint16_t  gfx2_banda_choques(void);
 
 /* --- Superficie de composicion ------------------------------------------
  * Un rectangulo de pixeles en RAM mas su posicion en pantalla. Las
@@ -132,6 +237,13 @@ void gfx2_rrect(gfx2_surf_t *s, int16_t x, int16_t y, int16_t w, int16_t h,
 /* Solo el contorno, grosor t, tambien con esquinas antialiasadas. */
 void gfx2_rrect_outline(gfx2_surf_t *s, int16_t x, int16_t y, int16_t w, int16_t h,
                         int16_t r, int16_t t, gfx2_rgba_t c);
+
+/* Una raya de cualquier angulo (Bresenham), recortada contra la banda.
+ * Ver su comentario en gfx2.c: la costa del mundo son 1.762 puntos y el
+ * dibujo corre una vez por banda, asi que lo que importa es que salga
+ * pronto cuando no toca. */
+void gfx2_line(gfx2_surf_t *s, int16_t x0, int16_t y0, int16_t x1, int16_t y1,
+               gfx2_rgba_t c);
 
 void gfx2_hline(gfx2_surf_t *s, int16_t x, int16_t y, int16_t w, gfx2_rgba_t c);
 void gfx2_vline(gfx2_surf_t *s, int16_t x, int16_t y, int16_t h, gfx2_rgba_t c);

@@ -1,10 +1,14 @@
 #include "splash.h"
 #include "gfx2.h"
 #include "palette.h"
-#include "font_title_60.h"
 #include "font_rain_16.h"
 #include "font_ui_14.h"
 #include "font_ui_18b.h"
+
+/*
+ * PANTALLA DE ARRANQUE. Ver splash.h para el porque de cada cosa, incluida
+ * la ida y vuelta de la lluvia y de donde sale la memoria de las columnas.
+ */
 
 /* --- rejilla de la lluvia ------------------------------------------------ */
 #define CELL_W   18
@@ -16,10 +20,10 @@
  * mismo ambar de la pantalla principal, no una escala verde aparte. La
  * cabeza es la tinta mas clara, que es lo que hace que se lea como "aqui
  * esta cayendo ahora" sin necesidad de brillo. */
-#define VERDE_CABEZA  PAL_SP_HEAD
-#define VERDE_VIVO    PAL_SP_HOT
-#define VERDE_MEDIO   PAL_SP_MID
-#define VERDE_OSCURO  PAL_SP_DIM
+#define TINTA_CABEZA  PAL_SP_HEAD
+#define TINTA_VIVA    PAL_SP_HOT
+#define TINTA_MEDIA   PAL_SP_MID
+#define TINTA_OSCURA  PAL_SP_DIM
 #define NEGRO         PAL_SP_BG
 
 /* --- tiempos ------------------------------------------------------------- */
@@ -27,11 +31,37 @@
 #define T_FIN      3600U   /* cuando termina todo */
 #define PASO_MS      55U   /* periodo de un fotograma */
 
-/* Banda del titulo: la lluvia sigue cayendo por encima y por debajo. */
-#define TIT_Y       168
-#define TIT_H       150
-#define CRED_H       26   /* franja de creditos, pegada abajo */
+/*
+ * Banda del titulo: la lluvia sigue cayendo por encima y por debajo.
+ *
+ * LAS BANDAS VAN EN LA REJILLA DE LA LLUVIA - 28/09/2026, mirando el render
+ * del banco: habia katakana pegados ENCIMA de la linea de creditos y no se
+ * borraban nunca.
+ *
+ * El motivo: una celda que cae a caballo del borde de una banda se deja de
+ * pintar en cuanto aparece el titulo -celda() la salta-, pero lo que ya
+ * estaba pintado ahi de antes NO se limpia, porque limpiar tambien es
+ * pintar y tambien se salta. La banda rellena su rectangulo de negro al
+ * aparecer, y la mitad de la celda que sobresale se queda fuera.
+ *
+ * Con las bandas cuadradas a la rejilla eso no puede pasar: o la celda esta
+ * entera dentro de la banda -y entonces el relleno de la banda se la lleva-
+ * o esta entera fuera y se sigue pintando. No hay medias celdas.
+ *
+ * Por eso 160/160/40 y no 168/150/26: son los mismos sitios redondeados a
+ * CELL_H.
+ */
+#define TIT_Y       160               /* 8 * CELL_H */
+#define TIT_H       160               /* 8 * CELL_H */
+#define CRED_H       40               /* 2 * CELL_H */
 #define CRED_Y      (GFX2_H - CRED_H)
+
+/* Que las bandas cuadren con la rejilla no es un detalle de estilo: es lo
+ * que hace cierto el razonamiento de arriba. Si alguien las mueve y se sale
+ * de la rejilla, esto no compila en vez de dejar basura en pantalla. */
+_Static_assert((TIT_Y % CELL_H) == 0 && (TIT_H % CELL_H) == 0 &&
+               (CRED_H % CELL_H) == 0,
+               "las bandas del splash tienen que ir en la rejilla de la lluvia");
 
 typedef struct {
     int8_t   cabeza;      /* fila de la cabeza; puede ir negativa al entrar */
@@ -42,10 +72,18 @@ typedef struct {
                            * mas apagados sin tener que guardar la rejilla */
 } col_t;
 
-static col_t   s_col[COLS];
+/*
+ * PRESTADA, NO RESERVADA. Ver splash.h: son 396 bytes y quedaban 196.
+ * A cero se pinta la pantalla fija y no hay lluvia, que es lo que habia
+ * entre el 25 y el 28 de septiembre y funcionaba.
+ */
+static col_t   *s_col;
 static uint32_t s_rnd = 0x1234567u;
 static uint32_t s_prox;        /* ms del siguiente fotograma */
 static uint8_t  s_titulo_hecho;
+static uint8_t  s_fija_hecha;  /* la pantalla sin lluvia se pinta una vez */
+
+uint32_t splash_ram_bytes(void) { return (uint32_t)(sizeof(col_t) * COLS); }
 
 /* Congruencial lineal: no hace falta nada mejor para decidir que katakana
  * cae, y no arrastra rand() de la libreria. */
@@ -77,6 +115,35 @@ static uint16_t glifo_cp(uint8_t k)
         k = (uint8_t)(k - n);
     }
     return font_rain_16.ranges[0].lo;
+}
+
+/* --- el rotulo, con las letras separadas --------------------------------- */
+/*
+ * Se dibuja letra a letra porque la tipografia no tiene espaciado ajustable y
+ * lo que se quiere aqui es justamente eso: separar. A 18 px, "DeepSDR" junto
+ * se lee como una palabra cualquiera, y separado se lee como un rotulo. Es lo
+ * que compensa los 42 px de alto que se perdieron al quitar font_title_60.
+ *
+ * Se mide primero el total para poder centrarlo, que es la unica forma de que
+ * quede centrado de verdad con una tipografia proporcional.
+ */
+static void rotulo(gfx2_surf_t *s, const char *p, int16_t y, int16_t sep,
+                   uint32_t color)
+{
+    int16_t total = 0, x;
+    const char *q;
+
+    for (q = p; *q != '\0'; q++) {
+        char c[2]; c[0] = *q; c[1] = '\0';
+        total = (int16_t)(total + gfx2_text_w(c, &font_ui_18b) + sep);
+    }
+    total = (int16_t)(total - sep);
+
+    x = (int16_t)((GFX2_W - total) / 2);
+    for (q = p; *q != '\0'; q++) {
+        char c[2]; c[0] = *q; c[1] = '\0';
+        x = (int16_t)(x + gfx2_text(s, x, y, c, &font_ui_18b, gfx2_rgb(color)) + sep);
+    }
 }
 
 /* --- dibujo de una celda ------------------------------------------------- */
@@ -130,52 +197,35 @@ static void celda(uint8_t col, int16_t fila, uint16_t cp, uint32_t color)
 /* --- titulo -------------------------------------------------------------- */
 static void pinta_titulo(gfx2_surf_t *s, void *ctx)
 {
-    int16_t w;
     (void)ctx;
 
     if (!gfx2_band_hits(s, TIT_Y, TIT_H)) { return; }
 
     gfx2_fill(s, 0, TIT_Y, GFX2_W, TIT_H, gfx2_rgb(NEGRO));
+    /* Las dos rayas: sin ellas el rotulo flota en medio de un rectangulo
+     * negro y no se lee como una pantalla, se lee como un fallo. */
     gfx2_hline(s, 0, TIT_Y, GFX2_W, gfx2_rgb(PAL_LINE));
     gfx2_hline(s, 0, (int16_t)(TIT_Y + TIT_H - 1), GFX2_W, gfx2_rgb(PAL_LINE));
 
-    /* "DeepSDR" centrado, y debajo "reload" separado con espaciado amplio:
-     * dos pesos distintos leen mejor que la misma palabra dos veces. */
-    w = gfx2_text_w("DeepSDR", &font_title_60);
-    gfx2_text(s, (int16_t)((GFX2_W - w) / 2), (int16_t)(TIT_Y + 16), "DeepSDR",
-              &font_title_60, gfx2_rgb(PAL_SP_TITLE));
-
-    {
-        /* "r e l o a d" letra a letra para poder separarlas: la fuente no
-         * tiene espaciado ajustable y juntas se leen como una palabra mas,
-         * no como un subtitulo. */
-        const char *p = "reload";
-        int16_t sep = 10, total = 0, x;
-        const char *q;
-
-        for (q = p; *q; q++) {
-            char c[2]; c[0] = *q; c[1] = 0;
-            total = (int16_t)(total + gfx2_text_w(c, &font_ui_18b) + sep);
-        }
-        total = (int16_t)(total - sep);
-        x = (int16_t)((GFX2_W - total) / 2);
-        for (q = p; *q; q++) {
-            char c[2]; c[0] = *q; c[1] = 0;
-            x = (int16_t)(x + gfx2_text(s, x, (int16_t)(TIT_Y + 100), c,
-                                        &font_ui_18b, gfx2_rgb(PAL_SP_SUB)) + sep);
-        }
-    }
+    rotulo(s, "DeepSDR", (int16_t)(TIT_Y + 46),  8, PAL_SP_TITLE);
+    rotulo(s, "reload",  (int16_t)(TIT_Y + 106), 10, PAL_SP_SUB);
 }
 
-/* Creditos abajo: esto es firmware de otros con una interfaz nueva encima, y
- * la pantalla de arranque es donde eso se dice. */
+/*
+ * Creditos abajo: esto es firmware de otros con una interfaz nueva encima, y
+ * la pantalla de arranque es donde eso se dice.
+ *
+ * La linea cabe entera y va centrada (font_ui_14, medido en sim/splashtest.c,
+ * no estimado). Si algun dia se le anade algo mas, medirlo antes -
+ * gfx2_text_in() recorta por la derecha sin avisar.
+ */
 static void pinta_creditos(gfx2_surf_t *s, void *ctx)
 {
     (void)ctx;
     if (!gfx2_band_hits(s, CRED_Y, CRED_H)) { return; }
     gfx2_fill(s, 0, CRED_Y, GFX2_W, CRED_H, gfx2_rgb(NEGRO));
-    gfx2_text_in(s, 0, (int16_t)(CRED_Y + 6), GFX2_W,
-                 "sobre el firmware de EA8DGL · UA6YKK · EA7GIB  ·  CC BY-NC-SA",
+    gfx2_text_in(s, 0, (int16_t)(CRED_Y + 13), GFX2_W,
+                 "Kifo (EA4HEW) sobre el firmware de EA8DGL · UA6YKK · EA7GIB  ·  CC BY-NC-SA",
                  &font_ui_14, gfx2_rgb(PAL_SP_DIM), GFX2_ALIGN_C);
 }
 
@@ -186,19 +236,36 @@ static void limpia(gfx2_surf_t *s, void *ctx)
     gfx2_fill(s, 0, 0, GFX2_W, GFX2_H, gfx2_rgb(NEGRO));
 }
 
-void splash_reinicia(void)
+/* La pantalla de siempre, sin lluvia. Es el camino de cuando no hay memoria
+ * prestada, y por eso se pinta con las MISMAS funciones que la animada: dos
+ * dibujos del mismo rotulo es como se consigue que uno se quede atras. */
+static void pinta_fija(gfx2_surf_t *s, void *ctx)
+{
+    gfx2_fill(s, 0, 0, GFX2_W, GFX2_H, gfx2_rgb(NEGRO));
+    pinta_titulo(s, ctx);
+    pinta_creditos(s, ctx);
+}
+
+void splash_reinicia(void *ram, uint32_t bytes)
 {
     uint8_t i, j;
 
     s_rnd = 0x1234567u;
     s_titulo_hecho = 0U;
+    s_fija_hecha = 0U;
     s_prox = 0U;
+
+    /* Menos de lo que hace falta es lo mismo que nada: media tabla de
+     * columnas se sale de ella y escribe donde no debe. Ver splash.h. */
+    s_col = (ram != 0 && bytes >= splash_ram_bytes()) ? (col_t *)ram : 0;
+    if (s_col == 0) { return; }
 
     for (i = 0; i < COLS; i++) {
         /* Cada columna arranca a una altura y a una velocidad distintas: si
          * todas empiezan arriba y a la vez, se ve una cortina bajando, no
-         * lluvia. */
-        /* Arranque escalonado pero CORTO: con cabezas hasta 30 filas por
+         * lluvia.
+         *
+         * Arranque escalonado pero CORTO: con cabezas hasta 30 filas por
          * encima, a medio segundo apenas habia entrado un tercio de las
          * columnas y la pantalla se veia vacia justo cuando mas mira uno. */
         s_col[i].cabeza  = (int8_t)(-(int8_t)(rnd() % 12u));
@@ -215,6 +282,18 @@ uint8_t splash_paso(uint32_t t)
     uint8_t i;
 
     if (t >= T_FIN) { return 0U; }
+
+    /* Sin memoria prestada no hay lluvia: se pinta la pantalla fija UNA vez
+     * y despues solo se cuenta el tiempo. Repintar un rotulo quieto sesenta
+     * veces por segundo seria gastar el bus en dibujar lo mismo. */
+    if (s_col == 0) {
+        if (!s_fija_hecha) {
+            s_fija_hecha = 1U;
+            s_titulo_hecho = 1U;
+            gfx2_render_screen(pinta_fija, 0);
+        }
+        return 1U;
+    }
 
     if (t < s_prox) { return 1U; }
     s_prox = t + PASO_MS;
@@ -240,14 +319,14 @@ uint8_t splash_paso(uint32_t t)
         c->cabeza++;
 
         /* Cinco celdas por paso, y el degradado de la estela sale solo: cada
-         * celda se pinta una vez de cabeza, otra de vivo, otra de medio y
-         * otra de oscuro segun la cabeza se aleja, y ahi se queda hasta que
+         * celda se pinta una vez de cabeza, otra de viva, otra de media y
+         * otra de oscura segun la cabeza se aleja, y ahi se queda hasta que
          * la cola la borra. No hace falta guardar la rejilla entera, solo
          * los ultimos cinco caracteres de cada columna. */
-        celda(i, c->cabeza,                    glifo_cp(c->glifo[0]), VERDE_CABEZA);
-        celda(i, (int16_t)(c->cabeza - 1),     glifo_cp(c->glifo[1]), VERDE_VIVO);
-        celda(i, (int16_t)(c->cabeza - 2),     glifo_cp(c->glifo[2]), VERDE_MEDIO);
-        celda(i, (int16_t)(c->cabeza - 4),     glifo_cp(c->glifo[4]), VERDE_OSCURO);
+        celda(i, c->cabeza,                    glifo_cp(c->glifo[0]), TINTA_CABEZA);
+        celda(i, (int16_t)(c->cabeza - 1),     glifo_cp(c->glifo[1]), TINTA_VIVA);
+        celda(i, (int16_t)(c->cabeza - 2),     glifo_cp(c->glifo[2]), TINTA_MEDIA);
+        celda(i, (int16_t)(c->cabeza - 4),     glifo_cp(c->glifo[4]), TINTA_OSCURA);
         celda(i, (int16_t)(c->cabeza - c->largo), 0u, PAL_SP_BG);
 
         if (c->cabeza - (int16_t)c->largo > ROWS) {
@@ -261,12 +340,16 @@ uint8_t splash_paso(uint32_t t)
     return 1U;
 }
 
-void splash_run(splash_ms_fn ms)
+void splash_run(splash_ms_fn ms, void *ram, uint32_t bytes)
 {
     uint32_t t0 = ms();
 
-    splash_reinicia();
+    splash_reinicia(ram, bytes);
     while (splash_paso(ms() - t0)) {
         /* nada que hacer: el arranque esta parado aqui a proposito */
     }
+    /* Las columnas dejan de existir aqui. Quien presto la memoria la
+     * recupera en cuanto esto vuelve, y el puntero se suelta para que un
+     * splash_paso() despistado no siga escribiendo en memoria de otro. */
+    s_col = 0;
 }

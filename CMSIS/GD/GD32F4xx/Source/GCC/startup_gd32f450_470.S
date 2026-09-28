@@ -52,6 +52,28 @@ LoopFillZerobss:
   cmp  r2, r3
   bcc  FillZerobss
 
+/* Zero fill the .tcmram segment (23/09/2026).
+ *
+ * Esta seccion son los buffers del DSP en la RAM rapida del nucleo, y se
+ * declaran con una macro llamada TCMRAM_BSS. Hasta hoy el arranque no los
+ * tocaba: arrancaban con lo que hubiera en esa RAM al encender. Funcionaba
+ * porque todos se rellenan despues desde el codigo, pero era suerte, no
+ * diseno. Ahora se ponen a cero como cualquier otro bss.
+ *
+ * No se toca la pila: empieza en el tope de la TCM (0x10010000) y crece
+ * hacia abajo, y _etcmram queda 16 kB por debajo. */
+  ldr  r2, =_stcmram
+  b  LoopFillZerotcm
+FillZerotcm:
+  movs  r3, #0
+  str  r3, [r2]
+  adds r2, r2, #4
+
+LoopFillZerotcm:
+  ldr  r3, = _etcmram
+  cmp  r2, r3
+  bcc  FillZerotcm
+
 /* Call the clock system initialization function.*/
   bl  SystemInit   
 /* Call into static constructors (C++) */

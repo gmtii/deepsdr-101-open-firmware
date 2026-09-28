@@ -164,6 +164,92 @@ static const palette_t k_pal_fria = {
     0x2F9E52, 0xC77A14, 0xD94040
 };
 
+/*
+ * ===========================================================================
+ * TRES TEMAS MAS, 23/09/2026 - de una foto de otro firmware que le gusto al
+ * dueno del proyecto.
+ * ===========================================================================
+ * Los dos primeros son temas CLAROS con tinta negra, y eso no es "cambiar
+ * tres numeros". Esta paleta esta disenada al reves de lo que piden: las
+ * superficies ACLARAN segun se elevan y la tinta OSCURECE segun pierde
+ * importancia. En un tema claro las dos rampas se invierten a la vez. Copiar
+ * el fondo de la foto y dejar los otros trece colores como estaban da una
+ * pantalla donde el renglon de ayuda de cada casilla desaparece y los tiles
+ * no se separan del fondo - y eso no lo avisa nadie, se ve en la radio.
+ *
+ * Asi que estos tres NO estan escritos a ojo: los genera
+ * tools/tema_disena.py del simulador. Los colores medidos de la foto entran
+ * como semilla (fondo, barra y boton pulsado) y las dos rampas salen por
+ * regla - "alejate del fondo hasta llegar a 4,5:1 / 3,2:1 de contraste"-,
+ * bisecando, para que el alejamiento sea el MINIMO que cumple y el tono se
+ * conserve.
+ *
+ * LAS MARCAS SI CAMBIAN, y es la diferencia de fondo con los cuatro temas de
+ * arriba. Aquellos comparten el trio teal/ambar/azul porque todos tienen
+ * superficies oscuras. Sobre el oliva ese trio se queda en 1,2 a 1,6 a uno
+ * de contraste: invisible. Sobre un fondo claro de L=0,36 la unica direccion
+ * posible es hacia abajo, asi que las marcas de estos dos temas son oscuras
+ * a la fuerza. Se ELIGEN buscando, no proponiendo: cada marca tiene su arco
+ * de tono (para que el tema siga pareciendo el tema) y dentro de el se
+ * maximiza la peor distancia de color entre pares y contra el fondo,
+ * incluyendo protanopia, deuteranopia y tritanopia.
+ *
+ * QUE VALEN ESOS NUMEROS. Los dE que saca ese script NO son comparables con
+ * los que hay escritos mas arriba: aquellos venian de un validador externo
+ * con otro modelo de simulacion de daltonismo. Es otra regla de medir. Por
+ * eso el criterio usado es RELATIVO - medido con ESA regla, el trio de cada
+ * tema nuevo tiene que quedar por encima del trio que ya lleva la radio-, y
+ * eso se cumple con holgura:
+ *
+ *     Oscura (el de siempre)   peor par  0,0   <- tritanopia, traza/banda
+ *     Oliva                    peor par 18,8
+ *     Naranja                  peor par 16,6
+ *     Fosforo                  peor par  9,8
+ *
+ * El cero del tema de siempre no es un fallo nuevo: palette.h ya lo decia
+ * arriba con otras palabras ("el par traza/VFO queda en dE 6,0 en
+ * tritanopia, banda admisible solo con codificacion secundaria"). La
+ * codificacion secundaria -area rellena, linea con cabeza, rectangulo
+ * translucido- es la que hace el trabajo en ese caso, y sigue ahi.
+ *
+ * Fosforo se queda en 9,8 A PROPOSITO: al optimizador le sale mejor nota
+ * subiendo la traza a un verde claro, pero entonces la traza y el texto son
+ * el mismo color y el tema deja de ser un tema de fosforo. Se le puso tope
+ * de luz a la traza y a la banda de paso, y 9,8 es lo que hay dentro de ese
+ * tope. Sigue siendo mucho mas que el 0,0 que lleva la radio hoy.
+ */
+
+/* Verde oliva con tinta negra. Fondo, barra y pulsado son los de la foto;
+ * lo demas esta calculado. */
+static const palette_t k_pal_oliva = {
+    "Oliva",
+    0x9BAA50, 0x949E4F, 0x8B954B, 0x848E47, 0x798141, 0x95A34D, 0x98A550,
+    0x000000, 0x282A15, 0x3E4321,
+    0x095E49, 0xA31010, 0x4E18F0,
+    0x1C5E43, 0x664F0A, 0x4F0808
+};
+
+/* Naranja fuerte con tinta negra. El mas duro de los tres para las marcas:
+ * con el fondo en L=0,32 no hay sitio hacia arriba, asi que las tres marcas
+ * son oscuras y el margen que queda es el mas justo de los dos claros. */
+static const palette_t k_pal_naranja = {
+    "Naranja",
+    0xFF6C25, 0xF06422, 0xE2601F, 0xD75C1D, 0xCB561B, 0xF76924, 0xF96924,
+    0x000000, 0x3A1808, 0x62290D,
+    0x214E6E, 0x300530, 0x1313C2,
+    0x104F15, 0x301E05, 0x940F30
+};
+
+/* Fosforo: casi negro con tinta verde, como un terminal. Aqui la rampa va
+ * en el sentido de siempre; lo que cambia es que todo el mundo es verde. */
+static const palette_t k_pal_fosforo = {
+    "Fósforo",
+    0x081810, 0x091F14, 0x0A2618, 0x05452A, 0x0C3320, 0x0B2F1E, 0x081C12,
+    0x27FF9B, 0x1A9D60, 0x167F4D,
+    0x388C70, 0xFFD91A, 0x1168A6,
+    0x1AFF9F, 0xFFE41A, 0xC91432
+};
+
 /* La paleta activa. Cambiarla y repintar es todo lo que hace falta. */
 extern const palette_t *g_pal;
 

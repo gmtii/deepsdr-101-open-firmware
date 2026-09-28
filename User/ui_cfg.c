@@ -22,7 +22,7 @@ static int16_t cel_y(uint8_t i) { return (int16_t)(UIC_GRID_Y + (i / cel_cols())
 
 /* Las categorias se reparten el alto disponible: con tres salen mas altas que
  * con cuatro, en vez de dejar un hueco abajo. */
-static int16_t cat_h(void) { return (int16_t)((UIG_H - 12 - (s_cats - 1) * UIC_CAT_GAP) / s_cats); }
+static int16_t cat_h(void) { return (int16_t)UIC_CAT_H_DE(s_cats); }
 static int16_t cat_y(uint8_t i) { return (int16_t)(UIC_CAT_Y + i * (cat_h() + UIC_CAT_GAP)); }
 
 int8_t ui_cfg_hit(uint16_t x, uint16_t y)

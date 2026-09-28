@@ -31,6 +31,21 @@ int8_t ui_det_hit(uint16_t x, uint16_t y)
         if ((int16_t)x >= UID_BTN_X1 - 10)           { return UID_HIT_MAS; }
         return UID_HIT_NONE;   /* el numero */
     }
+    /* La fila de ajustes rapidos, entre los botones grandes y el pie. Se
+     * mira ANTES que el pie porque su franja acaba justo donde empieza la
+     * del pie, y solo responde si de verdad hay botones - ver el
+     * comentario de UID_PRE_N en ui_det.h. */
+    if (y >= UID_PRE_Y - 4 && y < UID_PIE_Y - 8) {
+        int16_t rx = (int16_t)x - UID_PRE_X0;
+        int16_t paso = UID_PRE_W + UID_PRE_GAP;
+        if (rx >= 0) {
+            int16_t i = (int16_t)(rx / paso);
+            if (i < UID_PRE_N && (rx - i * paso) < UID_PRE_W) {
+                return (int8_t)(UID_HIT_PRE0 + i);
+            }
+        }
+        return UID_HIT_NONE;
+    }
     if (y >= UID_PIE_Y - 8 && y < UIG_Y + UIG_H) {
         /* El pie tiene uno o dos botones segun haya "LO / HI". Se decide por
          * la mitad de la pantalla, que es donde esta el reparto cuando son
@@ -118,6 +133,18 @@ static void draw_all(gfx2_surf_t *s, void *ctx)
     }
 
     valor(s, st);
+
+    if (st->preset[0] != 0) {
+        uint8_t i;
+        for (i = 0U; i < (uint8_t)UID_PRE_N; i++) {
+            if (st->preset[i] == 0) { continue; }
+            boton(s, (int16_t)(UID_PRE_X0 + i * (UID_PRE_W + UID_PRE_GAP)),
+                  UID_PRE_Y, UID_PRE_W, UID_PRE_H, 8,
+                  st->preset[i], &font_ui_18b,
+                  (uint8_t)(st->pressed == (int8_t)(UID_HIT_PRE0 + i)),
+                  (uint8_t)(st->preset_on == (int8_t)i));
+        }
+    }
 
     if (st->alt) {
         boton(s, pie_x(0U, n), UID_PIE_Y, pie_w(n), UID_PIE_H, 7, st->alt,

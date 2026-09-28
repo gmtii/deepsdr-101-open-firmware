@@ -1,4 +1,5 @@
 #include "sdr_rx.h"
+#include "irq_prio.h"
 #include "gd32f4xx.h"
 #include "debug_uart.h"
 
@@ -117,7 +118,12 @@ static void sdr_rx_arm_dma(void)
      * ISR-model comment at the top of this file). NVIC preemption
      * priority 6: below nothing critical, above the main loop. */
     dma_interrupt_enable(DMA0, DMA_CH3, DMA_CHXCTL_HTFIE | DMA_CHXCTL_FTFIE);
-    nvic_irq_enable(DMA0_Channel3_IRQn, 6U, 0U);
+    /* Prioridad 1: por debajo del reloj y por encima del tactil. El numero
+     * sale de irq_prio.h, que es donde esta escrito el plan entero y por que.
+     * Antes ponia 6, que con el reparto que habia -dos bits, establecido en
+     * silencio por la propia biblioteca- ni siquiera cabia: se desbordaba y
+     * acababa siendo el mismo valor que el tactil. */
+    nvic_irq_enable(DMA0_Channel3_IRQn, IRQ_PRIO_AUDIO, IRQ_SUB_NINGUNA);
     dma_channel_enable(DMA0, DMA_CH3);
 
     /* Enable the DMA receive request on SPI1 itself - without

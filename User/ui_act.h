@@ -36,6 +36,19 @@
 
 #define UI_ACT_Y      427      /* el waterfall acaba en 419: 7 px de aire */
 #define UI_ACT_H       50      /* 427..476, y 3 px de margen hasta 480       */
+/*
+ * SEIS casillas, y siguen siendo seis - 23/09/2026.
+ *
+ * "Func" (enganchar el mando a un ajuste) iba a ser una septima. Se midio y
+ * cabia: 7 de 106 px con el rotulo mas ancho en 67. Pero el dueno del
+ * proyecto propuso algo mejor: subir "Bandas" a la cabecera como una pastilla
+ * que ADEMAS dice en que banda estas -que es un dato que antes no se veia en
+ * ningun sitio- y dejar su hueco de abajo para Func.
+ *
+ * O sea que la barra no cambia de geometria y la pantalla gana informacion en
+ * vez de perder sitio. Se queda escrito aqui porque la cuenta de las siete
+ * casillas ya estaba hecha, por si algun dia hace falta.
+ */
 #define UI_ACT_N        6
 #define UI_ACT_MARGIN   2      /* a cada lado de la pantalla                 */
 #define UI_ACT_GAP      8      /* entre botones                              */

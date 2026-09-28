@@ -27,7 +27,7 @@
  *
  *   0a. DOWN-MIX: digitally shift the raw IQ by DEMOD_IF_OFFSET_HZ
  *      (see the LOW-IF TUNING note below for why), only while
- *      s_if_offset_active is set. Skip this entirely and everything
+ *      s_mix_hz no es cero. Skip this entirely and everything
  *      downstream is unchanged from before.
  *   0b. CHANNEL FILTER: a 4th-order Butterworth low-pass (2 cascaded
  *      CMSIS biquad DF1 stages), applied IDENTICALLY to I and Q via
@@ -111,7 +111,7 @@
  *   project owner as known-working elsewhere): at exactly Fs/4 the
  *   rotation e^(+j*2*pi*n/4) cycles through 1, j, -1, -j, so it needs
  *   NO multiplications at all - just sign flips and an I/Q swap. See
- *   the block comment above s_if_offset_active in demod_am.c for the
+ *   the block comment above s_mix_hz in demod_am.c for the
  *   exact per-sample mapping.
  *
  * Mechanics (same for either offset value): the LO is tuned
@@ -122,7 +122,7 @@
  * digitally mixes the block back so the wanted signal lands on DC -
  * right where CHF_COEFFS already expects it, no filter redesign
  * needed - moving the leakage artifact safely outside the channel
- * filter's ~+/-4kHz passband. s_if_offset_active (see demod_am.c)
+ * filter's ~+/-4kHz passband. s_mix_hz (see demod_am.c)
  * keeps the digital down-mix in sync with whatever's actually
  * programmed on the LO: it starts at 0 (the boot tune is still the
  * untouched byte-exact captured replay, no offset - see main.c) and
@@ -281,7 +281,7 @@ typedef enum {
  * the MODE button handler both need to know this: whenever the mode
  * is WFM, they must program the LO at the plain selected frequency
  * (not freq - DEMOD_IF_OFFSET_HZ) and call
- * demod_am_set_if_offset_active(0) - getting that out of sync would
+ * demod_am_set_mix_hz(0) - getting that out of sync would
  * center the discriminator on empty spectrum 12kHz off the actual
  * station. This board's tuning range (4.8-180MHz, see main.c's
  * TUNE_MIN_HZ/MAX_HZ) already covers the 88-108MHz broadcast band -
@@ -415,6 +415,42 @@ typedef enum {
 } audio_bw_t;
 
 void demod_am_set_audio_bw(audio_bw_t bw);
+
+/*
+ * EL FILTRO DE DOS CORTES - etapa 34, 24/09/2026.
+ *
+ * Sustituye a los tres anchos fijos de audio_bw_t de arriba, que eran paso
+ * bajo y nada mas. Ahora hay un corte por abajo y otro por arriba, cada
+ * uno por su lado, y CADA FAMILIA DE MODO RECUERDA LOS SUYOS: el filtro
+ * que quieres en banda lateral no es el que quieres en AM, y tener que
+ * reajustarlo al cambiar de modo convierte un ajuste fino en una
+ * molestia.
+ *
+ * CW no esta en la lista a proposito: tiene su propio paso banda, que se
+ * mueve con el tono (demod_am_set_cw_filter_hz) y manda sobre esto.
+ * WFM tampoco: su audio va por otro camino entero, a 192 kHz, con sus
+ * propios WFM_ALPF_*.
+ *
+ * El diseño del filtro vive en audiofil.c, que no depende de nada del
+ * GD32 para poder medirlo en el simulador - ver su cabecera.
+ */
+typedef enum {
+    FIL_FAM_SSB = 0,   /* USB, LSB y todo lo que cuelga de ellos */
+    FIL_FAM_AM,
+    FIL_FAM_SAM,
+    FIL_FAM_NFM,
+    FIL_FAM_N
+} fil_fam_t;
+
+/* La familia del modo que hay puesto ahora mismo. */
+uint8_t demod_am_filtro_familia(void);
+
+/* Los cortes de una familia, en Hz. `lo` a 0 quiere decir "sin paso
+ * alto". Se recortan a lo posible (ver audiofil.h), y lo que queda
+ * guardado es lo RECORTADO, no lo pedido - asi lo que enseña la pantalla
+ * es lo que suena. */
+void demod_am_set_filtro(uint8_t fam, uint16_t lo, uint16_t hi);
+void demod_am_get_filtro(uint8_t fam, uint16_t *lo, uint16_t *hi);
 audio_bw_t demod_am_get_audio_bw(void);
 
 /*
@@ -437,6 +473,12 @@ float demod_am_get_cw_filter_hz(void);
  */
 void  demod_am_set_cw_bw_hz(float bw_hz);
 float demod_am_get_cw_bw_hz(void);
+
+/* La tasa a la que corre ahora mismo el camino de AM/SSB/NFM: 48 o 96 kHz
+ * segun el ajuste de tasa. La necesita el decodificador de APRS, que se
+ * engancha al discriminador de FM y por tanto trabaja a ESTA tasa y no a los
+ * 12 kHz del camino de banda lateral. */
+float demod_am_get_active_fs_hz(void);
 
 /*
  * WFM pre-discriminator channel filter width - added 01/09/2026, per
@@ -716,22 +758,52 @@ uint8_t demod_am_get_and_clear_rf_clip_flag(void);
  * filter/AGC state. Call once before registering the block hook. */
 void demod_am_init(void);
 
-/* Enable/disable the low-IF down-mix (see the LOW-IF TUNING note
- * above). MUST stay in sync with whatever's actually programmed on
- * the LO: active=1 only once the LO is genuinely tuned
- * DEMOD_IF_OFFSET_HZ below the selected station, active=0 whenever
- * it's tuned exactly on it (e.g. the captured-bytes boot tune, which
- * carries no offset). Starts at 0 (matches demod_am_init() being
- * called before the first tune). Mismatching this with the real LO
- * shifts the wanted signal OUT of the channel filter's passband
- * instead of into it. */
-void demod_am_set_if_offset_active(uint8_t active);
+/*
+ * ============================================================================
+ * EL DESPLAZAMIENTO DIGITAL, EN HERCIOS - 23/09/2026 (etapa del NCO)
+ * ============================================================================
+ * ESTO ERA UN SI/NO. Habia un demod_am_set_if_offset_active(uint8_t) porque
+ * solo existia un desplazamiento posible, Fs/4, y lo unico que quedaba por
+ * decir era si estaba puesto o no. Al llegar el NCO de sintonia -el
+ * oscilador se queda aparcado y lo que se mueve es el punto de demodulacion-
+ * el desplazamiento pasa a ser una distancia cualquiera, asi que el si/no ya
+ * no alcanza.
+ *
+ * Y NO se ha anadido un segundo ajuste al lado del primero, que era lo
+ * facil. Dos variables que tienen que estar de acuerdo -"activo" y "cuantos
+ * hercios"- son exactamente el fallo que en este proyecto ya ha mordido seis
+ * veces: se ponen de acuerdo hasta el dia que no, y no hay error de
+ * compilacion que avise. Aqui hay UN dato:
+ *
+ *     0     no hay desplazamiento (WFM, o el arranque con los bytes
+ *           capturados, que no lleva ninguno)
+ *     != 0  los hercios que hay que desplazar, con su signo
+ *
+ * Todo lo demas se deduce de el, incluido el "esta activo" que main.c
+ * necesita para saber donde cae el punto de demodulacion en el panadaptador.
+ *
+ * TIENE QUE SEGUIR AL OSCILADOR DE VERDAD. La regla no cambia: esto vale
+ * exactamente (frecuencia sintonizada - oscilador local programado).
+ * Desajustarlo saca la señal FUERA del filtro de canal en vez de meterla
+ * dentro, que es lo mismo que pasaba antes, solo que ahora se puede
+ * desajustar de infinitas maneras en vez de dos. Por eso lo pone un solo
+ * sitio: apply_lo_tune() de main.c, que es tambien quien programa el
+ * oscilador, en la misma funcion y sin nada en medio.
+ *
+ * COMO SE APLICA. Si los hercios son EXACTAMENTE Fs/4 se usa el camino de
+ * siempre -la rotacion 1, -j, -1, +j, sin una sola multiplicacion-, asi que
+ * el modo normal de la radio cuesta hoy lo mismo que costaba ayer. Para
+ * cualquier otro valor entra el NCO de User/nco.c. Que los dos caminos dan
+ * lo mismo a Fs/4 no es una suposicion: lo comprueba sim/ncotest.c muestra a
+ * muestra.
+ */
+void demod_am_set_mix_hz(float hz);
 
-/* Query the current state set by demod_am_set_if_offset_active() -
- * used by main.c to know how far off-center the actually-demodulated
- * signal sits on the panadapter (see spectrum_draw()'s
- * center_mark_offset_px parameter). */
-uint8_t demod_am_get_if_offset_active(void);
+/* Los hercios que hay puestos. main.c lo usa para saber a que distancia del
+ * centro del panadaptador cae la señal que se esta demodulando de verdad
+ * (ver el parametro center_mark_offset_px de spectrum_draw()), y para
+ * recentrar el zoom antes de diezmar. */
+float demod_am_get_mix_hz(void);
 
 /*
  * demod_am_set_active_rate() - added 01/09/2026, per the project
@@ -760,6 +832,14 @@ uint8_t demod_am_get_if_offset_active(void);
  */
 void demod_am_set_active_rate(uint8_t is_48k);
 uint8_t demod_am_get_active_rate_is_48k(void);
+
+/*
+ * Conmuta el filtro de canal de NFM entre sus coeficientes de siempre y los
+ * anchos de AIS. Lo llama main.c al entrar y salir del modo AIS; ver el
+ * comentario de AIS_CHF_96K_COEFFS en demod_am.c para por que hace falta un
+ * filtro mas ancho y por que comparten instancia.
+ */
+void demod_am_ais_chf(uint8_t si);
 
 /* Process one raw RX half: SDR_RX_BLOCK_SAMPLES interleaved L/R (I/Q)
  * frames, demodulate, and push the resulting audio block into the

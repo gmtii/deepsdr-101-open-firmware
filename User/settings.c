@@ -19,6 +19,31 @@ extern volatile uint32_t g_msticks; /* same free-running ms counter touch.c/touc
 #define SETTINGS_SAVE_DEBOUNCE_MS 3000UL
 
 static uint8_t s_dirty = 0U;
+
+/* ---------------------------------------------------------------------
+ * CONTADORES DE GUARDADO. 25/09/2026.
+ * ---------------------------------------------------------------------
+ * El dueno reporta que los ajustes no se le guardan entre arranques. Se
+ * reviso todo el camino leyendo -el volumen se puede escribir, el aviso de
+ * "hay que guardar" llega, el buffer da de sobra, lo leido se aplica al
+ * arrancar- y sobre el papel deberia funcionar. Ya ha pasado hoy dos veces
+ * que lo que se lee y lo que hace la radio no coinciden, y las dos veces
+ * mandaba la radio.
+ *
+ * Asi que esto deja de ser una deduccion: los contadores salen en la
+ * ventana de informacion. Si marcan cero guardados, el que no corre es el
+ * guardado; si marcan guardados y aun asi se pierde, el fallo esta en la
+ * lectura del arranque. Un numero y se acabo la discusion. */
+static uint16_t s_guardados;   /* terminados bien */
+static uint16_t s_fallos;      /* intentados y fallidos */
+static uint32_t s_ult_ms;      /* g_msticks del ultimo que salio bien */
+
+void settings_cuentas(uint16_t *ok, uint16_t *mal, uint32_t *ultimo_ms)
+{
+    if (ok)        { *ok = s_guardados; }
+    if (mal)       { *mal = s_fallos; }
+    if (ultimo_ms) { *ultimo_ms = s_ult_ms; }
+}
 static uint32_t s_dirty_since_ms = 0U;
 
 /* Buffer for the CSV being saved via the async path - must stay
@@ -27,7 +52,15 @@ static uint32_t s_dirty_since_ms = 0U;
  * spi_flash_async_save_start() only references it, doesn't copy it -
  * see spi_flash.h's comment. A stack-local buffer would be gone the
  * instant settings_poll() returns, so this has to be static. */
-static uint8_t s_async_csv_buf[512]; /* 01/09/2026: bumped from 256 to 384 - see settings_load()'s own buffer comment for the worst-case math that made 256 too tight once nonwfm_use_48k was added. 07/09/2026: bumped again to 512 for the same reason, now that pga_gain_db_x2/spectrum_smooth_pct/speaker_enabled/backlight_pct/spectrum_style add roughly another 100 bytes worst-case. */
+/* 23/09/2026: 1024. Y ya no se discute en un comentario: el tamano lo mide
+ * tools/csvlen_check.py del simulador a partir de ESTE fichero, y ese banco
+ * ya ha ganado su sitio: el 23/09/2026, al anadir el noise blanker, dejo el
+ * peor caso en 1021 bytes contra un buffer de 1024 -TRES bytes de holgura,
+ * o sea que el siguiente ajuste habria truncado el fichero en silencio-. De
+ * ahi 1536. Y build_csv() avisa por UART si
+ * alguna vez trunca. Las tres subidas anteriores (256 -> 384 -> 512) fueron
+ * cuentas a ojo, y las tres se quedaron cortas a la siguiente clave. */
+static uint8_t s_async_csv_buf[1600];
 static uint8_t s_async_save_in_progress = 0U;
 
 /* --- manual CSV building/parsing - no sprintf/strtol, same policy as
@@ -116,12 +149,76 @@ static const char *spectrum_palette_to_str(spectrum_palette_t palette)
 
 /* Returns the byte length written (does NOT null-terminate - this is
  * flash file content, not a C string). */
+/*
+ * LA TABLA. Ver settings.h (settings_extra_id_t) para por que estos van por
+ * indice y no con un parametro y una rama cada uno.
+ *
+ * El orden es EL DEL ENUM, y eso es todo lo que hay que respetar: el
+ * _Static_assert de abajo caza que sobren o falten filas, y
+ * tools/persist_check.py caza que el orden no se haya cruzado.
+ *
+ * Las claves nuevas no colisionan con ninguna de las de arriba, y key_is()
+ * compara la clave ENTERA (no un prefijo), asi que anadir una no puede
+ * robarle las lineas a otra.
+ */
+static const char *const k_extra_claves[] = {
+    "agc_profile",      /* SET_X_AGC        */
+    "squelch_db",       /* SET_X_SQL        */
+    "nr_strength",      /* SET_X_NR         */
+    "nb_level",         /* SET_X_NB         */
+    "rf_agc_on",        /* SET_X_RFAGC      */
+    "spec_db_min",      /* SET_X_ESCALA_LO  */
+    "spec_db_max",      /* SET_X_ESCALA_HI  */
+    "spec_autoscale",   /* SET_X_AUTOESC    */
+    "spec_zoom",        /* SET_X_ZOOM       */
+    "spec_contour",     /* SET_X_CONTORNO   */
+    "touch_firmeza",    /* SET_X_TACTIL     */
+    "wfm_ifbw",         /* SET_X_IFBW       */
+    "rtty_shift_hz",    /* SET_X_RTTY_SHIFT */
+    "rtty_baud_idx",    /* SET_X_RTTY_BAUD  */
+    "rtty_inverted",    /* SET_X_RTTY_INV   */
+    "cw_tone_hz",       /* SET_X_CW_TONO    */
+    "cw_wpm_idx",       /* SET_X_CW_WPM     */
+    "cw_autotune",      /* SET_X_CW_AUTO    */
+    "wf_speed",         /* SET_X_WFVEL      */
+    "audio_analyzer",   /* SET_X_ANALIZ     */
+    "nco",              /* SET_X_NCO        */
+    "rds",              /* SET_X_RDS        */
+    "spec_bridge",      /* SET_X_PUENTE     */
+    "wefax_lpm_idx",    /* SET_X_WFX_LPM    */
+    "auto_notch",       /* SET_X_NOTCH      */
+    /* Los dos cortes del filtro, uno por familia de modo. Van empaquetados
+     * como lo*10000+hi en vez de en ocho claves: asi CONFIG.CSV sigue
+     * teniendo una linea por ajuste y se lee de un vistazo -"300 2700" se
+     * ve dentro de 3002700-, que es lo que se pierde al partirlo. */
+    "filtro_ssb",       /* SET_X_FIL_SSB    */
+    "filtro_am",        /* SET_X_FIL_AM     */
+    "filtro_sam",       /* SET_X_FIL_SAM    */
+    "filtro_nfm",       /* SET_X_FIL_NFM    */
+    "sstv_guardar",     /* SET_X_SSTV_GUARDA */
+    "wefax_guardar"     /* SET_X_WFX_GUARDA  */
+};
+_Static_assert(sizeof(k_extra_claves) / sizeof(k_extra_claves[0]) == (size_t)SET_X_N,
+               "k_extra_claves[] y settings_extra_id_t se han desincronizado");
+_Static_assert((int)SET_X_N <= 64, "settings_extra_t.presentes es un uint64_t: caben 64 claves");
+
+/*
+ * Lo que mide CONFIG.CSV, siempre. Tres bloques de 512 justos. El contenido
+ * de verdad anda por los 700 bytes; el resto son lineas en blanco. Ver el
+ * relleno al final de build_csv() para por que es fijo.
+ *
+ * tools/csvlen_check.py comprueba en cada compilacion que el peor caso de
+ * todas las claves sigue cabiendo aqui.
+ */
+#define CSV_TAMANO 1536U
+
 static uint32_t build_csv(uint8_t *buf, uint32_t buf_size,
                            const touch_calibration_t *cal, uint32_t vfo_hz, demod_mode_t mode,
                            uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2,
                            uint8_t nonwfm_use_48k, int16_t pga_gain_db_x2,
                            uint8_t spectrum_smooth_pct, uint8_t speaker_enabled,
-                           uint8_t att_rin_level, uint8_t tema_idx)
+                           uint8_t att_rin_level, uint8_t tema_idx,
+                           const settings_extra_t *extra)
 {
     uint32_t p = 0U;
 
@@ -204,6 +301,49 @@ static uint32_t build_csv(uint8_t *buf, uint32_t buf_size,
      * que un CONFIG.CSV escrito por una version con mas temas no rompe
      * nada, solo cae en el primero. */
     p = append_str(buf, p, buf_size, "tema_idx,"); p = append_u32(buf, p, buf_size, tema_idx); p = append_str(buf, p, buf_size, "\n");
+
+    /* Y los de tabla (23/09/2026), en un bucle. Diecisiete ajustes en cinco
+     * lineas: esa es toda la gracia de la tabla. */
+    if (extra != 0) {
+        uint32_t k;
+        for (k = 0U; k < (uint32_t)SET_X_N; k++) {
+            p = append_str(buf, p, buf_size, k_extra_claves[k]);
+            p = append_str(buf, p, buf_size, ",");
+            p = append_i32(buf, p, buf_size, extra->v[k]);
+            p = append_str(buf, p, buf_size, "\n");
+        }
+    }
+
+    /*
+     * RELLENO HASTA UN TAMAÑO FIJO. 23/09/2026.
+     *
+     * El guardado rapido (spi_flash_async_save_start) solo vale si el
+     * fichero sigue ocupando los MISMOS bloques de 512 bytes que ya tenia.
+     * Como el tamaño depende de lo que valgan los ajustes -"0" ocupa un
+     * caracter y "-120" cuatro-, el fichero crecia y encogia solo, y bastaba
+     * con que un dia cruzara un multiplo de 512 para que algunos guardados
+     * se fueran por el camino lento, que bloquea el bucle principal y se
+     * nota como un tiron dibujando el espectro.
+     *
+     * Se arregla de raiz: el fichero mide SIEMPRE CSV_TAMANO. Se rellena con
+     * lineas en blanco, que el lector ya se salta -no llevan coma, y ahi hay
+     * un `continue`-. Asi la condicion del guardado rapido es cierta por
+     * construccion y deja de depender de cuantos ajustes haya, en vez de ser
+     * algo que hay que volver a comprobar cada vez que se añade uno.
+     */
+    while (p < CSV_TAMANO && p < buf_size - 1U) {
+        buf[p++] = (uint8_t)'\n';
+    }
+
+    /* Aviso de truncado. append_*() respetan buf_size y cortan en vez de
+     * pisar memoria, pero un CONFIG.CSV al que le faltan las ultimas lineas
+     * es perdida de datos silenciosa: el buffer se ha subido a mano tres
+     * veces con cuentas hechas a ojo en el comentario, y a la cuarta lo que
+     * hay es esto, que lo dice en voz alta. El banco sim/csvlen del
+     * simulador mide el peor caso de verdad. */
+    if (p >= buf_size - 1U) {
+        debug_print("settings: *** CONFIG.CSV TRUNCADO - el buffer se ha quedado corto ***\n");
+    }
     return p;
 }
 
@@ -264,7 +404,8 @@ static uint8_t key_is(const uint8_t *key, uint32_t key_len, const char *literal)
 
 uint8_t settings_load(settings_loaded_t *out)
 {
-    uint8_t buf[512]; /* 01/09/2026: bumped from 256 to 384 - the REALISTIC worst case (every touch corner at 4095, vfo_hz at TUNE_MAX_HZ=180000000, tune_step_hz at 1000000, ms5351_xtal_hz near 26000000, mode="USB"/"WFM", audio_bw="1K8", volume_db_x2 negative) came out to 246 bytes even BEFORE nonwfm_use_48k existed - only 10 bytes of headroom, and adding that one new short line ("nonwfm_use_48k,1\n", 18 bytes) already pushed it OVER 256. append_str()/append_u32()/append_i32() all respect buf_size and would have silently truncated rather than corrupted memory, but a truncated CONFIG.CSV losing its last field(s) is still a real, if rare, data-loss bug worth avoiding outright rather than accepting - 384 gives comfortable headroom for this field and future ones. 07/09/2026: bumped again to 512 - pga_gain_db_x2/spectrum_smooth_pct/speaker_enabled/backlight_pct/spectrum_style ("spectrum_style,HEATMAP\n" alone is 23 bytes) add roughly another 100 bytes worst-case, and 384 no longer leaves the same comfortable margin. */
+    /* Ver s_async_csv_buf, arriba, para por que 1024 y no una cuenta a ojo. */
+    uint8_t buf[1600];
     uint32_t n;
     uint32_t pos = 0U;
     uint8_t got_any = 0U;
@@ -449,6 +590,20 @@ uint8_t settings_load(settings_loaded_t *out)
                 out->have_audio_bw = 1U;
                 got_any = 1U;
             }
+            else {
+                /* Los de tabla (23/09/2026): un bucle en vez de diecisiete
+                 * ramas. Va EL ULTIMO, detras de todas las claves con nombre
+                 * propio, asi que no puede robarle una linea a ninguna. */
+                uint32_t k;
+                for (k = 0U; k < (uint32_t)SET_X_N; k++) {
+                    if (key_is(key, key_len, k_extra_claves[k])) {
+                        out->extra.v[k] = manual_atoi32(val, val_len);
+                        out->extra.presentes |= ((uint64_t)1U << k);
+                        got_any = 1U;
+                        break;
+                    }
+                }
+            }
             /* any other unrecognized key: silently ignored - see settings.h's forward-compatibility comment */
         }
     }
@@ -471,26 +626,30 @@ void settings_mark_dirty(void)
 }
 
 void settings_save_now(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k,
-                        int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled, uint8_t att_rin_level, uint8_t tema_idx)
+                        int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled, uint8_t att_rin_level, uint8_t tema_idx,
+                        const settings_extra_t *extra)
 {
     touch_calibration_t cal;
-    uint8_t csv[512]; /* see settings_load()'s buffer comment for why 256, then 384, stopped being safe */
+    uint8_t csv[1600]; /* ver s_async_csv_buf */
     uint32_t len;
 
     touch_get_calibration(&cal);
     len = build_csv(csv, sizeof(csv), &cal, vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2, nonwfm_use_48k,
-                     pga_gain_db_x2, spectrum_smooth_pct, speaker_enabled, att_rin_level, tema_idx);
+                     pga_gain_db_x2, spectrum_smooth_pct, speaker_enabled, att_rin_level, tema_idx, extra);
 
     if (spi_flash_write_or_update_file(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3, csv, len)) {
         debug_print("settings_save_now: CONFIG.CSV saved\n");
+        s_guardados++; s_ult_ms = g_msticks;
     } else {
         debug_print("settings_save_now: *** CONFIG.CSV save FAILED - see spi_flash error above ***\n");
+        s_fallos++;
     }
     s_dirty = 0U;
 }
 
 void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k,
-                    int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled, uint8_t att_rin_level, uint8_t tema_idx)
+                    int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled, uint8_t att_rin_level, uint8_t tema_idx,
+                    const settings_extra_t *extra)
 {
     if (s_async_save_in_progress) {
         spi_flash_async_status_t st = spi_flash_async_save_poll();
@@ -498,9 +657,11 @@ void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, au
         if (st == SPI_FLASH_ASYNC_DONE) {
             debug_print("settings_poll: async CONFIG.CSV save done\n");
             s_async_save_in_progress = 0U;
+            s_guardados++; s_ult_ms = g_msticks;
         } else if (st == SPI_FLASH_ASYNC_ERROR) {
             debug_print("settings_poll: *** async CONFIG.CSV save FAILED - see spi_flash error above ***\n");
             s_async_save_in_progress = 0U;
+            s_fallos++;
         }
         /* SPI_FLASH_ASYNC_BUSY: nothing else to do this tick - don't
          * re-check dirty/debounce or start a second save while one is
@@ -536,7 +697,7 @@ void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, au
 
         touch_get_calibration(&cal);
         len = build_csv(s_async_csv_buf, sizeof(s_async_csv_buf), &cal, vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2, nonwfm_use_48k,
-                         pga_gain_db_x2, spectrum_smooth_pct, speaker_enabled, att_rin_level, tema_idx);
+                         pga_gain_db_x2, spectrum_smooth_pct, speaker_enabled, att_rin_level, tema_idx, extra);
 
         if (spi_flash_async_save_start(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3, s_async_csv_buf, len)) {
             s_async_save_in_progress = 1U;
@@ -544,7 +705,7 @@ void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, au
         } else {
             debug_print("settings_poll: async fast path unavailable (first save?) - falling back to a blocking save\n");
             settings_save_now(vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2, nonwfm_use_48k,
-                               pga_gain_db_x2, spectrum_smooth_pct, speaker_enabled, att_rin_level, tema_idx);
+                               pga_gain_db_x2, spectrum_smooth_pct, speaker_enabled, att_rin_level, tema_idx, extra);
         }
     }
 }

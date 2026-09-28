@@ -136,6 +136,21 @@ void spectrum_set_heatmap_trace_white(uint8_t white);
 uint8_t spectrum_get_heatmap_trace_white(void);
 
 /*
+ * EL PUENTE DE LA TRAZA, ahora conmutable - etapa 30, 24/09/2026.
+ *
+ * Lo que hace el puente esta explicado en spectrum_draw(), paso 1.6: donde
+ * dos columnas vecinas tienen alturas muy distintas, sus pixeles de traza no
+ * comparten fila y el borde de arriba se lee como puntos sueltos en vez de
+ * como una linea. El puente los une con un escalon, igual que una grafica de
+ * linea.
+ *
+ * Por defecto va ENCENDIDO, que es como ha estado desde que se escribio.
+ * Apagarlo devuelve los puntos sueltos.
+ */
+void    spectrum_set_bridge(uint8_t on);
+uint8_t spectrum_get_bridge(void);
+
+/*
  * Color palette for the shared dB->RGB565 colormap (spectrum_colormap()
  * below) - added 08/09/2026, per the project owner ("un tile para
  * cambiar las paletas... irnos a otras combinaciones de colores").
@@ -168,7 +183,8 @@ typedef enum {
     SPECTRUM_PALETTE_SMOKE         = 11, /* white -> grays -> black, i.e. an INVERTED grayscale (exact, Yaroslav Andrianov) */
     SPECTRUM_PALETTE_TEMPER_COLORS = 12, /* black -> indigo -> violet -> slate blue -> dusty rose -> plum (exact, Yaroslav Andrianov) */
     SPECTRUM_PALETTE_VIVID         = 13, /* black -> purple -> viridis-like band -> yellow -> orange -> red (exact, Yaroslav Andrianov) */
-    SPECTRUM_PALETTE_WEBSDR        = 14  /* black -> navy -> magenta -> pale yellow -> white (exact, Ryzerth) */
+    SPECTRUM_PALETTE_WEBSDR        = 14, /* black -> navy -> magenta -> pale yellow -> white (exact, Ryzerth) */
+    SPECTRUM_PALETTE_PHOSPHOR      = 15  /* negro -> verde apagado -> verde brillante -> blanco verdoso (propia, para el tema Fósforo - ver spectrum.c) */
 } spectrum_palette_t;
 
 /*

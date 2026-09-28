@@ -26,8 +26,26 @@
 
 #define UIC_SIDE_X     6
 #define UIC_SIDE_W   164
-#define UIC_CATS       4
-#define UIC_CAT_H     70
+/* Cinco desde el 23/09/2026: Pantalla se partio en "Pantalla" (como se ve)
+ * y "Espectro" (que se mide). No hace falta tocar ninguna medida: cat_h()
+ * reparte el alto entre las categorias que haya, y el banco de sim/config.c
+ * comprueba que el boton sigue siendo mas alto que el minimo para un dedo. */
+#define UIC_CATS       5
+/*
+ * El alto de un boton de categoria. NO es fijo: las categorias se reparten
+ * el alto disponible, asi que con cuatro salen de 70 px y con cinco de 54.
+ *
+ * La formula vive AQUI y no dentro de ui_cfg.c porque los bancos del
+ * simulador tienen que medir exactamente lo que dibuja el codigo. Hasta el
+ * 23/09/2026 el banco usaba el 70 de abajo como si fuera fijo, y al pasar a
+ * cinco categorias dijo "no caben" calculando 5 x 70 cuando el codigo iba a
+ * dibujarlas de 54. El banco tenia razon en preocuparse y mal el numero.
+ */
+#define UIC_CAT_H_DE(n)  ((UIG_H - 12 - ((n) - 1) * UIC_CAT_GAP) / (n))
+
+/* El valor con las cinco categorias de hoy, para lo que necesite una
+ * constante. Quien dibuje o mida debe usar UIC_CAT_H_DE(). */
+#define UIC_CAT_H     UIC_CAT_H_DE(UIC_CATS)
 #define UIC_CAT_GAP    8
 #define UIC_CAT_Y     (UIG_Y + 6)                      /* 110 */
 /* El boton "Cerrar" se ha ido: se sale pulsando otra vez "Ajustes" en la
@@ -41,6 +59,13 @@
  * Ajustes son 9 por categoria como mucho y cada celda dice dos cosas (nombre
  * y valor): caben holgadas, 3 x 3 de 200 x 98.
  *
+ * SE PROBO A METER DOCE, en 4 x 150, cuando las tres primeras paginas se
+ * quedaron a 9 de 9 (23/09/2026). Cabia -se midio: el nombre mas largo
+ * ocupa 108 px y el valor mas largo 130, contra 122 libres, y solo fallaba
+ * por un texto-. Pero se descarto: en un panel resistivo, que el dedo tenga
+ * 200 px de ancho en vez de 150 vale mas que una columna de mas. La salida
+ * fue una CATEGORIA nueva, que no cuesta nada porque cat_h() reparte el alto
+ * disponible entre las que haya (ver ui_cfg.c).
  * Bandas son hasta 16 por familia y cada celda dice tres (nombre, rango y
  * modo): 4 x 4 de 150 x 72. Mas pequeñas, pero siguen siendo 25 x 12 mm, y a
  * cambio NINGUNA familia necesita paginar - que es lo que de verdad cuesta

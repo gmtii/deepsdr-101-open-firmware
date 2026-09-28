@@ -85,6 +85,12 @@ void gfx_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color);
  * de pixels. Es la funcion que usa waterfall.c para pintar su buffer. */
 void gfx_blit(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pixels);
 
+/* Volcado que no espera: ver el comentario en gfx.c. Devuelve 1 si hay un
+ * envio por DMA en marcha (y hay que llamar a gfx_blit_espera() antes de
+ * tocar `pixels` o el panel), 0 si ya esta todo hecho. */
+uint8_t gfx_blit_arranca(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pixels);
+uint8_t gfx_blit_espera(void);
+
 /* --- Texto (fuente 5x7 monoespaciada, ver gfx_font.h) --- */
 /* scale multiplica cada pixel de la fuente (scale=1 -> letras de 5x7 reales,
  * scale=2 -> 10x14, etc). bg se usa como fondo de cada glyph; si fg==bg no

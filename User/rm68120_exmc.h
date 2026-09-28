@@ -107,4 +107,61 @@ extern volatile uint16_t g_panel_id_check2; /* respuesta a comando 0x3A00 */
 
 void rm68120_init(void);
 
+/* ---------------------------------------------------------------------
+ * ESCRITURA DE UN PIXEL, SIN LLAMADA. 24/09/2026.
+ * ---------------------------------------------------------------------
+ * rm68120_write_data() es una funcion de verdad, con su salto y su retorno:
+ *
+ *     0803ab9c <rm68120_write_data>:
+ *         ldr   r3, [pc, #4]    @ 0x60020000
+ *         strh  r0, [r3, #0]
+ *         bx    lr
+ *
+ * En un bucle que escribe pixel a pixel eso son unos 10 ciclos de tramite
+ * -salto, retorno y recarga de la tuberia de instrucciones- por CADA pixel.
+ * Volcar la cascada entera son 54.432 pixeles: unos 2,7 ms tirados solo en
+ * llamar y volver, encima de los 5,4 ms que cuesta el bus.
+ *
+ * Se midio en la radio: 14,9 ms por volcado, cuando la cuenta del bus sola
+ * daba 5,4. Esta era una de las dos mitades que faltaban.
+ *
+ * Esto es lo mismo pero incorporado en quien lo llama: una instruccion.
+ * rm68120_write_data() se queda tal cual para todo lo demas - no cambia
+ * nada, y sustituirla en sitios donde se escribe un pixel suelto no
+ * ganaria nada y ensuciaria el codigo.
+ */
+/* Ciclos acumulados dentro de gfx_blit(), o sea: cuanto del dibujo se va en
+ * EMPUJAR pixeles al panel, separado de cuanto se va en DECIDIR que pixel va
+ * en cada sitio. Sin esta separacion, "el espectro cuesta 65 ms" no dice
+ * donde hay que trabajar, y las dos mitades se arreglan de maneras
+ * completamente distintas: una con el bus o con un DMA, la otra con el
+ * propio bucle. Cuesta dos lecturas de un contador por fila. */
+extern volatile uint32_t g_lcd_ciclos;
+
+/* Funcion de verdad y no una linea metida aqui: esta cabecera la incluye
+ * tambien el simulador del PC (a traves de gfx.h), donde DWT no existe. La
+ * definicion vive en el .c de cada lado. Dos llamadas por fila volcada no
+ * cuestan nada; ponerlas por pixel si, y por eso rm68120_dato() SI esta
+ * aqui dentro. */
+uint32_t rm68120_ciclo(void);
+
+static inline void rm68120_dato(uint16_t v)
+{
+    LCD_DAT = v;
+}
+
+/* Prueba del desplazamiento por hardware del panel. Ver el comentario gordo
+ * en el .c: dice si el RM68120 sabe rodar su propia memoria, y en que
+ * direccion lo hace con el panel girado como lo tenemos. Apagar y encender
+ * lo deshace pase lo que pase. */
+void rm68120_scroll_prueba(uint16_t origen);
+
+/* Tiempo de dato del bus de la pantalla, en ciclos de HCLK (1..15). Ver el
+ * comentario gordo en el .c: es el numero que decide cuanto cuesta volcar la
+ * cascada, y se ajusta mirando la pantalla, no calculandolo. */
+uint16_t rm68120_bus_dato(void);
+uint16_t rm68120_bus_dato_arranque(void);
+uint16_t rm68120_bus_ns(void);
+void     rm68120_bus_dato_pon(uint16_t dato);
+
 #endif /* RM68120_EXMC_H */

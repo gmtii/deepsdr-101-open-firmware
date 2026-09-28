@@ -1,4 +1,5 @@
 #include "touch.h"
+#include "irq_prio.h"
 #include "gd32f4xx.h"
 #include "gfx.h"
 #include "debug_uart.h"
@@ -159,7 +160,9 @@ void touch_init(void)
     syscfg_exti_line_config(EXTI_SOURCE_GPIOD, EXTI_SOURCE_PIN2);
     exti_init(EXTI_2, EXTI_INTERRUPT, EXTI_TRIG_FALLING);
     exti_interrupt_flag_clear(EXTI_2);
-    nvic_irq_enable(EXTI2_IRQn, 2, 0);
+    /* Prioridad 2, la ultima: es un dedo y puede esperar un milisegundo.
+     * Antes ponia 2 tambien, pero con otro significado - ver irq_prio.h. */
+    nvic_irq_enable(EXTI2_IRQn, IRQ_PRIO_TACTIL, IRQ_SUB_NINGUNA);
 
     t_cs(1);
     t_clk(0);

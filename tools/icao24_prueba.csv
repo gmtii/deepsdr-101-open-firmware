@@ -1,0 +1,8 @@
+icao24,registration,typecode,model,icaoaircrafttype,operator
+4ca7c6,EI-DCL,B738,Boeing 737-800,L2J,Ryanair
+39d2b1,F-HTYA,A21N,Airbus A321neo,L2J,Air France
+3c4b26,D-AIZA,A320,Airbus A320-214,L2J,Lufthansa
+71c735,HL8274,B77W,Boeing 777-300ER,,Korean Air
+7c1234,VH-ZZA,B77W,Boeing 777-300ER,L2J,Qantas
+a1b2c3,N123AB,C172,Cessna 172,L1P,Privado
+a7b8c9,N456CD,C172,Cessna 172,,Privado

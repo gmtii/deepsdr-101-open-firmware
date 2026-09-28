@@ -80,6 +80,26 @@ void waterfall_init(void);
  */
 void waterfall_push_line(const uint8_t *line);
 
+/*
+ * EL BUFFER ESTA PRESTADO. 25/09/2026.
+ *
+ * La cascada comparte sus bytes con el area de trabajo de FT8 (ver
+ * ft8_shared_ram.h y el comentario largo de waterfall.c). Mientras FT8
+ * decodifica, esos bytes son magnitudes, no pixeles: pintarlos saca basura
+ * en pantalla Y, lo que es peor, escribir una linea nueva le corrompe los
+ * datos al decodificador. Las dos cosas en silencio.
+ *
+ * Esto estuvo escrito como una REGLA -"cualquier modo que quiera pintar
+ * cascada tiene que mirar antes si FT8 esta en marcha"-, y una regla que hay
+ * que acordarse de cumplir en cada sitio nuevo es una regla que un dia no se
+ * cumple. Ahora lo comprueba el duenno del buffer: mientras este prestado,
+ * waterfall_push_line() y waterfall_blit() no hacen nada. El que lo pide
+ * -ft8_modo.c- es tambien el que lo devuelve, y devolverlo pasa por
+ * waterfall_init(), que es lo unico que deja el buffer con pixeles otra vez.
+ */
+void    waterfall_presta(uint8_t si);
+uint8_t waterfall_prestada(void);
+
 /* Vuelca el buffer completo a la GRAM en (x,y). No hace falta llamarlo en
  * cada push_line si se prefiere desacoplar tasa de actualizacion de datos
  * vs. tasa de refresco de pantalla. */
