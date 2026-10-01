@@ -16,6 +16,8 @@
  */
 #include "gfx2.h"
 #include "palette.h"
+#include "idioma.h"
+#include "ui_qth.h"
 #include "font_num_20.h"
 #include "ui_top.h"   /* ETAPA 2: cabecera y barra de estado */
 #include "ui.h"
@@ -56,6 +58,7 @@
 #include "ui_hora.h"
 #include "rf_lpf.h"
 #include "encoder.h"
+#include "dfu_salto.h"
 #include "battery.h"
 #include "backlight.h"
 #include "arm_math.h" /* arm_fir_decimate_* - spectrum ZOOM, see spec_zoom_t's comment */
@@ -75,6 +78,7 @@
 #include "wspr_modo.h" /* WSPR - ver k_demod_modes[] y wspr_modo_poll() */
 #include "ais_modo.h"  /* AIS  - ver k_demod_modes[] y ais_modo_poll()  */
 #include "ale_modo.h"  /* ALE  - ver k_demod_modes[] y ale_modo_poll()  */
+#include "jtty_modo.h" /* JTTY - ver k_demod_modes[] y jtty_modo_poll() */
 #include "irq_prio.h" /* quien corta a quien, y por que - etapa 29 */
 #include "gd32_i2s.h"
 #include "sdr_rx.h"
@@ -89,6 +93,40 @@ static void led_gpio_init(void);
 static void speaker_pa_gpio_init(void);
 static void speaker_pa_set_enabled(uint8_t on);
 static void systick_delay_init(void);
+/*
+ * EL BUCLE ENTERO, NO SOLO EL DIBUJO - 01/10/2026.
+ *
+ * *** El dueno: "pero sigue investigando". ***
+ *
+ * Comparando los dos cargadores salio esto, y es lo que obliga a medir mas:
+ *
+ *                  FFT  marco  traza(empuje)  cascada  medido  real   tope
+ *   boot de serie    0    0      13 (0)          5      18 ms  24 ms  22/45
+ *   boot nuestro     0    0      13 (0)          4      17 ms  31 ms  22/45
+ *
+ * Dibujar cuesta LO MISMO con los dos -13 ms de traza, 0 de empujar
+ * pixeles- y nuestra cascada hasta cuesta menos. Hacemos MENOS trabajo
+ * medido, 17 contra 18 ms. Y aun asi tardamos 31 ms por fotograma en vez
+ * de 24, con la aplicacion pidiendo lo mismo en los dos casos.
+ *
+ * O sea que hay **8 ms por fotograma fuera de todo lo que se mide**. Los
+ * cuatro contadores de arriba cubren el dibujo y nada mas; el resto de la
+ * vuelta -tactil, mando, decodificadores, audio, esperas- no lo mira nadie.
+ *
+ * Estos tres cronometros cubren la vuelta ENTERA y la parten en tres: lo
+ * que tarda todo, lo que se va en el tactil (que habla por el bus que
+ * compartimos con la flash, y es el unico periferico que el cargador deja
+ * distinto y la aplicacion usa en cada vuelta) y lo que se va en los poll
+ * de los decodificadores. Lo que quede sin contar entre los tres y el
+ * dibujo es la espera.
+ *
+ * Igual que con el USB: cuando no se sabe donde esta el tiempo, se pone un
+ * cronometro, no una teoria.
+ */
+static volatile uint16_t s_bucle_us;    /* la vuelta entera */
+static volatile uint16_t s_tactil_us;   /* demo_touch_poll() */
+static volatile uint16_t s_polls_us;    /* los poll de los decodificadores */
+
 static void radio_screen_draw(void);
 static void sdr_spectrum_waterfall_tick(void);
 static void franja_arriba_tick(void);
@@ -154,11 +192,14 @@ static void rf_agc_apply_pga(void);
  * definicion vive abajo, junto al resto de lo de los ajustes; main() las
  * necesita aqui arriba, igual que rf_agc_apply_pga() justo debajo. */
 static void hora_show(void);
+static void qth_show(void);
 static void hora_sintoniza(void);
 static void barrido_arranca(void);
 static void hora_poll(void);
 static void hora_poll_rds(void);
 static void hora_touch(uint16_t x, uint16_t y, uint8_t pressed);
+static void qth_touch(uint16_t x, uint16_t y, uint8_t pressed);
+static void qth_mando(int32_t pasos);
 static void reloj_poner(uint8_t hh, uint8_t mm);
 static void reloj_anclar(int16_t mins_locales, uint32_t atraso_ms);
 static void extras_leer(settings_extra_t *e);
@@ -245,7 +286,46 @@ static void menu_detail_value_redraw(void);
  * DECLARACIONES aqui arriba; la definicion de top_sync() va mas abajo,
  * despues de k_agc_profile_labels y demas estado que necesita leer.
  * ======================================================================= */
-static float   s_db_frame[FFT_BINS_IQ]; /* lo ULTIMO dibujado, promediado por cuadro */
+/*
+ * DOS ARRAYS Y NO UNO - 30/09/2026.
+ *
+ * *** Por el dueño del proyecto: "conforme le subo el suavizado el waterfall
+ * y el espectro se ralentiza muchisimo". ***
+ *
+ *   s_db_frame   el cuadro CRUDO, promediado dentro del propio cuadro. Es
+ *                lo que baja a la CASCADA.
+ *   s_db_traza   el mismo, suavizado entre cuadros. Es lo que se DIBUJA
+ *                como traza, y contra lo que se engancha un toque.
+ *
+ * Antes era uno solo: el suavizado se escribia ENCIMA de s_db_frame "para
+ * que la traza y la cascada se vean igual", y la cascada se llevaba por
+ * delante el suavizado entero.
+ *
+ * Y eso no es una preferencia, es romperle el eje a la cascada. El
+ * suavizado es una media exponencial entre cuadros, o sea una constante de
+ * tiempo: a 22 ms por cuadro, con el ajuste al 75 % son 76 ms -tres cuadros,
+ * que es para lo que se hizo-, pero al 95 % son 429 ms, casi VEINTE cuadros.
+ * Cada renglon de la cascada llevaba entonces veinte cuadros de historia
+ * encima, asi que una rafaga que dura un renglon salia estirada en veinte y
+ * sin contraste. La cascada existe justo para enseñar CUANDO pasa cada cosa.
+ *
+ * Y ademas era incoherente consigo misma: la velocidad "Muy rapida" saca sus
+ * dos renglones de s_db_sum y de la foto de media tanda, que NO estan
+ * suavizadas, asi que a esa velocidad la cascada ya salia nitida y a las
+ * otras cuatro no.
+ */
+/*
+ * LOS LIMITES DE SINTONIA. Estaban definidos mil lineas mas abajo, junto al
+ * comentario que explica de donde salen (que sigue alli). Suben aqui porque
+ * el bloque que restaura los ajustes los necesita para recortar vfo_hz, y
+ * son dos numeros: dejarlos abajo obligaba a repetirlos.
+ */
+#define TUNE_MIN_HZ 30000UL
+#define TUNE_MAX_HZ 180000000UL
+
+static float   s_db_frame[FFT_BINS_IQ]; /* crudo: lo que baja a la cascada */
+static float   s_db_traza[FFT_BINS_IQ]; /* suavizado: lo que se dibuja */
+static uint8_t s_db_traza_lista = 0U;
 static uint8_t s_db_frame_listo = 0U;
 static ui_top_state_t s_top;
 static char s_top_freq[16];   /* >= FREQ_FIELD_CHARS+1, que se define mas abajo */
@@ -274,6 +354,7 @@ static const char *ajuste_nombre(uint8_t id);
 static void settings_value_redraw(void);
 static void tema_cambiar(void);
 static void paleta_cambiar(void);
+static void idioma_cambiar(void);
 /*
  * GRID_NADA y GRID_MODO no son rejillas paginadas: las dos pantallas que
  * nombran -Ajustes y Modo, igual que Bandas- van por la columna de
@@ -486,23 +567,26 @@ static void set_volume_db_x2(int16_t v)
  * 10 Hz ni el de 100 se notan siempre. No es nuevo, ya pasaba con el de
  * 100 Hz; pero mas vale saberlo que pensar que la radio no obedece.
  */
+/* La quinta columna es la descripcion en ingles (29/09/2026). La etiqueta
+ * -"12,5 kHz"- NO se traduce: es un numero con unidad, y el formato de los
+ * numeros se queda en espanol en los dos idiomas por decision del dueno. */
 #define TUNE_STEPS_LISTA(X)                                                  \
-    X(10HZ,        10UL,  "10 Hz",    "Batido y deriva")                     \
-    X(100HZ,      100UL,  "100 Hz",   "Ajuste fino")                         \
-    X(500HZ,      500UL,  "500 Hz",   "Buscar en SSB")                       \
-    X(1K,        1000UL,  "1 kHz",    "SSB")                                 \
-    X(5K,        5000UL,  "5 kHz",    "Onda corta")                          \
-    X(10K,      10000UL,  "10 kHz",   "CB y onda media")                     \
-    X(12K5,     12500UL,  "12,5 kHz", "Marina y 2 m")                        \
-    X(25K,      25000UL,  "25 kHz",   "Aeronáutica")                         \
-    X(100K,    100000UL,  "100 kHz",  "FM comercial")                        \
-    X(1M,     1000000UL,  "1 MHz",    "Saltos grandes")
+    X(10HZ,        10UL,  "10 Hz",    "Batido y deriva", "Beat and drift")   \
+    X(100HZ,      100UL,  "100 Hz",   "Ajuste fino",     "Fine tuning")      \
+    X(500HZ,      500UL,  "500 Hz",   "Buscar en SSB",   "Searching in SSB") \
+    X(1K,        1000UL,  "1 kHz",    "SSB",             "SSB")              \
+    X(5K,        5000UL,  "5 kHz",    "Onda corta",      "Shortwave")        \
+    X(10K,      10000UL,  "10 kHz",   "CB y onda media", "CB and mediumwave")\
+    X(12K5,     12500UL,  "12,5 kHz", "Marina y 2 m",    "Marine and 2 m")   \
+    X(25K,      25000UL,  "25 kHz",   "Aeronáutica",     "Aeronautical")     \
+    X(100K,    100000UL,  "100 kHz",  "FM comercial",    "Broadcast FM")     \
+    X(1M,     1000000UL,  "1 MHz",    "Saltos grandes",  "Big jumps")
 
 /* Los indices: BAND_STEP_1K y companyia, que es lo que guardan las
  * presintonias de banda (band_preset_t) y config.h. Son constantes de
  * enumeracion, no #define con un numero a mano: mover una linea de la
  * lista de arriba los renumera solo. */
-#define TUNE_STEP_X_IDX(suf, hz, et, desc) BAND_STEP_##suf,
+#define TUNE_STEP_X_IDX(suf, hz, et, desc, desc_en) BAND_STEP_##suf,
 enum { TUNE_STEPS_LISTA(TUNE_STEP_X_IDX) TUNE_STEP_COUNT_ENUM };
 #undef TUNE_STEP_X_IDX
 
@@ -522,7 +606,7 @@ static uint8_t s_tune_step_idx = CONFIG_TUNE_START_STEP_IDX;
  * 23/09/2026: los valores ya no estan aqui, salen de TUNE_STEPS_LISTA
  * (un poco mas arriba), que es tambien de donde salen los indices, las
  * etiquetas y las descripciones. Ver alli el porque. */
-#define TUNE_STEP_X_HZ(suf, hz, et, desc) hz,
+#define TUNE_STEP_X_HZ(suf, hz, et, desc, desc_en) hz,
 static const uint32_t k_tune_steps[] = { TUNE_STEPS_LISTA(TUNE_STEP_X_HZ) };
 #undef TUNE_STEP_X_HZ
 #define TUNE_STEP_COUNT (sizeof(k_tune_steps) / sizeof(k_tune_steps[0]))
@@ -773,6 +857,13 @@ static uint8_t     s_mapa_puesta;   /* 0 = aun no se ha colocado */
 
 int main(void)
 {
+    /*
+     * LA COMPROBACION DEL DFU YA NO ESTA AQUI. Se fue a SystemInit(), que
+     * corre ANTES de montar el reloj: la ROM mide el cristal para sacar sus
+     * 48 MHz y necesita encontrarlo parado. Ver el comentario gordo en
+     * CMSIS/GD/GD32F4xx/Source/system_gd32f4xx.c.
+     */
+
     /* Critical when chained after a bootloader: our vector table is no
      * longer at 0x08000000 (that's the bootloader's), but at
      * 0x08020000. Without this, any interrupt (including our own
@@ -923,6 +1014,13 @@ int main(void)
      * right before radio_screen_draw()) rather than reaching ahead of
      * this project's own established boot ordering.
      */
+    /*
+     * EL POR DEFECTO PRIMERO, EL FICHERO DESPUES, y en ese orden justo para
+     * que manden los ajustes: si CONFIG.CSV trae clave "grid",
+     * settings_load() pisa esto en la linea siguiente. Una radio recien
+     * flasheada se queda con IN80dk. Ver ft8_decoder_grid_por_defecto().
+     */
+    ft8_decoder_grid_por_defecto();
     (void)settings_load(&s_loaded_settings);
 
     /*
@@ -1258,7 +1356,34 @@ int main(void)
         }
     }
     if (s_loaded_settings.have_vfo_hz) {
-        s_tune_hz = s_loaded_settings.vfo_hz;
+        /*
+         * RECORTADA, como todo lo demas de este bloque - 30/09/2026.
+         *
+         * Era el unico valor de aqui que entraba sin recortar (el volumen,
+         * el PGA, el suavizado y el atenuador ya lo hacian), y ademas rompe
+         * dos invariantes que estan escritas en este mismo fichero:
+         *
+         *   lo_para_sintonia() hace `freq_hz - demod_if_offset_hz()` sin
+         *   guarda, y su comentario dice que es seguro "gracias al
+         *   invariante TUNE_MIN_HZ > DEMOD_IF_OFFSET_HZ, para evitar un
+         *   underflow de uint32_t". Con vfo_hz por debajo de 24 kHz en el
+         *   fichero, el uint32 da la vuelta a ~4,29 GHz y la radio arranca
+         *   sorda, sin sintonizar nada y marcando 0 Hz.
+         *
+         *   y sam_current_ppm_error() divide por s_tune_hz, con un
+         *   comentario que dice "s_tune_hz is always > 0 (TUNE_MIN_HZ
+         *   enforces that), so no divide-by-zero guard needed". Con
+         *   `vfo_hz,0` o `vfo_hz,` en el fichero, ya no lo enforzaba nadie.
+         *
+         * Todos los sitios por donde el usuario sintoniza recortan a
+         * [TUNE_MIN_HZ, TUNE_MAX_HZ]; este es el camino por el que entraba
+         * un numero sin pasar por ninguno de ellos.
+         */
+        uint32_t v = s_loaded_settings.vfo_hz;
+
+        if (v < (uint32_t)TUNE_MIN_HZ) { v = (uint32_t)TUNE_MIN_HZ; }
+        if (v > (uint32_t)TUNE_MAX_HZ) { v = (uint32_t)TUNE_MAX_HZ; }
+        s_tune_hz = v;
     }
     apply_lo_tune(s_tune_hz);
 
@@ -1310,6 +1435,7 @@ int main(void)
     debug_print("main: entering the main loop\n");
 
     while (1) {
+        uint32_t t_vuelta0 = DWT->CYCCNT;
 #if !CALIB_HEIGHT_TEST
         if (s_screen_asleep) {
             /*
@@ -1413,7 +1539,8 @@ int main(void)
                  * dos transiciones -entrar en FT8 y cerrarse el menu-
                  * porque en las dos lo que hay debajo no sirve. */
                 if (ft8_modo_activo() || hfdl_modo_activo() || wspr_modo_activo()
-                    || ais_modo_activo() || ale_modo_activo()) {
+                    || ais_modo_activo() || ale_modo_activo()
+                    || jtty_modo_activo()) {
                     ft8_panel_reinicia();
                 } else {
                 rtty_scope_panel_reset();
@@ -1449,7 +1576,7 @@ int main(void)
 
             if (drawing_now && (ft8_modo_activo() || hfdl_modo_activo()
                                 || wspr_modo_activo() || ais_modo_activo()
-                                || ale_modo_activo())) {
+                                || ale_modo_activo() || jtty_modo_activo())) {
                 /* FT8 se queda con el panel entero: ni osciloscopio ni
                  * espectro. Ver FT8_PANEL_H. */
                 ft8_panel_draw();
@@ -1468,9 +1595,30 @@ int main(void)
                  * reasons drawing_now was false for. */
                 sdr_spectrum_waterfall_tick();
             }
-            demo_touch_poll();
+            {
+                uint32_t t0 = DWT->CYCCNT;
+                demo_touch_poll();
+                /*
+                 * SOLO SI SE ESTA DIBUJANDO LA RADIO.
+                 *
+                 * *** La primera lectura del dueno fue "b65 t65", 65 ms de
+                 * bucle y 65 de tactil. *** Y era mentira: la tomo dentro
+                 * del menu, y ahi demo_touch_poll() no solo lee el bus,
+                 * tambien despacha el toque y REPINTA la pagina. Estaba
+                 * midiendo el menu, no la radio.
+                 *
+                 * El mismo fallo que tenia la fila Cascada, que decia 0/60
+                 * dentro del menu. Un cronometro que se lee en un sitio
+                 * distinto de donde se usa no mide nada.
+                 */
+                if (!s_menu_open) {
+                    uint32_t d = (DWT->CYCCNT - t0) / (SystemCoreClock / 1000000U);
+                    s_tactil_us = (uint16_t)((d > 65535U) ? 65535U : d);
+                }
+            }
             tune_encoder_poll();
         }
+        { uint32_t t_polls0 = DWT->CYCCNT;
         hora_poll();   /* pantalla de sincronizar la hora, si esta abierta */
         rf_agc_poll(); /* RF-level (analog PGA) auto-AGC - see its own comment */
         rtty_poll(); /* drains rtty.c's decoded text to debug UART - see its own comment */
@@ -1488,6 +1636,11 @@ int main(void)
          * gratis.
          */
         hfdl_modo_poll();
+        if (!s_menu_open) {
+            uint32_t d = (DWT->CYCCNT - t_polls0) / (SystemCoreClock / 1000000U);
+            s_polls_us = (uint16_t)((d > 65535U) ? 65535U : d);
+        }
+        }
         /*
          * Y WSPR. Aqui no hay nada caro por vuelta: mira el reloj y, dos
          * veces cada dos minutos, abre o cierra una captura. Lo caro -la
@@ -1512,6 +1665,7 @@ int main(void)
          */
         ale_modo_frec_pon(s_tune_hz / 1000UL);
         ale_modo_poll();
+        jtty_modo_poll();
         tics_poll();   /* vigila que el reloj no pierda milisegundos - etapa 29 */
         volcado_poll();  /* un bloque de 4 kB por vuelta - ver volcado_arranca() */
         prueba_poll();   /* la prueba del almacen - ver prueba_arranca() */
@@ -1603,6 +1757,10 @@ int main(void)
                     debug_print_dec("  agc_out  (AGC + I2S write)", bd.agc_out);
                 }
             }
+        }
+        if (!s_menu_open) {
+            uint32_t d = (DWT->CYCCNT - t_vuelta0) / (SystemCoreClock / 1000000U);
+            s_bucle_us = (uint16_t)((d > 65535U) ? 65535U : d);
         }
     }
 }
@@ -2051,8 +2209,10 @@ static uint8_t s_spec_smooth_passes = 0U;
  * any lower than this would need re-checking those too. 180MHz is the
  * top of the front-end LPF bank (rf_lpf.c).
  */
-#define TUNE_MIN_HZ 30000UL
-#define TUNE_MAX_HZ 180000000UL
+/* Los dos #define SUBIERON al principio del fichero el 30/09/2026, porque
+ * hacen falta antes: el bloque que restaura los ajustes -mil lineas mas
+ * arriba- recorta vfo_hz con ellos. El razonamiento de por que valen esto es
+ * el de aqui arriba y se queda aqui. */
 
 /* s_tune_hz's actual declaration moved up near s_menu_open, 17/08/2026
  * - see the comment there. This comment block (the "why 7.150MHz",
@@ -2074,7 +2234,7 @@ static uint8_t s_spec_smooth_passes = 0U;
  * que ya usan fuente proporcional. Las de arriba se quedan para las
  * pantallas que siguen dibujando con la 5x7 de ancho fijo, donde "12,5 kHz"
  * ni cabe ni se lee. Mismo orden e indices: si una crece, la otra tambien. */
-#define TUNE_STEP_X_ET(suf, hz, et, desc) et,
+#define TUNE_STEP_X_ET(suf, hz, et, desc, desc_en) et,
 static const char *k_tune_step_labels_ui[] = { TUNE_STEPS_LISTA(TUNE_STEP_X_ET) };
 #undef TUNE_STEP_X_ET
 /* s_tune_step_idx's actual declaration moved up near s_menu_open/
@@ -2145,8 +2305,8 @@ typedef enum {
  * pueda olvidar.
  */
 typedef struct {
-    const char *label;
-    const char *desc;
+    const char *label;   /* sigla del modo: AM, USB, FT8... no se traduce */
+    texto_t     desc;
     demod_mode_t mode;
     rtty_variant_t rtty_variant;
     uint8_t cw;                 /* 1 = ademas enciende el decodificador de CW */
@@ -2160,6 +2320,7 @@ typedef struct {
     uint8_t ais;                /* 1 = ademas enciende el de AIS */
     uint8_t ale;                /* 1 = ademas enciende el de ALE */
     uint8_t psk31;              /* 1 = ademas enciende el de PSK31 */
+    uint8_t jtty;               /* 1 = ademas enciende el de JTTY */
     uint8_t fam;                /* categoria de la columna: MODO_FAM_* */
 } demod_mode_entry_t;
 
@@ -2179,20 +2340,20 @@ typedef struct {
 #define MODO_FAM_DIG 1U
 #define MODO_FAM_COUNT 2U
 
-static const char *const k_modo_familias[MODO_FAM_COUNT] = {
-    "Analógico", "Digital"
+static const texto_t k_modo_familias[MODO_FAM_COUNT] = {
+    T("Analógico", "Analogue"), T("Digital", "Digital")
 };
 
 static const demod_mode_entry_t k_demod_modes[] = {
-    { "AM",     "Amplitud modulada",   DEMOD_MODE_AM,  RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
-    { "SAM",    "AM síncrona",         DEMOD_MODE_SAM, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA }, /* synchronous AM, 21/08/2026 - see sam.h */
-    { "USB",    "Banda lateral alta",  DEMOD_MODE_USB, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
-    { "LSB",    "Banda lateral baja",  DEMOD_MODE_LSB, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
-    { "NFM",    "FM estrecha",         DEMOD_MODE_NFM, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
-    { "WFM",    "FM ancha",            DEMOD_MODE_WFM, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
-    { "CW",     "Telegrafía Morse",    DEMOD_MODE_USB, RTTY_VARIANT_NONE,     1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG }, /* ver el comentario de arriba */
-    { "RTTY-L", "Teletipo en LSB",     DEMOD_MODE_LSB, RTTY_VARIANT_NORMAL,   0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG }, /* confirmed correct polarity on LSB, 08/08/2026 */
-    { "RTTY-U", "Teletipo en USB",     DEMOD_MODE_USB, RTTY_VARIANT_INVERTED, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG }, /* USB mirrors LSB - see this block's comment */
+    { "AM", T("Amplitud modulada", "Amplitude mod."),   DEMOD_MODE_AM,  RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
+    { "SAM", T("AM síncrona", "Synchronous AM"),         DEMOD_MODE_SAM, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA }, /* synchronous AM, 21/08/2026 - see sam.h */
+    { "USB", T("Banda lateral alta", "Upper sideband"),  DEMOD_MODE_USB, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
+    { "LSB", T("Banda lateral baja", "Lower sideband"),  DEMOD_MODE_LSB, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
+    { "NFM", T("FM estrecha", "Narrow FM"),         DEMOD_MODE_NFM, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
+    { "WFM", T("FM ancha", "Wide FM"),            DEMOD_MODE_WFM, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
+    { "CW", T("Telegrafía Morse", "Morse telegraphy"),    DEMOD_MODE_USB, RTTY_VARIANT_NONE,     1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG }, /* ver el comentario de arriba */
+    { "RTTY-L", T("Teletipo en LSB", "Teletype on LSB"),     DEMOD_MODE_LSB, RTTY_VARIANT_NORMAL,   0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG }, /* confirmed correct polarity on LSB, 08/08/2026 */
+    { "RTTY-U", T("Teletipo en USB", "Teletype on USB"),     DEMOD_MODE_USB, RTTY_VARIANT_INVERTED, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG }, /* USB mirrors LSB - see this block's comment */
     /*
      * NAVTEX, etapa 25. Otro oyente colgado de USB, como el CW: por debajo
      * es banda lateral alta y lo que anade es el decodificador de SITOR-B.
@@ -2201,18 +2362,18 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * escuchara del reves, el conmutador de navtex.c lo arregla sin cambiar
      * de modo.
      */
-    { "NAVTEX", "Avisos marítimos",     DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
+    { "NAVTEX", T("Avisos marítimos", "Marine warnings"),     DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
     /*
      * WEFAX, etapa 26. El cuarto oyente colgado de USB. A diferencia de los
      * otros tres, lo que saca no es texto sino una imagen, asi que se lleva
      * el panel entero - ver fax_panel_linea().
      */
-    { "WEFAX",  "Mapas del tiempo",      DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
+    { "WEFAX", T("Mapas del tiempo", "Weather charts"),      DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
     /*
      * SSTV, etapa 27. Como el fax, pero en color y con el sincronismo metido
      * en la propia señal, asi que no hay nada que ajustar a mano.
      */
-    { "SSTV",   "Fotos por radio",       DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
+    { "SSTV", T("Fotos por radio", "Pictures over radio"),       DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
     /*
      * APRS, etapa 28. EL UNICO QUE NO VA EN BANDA LATERAL: el paquete de
      * VHF se transmite en FM estrecha, asi que por debajo lleva NFM y el
@@ -2220,7 +2381,7 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * lateral como a los otros cinco. Ver demod_am.c, donde se engancha en
      * un sitio distinto y por eso.
      */
-    { "APRS",   "Paquete AX.25",         DEMOD_MODE_NFM, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
+    { "APRS", T("Paquete AX.25", "AX.25 packet"),         DEMOD_MODE_NFM, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
     /*
      * FT8, etapa 30. Vuelve a banda lateral alta, como los cuatro de arriba,
      * pero se diferencia de todos ellos en una cosa que manda en todo lo
@@ -2236,7 +2397,7 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * Eso es justo lo que hace ft8_modo_stop() al volver: reinicia la
      * cascada, porque lo que hay en ese buffer ya no son pixeles.
      */
-    { "FT8",    "Digital de HF",         DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
+    { "FT8", T("Digital de HF", "HF digital"),         DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
     /*
      * HFDL, etapa 31. Los datos de los aviones en onda corta.
      *
@@ -2254,7 +2415,7 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * de noche 8.927, 8.942 y 6.559. Es USB, y el ancho de filtro ancho -no
      * hay que centrar nada a mano: el mezclador se busca la subportadora.
      */
-    { "HFDL",   "Datos de aviones",      DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
+    { "HFDL", T("Datos de aviones", "Aircraft data"),      DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
     /*
      * WSPR, etapa 34. Las balizas de onda corta: 200 mW cruzando un oceano.
      *
@@ -2278,12 +2439,23 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * DONDE: 14.095,6 kHz (20 m) es la banda con mas trafico de dia. El
      * boton de frecuencias recorre las demas. Es USB, y la ventana de WSPR
      * cae 1.500 Hz por encima de la portadora, que es justo donde la pone
-     * el receptor (WSPR_RX_CENTRO_HZ): la tabla lleva esa cuenta hecha, o
-     * sea que las frecuencias de k_wspr_canales[] son las de SINTONIA, no
-     * las del dial que publican las listas.
+     * el receptor (WSPR_RX_CENTRO_HZ).
+     *
+     * *** CORRECCION, 28/09/2026. Aqui ponia "la tabla lleva esa cuenta
+     * hecha, o sea que las frecuencias de k_wspr_canales[] son las de
+     * SINTONIA, no las del dial que publican las listas". Es FALSO y se vio
+     * al montar la tabla de JTTY: 14.095,6 es exactamente el dial que
+     * publican todas las listas de WSPR, no el dial mas 1.500. La tabla
+     * lleva DIALES, igual que la de FT8 y por lo mismo - se sintoniza el
+     * dial y la señal aparece a 1.500 Hz de audio, que es donde el receptor
+     * pone su ventana-.
+     *
+     * No se ha tocado ni un numero: los numeros estaban bien y funcionan en
+     * antena. Lo que estaba mal era el comentario, que es peor, porque el
+     * siguiente que copie la tabla creyendolo le suma 1.500 Hz a todo. ***
      */
 #if WSPR_MODO
-    { "WSPR",   "Balizas de HF",         DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, MODO_FAM_DIG },
+    { "WSPR", T("Balizas de HF", "HF beacons"),         DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
 #endif
     /*
      * AIS, etapa 35. Los barcos.
@@ -2316,7 +2488,7 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * dueno cuando yo di por hecho que no: "ais es en 160 mhz que yo sepa
      * esta radio llega a 200mhz". Tenia razon.
      */
-    { "AIS",    "Barcos",                DEMOD_MODE_NFM, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, MODO_FAM_DIG },
+    { "AIS", T("Barcos", "Ships"),                DEMOD_MODE_NFM, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, MODO_FAM_DIG },
     /*
      * ALE, etapa 36. Quien anda por la banda.
      *
@@ -2341,7 +2513,7 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * indicativo, y hace falta porque ALE no lleva CRC: el Golay corrige
      * hasta tres errores por mitad y, cuando no puede, a veces no se entera.
      */
-    { "ALE",    "Sondeos de HF",         DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, MODO_FAM_DIG },
+    { "ALE", T("Sondeos de HF", "HF soundings"),         DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, MODO_FAM_DIG },
     /*
      * PSK31, etapa 37. Conversacion escrita en 31 hercios.
      *
@@ -2369,7 +2541,39 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * frecuencia medido en hercios con signo - se gira hasta que se acerca
      * a cero.
      */
-    { "PSK31",  "Charla en fase",        DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, MODO_FAM_DIG }
+    { "PSK31", T("Charla en fase", "Phase-shift chat"),        DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, MODO_FAM_DIG },
+    /*
+     * JTTY, etapa 37. El teletipo nuevo del equipo de WSJT-X, estrenado en
+     * la v3.2.0-rc1 de septiembre de 2026.
+     *
+     * VA EN BANDA LATERAL ALTA como FT8, WSPR y ALE, y COMPARTE LA MEMORIA
+     * DE LA CASCADA con ellos (ver ft8_shared_ram.h): su espectrograma y el
+     * Viterbi de 512 estados son 29 kB y en la SRAM propia quedaban 152
+     * bytes. Son ya SEIS modos repartiendose los mismos 54 kB.
+     *
+     * Y LA DIFERENCIA QUE MANDA EN TODO LO DEMAS: NO NECESITA LA HORA, Y NO
+     * PORQUE LE DE IGUAL, SINO PORQUE NO HAY RANURAS. FT8 y WSPR empiezan
+     * en segundos fijos del reloj y su receptor puede dormir entre medias;
+     * JTTY empieza cuando el otro le da a la tecla y dura lo que dure. Eso
+     * obliga a buscar el sincronismo CONTINUAMENTE, cada media fila de
+     * simbolo, y a tener siempre una trama entera de pasado guardada por si
+     * la que acaba de terminar era buena. Ver jtty_rx.h.
+     *
+     * ES 4-GFSK A 31,25 BAUDIOS EN 127 Hz: unas 60 palabras por minuto,
+     * pensado para concursos. Un mensaje son de una a dieciseis tramas
+     * seguidas de 34 bits, que jtty_modo.c junta por frecuencia porque dos
+     * estaciones pueden estar emitiendo A LA VEZ.
+     *
+     * SIN BOTON DE FRECUENCIAS, por lo mismo que ALE: el modo tiene un mes
+     * y no hay frecuencias de llamada asentadas que yo haya podido
+     * comprobar. Una lista inventada no se lee como una suposicion.
+     *
+     * DONDE MIRAR, MIENTRAS TANTO: la ventana de busqueda son 500 Hz
+     * alrededor de 1.500 Hz de audio, asi que basta con poner la emision
+     * mas o menos en medio del filtro y el receptor la encuentra - dice el
+     * desvio en su columna para poder afinar-.
+     */
+    { "JTTY", T("Teletipo digital", "Digital teletype"),      DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, MODO_FAM_DIG }
 };
 #define DEMOD_MODE_ENTRY_COUNT (sizeof(k_demod_modes) / sizeof(k_demod_modes[0]))
 /*
@@ -2466,7 +2670,7 @@ static const demod_mode_entry_t k_demod_modes[] = {
  * girar mas.
  */
 typedef struct {
-    const char *label;
+    texto_t     label;
     const char *rango;    /* escrito tal cual se pinta: "5.800-6.200 kHz" */
     /*
      * Los mismos limites en hercios, para saber EN QUE BANDA estas - lo usa
@@ -2489,46 +2693,65 @@ typedef struct {
  * izquierda. Aficionados primero, por el dueno del proyecto. */
 #define BAND_FAM_HAM   0U   /* aficionados */
 #define BAND_FAM_BCST  1U   /* radiodifusion */
-#define BAND_FAM_UTIL  2U   /* utilidades */
-#define BAND_FAM_COUNT 3U
+#define BAND_FAM_UTIL  2U   /* utilidades: lo de HF */
+/*
+ * LA CUARTA, 30/09/2026: VHF y UHF.
+ *
+ * "Utilidades" habia llegado a 19 bandas y la rejilla pinta 16
+ * (UIC_DCOLS x UIC_DROWS). Las tres ultimas estaban en la tabla y NO SE
+ * PODIAN TOCAR: no salian, sin aviso. El comentario de ui_cfg.h decia
+ * "ninguna familia necesita paginar" y habia dejado de ser verdad.
+ *
+ * Y llevaba asi desde que se anadio APRS, callado, porque el banco que lo
+ * vigila (sim/bandas2.c) mide una tabla que genera tools/bandas_dump.py, y
+ * make solo la regenera cuando cambia el .py. El .py no se habia tocado en
+ * meses, asi que el banco media una foto vieja de 46 bandas. Se descubrio el
+ * 30/09 al tocar ese fichero por la traduccion.
+ *
+ * Se parte en dos en vez de paginar o de borrar bandas: el corte cae solo
+ * -por debajo de 30 MHz es otra radio que por encima- y deja 11 y 8, o sea
+ * sitio de sobra en las dos.
+ */
+#define BAND_FAM_VHF   3U   /* VHF y UHF */
+#define BAND_FAM_COUNT 4U
 
 static const band_preset_t k_band_presets[] = {
     /* ---- aficionados, Region 1 ---------------------------------------- */
-    { "2200 m", "135,7-137,8 kHz",    135700UL, 137800UL, 136500UL,    DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_HAM },
-    { "630 m",  "472-479 kHz",        472000UL, 479000UL, 475500UL,    DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_HAM },
-    { "160 m",  "1.810-2.000 kHz",    1810000UL, 2000000UL, 1840000UL,   DEMOD_MODE_LSB, BAND_STEP_1K,   BAND_FAM_HAM },
-    { "80 m",   "3.500-3.800 kHz",    3500000UL, 3800000UL, 3750000UL,   DEMOD_MODE_LSB, BAND_STEP_1K,   BAND_FAM_HAM },
-    { "60 m",   "5.351-5.367 kHz",    5351000UL, 5367000UL, 5357000UL,   DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
-    { "40 m",   "7.000-7.200 kHz",    7000000UL, 7200000UL, 7150000UL,   DEMOD_MODE_LSB, BAND_STEP_1K,   BAND_FAM_HAM },
-    { "30 m",   "10.100-10.150 kHz",  10100000UL, 10150000UL, 10120000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
-    { "20 m",   "14.000-14.350 kHz",  14000000UL, 14350000UL, 14250000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
-    { "17 m",   "18.068-18.168 kHz",  18068000UL, 18168000UL, 18130000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
-    { "15 m",   "21.000-21.450 kHz",  21000000UL, 21450000UL, 21250000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
-    { "12 m",   "24.890-24.990 kHz",  24890000UL, 24990000UL, 24950000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
-    { "10 m",   "28,0-29,7 MHz",      28000000UL, 29700000UL, 28400000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
-    { "6 m",    "50-52 MHz",          50000000UL, 52000000UL, 50150000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
-    { "2 m",    "144-146 MHz",        144000000UL, 146000000UL, 145500000UL, DEMOD_MODE_NFM, BAND_STEP_12K5, BAND_FAM_HAM },
+    { T("2200 m", "2200 m"), "135,7-137,8 kHz",    135700UL, 137800UL, 136500UL,    DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_HAM },
+    { T("630 m", "630 m"),  "472-479 kHz",        472000UL, 479000UL, 475500UL,    DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_HAM },
+    { T("160 m", "160 m"),  "1.810-2.000 kHz",    1810000UL, 2000000UL, 1840000UL,   DEMOD_MODE_LSB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { T("80 m", "80 m"),   "3.500-3.800 kHz",    3500000UL, 3800000UL, 3750000UL,   DEMOD_MODE_LSB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { T("60 m", "60 m"),   "5.351-5.367 kHz",    5351000UL, 5367000UL, 5357000UL,   DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { T("40 m", "40 m"),   "7.000-7.200 kHz",    7000000UL, 7200000UL, 7150000UL,   DEMOD_MODE_LSB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { T("30 m", "30 m"),   "10.100-10.150 kHz",  10100000UL, 10150000UL, 10120000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { T("20 m", "20 m"),   "14.000-14.350 kHz",  14000000UL, 14350000UL, 14250000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { T("17 m", "17 m"),   "18.068-18.168 kHz",  18068000UL, 18168000UL, 18130000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { T("15 m", "15 m"),   "21.000-21.450 kHz",  21000000UL, 21450000UL, 21250000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { T("12 m", "12 m"),   "24.890-24.990 kHz",  24890000UL, 24990000UL, 24950000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { T("10 m", "10 m"),   "28,0-29,7 MHz",      28000000UL, 29700000UL, 28400000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { T("6 m", "6 m"),    "50-52 MHz",          50000000UL, 52000000UL, 50150000UL,  DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_HAM },
+    { T("2 m", "2 m"),    "144-146 MHz",        144000000UL, 146000000UL, 145500000UL, DEMOD_MODE_NFM, BAND_STEP_12K5, BAND_FAM_HAM },
 
     /* ---- radiodifusion ------------------------------------------------ */
-    { "OL",     "148-284 kHz",        148000UL, 284000UL, 198000UL,    DEMOD_MODE_AM,  BAND_STEP_1K,   BAND_FAM_BCST },
-    { "OM",     "526-1.606 kHz",      526000UL, 1606000UL, 1000000UL,   DEMOD_MODE_AM,  BAND_STEP_1K,   BAND_FAM_BCST },
-    { "120 m",  "2.300-2.495 kHz",    2300000UL, 2495000UL, 2400000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
-    { "90 m",   "3.200-3.400 kHz",    3200000UL, 3400000UL, 3300000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
-    { "75 m",   "3.900-4.000 kHz",    3900000UL, 4000000UL, 3950000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
-    { "60 m",   "4.750-5.060 kHz",    4750000UL, 5060000UL, 4900000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
-    { "49 m",   "5.800-6.200 kHz",    5800000UL, 6200000UL, 6000000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
-    { "41 m",   "7.200-7.450 kHz",    7200000UL, 7450000UL, 7300000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
-    { "31 m",   "9.400-9.900 kHz",    9400000UL, 9900000UL, 9600000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
-    { "25 m",   "11.600-12.100 kHz",  11600000UL, 12100000UL, 11800000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
-    { "22 m",   "13.570-13.870 kHz",  13570000UL, 13870000UL, 13700000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
-    { "19 m",   "15.100-15.830 kHz",  15100000UL, 15830000UL, 15400000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
-    { "16 m",   "17.480-17.900 kHz",  17480000UL, 17900000UL, 17650000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
-    { "15 m",   "18.900-19.020 kHz",  18900000UL, 19020000UL, 18950000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
-    { "13 m",   "21.450-21.850 kHz",  21450000UL, 21850000UL, 21600000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
-    { "11 m",   "25.670-26.100 kHz",  25670000UL, 26100000UL, 25800000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { T("OL", "LW"),     "148-284 kHz",        148000UL, 284000UL, 198000UL,    DEMOD_MODE_AM,  BAND_STEP_1K,   BAND_FAM_BCST },
+    { T("OM", "MW"),     "526-1.606 kHz",      526000UL, 1606000UL, 1000000UL,   DEMOD_MODE_AM,  BAND_STEP_1K,   BAND_FAM_BCST },
+    { T("120 m", "120 m"),  "2.300-2.495 kHz",    2300000UL, 2495000UL, 2400000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { T("90 m", "90 m"),   "3.200-3.400 kHz",    3200000UL, 3400000UL, 3300000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { T("75 m", "75 m"),   "3.900-4.000 kHz",    3900000UL, 4000000UL, 3950000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { T("60 m", "60 m"),   "4.750-5.060 kHz",    4750000UL, 5060000UL, 4900000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { T("49 m", "49 m"),   "5.800-6.200 kHz",    5800000UL, 6200000UL, 6000000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { T("41 m", "41 m"),   "7.200-7.450 kHz",    7200000UL, 7450000UL, 7300000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { T("31 m", "31 m"),   "9.400-9.900 kHz",    9400000UL, 9900000UL, 9600000UL,   DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { T("25 m", "25 m"),   "11.600-12.100 kHz",  11600000UL, 12100000UL, 11800000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { T("22 m", "22 m"),   "13.570-13.870 kHz",  13570000UL, 13870000UL, 13700000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { T("19 m", "19 m"),   "15.100-15.830 kHz",  15100000UL, 15830000UL, 15400000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { T("16 m", "16 m"),   "17.480-17.900 kHz",  17480000UL, 17900000UL, 17650000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { T("15 m", "15 m"),   "18.900-19.020 kHz",  18900000UL, 19020000UL, 18950000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { T("13 m", "13 m"),   "21.450-21.850 kHz",  21450000UL, 21850000UL, 21600000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
+    { T("11 m", "11 m"),   "25.670-26.100 kHz",  25670000UL, 26100000UL, 25800000UL,  DEMOD_MODE_AM,  BAND_STEP_5K,   BAND_FAM_BCST },
 
     /* ---- utilidades ---------------------------------------------------- */
-    { "NDB",    "190-535 kHz",        190000UL, 535000UL, 350000UL,    DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_UTIL },
+    { T("NDB", "NDB"),    "190-535 kHz",        190000UL, 535000UL, 350000UL,    DEMOD_MODE_USB, BAND_STEP_1K,   BAND_FAM_UTIL },
     /*
      * Las tres frecuencias de NAVTEX, 24/09/2026. 518 kHz es la
      * internacional y va en ingles; 490 kHz es la misma idea en el idioma
@@ -2539,9 +2762,9 @@ static const band_preset_t k_band_presets[] = {
      * deja el aparato en el sitio, no enciende el decodificador, igual que
      * elegir la banda de 40 metros no enciende el RTTY.
      */
-    { "NAVTEX", "518 kHz",            518000UL, 518000UL, 518000UL,    DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
-    { "NAVTEX-N","490 kHz",            490000UL, 490000UL, 490000UL,    DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
-    { "NAVTEX-HF","4.209,5 kHz",        4209500UL, 4209500UL, 4209500UL, DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
+    { T("NAVTEX", "NAVTEX"), "518 kHz",            518000UL, 518000UL, 518000UL,    DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
+    { T("NAVTEX-N", "NAVTEX-N"),"490 kHz",            490000UL, 490000UL, 490000UL,    DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
+    { T("NAVTEX-HF", "NAVTEX-HF"),"4.209,5 kHz",        4209500UL, 4209500UL, 4209500UL, DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
     /*
      * Las tres del DWD (Pinneberg), 24/09/2026. Son las emisiones de fax
      * meteorologico que se reciben bien desde España, y tienen horario
@@ -2553,9 +2776,9 @@ static const band_preset_t k_band_presets[] = {
      * decodificador lo busca. Si se sintonizara el centro del tono, la imagen
      * saldria toda blanca o toda negra.
      */
-    { "FAX 4",  "DWD 3.855 kHz",       3855000UL, 3855000UL, 3855000UL,  DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
-    { "FAX 8",  "DWD 7.880 kHz",       7880000UL, 7880000UL, 7880000UL,  DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
-    { "FAX 14", "DWD 13.882,5 kHz",    13882500UL, 13882500UL, 13882500UL, DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
+    { T("FAX 4", "FAX 4"),  "DWD 3.855 kHz",       3855000UL, 3855000UL, 3855000UL,  DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
+    { T("FAX 8", "FAX 8"),  "DWD 7.880 kHz",       7880000UL, 7880000UL, 7880000UL,  DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
+    { T("FAX 14", "FAX 14"), "DWD 13.882,5 kHz",    13882500UL, 13882500UL, 13882500UL, DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
     /*
      * SSTV, 24/09/2026. 14,230 MHz es la frecuencia de llamada de imagen en
      * la banda de 20 metros y es donde esta casi todo el trafico que se puede
@@ -2567,8 +2790,8 @@ static const band_preset_t k_band_presets[] = {
      * el tono no cae donde debe los colores salen lavados. La frecuencia que
      * va aqui es la de la portadora, como siempre en banda lateral.
      */
-    { "SSTV 20","14.230 kHz",         14230000UL, 14230000UL, 14230000UL, DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
-    { "SSTV 40","7.165 kHz",          7165000UL, 7165000UL, 7165000UL,  DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
+    { T("SSTV 20", "SSTV 20"),"14.230 kHz",         14230000UL, 14230000UL, 14230000UL, DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
+    { T("SSTV 40", "SSTV 40"),"7.165 kHz",          7165000UL, 7165000UL, 7165000UL,  DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
     /*
      * APRS, 24/09/2026. 144,800 MHz es la frecuencia de paquete de toda
      * Europa: posiciones de estaciones fijas y moviles, partes
@@ -2579,10 +2802,10 @@ static const band_preset_t k_band_presets[] = {
      * elegir despues -"APRS"- lleva NFM por debajo en vez de USB. Aqui se
      * sintoniza la frecuencia de verdad, sin desplazamiento de ningun tipo.
      */
-    { "APRS",   "144,800 MHz",        144800000UL, 144800000UL, 144800000UL, DEMOD_MODE_NFM, BAND_STEP_5K, BAND_FAM_UTIL },
-    { "APRS 70","432,500 MHz",        432500000UL, 432500000UL, 432500000UL, DEMOD_MODE_NFM, BAND_STEP_5K, BAND_FAM_UTIL },
-    { "Horaria","2,5 / 5 / 10 MHz",   0UL, 0UL, 10000000UL,  DEMOD_MODE_AM,  BAND_STEP_1K,   BAND_FAM_UTIL },
-    { "CB",     "26,965-27,405 MHz",  26965000UL, 27405000UL, 27185000UL,  DEMOD_MODE_AM,  BAND_STEP_10K,  BAND_FAM_UTIL },
+    { T("APRS", "APRS"),   "144,800 MHz",        144800000UL, 144800000UL, 144800000UL, DEMOD_MODE_NFM, BAND_STEP_5K, BAND_FAM_VHF },
+    { T("APRS 70", "APRS 70"),"432,500 MHz",        432500000UL, 432500000UL, 432500000UL, DEMOD_MODE_NFM, BAND_STEP_5K, BAND_FAM_VHF },
+    { T("Horaria", "Time"),"2,5 / 5 / 10 MHz",   0UL, 0UL, 10000000UL,  DEMOD_MODE_AM,  BAND_STEP_1K,   BAND_FAM_UTIL },
+    { T("CB", "CB"),     "26,965-27,405 MHz",  26965000UL, 27405000UL, 27185000UL,  DEMOD_MODE_AM,  BAND_STEP_10K,  BAND_FAM_UTIL },
     /*
      * Las DOS bandas de FM comercial que existen en el mundo. 23/09/2026.
      *
@@ -2609,16 +2832,17 @@ static const band_preset_t k_band_presets[] = {
      * OIRT no estan en una rejilla de 100 kHz (hay emisoras en 66,44 o en
      * 70,19), asi que con 100 kHz se pasarian de largo.
      */
-    { "FM OIRT","65,8-74 MHz",        65800000UL, 74000000UL, 66300000UL,  DEMOD_MODE_WFM, BAND_STEP_10K,  BAND_FAM_UTIL },
-    { "FM",     "CCIR 87,5-108 MHz",  87500000UL, 108000000UL, 100000000UL, DEMOD_MODE_WFM, BAND_STEP_100K, BAND_FAM_UTIL },
-    { "Aérea",  "108-137 MHz",        108000000UL, 137000000UL, 118000000UL, DEMOD_MODE_AM,  BAND_STEP_25K,  BAND_FAM_UTIL },
-    { "Meteo",  "137-138 MHz",        137000000UL, 138000000UL, 137500000UL, DEMOD_MODE_WFM, BAND_STEP_12K5, BAND_FAM_UTIL },
-    { "Marina", "156-162 MHz",        156000000UL, 162000000UL, 156800000UL, DEMOD_MODE_NFM, BAND_STEP_12K5, BAND_FAM_UTIL },
-    { "VHF alta","162-174 MHz",       162000000UL, 174000000UL, 165000000UL, DEMOD_MODE_NFM, BAND_STEP_12K5, BAND_FAM_UTIL }
+    { T("FM OIRT", "FM OIRT"),"65,8-74 MHz",        65800000UL, 74000000UL, 66300000UL,  DEMOD_MODE_WFM, BAND_STEP_10K,  BAND_FAM_VHF },
+    { T("FM", "FM"),     "CCIR 87,5-108 MHz",  87500000UL, 108000000UL, 100000000UL, DEMOD_MODE_WFM, BAND_STEP_100K, BAND_FAM_VHF },
+    { T("Aérea", "Air"),  "108-137 MHz",        108000000UL, 137000000UL, 118000000UL, DEMOD_MODE_AM,  BAND_STEP_25K,  BAND_FAM_VHF },
+    { T("Meteo", "Weather"),  "137-138 MHz",        137000000UL, 138000000UL, 137500000UL, DEMOD_MODE_WFM, BAND_STEP_12K5, BAND_FAM_VHF },
+    { T("Marina", "Marine"), "156-162 MHz",        156000000UL, 162000000UL, 156800000UL, DEMOD_MODE_NFM, BAND_STEP_12K5, BAND_FAM_VHF },
+    { T("VHF alta", "VHF high"),"162-174 MHz",       162000000UL, 174000000UL, 165000000UL, DEMOD_MODE_NFM, BAND_STEP_12K5, BAND_FAM_VHF }
 };
 
-static const char *const k_band_familias[BAND_FAM_COUNT] = {
-    "Aficionados", "Radiodifusión", "Utilidades"
+static const texto_t k_band_familias[BAND_FAM_COUNT] = {
+    T("Aficionados", "Amateur"), T("Radiodifusión", "Broadcast"),
+    T("Utilidades", "Utility"), T("VHF/UHF", "VHF/UHF")
 };
 #define BAND_PRESET_COUNT (sizeof(k_band_presets) / sizeof(k_band_presets[0]))
 
@@ -3608,7 +3832,11 @@ static void smeter_draw(uint8_t segs)
     s_smeter_segs_last = segs;
     s_top_segs = segs;
     top_sync();
-    ui_top_draw_status(&s_top);
+    /* Solo la parte que se mueve. Esto corre en CADA fotograma mientras
+     * entra señal -la barra no para quieta- y repintar los 800 px de la
+     * franja costaba 32.051 accesos al bus; los 284 de la izquierda, 11.379.
+     * Ver ui_top_draw_smeter(). */
+    ui_top_draw_smeter(&s_top);
 }
 
 /* Convert the demod's peak (int16 scale) to lit segments. Uses the
@@ -3934,6 +4162,12 @@ static void smeter_dbm_update_and_draw(float peak)
  * 01/09/2026 (also per the project owner) once MANUAL was re-added to
  * the cycle as an explicit "AGC off" rung - OFF reads more clearly
  * than MAN for that purpose. */
+/*
+ * Las siglas del chip de AGC de la barra de estado. Tres letras, iguales en
+ * los dos idiomas a proposito: son ingles ya -OFF/SLoW/MEDium/FaST-, se leen
+ * igual en espanol, y el chip mide lo que mide. Los nombres LARGOS de la
+ * celda de Ajustes si se traducen: ver k_agc_nombres[].
+ */
 static const char *k_agc_profile_labels[4] = { "OFF", "SLW", "MED", "FST" };
 
 /*
@@ -4066,6 +4300,7 @@ static uint8_t demod_mode_entry_active(uint8_t i)
                      k_demod_modes[i].wspr == wspr_modo_activo() &&
                      k_demod_modes[i].ais  == ais_modo_activo() &&
                      k_demod_modes[i].ale  == ale_modo_activo() &&
+                     k_demod_modes[i].jtty == jtty_modo_activo() &&
                      k_demod_modes[i].psk31 == psk31_activo());
 }
 
@@ -4162,7 +4397,7 @@ static void top_sync(void)
      * El nombre de la banda es informacion; el boton es la funcion, y esa
      * tiene que estar siempre. */
     s_top.band = banda_actual(s_tune_hz);
-    if (!s_top.band) { s_top.band = "Bandas"; }
+    if (!s_top.band) { s_top.band = tr("Bandas", "Bands"); }
     s_top.knob = top_knob_from_target(s_encoder_target);
     s_top.knob_value = s_top_knobval;
     /* Con el mando enganchado a un ajuste, la pastilla dice SU nombre y SU
@@ -4328,20 +4563,24 @@ const palette_t *g_pal = &k_pal_oscura;
  * se ha vuelto a meter todavia.
  */
 typedef struct {
-    const char         *nombre;
-    const char         *desc;
+    texto_t             nombre;
+    texto_t             desc;
     const palette_t    *pal;
     spectrum_palette_t  wf;
 } tema_t;
 
 static const tema_t k_temas[] = {
-    { "Oscura",      "La de siempre, con el waterfall clásico",
+    { T("Oscura", "Dark"),
+      T("La de siempre, con el waterfall clásico", "The usual one, classic waterfall"),
       &k_pal_oscura,    SPECTRUM_PALETTE_CLASSIC },
-    { "Contrastada", "Negro real y saltos mayores, para pleno sol",
+    { T("Contrastada", "High contrast"),
+      T("Negro real y saltos mayores, para pleno sol", "True black, wider steps, for full sun"),
       &k_pal_contraste, SPECTRUM_PALETTE_TURBO },
-    { "Ámbar",       "Grises cálidos, sin azul: para la noche",
+    { T("Ámbar", "Amber"),
+      T("Grises cálidos, sin azul: para la noche", "Warm greys, no blue: for night use"),
       &k_pal_ambar,     SPECTRUM_PALETTE_INFERNO },
-    { "Fría",        "Grises azulados, para luz de día",
+    { T("Fría", "Cool"),
+      T("Grises azulados, para luz de día", "Bluish greys, for daylight"),
       &k_pal_fria,      SPECTRUM_PALETTE_VIRIDIS },
     /*
      * Los tres del 23/09/2026 (ver palette.h para como estan calculados).
@@ -4357,11 +4596,14 @@ static const tema_t k_temas[] = {
      * que habia ninguna es verde: la que se llama "Clasica verde" lo es por
      * su autor, no por su color, y es azul casi entera.
      */
-    { "Oliva",       "Verde oliva con tinta negra, tema claro",
+    { T("Oliva", "Olive"),
+      T("Verde oliva con tinta negra, tema claro", "Olive green, black ink, light theme"),
       &k_pal_oliva,     SPECTRUM_PALETTE_SMOKE },
-    { "Naranja",     "Naranja fuerte con tinta negra, tema claro",
+    { T("Naranja", "Orange"),
+      T("Naranja fuerte con tinta negra, tema claro", "Strong orange, black ink, light theme"),
       &k_pal_naranja,   SPECTRUM_PALETTE_FIRE },
-    { "Fósforo",     "Verde fósforo sobre negro, como un terminal",
+    { T("Fósforo", "Phosphor"),
+      T("Verde fósforo sobre negro, como un terminal", "Phosphor green on black, like a terminal"),
       &k_pal_fosforo,   SPECTRUM_PALETTE_PHOSPHOR }
 };
 #define TEMA_COUNT (sizeof(k_temas) / sizeof(k_temas[0]))
@@ -4384,14 +4626,14 @@ static int8_t         s_act_press = -1;       /* boton bajo el dedo desde la pul
  */
 static const struct {
     ui_button_t *btn;
-    const char  *nombre;
+    texto_t      nombre;
 } k_act_slots[] = {
-    { &s_btn_func,  "Func"    },
-    { &s_btn_mode,  "Modo"    },
-    { &s_btn_step,  "Paso"    },
-    { &s_btn_vol,   "Volumen" },
-    { &s_btn_nr,    "Ruido"   },
-    { &s_btn_menu,  "Ajustes" },
+    { &s_btn_func,  T("Func",    "Func")     },
+    { &s_btn_mode,  T("Modo",    "Mode")     },
+    { &s_btn_step,  T("Paso",    "Step")     },
+    { &s_btn_vol,   T("Volumen", "Volume")   },
+    { &s_btn_nr,    T("Ruido",   "Noise")    },
+    { &s_btn_menu,  T("Ajustes", "Settings") },
 };
 
 /*
@@ -4432,7 +4674,7 @@ static const char *banda_actual(uint32_t hz)
         if (b->lo_hz == 0UL && b->hi_hz == 0UL) { continue; } /* no es un rango */
         if (hz < b->lo_hz || hz > b->hi_hz) { continue; }
         ancho = b->hi_hz - b->lo_hz;
-        if (ancho < ancho_mejor) { ancho_mejor = ancho; mejor = b->label; }
+        if (ancho < ancho_mejor) { ancho_mejor = ancho; mejor = b->label[idioma()]; }
     }
     return mejor;
 }
@@ -4446,7 +4688,7 @@ static void act_sync(void)
     for (i = 0U; i < UI_ACT_N; i++) {
         const ui_button_t *b = k_act_slots[i].btn;
 
-        s_act.name[i]   = k_act_slots[i].nombre;
+        s_act.name[i]   = k_act_slots[i].nombre[idioma()];
         s_act.value[i]  = 0;
         s_act.active[i] = 0U;
 
@@ -4469,7 +4711,7 @@ static void act_sync(void)
             s_act.value[i]  = s_act_vol;
             s_act.active[i] = (uint8_t)(s_encoder_target == ENCODER_TARGET_VOLUME);
         } else if (b == &s_btn_nr) {
-            s_act.value[i]  = s_nr_on ? "activo" : "apagado";
+            s_act.value[i]  = s_nr_on ? tr("activo", "on") : tr("apagado", "off");
             s_act.active[i] = s_nr_on;
         } else if (b == &s_btn_menu) {
             /* Se ilumina el boton de LA pantalla que esta abierta, no el de
@@ -4538,7 +4780,11 @@ static const float       k_rtty_baud_values[4] = { 45.45f, 50.0f, 75.0f, 100.0f 
  */
 /* Los cuatro estados del blanker. Ver nb.h: los umbrales que hay detras se
  * midieron con sim/nbtest.c, no se eligieron a ojo. */
-static const char *const k_nb_nombres[4] = { "Apagado", "Suave", "Medio", "Fuerte" };
+/* Los cuatro grados del blanker. En texto_t desde el 29/09/2026: la celda
+ * de Ajustes los ensena tal cual y son interfaz, no protocolo. */
+static const texto_t k_nb_nombres[4] = {
+    T("Apagado", "Off"), T("Suave", "Gentle"), T("Medio", "Medium"), T("Fuerte", "Strong")
+};
 
 static const uint8_t k_cw_wpm[] = { 12U, 16U, 20U, 25U, 30U, 36U };
 #define CW_WPM_OPCIONES (sizeof(k_cw_wpm) / sizeof(k_cw_wpm[0]))
@@ -5740,9 +5986,20 @@ static int16_t s_rx_lock_check_q[SDR_RX_BLOCK_SAMPLES_MAX];
  * looks corrupted (or never arrived within the timeout - treated the
  * same as corrupted, since either way this lock attempt isn't
  * trustworthy), 0 if it looks like plausible real signal. */
-/* Herramienta de diagnostico: se compila siempre pero hoy no la llama nadie
- * (su punto de uso esta detras de un #if desactivado). Se marca como
- * posiblemente sin usar en vez de borrarla, para no perder el codigo. */
+/*
+ * Herramienta de diagnostico. NO hay ningun #if de por medio, aunque este
+ * comentario lo dijera hasta el 28/09/2026: la llamada esta en texto plano
+ * mas abajo, DENTRO de un debug_print(). Con DEBUG_UART_ENABLED=0 -la
+ * compilacion de serie- esa macro expande a ((void)0) y se lleva por
+ * delante la llamada entera; con el UART encendido, la funcion SI se
+ * ejecuta.
+ *
+ * Y eso es exactamente el riesgo del que avisa debug_uart.h: es la unica
+ * llamada del arbol que mete una funcion CON TRABAJO dentro de un
+ * debug_print(), o sea codigo que desaparece en silencio segun como se
+ * compile. Queda anotado aqui porque el comentario viejo ("detras de un #if
+ * desactivado") mandaba a buscar un interruptor que no existe.
+ */
 __attribute__((unused))
 static uint8_t rx_capture_looks_corrupted(void)
 {
@@ -6052,7 +6309,7 @@ static void menu_band_preset_callback(void *widget, ui_event_t event, void *user
         apply_lo_tune(s_tune_hz);
 
         debug_print("bands: preset applied -> ");
-        debug_print(p->label);
+        debug_print(p->label[IDIOMA_ES]);   /* el UART, siempre en espanol */
         debug_print("\n");
 
         /* menu_screen_close() only restores the spectrum/waterfall
@@ -6255,6 +6512,42 @@ static void menu_tile_specagc_callback(void *widget, ui_event_t event, void *use
 }
 
 
+/*
+ * LO QUE HAY QUE VOLVER A ARMAR CUANDO CAMBIA LA TASA DE RF - 30/09/2026.
+ *
+ * La pastilla RATE conmuta entre 96 y 48 kHz y llama a apply_demod_mode() y
+ * apply_lo_tune(), que rearman el demodulador y el oscilador. Pero hay dos
+ * cosas mas que se calcularon con la tasa VIEJA y que nadie tocaba:
+ *
+ *   APRS. ax25_start() calcula con la tasa el paso del reloj de bit y las
+ *   frecuencias de sus dos osciladores. Y solo se llama desde el conmutador
+ *   de MODO. O sea que entrar en APRS y despues tocar RATE dejaba el
+ *   decodificador buscando 600 y 1.100 Hz en vez de 1.200 y 2.200, con el
+ *   reloj a mitad de velocidad: no decodificaba ni una trama, y no habia
+ *   forma de saber por que ni de arreglarlo salvo volver a elegir el modo.
+ *
+ *   EL ANALIZADOR DE AUDIO. analiz_aplicar() tambien pregunta la tasa, y
+ *   tampoco se llamaba desde aqui: con 96 kHz puestos dentro y 48 entrando,
+ *   analiz_hz_por_bin() y analiz_tope_hz() devuelven EL DOBLE de lo real y
+ *   todo el eje de frecuencias miente. Un instrumento de medida que se
+ *   equivoca por un factor dos sin decirlo.
+ *
+ * Los dos se rearman desde aqui, que es el unico sitio donde cambia la tasa,
+ * para que el tercero que dependa de ella tenga un sitio evidente donde
+ * ponerse.
+ */
+static void analiz_aplicar(void);   /* definida mas abajo, con la tabla del zoom */
+
+static void tasa_rf_reaplica(void)
+{
+    if (ax25_activo()) {
+        ax25_start(demod_am_get_active_fs_hz());
+    }
+    if (analiz_activo()) {
+        analiz_aplicar();
+    }
+}
+
 static void menu_tile_rate_callback(void *widget, ui_event_t event, void *user_data)
 {
     (void)widget;
@@ -6269,6 +6562,7 @@ static void menu_tile_rate_callback(void *widget, ui_event_t event, void *user_d
             apply_demod_mode(demod_am_get_mode());
             apply_lo_tune(s_tune_hz);
         }
+        tasa_rf_reaplica();
     }
 }
 
@@ -6630,13 +6924,13 @@ static const struct {
     uint8_t     mult;      /* lineas por frame */
     uint8_t     div;       /* frames por linea (el otro sentido) */
     uint8_t     clave;     /* lo que se GUARDA: lineas por segundo, redondeado */
-    const char *nombre;
+    texto_t     nombre;
 } k_wf[WF_VEL_N] = {
-    { 2U, 1U, 60U, "Muy rápida" },
-    { 1U, 1U, 30U, "Rápida"     },
-    { 1U, 2U, 15U, "Media"      },
-    { 1U, 4U,  7U, "Lenta"      },
-    { 1U, 8U,  3U, "Muy lenta"  }
+    { 2U, 1U, 60U, T("Muy rápida", "Very fast") },
+    { 1U, 1U, 30U, T("Rápida",     "Fast")      },
+    { 1U, 2U, 15U, T("Media",      "Medium")    },
+    { 1U, 4U,  7U, T("Lenta",      "Slow")      },
+    { 1U, 8U,  3U, T("Muy lenta",  "Very slow") }
 };
 
 /*
@@ -6692,8 +6986,9 @@ static void wf_vel_siguiente(void)
  * -un ajuste que no se acuerda de lo que le dijiste es un ajuste que
  * miente- pero es la clase de cosa que despista si no se espera.
  */
-static const char *const k_analiz_nombres[ANALIZ_N + 1U] = {
-    "Apagado", "2400 Hz", "1200 Hz", "600 Hz", "300 Hz", "150 Hz"
+static const texto_t k_analiz_nombres[ANALIZ_N + 1U] = {
+    T("Apagado", "Off"), T("2400 Hz", "2400 Hz"), T("1200 Hz", "1200 Hz"),
+    T("600 Hz", "600 Hz"), T("300 Hz", "300 Hz"), T("150 Hz", "150 Hz")
 };
 static uint8_t s_analiz = 0U;   /* 0 = apagado; 1..5 = ANALIZ_* + 1 */
 
@@ -6790,7 +7085,7 @@ enum {
     AJ_ALTAVOZ, AJ_TASA, AJ_IFBW, AJ_TACTIL, AJ_CAL_TACTIL, AJ_CAL_PPM, AJ_DORMIR,
     AJ_RTTY_SHIFT, AJ_RTTY_BAUD, AJ_RTTY_INV,
     AJ_CW_TONO, AJ_CW_PPM, AJ_CW_AUTO, AJ_WFX_LPM, AJ_RDS, AJ_HORA, AJ_NOTCH,
-    AJ_TEMA, AJ_INFO
+    AJ_TEMA, AJ_INFO, AJ_IDIOMA, AJ_QTH, AJ_MANDO
 };
 
 /*
@@ -6822,9 +7117,13 @@ enum {
 #define AJ_PAGINAS      5U
 
 typedef struct {
-    const char *nombre;
-    uint8_t     pagina;
-    uint8_t     id;
+    /* Los dos idiomas juntos, en el mismo sitio donde estaba la cadena
+     * espanola: se ve de un vistazo si la traduccion es la que toca, y al
+     * anadir una fila no hay una segunda tabla que se pueda olvidar.
+     * Ver User/idioma.h. */
+    texto_t nombre;
+    uint8_t pagina;
+    uint8_t id;
 } ajuste_t;
 
 /*
@@ -6833,8 +7132,8 @@ typedef struct {
  * una vez en la vida (calibrar) abajo.
  */
 static const ajuste_t k_ajustes[] = {
-    { "AGC",           AJ_PAG_RADIO,    AJ_AGC        },
-    { "Ancho (BW)",    AJ_PAG_RADIO,    AJ_BW         },
+    { T("AGC", "AGC"), AJ_PAG_RADIO, AJ_AGC },
+    { T("Ancho (BW)", "Bandwidth"), AJ_PAG_RADIO, AJ_BW },
     /* El Notch ocupa el hueco que deja Volumen, y no es casualidad que
      * caiga aqui: Reducción, Blanker y Notch son las tres herramientas
      * contra lo que estorba, y estan juntas.
@@ -6845,21 +7144,21 @@ static const ajuste_t k_ajustes[] = {
      * que su celda aqui era el tercer camino a lo mismo. Las cuatro
      * paginas estaban a 9 de 9 y una sexta categoria no cabe - saldrian
      * 44 px por categoria y el objetivo minimo de dedo son 47. */
-    { "Notch",         AJ_PAG_RADIO,    AJ_NOTCH      },
-    { "Silenciador",   AJ_PAG_RADIO,    AJ_SQL        },
-    { "Reducción",     AJ_PAG_RADIO,    AJ_NR         },
-    { "Blanker",       AJ_PAG_RADIO,    AJ_NB         },
-    { "Ganancia",      AJ_PAG_RADIO,    AJ_PGA        },
-    { "AGC de RF",     AJ_PAG_RADIO,    AJ_RFAGC      },
-    { "Atenuador",     AJ_PAG_RADIO,    AJ_ATT        },
+    { T("Notch", "Notch"), AJ_PAG_RADIO, AJ_NOTCH },
+    { T("Silenciador", "Squelch"), AJ_PAG_RADIO, AJ_SQL },
+    { T("Reducción", "Noise red."), AJ_PAG_RADIO, AJ_NR },
+    { T("Blanker", "Blanker"), AJ_PAG_RADIO, AJ_NB },
+    { T("Ganancia", "Gain"), AJ_PAG_RADIO, AJ_PGA },
+    { T("AGC de RF", "RF AGC"), AJ_PAG_RADIO, AJ_RFAGC },
+    { T("Atenuador", "Attenuator"), AJ_PAG_RADIO, AJ_ATT },
 
-    { "Paleta",        AJ_PAG_PANTALLA, AJ_PALETA     },
-    { "Estilo",        AJ_PAG_PANTALLA, AJ_ESTILO     },
-    { "Traza",         AJ_PAG_PANTALLA, AJ_TRAZA      },
+    { T("Paleta", "Palette"), AJ_PAG_PANTALLA, AJ_PALETA },
+    { T("Estilo", "Style"), AJ_PAG_PANTALLA, AJ_ESTILO },
+    { T("Traza", "Trace"), AJ_PAG_PANTALLA, AJ_TRAZA },
     /* Tema, 22/09/2026: la paleta de la interfaz, distinta de "Paleta",
      * que son los colores del espectro. */
-    { "Tema",          AJ_PAG_PANTALLA, AJ_TEMA       },
-    { "Volumen",       AJ_PAG_PANTALLA, AJ_VOL        },
+    { T("Tema", "Theme"), AJ_PAG_PANTALLA, AJ_TEMA },
+    { T("Volumen", "Volume"), AJ_PAG_PANTALLA, AJ_VOL },
     /*
      * *** El dueno: "mover brillo a seccion pantalla". ***
      *
@@ -6869,73 +7168,139 @@ static const ajuste_t k_ajustes[] = {
      * mas arriba ya lo contaba como un ejemplo de lo que no habia que
      * hacer, y seguia hecho.
      */
-    { "Brillo",        AJ_PAG_PANTALLA, AJ_BRILLO     },
+    { T("Brillo", "Brightness"), AJ_PAG_PANTALLA, AJ_BRILLO },
+    /*
+     * LOS DOS DEL TACTIL, 29/09/2026, por el dueno: "tienes que mover
+     * tactil y calibrar tactil a pantalla".
+     *
+     * Estaban en Equipo desde siempre, y ahi no es donde se buscan: la
+     * firmeza del tactil y su calibracion son de la PANTALLA, igual que el
+     * brillo o el tema. En Equipo quedan las cosas del aparato que no se
+     * tocan mientras se escucha.
+     *
+     * Y ademas hacia falta el sitio: Equipo se habia quedado a 9 de 9 al
+     * entrar Idioma, y la rejilla dibuja nueve y corta en silencio. Con
+     * esta mudanza Equipo baja a 7 y Pantalla sube a 8, asi que las dos
+     * vuelven a tener hueco.
+     *
+     * Calibrar va la ultima de la pagina: es lo que se toca una vez en la
+     * vida, y ese es el criterio de orden de toda la tabla.
+     */
+    { T("Táctil", "Touch"), AJ_PAG_PANTALLA, AJ_TACTIL },
+    { T("Calibrar táctil", "Touch calib."), AJ_PAG_PANTALLA, AJ_CAL_TACTIL },
 
-    { "Escala",        AJ_PAG_ESPECTRO, AJ_ESCALA     },
-    { "Autoescala",    AJ_PAG_ESPECTRO, AJ_AUTOESC    },
-    { "Zoom",          AJ_PAG_ESPECTRO, AJ_ZOOM       },
-    { "Suavizado",     AJ_PAG_ESPECTRO, AJ_SUAVIZ     },
-    { "Contorno",      AJ_PAG_ESPECTRO, AJ_CONTORNO   },
+    { T("Escala", "Scale"), AJ_PAG_ESPECTRO, AJ_ESCALA },
+    { T("Autoescala", "Auto scale"), AJ_PAG_ESPECTRO, AJ_AUTOESC },
+    { T("Zoom", "Zoom"), AJ_PAG_ESPECTRO, AJ_ZOOM },
+    { T("Suavizado", "Smoothing"), AJ_PAG_ESPECTRO, AJ_SUAVIZ },
+    { T("Contorno", "Contour"), AJ_PAG_ESPECTRO, AJ_CONTORNO },
     /* Puente, 24/09/2026: si la traza une los puntos vecinos o los deja
      * sueltos. Ver spectrum_set_bridge(). */
-    { "Puente",        AJ_PAG_ESPECTRO, AJ_PUENTE     },
+    { T("Puente", "Bridge"), AJ_PAG_ESPECTRO, AJ_PUENTE },
     /* Cascada, 23/09/2026: cada cuanto baja una linea. */
-    { "Cascada",       AJ_PAG_ESPECTRO, AJ_WFVEL      },
+    { T("Cascada", "Waterfall"), AJ_PAG_ESPECTRO, AJ_WFVEL },
     /* Analizador: el panel deja de enseñar radiofrecuencia y enseña el
      * espectro del audio. Ver User/analizador.h. */
-    { "Analizador",    AJ_PAG_ESPECTRO, AJ_ANALIZ     },
-    { "NCO",           AJ_PAG_ESPECTRO, AJ_NCO        },
+    { T("Analizador", "Analyzer"), AJ_PAG_ESPECTRO, AJ_ANALIZ },
+    { T("NCO", "NCO"), AJ_PAG_ESPECTRO, AJ_NCO },
 
-    { "Altavoz",       AJ_PAG_EQUIPO,   AJ_ALTAVOZ    },
-    { "Táctil",        AJ_PAG_EQUIPO,   AJ_TACTIL     },
-    { "Muestreo",      AJ_PAG_EQUIPO,   AJ_TASA       },
-    { "Filtro FM",     AJ_PAG_EQUIPO,   AJ_IFBW       },
-    { "Reposo",        AJ_PAG_EQUIPO,   AJ_DORMIR     },
-    { "Calibrar táctil", AJ_PAG_EQUIPO, AJ_CAL_TACTIL },
-    { "Calibrar PPM",  AJ_PAG_EQUIPO,   AJ_CAL_PPM    },
-    { "Información",   AJ_PAG_EQUIPO,   AJ_INFO       },
+    /*
+     * ORDEN DE LAS FILAS DE EQUIPO - 30/09/2026, por el dueno: "los tres de
+     * abajo tienen que estar en medio y los de en medio abajo".
+     *
+     * Y encaja con el criterio de toda la tabla, que es el de uso y no el
+     * historico: QTH, Mando e Idioma son PREFERENCIAS que se ponen y se
+     * miran; Reposo, Calibrar PPM e Informacion son acciones que se tocan
+     * una vez en la vida. Lo que se toca a menudo arriba, lo que no, abajo.
+     */
+    { T("Altavoz", "Speaker"), AJ_PAG_EQUIPO, AJ_ALTAVOZ },
+    { T("Muestreo", "Sampling"), AJ_PAG_EQUIPO, AJ_TASA },
+    { T("Filtro FM", "FM filter"), AJ_PAG_EQUIPO, AJ_IFBW },
+    { T("QTH", "QTH"), AJ_PAG_EQUIPO, AJ_QTH },
+    /*
+     * Mando, 30/09/2026, por el dueno: "el encoder en esta radio va al
+     * reves". El cableado del encoder no es igual en todas las placas, asi
+     * que el sentido no puede ser una constante de compilacion. Va en
+     * Equipo porque es una propiedad DE ESTE aparato, como el tactil o el
+     * altavoz, y no una preferencia de escucha.
+     */
+    { T("Mando", "Knob"), AJ_PAG_EQUIPO, AJ_MANDO },
+    /*
+     * Idioma, 29/09/2026, por el dueno: un boton que alterna entre espanol
+     * e ingles y cambia el texto de toda la interfaz.
+     *
+     * Va en Equipo porque es una preferencia del aparato, no de escucha, y
+     * porque es lo unico que queda de esa familia. Con esta fila EQUIPO SE
+     * QUEDA A 9 DE 9: la rejilla dibuja nueve celdas y corta en silencio a
+     * partir de ahi, asi que la decima fila de esta pagina no se veria y
+     * nadie se enteraria. El _Static_assert de debajo de la tabla es lo que
+     * impide que eso pase sin avisar.
+     */
+    { T("Idioma", "Language"), AJ_PAG_EQUIPO, AJ_IDIOMA },
+    { T("Reposo", "Sleep"), AJ_PAG_EQUIPO, AJ_DORMIR },
+    { T("Calibrar PPM", "PPM calib."), AJ_PAG_EQUIPO, AJ_CAL_PPM },
+    { T("Información", "Information"), AJ_PAG_EQUIPO, AJ_INFO },
+    /*
+     * QTH, 29/09/2026, por el dueno. Tu localizador Maidenhead: de el
+     * salen el aspa de "donde estamos" en los mapas de FT8, WSPR, AIS y
+     * JTTY, y la distancia de las lineas de CQ de FT8.
+     *
+     * Hasta hoy era un #define de ft8_decoder.c que valia "IL18"
+     * -Canarias, el ejemplo del comentario original- y no habia por donde
+     * cambiarlo. Cabe aqui porque Tactil y Calibrar tactil se fueron a
+     * Pantalla, que es donde se buscan.
+     */
 
-    { "Desplazamiento",AJ_PAG_DIGITAL,  AJ_RTTY_SHIFT },
-    { "Baudios",       AJ_PAG_DIGITAL,  AJ_RTTY_BAUD  },
-    { "Inversión",     AJ_PAG_DIGITAL,  AJ_RTTY_INV   },
+    { T("Desplazamiento", "Shift"), AJ_PAG_DIGITAL, AJ_RTTY_SHIFT },
+    { T("Baudios", "Baud rate"), AJ_PAG_DIGITAL, AJ_RTTY_BAUD },
+    { T("Inversión", "Inverted"), AJ_PAG_DIGITAL, AJ_RTTY_INV },
 
-    { "Tono CW",       AJ_PAG_DIGITAL,  AJ_CW_TONO    },
-    { "Velocidad CW",  AJ_PAG_DIGITAL,  AJ_CW_PPM     },
-    { "Autoenganche",  AJ_PAG_DIGITAL,  AJ_CW_AUTO    },
+    { T("Tono CW", "CW pitch"), AJ_PAG_DIGITAL, AJ_CW_TONO },
+    { T("Velocidad CW", "CW speed"), AJ_PAG_DIGITAL, AJ_CW_PPM },
+    { T("Autoenganche", "Auto lock"), AJ_PAG_DIGITAL, AJ_CW_AUTO },
 
     /* Velocidad de linea del fax. El decodificador ya sabia las cuatro
      * desde la etapa 26 -wefax_set_lpm()-, pero no habia por donde
      * pedirlas: 120 es la normal y era la unica alcanzable, asi que una
      * carta a 90 o a 240 salia inclinada sin remedio. */
-    { "Velocidad fax", AJ_PAG_DIGITAL,  AJ_WFX_LPM    },
+    { T("Velocidad fax", "Fax speed"), AJ_PAG_DIGITAL, AJ_WFX_LPM },
     /* Va en Digital y no en Equipo por dos razones, y las dos son buenas:
      * es un decodificador de radio como RTTY o CW -no una preferencia del
      * aparato-, y Equipo estaba a 9 de 9 mientras que aqui sobra sitio. El
      * dia que se añada MSF o alguna otra emisora horaria, van al lado. */
-    { "RDS",           AJ_PAG_DIGITAL,  AJ_RDS        },
-    { "Hora por radio", AJ_PAG_DIGITAL, AJ_HORA        }
+    { T("RDS", "RDS"), AJ_PAG_DIGITAL, AJ_RDS },
+    { T("Hora por radio", "Radio clock"), AJ_PAG_DIGITAL, AJ_HORA }
 };
 #define AJUSTE_COUNT (sizeof(k_ajustes) / sizeof(k_ajustes[0]))
 
-static const char *const k_aj_paginas[AJ_PAGINAS] = {
-    "Radio", "Pantalla", "Espectro", "Digital", "Equipo"
+static const texto_t k_aj_paginas[AJ_PAGINAS] = {
+    T("Radio",    "Radio"),
+    T("Pantalla", "Display"),
+    T("Espectro", "Spectrum"),
+    T("Digital",  "Digital"),
+    T("Equipo",   "Device")
 };
 
 /* Las cuatro fuerzas del notch. Los numeros de cada una salen del
  * barrido del banco - ver la tabla de anotch.c. */
-static const char *const k_notch_nombres[4] = {
-    "Suave", "Normal", "Fuerte", "A saco"
+static const texto_t k_notch_nombres[4] = {
+    T("Suave", "Gentle"), T("Normal", "Normal"),
+    T("Fuerte", "Strong"), T("A saco", "Maximum")
 };
 
 /* Nombres largos para lo que antes eran siglas de tres letras. */
-static const char *const k_agc_nombres[4]   = { "Sin AGC", "Lenta", "Media", "Rápida" };
+static const texto_t k_agc_nombres[4] = {
+    T("Sin AGC", "No AGC"), T("Lenta", "Slow"), T("Media", "Medium"), T("Rápida", "Fast")
+};
 /* Los nombres largos de Ajustes y las siglas de la barra son la misma lista
  * en dos formatos, indexada por el mismo perfil de AGC. */
 _Static_assert(sizeof(k_agc_nombres) / sizeof(k_agc_nombres[0])
                == sizeof(k_agc_profile_labels) / sizeof(k_agc_profile_labels[0]),
                "k_agc_nombres y k_agc_profile_labels tienen que medir lo mismo");
 static const char *const k_att_nombres[3]   = { "0 dB", "-6 dB", "-12 dB" };
-static const char *const k_tactil_nombres[3]= { "Sensible", "Normal", "Firme" };
+static const texto_t k_tactil_nombres[3] = {
+    T("Sensible", "Light"), T("Normal", "Normal"), T("Firme", "Firm")
+};
 
 /* Buffer compartido por las celdas: se rellena una por una al construir la
  * pagina, y ui_grid solo guarda el puntero, asi que cada celda necesita el
@@ -6949,7 +7314,7 @@ static void aj_u2s(char *b, uint32_t v) { top_u2s(b, v); }
 static const char *ajuste_valor(uint8_t id, char *buf)
 {
     switch (id) {
-    case AJ_AGC:    return k_agc_nombres[(uint8_t)demod_am_get_agc_profile()];
+    case AJ_AGC:    return k_agc_nombres[(uint8_t)demod_am_get_agc_profile()][idioma()];
     case AJ_BW: {
         demod_mode_t m = demod_am_get_mode();
         if (cw_get_enabled()) {
@@ -6968,7 +7333,7 @@ static const char *ajuste_valor(uint8_t id, char *buf)
             fil_format(buf, lo, hi, " kHz");
             return buf;
         }
-        return "fijo";
+        return tr("fijo", "fixed");
     }
     case AJ_VOL:    volume_format_ui(s_volume_db_x2, buf); return buf;
     case AJ_PGA:    volume_format_ui(s_pga_gain_db_x2, buf); return buf;
@@ -6985,8 +7350,8 @@ static const char *ajuste_valor(uint8_t id, char *buf)
     /* El blanker dice su nivel, no "activo/apagado": los tres grados no son
      * mas de lo mismo, son umbrales distintos, y cual tienes puesto es justo
      * lo que hay que saber cuando algo suena raro. */
-    case AJ_NB:     return k_nb_nombres[nb_get_nivel()];
-    case AJ_RFAGC:  return s_rf_agc_enabled ? "Activo" : "Apagado";
+    case AJ_NB:     return k_nb_nombres[nb_get_nivel()][idioma()];
+    case AJ_RFAGC:  return s_rf_agc_enabled ? tr("Activo", "On") : tr("Apagado", "Off");
     case AJ_ATT:
         /* Lo que se ensena es LO QUE HAS PEDIDO, no lo que el automatico
          * este haciendo en este segundo: si no, la celda cambiaba sola y
@@ -7033,7 +7398,7 @@ static const char *ajuste_valor(uint8_t id, char *buf)
         aj_u2s(&buf[i], (uint32_t)hi);
         return buf;
     }
-    case AJ_AUTOESC: return s_spec_agc_enabled ? "Activa" : "Apagada";
+    case AJ_AUTOESC: return s_spec_agc_enabled ? tr("Activa", "On") : tr("Apagada", "Off");
     case AJ_SUAVIZ: {
         uint8_t i;
         aj_u2s(buf, (uint32_t)spectrum_smooth_pct_for_save());
@@ -7042,20 +7407,20 @@ static const char *ajuste_valor(uint8_t id, char *buf)
         return buf;
     }
     case AJ_CONTORNO: aj_u2s(buf, (uint32_t)s_spec_smooth_passes); return buf;
-    case AJ_WFVEL:    return k_wf[s_wf_vel].nombre;
-    case AJ_ANALIZ:   return k_analiz_nombres[s_analiz];
+    case AJ_WFVEL:    return k_wf[s_wf_vel].nombre[idioma()];
+    case AJ_ANALIZ:   return k_analiz_nombres[s_analiz][idioma()];
     /* "Activo"/"Apagado" y no "Puesto": es como lo dicen ya el AGC de RF, el
      * autoenganche y el altavoz, y una casilla que dice lo mismo con otra
      * palabra obliga a traducir mentalmente. 23/09/2026, por el dueno. */
-    case AJ_NCO:      return s_nco_on ? "Activo" : "Apagado";
+    case AJ_NCO:      return s_nco_on ? tr("Activo", "On") : tr("Apagado", "Off");
     /* "Unido" y "Suelto" y no "Activo"/"Apagado": lo que cambia no es que
      * algo funcione o no, es como se ve la traza, y el rotulo lo dice. */
-    case AJ_PUENTE:   return spectrum_get_bridge() ? "Unido" : "Suelto";
+    case AJ_PUENTE:   return spectrum_get_bridge() ? tr("Unido", "Joined") : tr("Suelto", "Loose");
     case AJ_ESTILO:
         switch (spectrum_get_style()) {
-        case SPECTRUM_STYLE_HEATMAP: return "Relleno";
-        case SPECTRUM_STYLE_LINE:    return "Línea";
-        default:                     return "Contorno";
+        case SPECTRUM_STYLE_HEATMAP: return tr("Relleno", "Filled");
+        case SPECTRUM_STYLE_LINE:    return tr("Línea", "Line");
+        default:                     return tr("Contorno", "Outline");
         }
     case AJ_ZOOM:
         return (s_spec_zoom == SPEC_ZOOM_8X) ? "8x" :
@@ -7067,12 +7432,13 @@ static const char *ajuste_valor(uint8_t id, char *buf)
          * porque aqui habia una copia a mano de la lista a la que le
          * faltaban tres ramas. */
         return spectrum_palette_nombre((uint8_t)spectrum_get_palette());
-    case AJ_TRAZA:   return spectrum_get_heatmap_trace_white() ? "Blanca" : "Del color";
+    case AJ_TRAZA:   return spectrum_get_heatmap_trace_white() ? tr("Blanca", "White")
+                                                              : tr("Del color", "Palette");
 
-    case AJ_ALTAVOZ: return s_speaker_pa_enabled ? "Activo" : "Mudo";
+    case AJ_ALTAVOZ: return s_speaker_pa_enabled ? tr("Activo", "On") : tr("Mudo", "Muted");
     case AJ_TASA:    return s_nonwfm_use_48k ? "48 kHz" : "96 kHz";
     case AJ_IFBW:    return (demod_am_get_wfm_ifbw() == WFM_IFBW_NARROW) ? "80 kHz" : "96 kHz";
-    case AJ_TACTIL:  return k_tactil_nombres[touch_get_firmeza() - 1U];
+    case AJ_TACTIL:  return k_tactil_nombres[touch_get_firmeza() - 1U][idioma()];
 
     case AJ_RTTY_SHIFT: {
         uint8_t i;
@@ -7084,7 +7450,8 @@ static const char *ajuste_valor(uint8_t id, char *buf)
     case AJ_RTTY_BAUD: return k_rtty_baud_labels[s_rtty_baud_idx];
 
     case AJ_NOTCH:
-        return anotch_activo() ? k_notch_nombres[anotch_fuerza()] : "Apagado";
+        return anotch_activo() ? k_notch_nombres[anotch_fuerza()][idioma()]
+                               : tr("Apagado", "Off");
 
     case AJ_WFX_LPM: {
         uint8_t i;
@@ -7111,9 +7478,38 @@ static const char *ajuste_valor(uint8_t id, char *buf)
      * que no informa de nada.
      */
     case AJ_INFO:   return 0;   /* es una accion: abre su pantalla */
+    /*
+     * El idioma se escribe EN SI MISMO, no traducido al otro: en espanol
+     * pone "Espanol" y en ingles "English", nunca "Ingles". Quien se
+     * encuentra la radio en un idioma que no entiende busca la palabra que
+     * reconoce, no su traduccion. Ver idioma_nombre().
+     */
+    case AJ_IDIOMA: return idioma_nombre();
+    /* "Normal" es el sentido de fabrica de la placa, sea cual sea: lo que
+     * el usuario ve es si lo ha dado la vuelta o no, no cual de los dos
+     * cableados lleva dentro, que no puede saberlo ni le importa. */
+    case AJ_MANDO:  return encoder_invertido() ? tr("Invertido", "Reversed")
+                                               : tr("Normal", "Normal");
+    /* El localizador tal cual, que es lo unico que hay que ver de un
+     * vistazo. Las coordenadas se ensenan dentro de su pantalla. */
+    case AJ_QTH: {
+        /* Vacio = no hay QTH puesto, que desde el 30/09 es un estado normal
+         * y no un fallo: ya no hay localizador compilado (ver la cabecera de
+         * ft8_decoder.c). La celda tiene que DECIRLO, porque sin QTH no sale
+         * el aspa de los mapas ni la distancia de los CQ y eso, en blanco,
+         * se lee como que el mapa esta roto. */
+        const char *g = ft8_decoder_get_own_grid();
+        /* Con el por defecto del arranque en frio (IN80dk) esto no se ve
+         * casi nunca; se queda porque un CONFIG.CSV con un "grid" que no
+         * vale deja el localizador vacio, y entonces no sale el aspa ni las
+         * distancias y la celda en blanco se leeria como que el mapa esta
+         * roto. Ver ft8_decoder_set_own_grid(). */
+        return (g != 0 && g[0] != '\0') ? g : tr("sin poner", "not set");
+    }
     case AJ_CW_AUTO:
-        return cw_get_autotune() ? "Automático" : "Fijo en el tono";
-    case AJ_TEMA:   return k_temas[s_tema_idx].nombre;
+        return cw_get_autotune() ? tr("Automático", "Automatic")
+                                 : tr("Fijo en el tono", "Fixed on pitch");
+    case AJ_TEMA:   return k_temas[s_tema_idx].nombre[idioma()];
     case AJ_CW_PPM: {
         uint8_t i;
         aj_u2s(buf, (uint32_t)k_cw_wpm[s_cw_wpm_idx]);
@@ -7122,8 +7518,9 @@ static const char *ajuste_valor(uint8_t id, char *buf)
         aj_u2s(&buf[i], (uint32_t)(cw_get_wpm() + 0.5f));
         return buf;
     }
-    case AJ_RTTY_INV:  return rtty_get_station_inverted() ? "Invertida" : "Normal";
-    case AJ_RDS:       return rds_activo() ? "Activo" : "Apagado";
+    case AJ_RTTY_INV:  return rtty_get_station_inverted() ? tr("Invertida", "Inverted")
+                                                          : tr("Normal", "Normal");
+    case AJ_RDS:       return rds_activo() ? tr("Activo", "On") : tr("Apagado", "Off");
 
     default: return 0;   /* acciones: calibrar, dormir */
     }
@@ -7297,9 +7694,9 @@ static void hora_show(void)
 
     /* Una muestra de envolvente por bloque: el ritmo sale de la tasa activa,
      * no de un numero escrito a mano, porque a 48 kHz son la mitad. */
-    s_hora.titulo = "Hora por radio";
-    s_hora.estado = "Buscando la señal";
-    s_hora.detalle = "puede tardar 3 o 4 minutos";
+    s_hora.titulo = tr("Hora por radio", "Radio clock");
+    s_hora.estado = tr("Buscando la señal", "Searching for the signal");
+    s_hora.detalle = tr("puede tardar 3 o 4 minutos", "it can take 3 or 4 minutes");
     s_hora.nivel = 0U;
     s_hora.marca = 0U;
     s_hora.latido = 0U;
@@ -7349,7 +7746,7 @@ static void barrido_arranca(void)
     s_barrido_ms0 = g_msticks;
     s_hora_emisora = HORA_DCF77;
     hora_sintoniza();
-    s_hora.emisora = "Buscando en todas";
+    s_hora.emisora = tr("Buscando en todas", "Scanning all of them");
 }
 
 /* Escribe la tabla del barrido: una casilla por emisora con lo mejor que se
@@ -7395,7 +7792,7 @@ static uint8_t barrido_paso(const dcf_info_t *inf)
         s_barrido_ms0 = g_msticks;
         s_hora_emisora = (hora_emisora_t)s_barrido_i;
         hora_sintoniza();
-        s_hora.emisora = "Buscando en todas";
+        s_hora.emisora = tr("Buscando en todas", "Scanning all of them");
         return 1U;
     }
 
@@ -7448,8 +7845,9 @@ static void hora_poll_rds(void)
     s_hora.puede_aplicar = 0U;
 
     if (!in.enganchado) {
-        s_hora.estado = "Buscando el RDS";
-        s_hora.detalle = "sintoniza una emisora de FM con el mando";
+        s_hora.estado = tr("Buscando el RDS", "Searching for RDS");
+        s_hora.detalle = tr("sintoniza una emisora de FM con el mando",
+                        "tune an FM station with the knob");
     } else if (!in.tiene_hora) {
         /*
          * Enganchado pero sin hora todavia, que es el estado NORMAL durante
@@ -7457,8 +7855,9 @@ static void hora_poll_rds(void)
          * vez por minuto, no once veces por segundo como el nombre. Decirlo
          * evita que parezca que no funciona.
          */
-        s_hora.estado = in.tiene_ps ? in.ps : "Leyendo el RDS";
-        s_hora.detalle = "la hora se manda una vez por minuto";
+        s_hora.estado = in.tiene_ps ? in.ps : tr("Leyendo el RDS", "Reading RDS");
+        s_hora.detalle = tr("la hora se manda una vez por minuto",
+                        "the time is sent once a minute");
 
         /*
          * Y si la cadena NO esta en la lista de codigos, se enseña el codigo
@@ -7479,7 +7878,8 @@ static void hora_poll_rds(void)
             *p++ = hx[in.pi & 0xFU];
             *p++ = ' '; *p++ = '-'; *p++ = ' ';
             {
-                const char *t = "la hora se manda una vez por minuto";
+                const char *t = tr("la hora se manda una vez por minuto",
+                                   "the time is sent once a minute");
                 while (*t != '\0') { *p++ = *t++; }
             }
             *p = '\0';
@@ -7503,7 +7903,7 @@ static void hora_poll_rds(void)
         while (loc < 0)     { loc += 1440; }
         while (loc >= 1440) { loc -= 1440; }
 
-        s_hora.estado = "Hora recibida - sin confirmar";
+        s_hora.estado = tr("Hora recibida - sin confirmar", "Time received - unconfirmed");
 
         p = s_hora_txt;
         p = hora_u2(p, (uint8_t)(loc / 60)); *p++ = ':';
@@ -7513,8 +7913,11 @@ static void hora_poll_rds(void)
         p = s_hora_det;
         p = hora_u3(p, (uint32_t)s_rds_ct_n);
         {
-            const char *t = (s_rds_ct_n == 1U) ? " recibida - hace falta otra que cuadre"
-                                               : " recibidas - hace falta que dos cuadren";
+            const char *t = (s_rds_ct_n == 1U)
+                    ? tr(" recibida - hace falta otra que cuadre",
+                         " received - another matching one is needed")
+                    : tr(" recibidas - hace falta que dos cuadren",
+                         " received - two of them must match");
             while (*t != '\0') { *p++ = *t++; }
         }
         if (s_rds_ct_mal > 0U) {
@@ -7530,10 +7933,11 @@ static void hora_poll_rds(void)
         while (loc < 0)     { loc += 1440; }
         while (loc >= 1440) { loc -= 1440; }
 
-        s_hora.estado = in.tiene_ps ? in.ps : "Hora confirmada";
+        s_hora.estado = in.tiene_ps ? in.ps : tr("Hora confirmada", "Time confirmed");
         s_hora.detalle = s_hora_anclada
-                       ? "en hora y anclado al segundo (la norma da +/-0,1 s)"
-                       : "el reloj ya esta en hora";
+                       ? tr("en hora y anclado al segundo (la norma da +/-0,1 s)",
+                            "on time and locked to the second (spec says +/-0,1 s)")
+                       : tr("el reloj ya esta en hora", "the clock is already on time");
 
         /*
          * Una vez anclado se enseña el RELOJ DE LA RADIO con segundos, no la
@@ -7653,13 +8057,14 @@ static void hora_poll(void)
     p = s_hora_det;
     switch (inf.estado) {
     case DCF_BUSCANDO:
-        s_hora.estado = "Buscando la señal";
-        s_hora.detalle = "si la barra de marca no late, no hay señal";
+        s_hora.estado = tr("Buscando la señal", "Searching for the signal");
+        s_hora.detalle = tr("si la barra de marca no late, no hay señal",
+                        "if the mark bar does not beat, there is no signal");
         break;
     case DCF_LEYENDO:
     case DCF_PERDIDO:
         s_hora.estado = (inf.estado == DCF_PERDIDO) ? "Se ha perdido - reintentando"
-                                                    : "Leyendo la trama";
+                                                    : tr("Leyendo la trama", "Reading the frame");
         p = hora_u2(p, inf.bits); *p++ = '/'; p = hora_u2(p, 59U);
         /* Y los dos numeros que de verdad explican lo que pasa cuando no
          * avanza: cuanto duro la ultima marca y cuanto hay entre segundos.
@@ -7681,13 +8086,14 @@ static void hora_poll(void)
         s_hora.detalle = s_hora_det;
         break;
     case DCF_CONFIRMANDO:
-        s_hora.estado = "Una trama buena - confirmando con la siguiente";
-        s_hora.detalle = "un minuto mas";
+        s_hora.estado = tr("Una trama buena - confirmando con la siguiente",
+                       "One good frame - confirming with the next one");
+        s_hora.detalle = tr("un minuto mas", "one more minute");
         break;
     case DCF_LISTO:
     default:
-        s_hora.estado = "Hora recibida y confirmada";
-        s_hora.detalle = "pulsa Aplicar para ponerla";
+        s_hora.estado = tr("Hora recibida y confirmada", "Time received and confirmed");
+        s_hora.detalle = tr("pulsa Aplicar para ponerla", "press Apply to set it");
         break;
     }
 
@@ -7824,7 +8230,7 @@ static uint8_t ajuste_enganchar(uint8_t id)
     case AJ_CW_TONO:    t = ENCODER_TARGET_CW_TONE;    break;
     case AJ_BW:         t = ENCODER_TARGET_FILTRO;     break;
     case AJ_CAL_TACTIL: case AJ_CAL_PPM: case AJ_DORMIR: case AJ_INFO:
-    case AJ_HORA:
+    case AJ_HORA:      case AJ_QTH:
         return 0U;   /* son acciones, no valores */
     default:
         if (ajuste_estados(id) < 2U) { return 0U; }
@@ -7884,6 +8290,7 @@ static uint8_t ajuste_estados(uint8_t id)
     /* De dos estados: da igual el sentido, un paso los cambia. */
     case AJ_RFAGC: case AJ_AUTOESC: case AJ_TRAZA: case AJ_ALTAVOZ:
     case AJ_TASA:  case AJ_IFBW:    case AJ_RTTY_INV: case AJ_CW_AUTO:
+    case AJ_IDIOMA: case AJ_MANDO:
         return 2U;
     /* Paleta y tema tienen muchos estados y un indice de verdad, asi que se
      * mueven poniendo el indice en vez de avanzando n-1 veces. Ver
@@ -7935,8 +8342,9 @@ static uint8_t ajuste_estados(uint8_t id)
  */
 enum { SSTV_GUARDA_NO = 0, SSTV_GUARDA_24, SSTV_GUARDA_16, SSTV_GUARDA_N };
 
-static const char *const k_sstv_guarda[SSTV_GUARDA_N] = {
-    "No guardar", "BMP 24 bits", "BMP 16 bits"
+static const texto_t k_sstv_guarda[SSTV_GUARDA_N] = {
+    T("No guardar", "Do not save"), T("BMP 24 bits", "BMP 24 bit"),
+    T("BMP 16 bits", "BMP 16 bit")
 };
 
 /*
@@ -7945,9 +8353,13 @@ static const char *const k_sstv_guarda[SSTV_GUARDA_N] = {
  * para que sim/digi.c mida que TODOS caben en el boton. Un rotulo que se
  * sale no avisa: se pinta encima del de al lado.
  */
-static const char *const k_sstv_gsv_estado[] = {
-    "Guardando 000",    /* las cifras las pone gsv_rotulo() */
-    "Fallo al guardar"
+static const texto_t k_sstv_gsv_estado[] = {
+    /* Las cifras las pone gsv_rotulo() copiando los DIEZ primeros
+     * caracteres: "Guardando " y "Saving    " miden los dos diez a
+     * proposito, rellenando con espacios el ingles, para que el bucle no
+     * tenga que saber cual esta puesto. */
+    T("Guardando 000", "Saving    000"),
+    T("Fallo al guardar", "Save failed")
 };
 
 static uint8_t s_sstv_guarda;
@@ -7991,8 +8403,8 @@ static uint8_t s_sstv_modo_idx;
 
 enum { WFX_GUARDA_NO = 0, WFX_GUARDA_SI, WFX_GUARDA_N };
 
-static const char *const k_wfx_guarda[WFX_GUARDA_N] = {
-    "No guardar", "BMP gris"
+static const texto_t k_wfx_guarda[WFX_GUARDA_N] = {
+    T("No guardar", "Do not save"), T("BMP gris", "Grey BMP")
 };
 
 static uint8_t s_wfx_guarda;
@@ -8003,6 +8415,7 @@ static void extras_leer(settings_extra_t *e)
     e->v[SET_X_AGC]        = (int32_t)demod_am_get_agc_profile();
     e->v[SET_X_SQL]        = (int32_t)demod_am_get_squelch_db();
     e->v[SET_X_NR]         = (int32_t)s_nr_strength;
+    e->v[SET_X_NR_ON]      = (int32_t)s_nr_on;
     e->v[SET_X_NB]         = (int32_t)nb_get_nivel();
     e->v[SET_X_RFAGC]      = (int32_t)s_rf_agc_enabled;
     e->v[SET_X_ESCALA_LO]  = (int32_t)s_db_min;
@@ -8029,6 +8442,8 @@ static void extras_leer(settings_extra_t *e)
     e->v[SET_X_NOTCH]      = anotch_activo() ? (int32_t)(anotch_fuerza() + 1) : 0;
     e->v[SET_X_SSTV_GUARDA] = (int32_t)s_sstv_guarda;
     e->v[SET_X_WFX_GUARDA]  = (int32_t)s_wfx_guarda;
+    e->v[SET_X_IDIOMA]      = (int32_t)idioma();
+    e->v[SET_X_ENC_INV]     = (int32_t)encoder_invertido();
     /*
      * Las cuatro familias, ESCRITAS UNA A UNA y no en un bucle sobre
      * SET_X_FIL_SSB + f. El bucle funcionaba igual de bien, pero
@@ -8074,7 +8489,17 @@ static void extras_aplicar(const settings_extra_t *e)
     /* Una clave que no venia en el fichero (primer arranque, o un
      * CONFIG.CSV de antes de que existiera) deja el valor por defecto
      * compilado, que es justo lo que habia antes de todo esto. */
-    #define EX_HAY(id) ((e->presentes & ((uint32_t)1U << (id))) != 0U)
+    /*
+     * (uint64_t) y no (uint32_t). `presentes` se amplio a 64 bits el
+     * 24/09/2026 justo para que cupieran mas claves, pero ESTA macro -la
+     * unica que lo lee dentro de extras_aplicar()- se quedo con el
+     * desplazamiento de 32. Con 31 claves nunca se noto; la clave numero
+     * 33 se habria leido siempre como ausente, sin un solo aviso del
+     * compilador y sin nada raro en pantalla: el ajuste guardado
+     * simplemente no volveria. Encontrado el 29/09/2026 al anadir el
+     * idioma, que es la clave 32 y aun cabia por los pelos.
+     */
+    #define EX_HAY(id) ((e->presentes & ((uint64_t)1U << (id))) != 0U)
 
     /* Punto de partida del contorno: el valor REAL que tiene spectrum.c, no
      * el 0 con el que se declara la variable de este fichero. Si CONFIG.CSV
@@ -8094,6 +8519,25 @@ static void extras_aplicar(const settings_extra_t *e)
     if (EX_HAY(SET_X_NR)) {
         s_nr_strength = (uint16_t)ex_rec(e->v[SET_X_NR], 0, (int32_t)NR_STRENGTH_MAX);
         nr_ss_set_strength(s_nr_strength);
+    }
+    /*
+     * El INTERRUPTOR de la reduccion de ruido, no solo su intensidad.
+     *
+     * *** El dueno: "arregla eso que has encontrado que no se guarda". ***
+     * Se guardaba "nr_strength" desde siempre y el encendido no, asi que la
+     * NR arrancaba apagada por mucho que la dejaras puesta. Se noto por un
+     * camino torcido: dos videos suyos con el mismo CONFIG.CSV y el boton
+     * en estados distintos, que yo achaque a un fichero danado hasta que el
+     * dijo lo evidente -los dos leen el mismo fichero- y resulto que el
+     * dato no estaba en ningun fichero.
+     *
+     * Va detras del NB para no separarlo de su intensidad, y nr_ss_set_
+     * enabled() se llama aqui mismo porque s_nr_on es solo el espejo: quien
+     * manda de verdad es el modulo.
+     */
+    if (EX_HAY(SET_X_NR_ON)) {
+        s_nr_on = (uint8_t)(ex_rec(e->v[SET_X_NR_ON], 0, 1) != 0);
+        nr_ss_set_enabled(s_nr_on);
     }
     if (EX_HAY(SET_X_NB)) {
         nb_set_nivel((uint8_t)ex_rec(e->v[SET_X_NB], 0, 3));
@@ -8132,6 +8576,17 @@ static void extras_aplicar(const settings_extra_t *e)
     if (EX_HAY(SET_X_ANALIZ)) {
         s_analiz = (uint8_t)ex_rec(e->v[SET_X_ANALIZ], 0, (int32_t)ANALIZ_N);
         analiz_aplicar();
+    }
+    if (EX_HAY(SET_X_IDIOMA)) {
+        /* idioma_pon() ya recorta por su cuenta -ver su comentario-, pero
+         * el recorte va igualmente aqui: es la regla de este bloque, "cada
+         * ajuste recorta EL SUYO", y confiar en que el otro extremo recorte
+         * es justo como entro el filtro de FM invertido. */
+        idioma_pon((uint8_t)ex_rec(e->v[SET_X_IDIOMA],
+                                   (int32_t)IDIOMA_ES, (int32_t)IDIOMA_EN));
+    }
+    if (EX_HAY(SET_X_ENC_INV)) {
+        encoder_invertido_pon((uint8_t)ex_rec(e->v[SET_X_ENC_INV], 0, 1));
     }
     if (EX_HAY(SET_X_NCO)) {
         /* Solo el ajuste. El oscilador NO se reaparca aqui: apply_lo_tune()
@@ -8259,7 +8714,7 @@ static const char *ajuste_nombre(uint8_t id)
 {
     uint16_t i;
     for (i = 0U; i < (uint16_t)AJUSTE_COUNT; i++) {
-        if (k_ajustes[i].id == id) { return k_ajustes[i].nombre; }
+        if (k_ajustes[i].id == id) { return k_ajustes[i].nombre[idioma()]; }
     }
     return "";
 }
@@ -8340,8 +8795,14 @@ static void ajuste_accion(uint8_t id)
         settings_value_redraw();
         break;
     case AJ_TEMA:       tema_cambiar(); break;
+    case AJ_IDIOMA:     idioma_cambiar(); break;
+    case AJ_MANDO:
+        encoder_invertido_pon((uint8_t)(encoder_invertido() ? 0U : 1U));
+        settings_value_redraw();
+        break;
     case AJ_INFO:       grid_show(GRID_INFO); break;
     case AJ_HORA:       hora_show(); break;
+    case AJ_QTH:        qth_show(); break;
     default: break;
     }
 
@@ -8368,6 +8829,7 @@ static void ajuste_accion(uint8_t id)
     switch (id) {
     case AJ_INFO:
     case AJ_HORA:
+    case AJ_QTH:
     case AJ_DORMIR:
     case AJ_CAL_TACTIL:
     case AJ_CAL_PPM:
@@ -8435,9 +8897,9 @@ static uint8_t cfg_cats(void)
 static const char *cfg_cat_nombre(uint8_t i)
 {
     switch (s_cfg_pant) {
-    case CFG_BANDAS: return k_band_familias[i];
-    case CFG_MODOS:  return k_modo_familias[i];
-    default:         return k_aj_paginas[i];
+    case CFG_BANDAS: return k_band_familias[i][idioma()];
+    case CFG_MODOS:  return k_modo_familias[i][idioma()];
+    default:         return k_aj_paginas[i][idioma()];
     }
 }
 
@@ -8510,7 +8972,7 @@ static void cfg_fill(void)
             const band_preset_t *b = &k_band_presets[k];
             uint8_t m;
 
-            s_cfg.cel[n].nombre = b->label;
+            s_cfg.cel[n].nombre = b->label[idioma()];
             s_cfg.cel[n].valor  = b->rango;
             s_cfg.cel[n].extra  = "";
             for (m = 0U; m < (uint8_t)DEMOD_MODE_ENTRY_COUNT; m++) {
@@ -8524,7 +8986,7 @@ static void cfg_fill(void)
             if (b->freq_hz == s_tune_hz) { s_cfg.marcada = n; }
         } else if (s_cfg_pant == CFG_MODOS) {
             s_cfg.cel[n].nombre = k_demod_modes[k].label;
-            s_cfg.cel[n].valor  = k_demod_modes[k].desc;
+            s_cfg.cel[n].valor  = k_demod_modes[k].desc[idioma()];
             /* El tercer renglon dice SOBRE QUE va, y solo cuando no es
              * evidente: CW, RTTY, NAVTEX, WEFAX y SSTV son banda lateral
              * por debajo y APRS es FM estrecha, que es la diferencia que
@@ -8539,7 +9001,7 @@ static void cfg_fill(void)
             const ajuste_t *a = &k_ajustes[k];
             const char *v = ajuste_valor(a->id, s_cfg_val[n]);
 
-            s_cfg.cel[n].nombre = a->nombre;
+            s_cfg.cel[n].nombre = a->nombre[idioma()];
             /* Los que son una accion y no un valor dejan el renglon vacio,
              * igual que en la rejilla: "tocar" vale para toda la pantalla. */
             s_cfg.cel[n].valor  = v ? v : "";
@@ -8583,7 +9045,7 @@ static void tema_aplicar(uint8_t i)
     g_pal = k_temas[i].pal;
     spectrum_set_palette(k_temas[i].wf);
     debug_print("tema: ");
-    debug_print(k_temas[i].nombre);
+    debug_print(k_temas[i].nombre[IDIOMA_ES]);   /* el UART, siempre en espanol */
     debug_print("\n");
 
     /*
@@ -8666,6 +9128,214 @@ static void tema_cambiar(void)
     if (s_menu_cfg_active) {
         cfg_fill();
         ui_cfg_draw(&s_cfg);
+    }
+}
+
+/*
+ * ALTERNA EL IDIOMA Y REPINTA LO QUE SE VE EN TODAS LAS PANTALLAS.
+ *
+ * Es el mismo problema que tuvo el tema el 23/09/2026 y se resuelve igual,
+ * copiando su solucion a proposito: el idioma no cambia solo la celda que
+ * has tocado, cambia la cabecera, la barra de estado y la barra de acciones
+ * de abajo. Sin este repintado tocarias "Idioma" y verias el valor en
+ * ingles con "Ajustes", "Modo" y "Paso" todavia en espanol, hasta salir a
+ * la pantalla principal.
+ *
+ * Lo de EN MEDIO lo repinta quien llama, porque cada pantalla sabe
+ * repintarse a si misma y desde aqui no se sabe cual hay puesta. Aqui solo
+ * se cubre el caso de la pantalla de ajustes, que es desde donde se toca.
+ */
+static void idioma_cambiar(void)
+{
+    (void)idioma_alterna();
+    debug_print("idioma: ");
+    debug_print(idioma_nombre());
+    debug_print("\n");
+
+    if (s_settings_ready_for_autosave) { settings_mark_dirty(); }
+
+    if (s_pantalla_pintada && !s_screen_asleep) {
+        freq_display_draw();   /* la cabecera entera */
+        badges_draw();         /* la barra de estado entera */
+        act_draw();            /* la barra de acciones de abajo */
+    }
+    if (s_menu_cfg_active) {
+        cfg_fill();
+        ui_cfg_draw(&s_cfg);
+    }
+}
+
+/* ===========================================================================
+ * PANTALLA DEL QTH - 29/09/2026
+ * ===========================================================================
+ * Seis casillas, una por caracter del localizador, y cada posicion solo
+ * ofrece su alfabeto. Ver User/ui_qth.h para por que asi y no con un
+ * teclado.
+ *
+ * Lo que se edita es una COPIA (s_qth_edit). El localizador de verdad no
+ * cambia hasta que se pulsa Aplicar: salir a medias no puede dejar la radio
+ * apuntando a un sitio que no has terminado de escribir.
+ */
+static ui_qth_state_t s_qth;
+static char           s_qth_edit[UIQ_N + 1];
+static char           s_qth_coord[28];
+static uint8_t        s_menu_qth_active = 0U;
+
+/* El alfabeto de cada posicion, y cuantos tiene. Una sola tabla: la pista
+ * que se pinta y el ciclado salen de aqui, asi que no pueden decir cosas
+ * distintas. */
+static const char *qth_alfabeto(uint8_t i, uint8_t *n)
+{
+    if (i < 2U) { *n = 18U; return "ABCDEFGHIJKLMNOPQR"; }
+    if (i < 4U) { *n = 10U; return "0123456789"; }
+    *n = 24U;   return "abcdefghijklmnopqrstuvwx";
+}
+
+/*
+ * EL RENGLON DE COORDENADAS lo monta ft8_decoder.c - 30/09/2026.
+ *
+ * Aqui habia el formateo Y, antes, una segunda conversion de localizador a
+ * coordenadas que estaba mal (la subcuadricula x10: "IN80fp" salia en
+ * Francia). Ahora ni la conversion ni el formato viven en este fichero: los
+ * dos son uno solo, en ft8_decoder.c, y sim/qthcoord.c los mide compilando
+ * ESE fichero. Dos sitios que contestan la misma pregunta es como se cuela
+ * que solo uno este bien.
+ */
+static void qth_coord_txt(const char *g)
+{
+    if (!ft8_decoder_grid_coord_txt(g, (int)UIQ_N,
+                                    s_qth_coord, sizeof s_qth_coord)) {
+        s_qth_coord[0] = '\0';
+    }
+}
+
+static void qth_fill(void)
+{
+    uint8_t i, n;
+
+    for (i = 0U; i < UIQ_N; i++) {
+        s_qth.loc[i] = s_qth_edit[i];
+        (void)qth_alfabeto(i, &n);
+        s_qth.pista[i] = (i < 2U) ? "A-R" : ((i < 4U) ? "0-9" : "a-x");
+    }
+    s_qth.loc[UIQ_N] = '\0';
+
+    qth_coord_txt(s_qth_edit);
+    s_qth.coord = s_qth_coord;
+
+    s_qth.titulo = "QTH";   /* igual en los dos idiomas */
+    s_qth.pie    = tr("tu localizador: de aquí salen el aspa de los mapas y las distancias",
+                      "your locator: the map cross and the distances come from this");
+    s_qth.rot[UIQ_HIT_MENOS]   = "-";
+    s_qth.rot[UIQ_HIT_MAS]     = "+";
+    s_qth.rot[UIQ_HIT_APLICAR] = tr("Aplicar", "Apply");
+    s_qth.rot[UIQ_HIT_SALIR]   = tr("Salir", "Exit");
+
+    {
+        const char *ya = ft8_decoder_get_own_grid();
+        uint8_t dif = 0U;
+        for (i = 0U; i < UIQ_N; i++) {
+            if (ya[i] != s_qth_edit[i]) { dif = 1U; break; }
+        }
+        s_qth.cambiado = dif;
+    }
+}
+
+static void qth_show(void)
+{
+    const char *ya = ft8_decoder_get_own_grid();
+    uint8_t i;
+
+    /*
+     * Se parte de lo que hay puesto. Si por lo que sea estuviera vacio -un
+     * CONFIG.CSV con un valor que no valido, ver ft8_decoder_set_own_grid()-
+     * se arranca en "AA00aa", que es el primero de cada alfabeto: mejor un
+     * sitio evidentemente falso que una pantalla en blanco.
+     */
+    for (i = 0U; i < UIQ_N; i++) {
+        char c = ya[i];
+        if (c == '\0') { c = (i < 2U) ? 'A' : ((i < 4U) ? '0' : 'a'); }
+        s_qth_edit[i] = c;
+    }
+    s_qth_edit[UIQ_N] = '\0';
+
+    s_qth.sel = 0U;
+    s_qth.pressed = UIQ_HIT_NONE;
+    qth_fill();
+
+    s_menu_qth_active = 1U;
+    s_menu_open = 1U;
+    s_menu_cfg_active = 0U;
+    s_menu_detail_active = 0U;
+    s_menu_hora_active = 0U;
+    s_grid_pant = GRID_NADA;
+    s_kbd_modo = KBD_NADA;
+
+    ui_qth_draw(&s_qth);
+    act_draw();
+}
+
+/* Mueve la casilla elegida `pasos` posiciones dentro de SU alfabeto. Lo
+ * usan el mando y los dos botones, asi que ciclar es una sola cosa. */
+static void qth_mando(int32_t pasos)
+{
+    uint8_t n, i;
+    const char *alf;
+    int32_t k;
+
+    if (!s_menu_qth_active) { return; }
+    alf = qth_alfabeto(s_qth.sel, &n);
+
+    for (i = 0U; i < n; i++) { if (alf[i] == s_qth_edit[s_qth.sel]) { break; } }
+    if (i >= n) { i = 0U; }
+
+    k = ((int32_t)i + pasos) % (int32_t)n;
+    if (k < 0) { k += (int32_t)n; }
+    s_qth_edit[s_qth.sel] = alf[k];
+
+    qth_fill();
+    ui_qth_draw(&s_qth);
+}
+
+static void qth_touch(uint16_t x, uint16_t y, uint8_t pressed)
+{
+    if (pressed) {
+        if (s_qth.pressed < 0) {
+            int8_t h = ui_qth_hit(x, y);
+            /* "Aplicar" apagado no se hunde: un boton que da retorno visual
+             * y luego no hace nada se vive como que la pantalla falla. Es la
+             * misma regla que en hora_touch(). */
+            if (h == UIQ_HIT_APLICAR && !s_qth.cambiado) { h = UIQ_HIT_NONE; }
+            if (h != UIQ_HIT_NONE) { s_qth.pressed = h; ui_qth_draw(&s_qth); }
+        }
+        return;
+    }
+    if (s_qth.pressed < 0) { return; }
+    {
+        int8_t k = s_qth.pressed;
+
+        s_qth.pressed = UIQ_HIT_NONE;
+
+        if (k >= UIQ_HIT_CAJA) {
+            s_qth.sel = (uint8_t)(k - UIQ_HIT_CAJA);
+            qth_fill();
+            ui_qth_draw(&s_qth);
+        } else if (k == UIQ_HIT_MENOS) {
+            qth_mando(-1);
+        } else if (k == UIQ_HIT_MAS) {
+            qth_mando(1);
+        } else if (k == UIQ_HIT_APLICAR) {
+            ft8_decoder_set_own_grid(s_qth_edit, (int)UIQ_N);
+            if (s_settings_ready_for_autosave) { settings_mark_dirty(); }
+            debug_print("qth: ");
+            debug_print(ft8_decoder_get_own_grid());
+            debug_print("\n");
+            menu_screen_close();
+        } else {
+            /* Salir SIN aplicar: lo editado se tira. Ver el comentario de
+             * arriba sobre por que se edita una copia. */
+            menu_screen_close();
+        }
     }
 }
 
@@ -8837,8 +9507,8 @@ static int8_t           s_grid_press = -1;
  * saltar (los tres arrays se generan de la misma lista), y esa es
  * precisamente la idea - que la comprobacion sobre y no que no exista.
  */
-#define TUNE_STEP_X_DESC(suf, hz, et, desc) desc,
-static const char *const k_paso_desc[] = { TUNE_STEPS_LISTA(TUNE_STEP_X_DESC) };
+#define TUNE_STEP_X_DESC(suf, hz, et, desc, desc_en) T(desc, desc_en),
+static const texto_t k_paso_desc[] = { TUNE_STEPS_LISTA(TUNE_STEP_X_DESC) };
 #undef TUNE_STEP_X_DESC
 _Static_assert(sizeof(k_paso_desc) / sizeof(k_paso_desc[0]) == TUNE_STEP_COUNT,
                "k_paso_desc[] tiene que tener una entrada por cada paso de k_tune_steps[]");
@@ -8891,6 +9561,32 @@ _Static_assert(sizeof(k_tune_step_labels_ui) / sizeof(k_tune_step_labels_ui[0]) 
  */
 static volatile uint32_t s_wf_ciclos;   /* ciclos del ultimo push+volcado */
 static volatile uint16_t s_wf_lps;      /* lineas por segundo conseguidas */
+
+/*
+ * EL ULTIMO VALOR QUE SIGNIFICABA ALGO - 01/10/2026.
+ *
+ * *** El dueno, comparando dos cargadores: "la señal va un poquito mas
+ * lenta y ademas se ralentiza mas aun cuando recibe señal". ***
+ *
+ * Esa observacion hay que poder MEDIRLA, y hasta hoy no se podia. La fila
+ * "Cascada" enseña s_wf_lps, pero dentro del menu la cascada no se dibuja,
+ * asi que al segundo el contador se pone a cero y la fila dice "0/60".
+ * Inservible justo cuando se quiere leer.
+ *
+ * Han hecho falta tres intentos de medirlo desde fuera con una camara
+ * -correlacion vertical, desplazamiento acumulado y deteccion de linea
+ * nueva- y los tres han fallado: el patron de la cascada son rayas
+ * verticales, que son invariantes al desplazamiento, y el temblor de la
+ * mano tiene el mismo tamaño que la señal que se busca. No se puede medir
+ * por fuera. Tiene que contarlo la radio.
+ *
+ * Asi que se guarda el ultimo valor DISTINTO DE CERO, mas el peor
+ * fotograma visto. Con eso se mira el menu, se apunta, se graba el otro
+ * cargador y se comparan dos numeros en vez de dos impresiones.
+ */
+static volatile uint16_t s_wf_lps_vivo;   /* ultimo s_wf_lps != 0 */
+static volatile uint16_t s_fps_vivo;      /* ultimo s_fps != 0 */
+static volatile uint16_t s_frame_peor_ms; /* el fotograma mas largo visto */
 static uint16_t s_wf_lineas;            /* van contadas dentro de este segundo */
 static uint16_t s_wf_lineas_antes;      /* para saber si ESTE fotograma volco */
 /* Fotogramas por segundo, en la misma ventana de un segundo que las lineas.
@@ -8918,6 +9614,7 @@ static volatile uint16_t s_fft_us;
 static volatile uint16_t s_spec_us;
 static volatile uint16_t s_chrome_us;
 static volatile uint16_t s_push_us;   /* de los de arriba, lo que se fue en empujar pixeles */
+
 
 extern uint32_t _sdata, _edata, _sbss, _ebss, _stcmram, _etcmram, _eflash;
 extern uint32_t _sarriba, _earriba;
@@ -9120,6 +9817,41 @@ static uint8_t  s_pru_estado;
  */
 #define MICRO_FLASH_BASE ((const uint8_t *)0x08000000UL)
 #define MICRO_FLASH_TAM  (512UL * 1024UL)
+
+/*
+ * LA ROM DE FABRICA DEL CHIP - 01/10/2026.
+ *
+ * *** El dueno, cuando le pedi que sacara esto por SWD: "que no quiero
+ * abrir la radio joder" ... "pa que te crees que estamos haciendo esto".
+ * *** Tiene toda la razon: el objetivo entero del DFU era no abrirla, y yo
+ * le propuse dos pruebas que las dos pasaban por destripar el aparato.
+ *
+ * No hace falta. Esos 30 kB estan MAPEADOS en memoria, igual que la flash
+ * del micro, asi que el volcado se hace desde dentro con el mismo
+ * spi_flash_volcado_abre_mem() de siempre y sale por el disco USB.
+ *
+ * Y es lo unico que contesta la pregunta de verdad: si ahi dentro hay
+ * descriptores de USB, la ROM habla USB y el que falla es mi salto. Si solo
+ * hay codigo de USART, no hay nada que arreglar y la idea se cae.
+ */
+#define ROM_FABRICA_BASE ((const uint8_t *)0x1FFF0000UL)
+#define ROM_FABRICA_TAM  (0x7800UL)          /* 30 kB */
+
+/*
+ * Y VA AL VOLCADO.BIN DE SIEMPRE, no a un fichero propio.
+ *
+ * *** El dueno, 01/10/2026: "no encuentro el .BIN" ... "eso dice el
+ * boton". *** El boton decia "no encuentro el .BIN" y decia la verdad:
+ * spi_flash_volcado_abre() NO crea el fichero de destino, lo BUSCA. Tiene
+ * que estar ya en el volumen, entero y sin trocear, porque el volcado
+ * escribe dentro de sus clusters sin tocar la FAT.
+ *
+ * La primera version pedia un ROMFABRI.BIN que no existia en ningun sitio y
+ * que yo no le dije que hiciera falta. Usando VOLCADO.BIN el procedimiento
+ * es el MISMO que el dueno ya conoce del volcado de la flash del micro, con
+ * el fichero que ya tiene: copiarlo al disco, tocar, reiniciar, copiarlo de
+ * vuelta. Y de paso no hay un segundo fichero que mantener.
+ */
 
 /*
  * EL CAMINO DE VUELTA - etapa 38, 24/09/2026.
@@ -9352,30 +10084,35 @@ static uint8_t datos_arranca(void)
 
     s_datos_porque = 0;
     if (s_vol_estado == 1U || s_pru_estado == 1U || s_pru_estado == 5U) {
-        s_datos_porque = "la flash esta ocupada con otra copia";
+        s_datos_porque = tr("la flash esta ocupada con otra copia",
+                            "the flash is busy with another copy");
         return 0U;
     }
     if (!spi_flash_fichero_tam("DATOS   ", "BIN", &tam) || tam == 0UL) {
-        s_datos_porque = "DATOS.BIN esta en el disco pero no se puede medir";
+        s_datos_porque = tr("DATOS.BIN esta en el disco pero no se puede medir",
+                            "DATOS.BIN is on the disk but cannot be measured");
         s_vol_estado = 3U;
         return 0U;
     }
     bloques = (tam + 4095UL) & ~4095UL;
     if (bloques > (DATOS_TOPE - DATOS_BASE)) {
-        s_datos_porque = "DATOS.BIN es mayor que la zona alta";
+        s_datos_porque = tr("DATOS.BIN es mayor que la zona alta",
+                            "DATOS.BIN is bigger than the upper area");
         s_vol_estado = 3U;
         return 0U;
     }
 
     a = alta_mira();
     if (a->fs_bytes == 0UL) {
-        s_datos_porque = "no se ha podido medir el sistema de ficheros";
+        s_datos_porque = tr("no se ha podido medir el sistema de ficheros",
+                            "the file system could not be measured");
         s_vol_sin_zona = 1U;
         s_vol_estado = 3U;
         return 0U;
     }
     if (a->bytes_mide < DATOS_TOPE || DATOS_BASE < a->fs_bytes) {
-        s_datos_porque = "la zona alta de este chip no llega hasta aqui";
+        s_datos_porque = tr("la zona alta de este chip no llega hasta aqui",
+                            "this chip's upper area does not reach that far");
         s_vol_sin_zona = 1U;
         s_vol_estado = 3U;
         return 0U;
@@ -9395,13 +10132,15 @@ static uint8_t datos_arranca(void)
 }
 
 /* El rotulo de la pantalla. Se pasa a proposito: ver aviones_pantalla_t(). */
-static const char k_datos_tit[] = "Bases de datos";
-static const char k_datos_que[] = "DATOS.BIN, del disco a la zona alta de la flash";
+static const char *k_datos_tit(void) { return tr("Bases de datos", "Databases"); }
+static const char *k_datos_que(void)
+{ return tr("DATOS.BIN, del disco a la zona alta de la flash",
+            "DATOS.BIN, from disk to the upper flash area"); }
 
 static void datos_cartel(avip_fase_t f, uint8_t pct, const char *motivo,
                          uint32_t bytes)
 {
-    aviones_pantalla_t(f, pct, motivo, bytes, k_datos_tit, k_datos_que);
+    aviones_pantalla_t(f, pct, motivo, bytes, k_datos_tit(), k_datos_que());
 }
 
 /*
@@ -9477,14 +10216,17 @@ static uint8_t datos_al_arrancar(void)
      * no vale seria perderlo.
      */
     if (!zona_alta_abre(spi_flash_read)) {
-        datos_cartel(AVIP_FALLO, 0U, "Copiado, pero el directorio no cuadra", 0UL);
+        datos_cartel(AVIP_FALLO, 0U, tr("Copiado, pero el directorio no cuadra",
+                                        "Copied, but the directory does not add up"), 0UL);
     } else if (!zona_alta_verifica_p(datos_comprobando)) {
-        datos_cartel(AVIP_FALLO, 0U, "Copiado, pero las sumas no cuadran", 0UL);
+        datos_cartel(AVIP_FALLO, 0U, tr("Copiado, pero las sumas no cuadran",
+                                        "Copied, but the checksums do not match"), 0UL);
     } else if (spi_flash_fichero_borra("DATOS   ", "BIN")) {
         datos_cartel(AVIP_HECHO, 100U, (const char *)0, total);
     } else {
         datos_cartel(AVIP_FALLO, 0U,
-                     "Cargado, pero no se pudo borrar del disco", 0UL);
+                     tr("Cargado, pero no se pudo borrar del disco",
+                        "Loaded, but it could not be deleted from the disk"), 0UL);
     }
     espera_ms(2500U);
     return 1U;
@@ -9556,6 +10298,20 @@ static void volcado_arranca_micro(void)
     if (spi_flash_volcado_abre_mem(k_vol_nombre, k_vol_ext,
                                    MICRO_FLASH_BASE, MICRO_FLASH_TAM)) {
         s_vol_aviones = 0U;   /* este volcado no es el de los aviones: no se borra nada */
+        s_vol_estado = 1U;
+        s_vol_bytes = spi_flash_volcado_total();
+        return;
+    }
+    s_vol_estado = 3U;
+}
+
+static void volcado_arranca_rom(void)
+{
+    if (s_vol_estado == 1U) { return; }
+    s_vol_sin_zona = 0U;
+    if (spi_flash_volcado_abre_mem(k_vol_nombre, k_vol_ext,
+                                   ROM_FABRICA_BASE, ROM_FABRICA_TAM)) {
+        s_vol_aviones = 0U;
         s_vol_estado = 1U;
         s_vol_bytes = spi_flash_volcado_total();
         return;
@@ -9768,59 +10524,22 @@ static void prueba_poll(void)
 }
 
 /*
- * GRABAR UN TROZO EN EL PENDRIVE
- * ------------------------------
- * *** 24/09/2026, por el dueno del proyecto: "pos haz un boton que grabe
- * un trozo cada vez que le doy", "trozo 1, luego trozo 1+2", "asi cada
- * vez que le doy", "y cuando me canse de darle te paso el fichero" ***
+ * EL BOTON DE GRABAR TROZOS SE HA IDO - 28/09/2026.
  *
- * Cada toque anade 4 kB a PRUEBA.BIN en el volumen FAT. Es el ensayo del
- * camino de escritura antes de confiarle una imagen de verdad: ver el
- * comentario gordo de spi_flash_anade_trozo().
+ * *** Nacio el 24/09 por el dueño del proyecto: "pos haz un boton que
+ * grabe un trozo cada vez que le doy" ... "y cuando me canse de darle te
+ * paso el fichero". Y se va hoy tambien por el: al preguntarle de donde
+ * sacamos SRAM, eligio este. ***
  *
- * El relleno es prueba_byte() de la POSICION ABSOLUTA dentro del fichero,
- * el mismo que ya usa la prueba del almacen. Eso es lo que hace el
- * fichero comprobable desde fuera: un trozo escrito en el sitio
- * equivocado no se parece al relleno que le tocaba, asi que el fichero
- * solo ya dice si cada pulsacion cayo donde debia. Un relleno constante
- * -ceros, o el numero de trozo repetido- pasaria por bueno exactamente
- * en el caso que hay que cazar.
+ * Era el ensayo del camino de escritura al pendrive antes de confiarle una
+ * imagen de verdad, y sirvio: con el se cazo que el escritor se llevaba
+ * por delante a los ficheros vecinos. Lo que hacia -sacar un fichero de la
+ * radio a trozos- ya no hace falta, y el camino que probaba sigue teniendo
+ * su banco, sim/fatanade.c, que nunca dependio de este boton.
+ *
+ * Costaba 4.096 bytes de SRAM PERMANENTES por una herramienta que solo se
+ * usa una tarde.
  */
-#define TROZO_BYTES  4096U
-
-static uint8_t       s_trozo_buf[TROZO_BYTES];
-static uint8_t       s_trozo_hecho;    /* se grabo algo desde que arranco */
-static spi_anade_r_t s_trozo_porque;
-/*
- * Cuantas veces salta hacia atras la cadena, o sea cuanto esta el fichero
- * ocupando huecos que dejaron otros al borrarse. Se calcula AL GRABAR y se
- * guarda: recorrer la FAT son unos 50 ms por este bus, y eso no puede
- * pasar cada vez que se refresca la celda.
- */
-static uint32_t      s_trozo_saltos;
-static uint8_t       s_trozo_saltos_hay;
-
-static void trozo_arranca(void)
-{
-    uint32_t tam = 0UL, i;
-
-    /* Donde acaba el fichero es donde empieza el relleno de este trozo.
-     * Si todavia no existe, empieza en cero. */
-    (void)spi_flash_fichero_tam("PRUEBA  ", "BIN", &tam);
-    for (i = 0U; i < TROZO_BYTES; i++) {
-        s_trozo_buf[i] = prueba_byte(tam + i);
-    }
-
-    (void)spi_flash_anade_trozo("PRUEBA  ", "BIN", s_trozo_buf, &s_trozo_porque);
-    s_trozo_hecho = 1U;
-
-    /* Y de paso, ya que estamos pagando medio segundo, se mira la forma de
-     * la cadena. Antes de la primera pulsacion no se sabe y no se enseña:
-     * mas vale callarse que enseñar un cero que parece "esta contigua"
-     * cuando lo que pasa es que nadie ha mirado. */
-    s_trozo_saltos_hay = spi_flash_fichero_cadena("PRUEBA  ", "BIN",
-                                                  0, &s_trozo_saltos);
-}
 
 static const spi_flash_alta_t *alta_mira(void)
 {
@@ -9877,9 +10596,10 @@ static uint8_t info_hex32(char *b, uint8_t i, uint32_t v)
 enum { INFO_VERSION = 0, INFO_MICRO, INFO_FLASH, INFO_FLASH2,
        INFO_SRAM, INFO_TCM, INFO_PILA, INFO_CASCADA, INFO_TEMP, INFO_BATT, INFO_TICS, INFO_RTC,
        INFO_XCHIP, INFO_XFS, INFO_XFORMATO, INFO_XALTA, INFO_XFIRMA, INFO_XIMG,
-       INFO_XVOLCADO, INFO_XVOLMICRO, INFO_XPRUEBA, INFO_XRESTAURA, INFO_XAVIONES,
-       INFO_XBORRAF, INFO_XTROZO,
-       INFO_XIPA, INFO_XDMA, INFO_XBUS, INFO_XFRAME, INFO_XMSFRAME, INFO_XAUDIO,
+       INFO_XVOLCADO, INFO_XVOLMICRO, INFO_XVOLROM, INFO_XPRUEBA, INFO_XRESTAURA, INFO_XAVIONES,
+       INFO_XBORRAF, INFO_XDFU,
+       INFO_XIPA, INFO_XDMA, INFO_XBUS, INFO_XFRAME, INFO_XMSFRAME, INFO_XISR,
+       INFO_XAUDIO,
        INFO_XAJUSTES, INFO_XARRANQUE, INFO_COUNT };
 
 /*
@@ -9915,15 +10635,32 @@ _Static_assert((INFO_XIPA - INFO_XVOLCADO) <= UIG_CELLS,
 _Static_assert((INFO_COUNT - INFO_XIPA) <= UIG_CELLS,
                "las filas de Pantalla ya no caben en una pagina");
 
-static const char *const k_info_nombres[INFO_COUNT] = {
-    "Versión", "Micro", "Flash", "Flash alta", "SRAM", "TCM", "Pila", "Cascada",
-    "Temp. del chip", "Batería", "Reloj", "RTC",
-    "Flash externa", "Sist. ficheros", "Formato", "Zona alta", "Firma update4",
-    "Imágenes", "Volcar zona alta", "Volcar flash micro", "Probar imágenes",
-    "Restaurar zona", "Cargar datos", "Borrar zona alta", "Grabar trozo",
-    "Acelerador IPA", "DMA de pantalla", "Bus pantalla", "Fotograma", "Tope de fotograma",
-    "Salud del audio",
-    "Guardados", "Al arrancar"
+/* Primer toque arma la fila, el segundo salta. Se pone a cero al entrar en
+ * la pantalla, igual que el contador de los cinco toques de la version: si
+ * sales y vuelves, hay que volver a tocar dos veces. */
+static uint8_t s_dfu_armado = 0U;
+
+static const texto_t k_info_nombres[INFO_COUNT] = {
+    T("Versión", "Version"), T("Micro", "MCU"), T("Flash", "Flash"),
+    T("Flash alta", "Upper flash"), T("SRAM", "SRAM"), T("TCM", "TCM"),
+    T("Pila", "Stack"), T("Cascada", "Waterfall"),
+    T("Temp. del chip", "Chip temp."), T("Batería", "Battery"),
+    T("Reloj", "Clock"), T("RTC", "RTC"),
+    T("Flash externa", "External flash"), T("Sist. ficheros", "File system"),
+    T("Formato", "Format"), T("Zona alta", "Upper area"),
+    T("Firma update4", "update4 signature"),
+    T("Imágenes", "Images"), T("Volcar zona alta", "Dump upper area"),
+    T("Volcar flash micro", "Dump MCU flash"),
+    T("Volcar ROM de fábrica", "Dump factory ROM"), T("Probar imágenes", "Test images"),
+    T("Restaurar zona", "Restore area"), T("Cargar datos", "Load data"),
+    T("Borrar zona alta", "Erase upper area"),
+    T("Modo DFU", "DFU mode"),
+    T("Acelerador IPA", "IPA accelerator"), T("DMA de pantalla", "Display DMA"),
+    T("Bus pantalla", "Display bus"), T("Fotograma", "Frame"),
+    T("Tope de fotograma", "Frame budget"),
+    T("Carga de audio", "Audio load"),
+    T("Salud del audio", "Audio health"),
+    T("Guardados", "Saves"), T("Al arrancar", "At boot")
 };
 
 /*
@@ -9956,6 +10693,41 @@ static char s_info_val[UIG_CELLS][32];
 static char s_sstv_v2[UIG_CELLS][8];
 static char s_sstv_v3[UIG_CELLS][12];
 
+
+/* El texto de las filas de volcado. Ver el comentario en su case. */
+static const char *volcado_valor_txt(char *buf)
+{
+    uint8_t i;
+    switch (s_vol_estado) {
+    case 1U: {
+        uint32_t t = spi_flash_volcado_total();
+        uint32_t h = spi_flash_volcado_hechos();
+        aj_u2s(buf, (t != 0UL) ? (h * 100UL / t) : 0UL);
+        for (i = 0U; buf[i] != '\0'; i++) { }
+        buf[i++] = ' '; buf[i++] = '%'; buf[i] = '\0';
+        return buf;
+    }
+    case 2U: {
+        /* Cuanto se ha sacado de verdad, que con un fichero mas
+         * pequeño que la zona no es todo - ver volcado_arranca(). */
+        uint8_t k = 0U;
+        buf[k++] = 'h'; buf[k++] = 'e'; buf[k++] = 'c'; buf[k++] = 'h';
+        buf[k++] = 'o'; buf[k++] = ','; buf[k++] = ' ';
+        aj_u2s(&buf[k], s_vol_bytes / 1024UL);
+        while (buf[k] != '\0') { k++; }
+        buf[k++] = ' '; buf[k++] = 'k'; buf[k++] = 'B'; buf[k] = '\0';
+        return buf;
+    }
+    case 3U:
+        /* El motivo EXACTO, que son seis distintos - ver
+         * spi_flash_volcado_porque(). La primera version decia
+         * "falta VOLCADO.BIN" para todos, y el fichero estaba
+         * puesto: el mensaje mandaba a mirar donde no era. */
+        return s_vol_sin_zona ? "no hay zona arriba"
+                          : spi_flash_volcado_porque_txt();
+    default: return tr("tocar", "tap");
+    }
+}
 
 static const char *info_valor(uint8_t id, char *buf)
 {
@@ -9993,7 +10765,7 @@ static const char *info_valor(uint8_t id, char *buf)
          * irq_prio.h y tics_poll(). */
         char *p = buf;
         if (s_tics_perdidos == 0U) {
-            const char *t = "0 tics perdidos";
+            const char *t = tr("0 tics perdidos", "0 lost ticks");
             while (*t != '\0') { *p++ = *t++; }
         } else {
             /* Ancho variable, sin ceros delante: los hora_uN() de este
@@ -10002,7 +10774,8 @@ static const char *info_valor(uint8_t id, char *buf)
             uint32_t v = s_tics_perdidos, div = 1U;
             while (v / div >= 10U) { div *= 10U; }
             while (div > 0U) { *p++ = (char)('0' + ((v / div) % 10U)); div /= 10U; }
-            { const char *t = " PERDIDOS"; while (*t != '\0') { *p++ = *t++; } }
+            { const char *t = tr(" PERDIDOS", " LOST");
+              while (*t != '\0') { *p++ = *t++; } }
         }
         *p = '\0';
         return buf;
@@ -10023,11 +10796,21 @@ static const char *info_valor(uint8_t id, char *buf)
         uint32_t seg;
         uint8_t  i = 0U;
 
-        if (rtc_hw_lxtal_failed()) { return "cristal KO"; }
-        if (!rtc_hw_has_ever_synced()) { return "en hora: nunca"; }
+        if (rtc_hw_lxtal_failed()) { return tr("cristal KO", "crystal dead"); }
+        if (!rtc_hw_has_ever_synced()) {
+            return tr("en hora: nunca", "set: never");
+        }
 
         seg = rtc_hw_get_seconds_since_sync();
-        { const char *t = "en hora hace "; while (*t != '\0') { buf[i++] = *t++; } }
+        /*
+         * DOS TROZOS, uno delante y otro detras, y no una sola cadena: en
+         * español el "hace" va ANTES del numero ("en hora hace 50 m") y en
+         * ingles el "ago" va DESPUES ("set 50 m ago"). Una sola llamada a
+         * tr() solo puede poner texto en un sitio, asi que saldria "set 50 m"
+         * a secas, que no dice si hace 50 minutos o dentro de 50.
+         */
+        { const char *t = tr("en hora hace ", "set ");
+          while (*t != '\0') { buf[i++] = *t++; } }
         if (seg < 3600UL) {
             aj_u2s(&buf[i], seg / 60UL);
             while (buf[i] != '\0') { i++; }
@@ -10045,6 +10828,8 @@ static const char *info_valor(uint8_t id, char *buf)
             while (buf[i] != '\0') { i++; }
             buf[i++] = ' '; buf[i++] = 'd';
         }
+        { const char *t = tr("", " ago");   /* ver el comentario de arriba */
+          while (*t != '\0') { buf[i++] = *t++; } }
         buf[i] = '\0';
         return buf;
     }
@@ -10088,7 +10873,9 @@ static const char *info_valor(uint8_t id, char *buf)
          * ficheros, partida en ocho: '#' es "aqui hay algo". */
         const spi_flash_alta_t *a = alta_mira();
         uint8_t i, k;
-        if (a->bloques_mirados == 0UL) { return "no medida"; }
+        if (a->bloques_mirados == 0UL) {
+            return tr("no medida", "not measured");
+        }
         for (k = 0U; k < 8U; k++) { buf[k] = a->mapa[k] ? '#' : '.'; }
         i = 8U; buf[i++] = ' ';
         aj_u2s(&buf[i], a->bloques_con_datos);
@@ -10105,7 +10892,7 @@ static const char *info_valor(uint8_t id, char *buf)
         uint8_t i;
         /* Sin montar no se monta AQUI: ver imgs_monta(). Se dice, que es
          * mas honrado que enseñar un cero que parece "no hay sitio". */
-        if (!s_imgs_hecho) { return "sin montar"; }
+        if (!s_imgs_hecho) { return tr("sin montar", "not mounted"); }
         /* Si no hay almacen, POR QUE no lo hay. */
         if (imgs_total() == 0UL) { return imgs_veredicto_texto(); }
         aj_u2s(buf, (uint32_t)imgs_cuantas());
@@ -10131,65 +10918,57 @@ static const char *info_valor(uint8_t id, char *buf)
             buf[i++] = 'r'; buf[i] = '\0';
             return buf;
         }
-        case 2U: return "escrita: ya flashea";
-        case 3U: return "INTACTA";
-        case 4U: return "NO CUADRA";
+        case 2U: return tr("escrita: ya flashea", "written: flashing now");
+        case 3U: return tr("INTACTA", "UNTOUCHED");
+        case 4U: return tr("NO CUADRA", "MISMATCH");
         default:
-            if (!s_imgs_hecho) { return "tocar: montar"; }
-            return (imgs_cuantas() > 0U) ? "tocar: verificar"
-                                         : "tocar: escribir";
+            if (!s_imgs_hecho) { return tr("tocar: montar", "tap: mount"); }
+            return (imgs_cuantas() > 0U) ? tr("tocar: verificar", "tap: verify")
+                                         : tr("tocar: escribir", "tap: write");
         }
     }
-    case INFO_XTROZO: {
-        uint32_t tam = 0UL;
-        uint8_t  i;
+    case INFO_XDFU:
+        /*
+         * LA FILA QUE APAGA LA RADIO A PROPOSITO.
+         *
+         * *** El dueno: "ponle un boton dfu en el menu de informacion, en
+         * la parte oculta". *** Salta al cargador DFU de fabrica del chip,
+         * que reprograma la flash por el mismo USB-C. Sirve para cambiar el
+         * CARGADOR DE ARRANQUE sin abrir la radio: un cargador no puede
+         * reescribirse a si mismo, el de fabrica si.
+         *
+         * Pide DOS toques. No porque sea peligroso -se deshace apagando y
+         * encendiendo, no se borra nada- sino porque desde fuera parece que
+         * la radio se ha colgado: pantalla quieta y sin audio. Un toque sin
+         * querer en la pagina oculta y el dueno pensando que ha roto algo.
+         */
+        return s_dfu_armado ? tr("Tocar otra vez", "Tap again")
+                            : tr("Reiniciar en DFU", "Reboot into DFU");
 
-        if (s_trozo_hecho && s_trozo_porque != SPI_ANADE_OK) {
-            return spi_flash_anade_porque_txt(s_trozo_porque);
-        }
-        if (!spi_flash_fichero_tam("PRUEBA  ", "BIN", &tam) || tam == 0UL) {
-            return "tocar: primer trozo";
-        }
-        /* "trozo 7, 28 kB" */
-        { const char *t = "trozo "; i = 0U; while (*t != '\0') { buf[i++] = *t++; } }
-        aj_u2s(&buf[i], tam / TROZO_BYTES);
-        while (buf[i] != '\0') { i++; }
-        buf[i++] = ','; buf[i++] = ' ';
-        aj_u2s(&buf[i], tam / 1024UL);
-        while (buf[i] != '\0') { i++; }
-        buf[i++] = ' '; buf[i++] = 'k'; buf[i++] = 'B';
-        if (s_trozo_saltos_hay) {
-            buf[i++] = ' '; buf[i++] = '(';
-            aj_u2s(&buf[i], s_trozo_saltos);
-            while (buf[i] != '\0') { i++; }
-            buf[i++] = ')';
-        }
-        buf[i] = '\0';
-        return buf;
-    }
     case INFO_XBORRAF:
-        if (s_vol_estado == 1U) { return "en curso"; }
-        if (s_vol_estado == 2U) { return "borrada"; }
+        if (s_vol_estado == 1U) { return tr("en curso", "in progress"); }
+        if (s_vol_estado == 2U) { return tr("borrada", "erased"); }
         if (!spi_flash_fichero_hay(k_zona_nombre, k_vol_ext)) {
             /* Se dice ANTES de tocar, no despues: el que mira la celda
              * tiene que saber que le falta el paracaidas. */
-            return "falta ZONAALTA.BIN";
+            return tr("falta ZONAALTA.BIN", "ZONAALTA.BIN missing");
         }
         return (s_vol_estado == 3U) ? spi_flash_volcado_porque_txt()
-                                    : "tocar: borra todo";
+                                    : tr("tocar: borra todo", "tap: erases everything");
     case INFO_XRESTAURA:
-        if (s_vol_estado == 1U) { return "en curso"; }
+        if (s_vol_estado == 1U) { return tr("en curso", "in progress"); }
         if (s_vol_estado == 3U) { return spi_flash_volcado_porque_txt(); }
-        return (s_vol_estado == 2U) ? "hecho" : "tocar: ZONAALTA.BIN";
+        return (s_vol_estado == 2U) ? tr("hecho", "done")
+                                    : tr("tocar: ZONAALTA.BIN", "tap: ZONAALTA.BIN");
     case INFO_XAVIONES:
-        if (s_vol_estado == 1U) { return "en curso"; }
+        if (s_vol_estado == 1U) { return tr("en curso", "in progress"); }
         /* El motivo PROPIO si lo hay, y el del volcado solo si no. Ver
          * s_datos_porque: cada fallo tiene el suyo desde el 28/09/2026. */
         if (s_vol_estado == 3U) {
             return (s_datos_porque != 0) ? s_datos_porque
                                          : spi_flash_volcado_porque_txt();
         }
-        if (s_vol_estado == 2U) { return "hecho"; }
+        if (s_vol_estado == 2U) { return tr("hecho", "done"); }
         /* Si el fichero no esta en el disco se dice ANTES de tocar: es un
          * traslado de medio mega y enterarse a mitad es tarde. */
         /*
@@ -10204,49 +10983,32 @@ static const char *info_valor(uint8_t id, char *buf)
          * El motivo de verdad lleva desde siempre en s_vol_porque. Lo que
          * faltaba era mirarlo.
          */
-        if (spi_flash_fichero_hay("DATOS   ", "BIN")) { return "tocar: DATOS.BIN"; }
+        if (spi_flash_fichero_hay("DATOS   ", "BIN")) {
+            return tr("tocar: DATOS.BIN", "tap: DATOS.BIN");
+        }
         return spi_flash_volcado_porque_txt();
+    case INFO_XVOLROM:
     case INFO_XVOLMICRO:
-        /* Comparte estado con el otro volcado: solo puede haber uno a la
-         * vez, y el fichero de destino es el mismo. */
-        if (s_vol_estado == 1U) { return "en curso"; }
-        return (s_vol_estado == 2U) ? "hecho" : "tocar";
-    case INFO_XVOLCADO: {
-        uint8_t i;
-        switch (s_vol_estado) {
-        case 1U: {
-            uint32_t t = spi_flash_volcado_total();
-            uint32_t h = spi_flash_volcado_hechos();
-            aj_u2s(buf, (t != 0UL) ? (h * 100UL / t) : 0UL);
-            for (i = 0U; buf[i] != '\0'; i++) { }
-            buf[i++] = ' '; buf[i++] = '%'; buf[i] = '\0';
-            return buf;
-        }
-        case 2U: {
-            /* Cuanto se ha sacado de verdad, que con un fichero mas
-             * pequeño que la zona no es todo - ver volcado_arranca(). */
-            uint8_t k = 0U;
-            buf[k++] = 'h'; buf[k++] = 'e'; buf[k++] = 'c'; buf[k++] = 'h';
-            buf[k++] = 'o'; buf[k++] = ','; buf[k++] = ' ';
-            aj_u2s(&buf[k], s_vol_bytes / 1024UL);
-            while (buf[k] != '\0') { k++; }
-            buf[k++] = ' '; buf[k++] = 'k'; buf[k++] = 'B'; buf[k] = '\0';
-            return buf;
-        }
-        case 3U:
-            /* El motivo EXACTO, que son seis distintos - ver
-             * spi_flash_volcado_porque(). La primera version decia
-             * "falta VOLCADO.BIN" para todos, y el fichero estaba
-             * puesto: el mensaje mandaba a mirar donde no era. */
-            return s_vol_sin_zona ? "no hay zona arriba"
-                                  : spi_flash_volcado_porque_txt();
-        default: return "tocar";
-        }
-    }
+    case INFO_XVOLCADO:
+        /*
+         * LOS TRES VOLCADOS DICEN LO MISMO, Y AHORA DE VERDAD.
+         *
+         * *** El dueno, el 01/10/2026: "volcar rom de fabrica deberia de
+         * hacer algo si lo toco?" *** Y hacia algo: fallar. Pero la fila de
+         * la ROM y la de la flash del micro solo sabian decir "en curso",
+         * "hecho" y "tocar", asi que un fallo -estado 3- caia en el default
+         * y se pintaba "tocar": EXACTAMENTE igual que si no lo hubieras
+         * tocado. La fila mentia por omision.
+         *
+         * Ahora las tres comparten el texto de VOLCADO, que es el que ya
+         * sabia decir el tanto por ciento mientras corre y el motivo exacto
+         * cuando falla -seis distintos, ver spi_flash_volcado_porque()-.
+         */
+        return volcado_valor_txt(buf);
     case INFO_XFIRMA: {
         const spi_flash_alta_t *a = alta_mira();
         uint8_t i;
-        if (!a->firma_hay) { return "no aparece"; }
+        if (!a->firma_hay) { return tr("no aparece", "not present"); }
         i = info_hex32(buf, 0U, a->firma_addr);
         buf[i] = '\0';
         return buf;
@@ -10307,6 +11069,61 @@ static const char *info_valor(uint8_t id, char *buf)
         buf[i] = '\0';
         return buf;
     }
+    case INFO_XISR: {
+        /*
+         * CUANTO DEL PRESUPUESTO SE COME LA INTERRUPCION DEL AUDIO -
+         * 30/09/2026.
+         *
+         * *** Por el dueño: "si activo el boton de ruido tambien se
+         * ralentiza". ***
+         *
+         * El desglose por etapas existe desde el 31/07, pero solo salia por
+         * el puerto serie, que va apagado en la compilacion de verdad
+         * (DEBUG_UART_ENABLED=0). O sea que la pregunta "¿cuanto cuesta la
+         * reduccion de ruido en ESTA radio?" no se podia contestar mirando
+         * la radio, solo estimando desde el simulador. Y una estimacion no
+         * es una medida.
+         *
+         * Aqui sale lo unico que hace falta para contestarla: los ciclos
+         * que tardo el ultimo bloque frente a los que caben en el tiempo de
+         * ese bloque, en tantos por ciento, y aparte lo que se lleva la
+         * reduccion de ruido. Se lee con el boton de Ruido apagado y con el
+         * encendido, y la diferencia es el dato.
+         *
+         * El presupuesto: a 96 kHz y 256 muestras por bloque, un bloque dura
+         * 2,667 ms, que a 200 MHz son 533.333 ciclos. A 48 kHz, el doble de
+         * tiempo. Se calcula, no se escribe: la tasa la puede cambiar el
+         * usuario con la pastilla RATE.
+         */
+        uint32_t tasa = s_nonwfm_use_48k ? 48000UL : 96000UL;
+        uint32_t tope = (SystemCoreClock / tasa) * (uint32_t)SDR_RX_BLOCK_SAMPLES;
+        uint32_t usados = demod_am_get_last_cycles();
+        demod_am_cycles_breakdown_t bd = demod_am_get_last_cycles_breakdown();
+        uint8_t i = 0U;
+
+        if (tope == 0UL) { return "?"; }
+        /* Topado a 999: por encima del 100 % ya no importa cuanto. */
+        {
+            uint32_t pc = (uint32_t)(((uint64_t)usados * 100ULL) / tope);
+            uint32_t pn = (uint32_t)(((uint64_t)bd.nr * 100ULL) / tope);
+
+            if (pc > 999UL) { pc = 999UL; }
+            if (pn > 999UL) { pn = 999UL; }
+            aj_u2s(buf, pc);
+            while (buf[i] != '\0') { i++; }
+            buf[i++] = ' '; buf[i++] = '%';
+            buf[i++] = ','; buf[i++] = ' ';
+            aj_u2s(&buf[i], pn);
+            while (buf[i] != '\0') { i++; }
+            buf[i++] = ' ';
+            /* "rui" / "nr": el nombre corto de la reduccion de ruido. */
+            { const char *t = tr("rui", "nr");
+              while (*t != '\0') { buf[i++] = *t++; } }
+            buf[i] = '\0';
+        }
+        return buf;
+    }
+
     case INFO_XAUDIO: {
         /* Los dos contadores de error que ya llevaban las dos cadenas de
          * audio y que nunca habian salido de su fichero: fallos de trama
@@ -10460,6 +11277,33 @@ static const char *info_valor(uint8_t id, char *buf)
         buf[i++] = '/';
         aj_u2s(&buf[i], (uint32_t)s_tanda_mitad);
         while (buf[i] != '\0') { i++; }
+        /*
+         * Y LA VUELTA ENTERA, QUE ES LO QUE FALTABA - 01/10/2026.
+         *
+         * "b31 t1 p0": la vuelta completa del bucle principal, lo que se
+         * fue en el tactil y lo que se fue en los poll de los
+         * decodificadores, en milisegundos.
+         *
+         * Los cuatro numeros de la izquierda cubren el DIBUJO y nada mas.
+         * Comparando los dos cargadores salio que el dibujo cuesta lo mismo
+         * -13 ms de traza, 0 de empujar pixeles- y aun asi el fotograma
+         * tardaba 31 ms con el nuestro y 24 con el de serie. Con la vuelta
+         * entera medida, la resta dice de una vez donde se van esos 8 ms:
+         *
+         *   b mucho mayor que la suma de la izquierda -> esta fuera del
+         *     dibujo, y t y p dicen si es el tactil o los decodificadores;
+         *   b parecido a la suma -> entonces es espera, y hay que mirar
+         *     quien la impone.
+         */
+        buf[i++] = ' '; buf[i++] = 'b';
+        aj_u2s(&buf[i], (uint32_t)(s_bucle_us / 1000U));
+        while (buf[i] != '\0') { i++; }
+        buf[i++] = '/';
+        aj_u2s(&buf[i], (uint32_t)(s_tactil_us / 1000U));
+        while (buf[i] != '\0') { i++; }
+        buf[i++] = '/';
+        aj_u2s(&buf[i], (uint32_t)(s_polls_us / 1000U));
+        while (buf[i] != '\0') { i++; }
         buf[i] = '\0';
         return buf;
     }
@@ -10492,7 +11336,7 @@ static const char *info_valor(uint8_t id, char *buf)
          * Y sobre todo: si el segundo numero NO cambia al cambiar la
          * velocidad, el problema no es la velocidad de dibujo sino que el
          * ajuste no se esta aplicando. */
-        aj_u2s(&buf[i], (uint32_t)s_wf_lps);
+        aj_u2s(&buf[i], (uint32_t)((s_wf_lps != 0U) ? s_wf_lps : s_wf_lps_vivo));
         while (buf[i] != '\0') { i++; }
         buf[i++] = '/';
         aj_u2s(&buf[i], (uint32_t)k_wf[s_wf_vel].clave);
@@ -10501,7 +11345,7 @@ static const char *info_valor(uint8_t id, char *buf)
          * juntos no hay nada que deducir - 28 lineas a 28 fotogramas es una
          * linea por fotograma, y 28 a 14 son dos. */
         buf[i++] = ' '; buf[i++] = '\xC2'; buf[i++] = '\xB7'; buf[i++] = ' ';
-        aj_u2s(&buf[i], (uint32_t)s_fps);
+        aj_u2s(&buf[i], (uint32_t)((s_fps != 0U) ? s_fps : s_fps_vivo));
         while (buf[i] != '\0') { i++; }
         buf[i++] = 'f';
         buf[i] = '\0';
@@ -10685,6 +11529,117 @@ static void ft8_frec_siguiente(void)
     /* Si no estas en ninguna de la lista, el primer toque te mete por el
      * principio en vez de no hacer nada - igual que en HFDL. */
     s_tune_hz = (uint32_t)(k_ft8_canales[sig].khz * 1000U);
+    apply_lo_tune(s_tune_hz);
+    top_sync();
+    ui_top_draw(&s_top);
+}
+
+/*
+ * LAS FRECUENCIAS DE JTTY - 28/09/2026.
+ *
+ * *** El dueño: "jtty tendra igual que ft8, una lista de frecuencias". ***
+ *
+ * Y la tiene. Cuando escribi el modo dije que no habia frecuencias
+ * asentadas que hubiera podido comprobar, y por eso no puse boton. Lo que
+ * pasa es que no las busque donde estaban: **las trae el propio WSJT-X**,
+ * en models/FrequencyList.cpp de la v3.2.0-rc1, con su comentario al lado
+ * explicando de donde sale cada una.
+ *
+ * Son estas nueve, copiadas de ahi y no deducidas:
+ *
+ *     1.838   la frecuencia de RTTY de siempre
+ *     3.575   se queda por debajo del tramo estrecho de la Region 3 incluso
+ *             con los 1.500 Hz de audio sumados
+ *     7.090   la de RTTY + 10 kHz
+ *    10.140   la de RTTY; el borde de banda (10.150) no deja sitio para los
+ *             10 kHz de costumbre
+ *    14.090   la de RTTY + 10 kHz
+ *    18.100   la de RTTY; +10 kHz sacaria la señal del tramo de datos de
+ *             EE.UU. y la pondria encima de las balizas del NCDXF
+ *    21.090   la de RTTY + 10 kHz
+ *    24.920   la de RTTY; el tramo estrecho (24.920-24.925) no deja sitio
+ *    28.090   la de RTTY + 10 kHz
+ *
+ * SON DIALES, como las de FT8: se sintoniza esto en USB y la señal aparece
+ * alrededor de 1.500 Hz de audio, que es justo donde jtty_rx.c pone el
+ * centro de su ventana de busqueda. No hay que sumar nada.
+ *
+ * Y CUATRO DE LAS NUEVE CAEN ENCIMA DE FT8. HAY QUE SABERLO.
+ *
+ * *** Por el dueño del proyecto: "me has puesto 18.100 como frecuencia de
+ * jtty?" ... "pero si 18.100 es frecuencia de ft8". ***
+ *
+ * Tiene razon en el hecho, y la tabla tambien: en el MISMO fichero de
+ * WSJT-X, cuatro renglones mas arriba, esta `{18100000, Modes::FT8}`. Los
+ * dos modos comparten dial en 17 m porque el sitio de RTTY es ese y subir
+ * 10 kHz sacaria la señal del tramo de datos de EE.UU. Lo dice el
+ * comentario de arriba, que es el de ellos.
+ *
+ * Contra la lista de FT8 de esta misma radio, las coincidencias son:
+ *
+ *     18.100   JTTY y FT8, los dos como frecuencia PRINCIPAL de 17 m
+ *     14.090   JTTY, y la de FT8 para expediciones
+ *     21.090   JTTY, y 21.091 de FT8 para expediciones -1 kHz-
+ *     28.090   JTTY, y 28.091 de FT8 para expediciones -1 kHz-
+ *
+ * La tabla NO se toca por eso: es la del programa que define el modo, y
+ * cambiarla a mi criterio seria inventarme frecuencias, que es exactamente
+ * lo que no quise hacer cuando no puse boton. Pero se escribe aqui porque
+ * en el aire se nota: en 17 m se van a oir los dos, y lo que suene mas
+ * fuerte sera FT8. Si en 18.100 no sale nada en JTTY, el modo no esta
+ * roto - es que ahi vive otro-.
+ */
+typedef struct { uint32_t khz; const char *banda; } jtty_canal_t;
+
+static const jtty_canal_t k_jtty_canales[] = {
+    {  1838UL, "160 m" },
+    {  3575UL,  "80 m" },
+    {  7090UL,  "40 m" },
+    { 10140UL,  "30 m" },
+    { 14090UL,  "20 m" },
+    { 18100UL,  "17 m" },
+    { 21090UL,  "15 m" },
+    { 24920UL,  "12 m" },
+    { 28090UL,  "10 m" },
+};
+#define JTTY_CANAL_COUNT (sizeof(k_jtty_canales) / sizeof(k_jtty_canales[0]))
+
+static char s_jtty_frec_txt[12];
+
+/* El mismo formato que FT8 y HFDL: kHz con punto de millar. */
+static const char *jtty_frec_rotulo(void)
+{
+    uint32_t khz = (uint32_t)(s_tune_hz / 1000U);
+    uint8_t  i = 0U;
+
+    if (khz >= 1000U) {
+        aj_u2s(s_jtty_frec_txt, khz / 1000U);
+        while (s_jtty_frec_txt[i] != '\0') { i++; }
+        s_jtty_frec_txt[i++] = '.';
+        s_jtty_frec_txt[i++] = (char)('0' + ((khz / 100U) % 10U));
+        s_jtty_frec_txt[i++] = (char)('0' + ((khz / 10U) % 10U));
+        s_jtty_frec_txt[i++] = (char)('0' + (khz % 10U));
+        s_jtty_frec_txt[i] = '\0';
+    } else {
+        aj_u2s(s_jtty_frec_txt, khz);
+    }
+    return s_jtty_frec_txt;
+}
+
+static void jtty_frec_siguiente(void)
+{
+    uint32_t khz = (uint32_t)(s_tune_hz / 1000U);
+    uint16_t i, sig = 0U;
+
+    for (i = 0U; i < (uint16_t)JTTY_CANAL_COUNT; i++) {
+        if (k_jtty_canales[i].khz == khz) {
+            sig = (uint16_t)((i + 1U) % JTTY_CANAL_COUNT);
+            break;
+        }
+    }
+    /* Si no estas en ninguna, el primer toque te mete por el principio en
+     * vez de no hacer nada - igual que en FT8 y HFDL. */
+    s_tune_hz = (uint32_t)(k_jtty_canales[sig].khz * 1000U);
     apply_lo_tune(s_tune_hz);
     top_sync();
     ui_top_draw(&s_top);
@@ -11008,15 +11963,17 @@ static uint8_t grid_grupo(uint16_t i)
 static const char *grid_grupo_nombre(uint8_t g)
 {
     switch (s_grid_pant) {
-    case GRID_AJUSTES: return k_aj_paginas[g];
-    case GRID_BANDAS:  return k_band_familias[g];
-    case GRID_PASOS:   return "Paso de sintonía";
-    case GRID_INFO:    return (g == 0U) ? "Información"
-                                        : ((g == 1U) ? "Flash externa"
-                                        : ((g == 2U) ? "Volcar y restaurar" : "Pantalla"));
-    case GRID_SSTV:    return "Modo de SSTV";
-    case GRID_HFDL:    return (g == 0U) ? "HFDL de noche (bajo 10 MHz)"
-                                        : "HFDL de día (sobre 10 MHz)";
+    case GRID_AJUSTES: return k_aj_paginas[g][idioma()];
+    case GRID_BANDAS:  return k_band_familias[g][idioma()];
+    case GRID_PASOS:   return tr("Paso de sintonía", "Tuning step");
+    case GRID_INFO:    return (g == 0U) ? tr("Información", "Information")
+                                        : ((g == 1U) ? tr("Flash externa", "External flash")
+                                        : ((g == 2U) ? tr("Volcar y restaurar", "Dump and restore")
+                                                     : tr("Pantalla", "Display")));
+    case GRID_SSTV:    return tr("Modo de SSTV", "SSTV mode");
+    case GRID_HFDL:    return (g == 0U)
+                       ? tr("HFDL de noche (bajo 10 MHz)", "HFDL at night (below 10 MHz)")
+                       : tr("HFDL de día (sobre 10 MHz)",  "HFDL by day (above 10 MHz)");
     default:           return "";
     }
 }
@@ -11082,8 +12039,10 @@ static void grid_fill(void)
     s_grid.cursor  = s_grid_cursor;
     s_grid.marcada = 0xFFU;
 
-    s_grid.nav[0] = "Anterior";  s_grid.nav_on[0] = (uint8_t)(s_grid_page > 0U);
-    s_grid.nav[1] = "Siguiente"; s_grid.nav_on[1] = (uint8_t)(s_grid_page + 1U < s_grid.paginas);
+    s_grid.nav[0] = tr("Anterior", "Previous");
+    s_grid.nav_on[0] = (uint8_t)(s_grid_page > 0U);
+    s_grid.nav[1] = tr("Siguiente", "Next");
+    s_grid.nav_on[1] = (uint8_t)(s_grid_page + 1U < s_grid.paginas);
 
     for (i = 0U; i < UIG_CELLS; i++) {
         s_grid.cel[i].l1 = "";
@@ -11096,7 +12055,7 @@ static void grid_fill(void)
         case GRID_AJUSTES: {
             const ajuste_t *a = &k_ajustes[primero + i];
             const char *v = ajuste_valor(a->id, s_aj_val[i]);
-            s_grid.cel[i].l1 = a->nombre;
+            s_grid.cel[i].l1 = a->nombre[idioma()];
             /* Los ajustes que son una accion y no un valor dejan el renglon
              * vacio: la pantalla entera se toca, asi que poner "tocar" en
              * tres celdas solo repite lo que ya vale para todas. */
@@ -11106,7 +12065,7 @@ static void grid_fill(void)
         case GRID_BANDAS: {
             const band_preset_t *b = &k_band_presets[primero + i];
             uint8_t m;
-            s_grid.cel[i].l1 = b->label;
+            s_grid.cel[i].l1 = b->label[idioma()];
             s_grid.cel[i].l2 = b->rango;
             s_grid.cel[i].l3 = "";
             for (m = 0U; m < (uint8_t)DEMOD_MODE_ENTRY_COUNT; m++) {
@@ -11164,7 +12123,7 @@ static void grid_fill(void)
         }
         case GRID_INFO: {
             uint8_t id = (uint8_t)(primero + i);
-            s_grid.cel[i].l1 = k_info_nombres[id];
+            s_grid.cel[i].l1 = k_info_nombres[id][idioma()];
             s_grid.cel[i].l2 = info_valor(id, s_info_val[i]);
             break;
         }
@@ -11200,7 +12159,7 @@ static void grid_fill(void)
         case GRID_PASOS: {
             uint16_t k = (uint16_t)(primero + i);
             s_grid.cel[i].l1 = k_tune_step_labels_ui[k];
-            s_grid.cel[i].l2 = k_paso_desc[k];
+            s_grid.cel[i].l2 = k_paso_desc[k][idioma()];
             if (k == s_tune_step_idx) { s_grid.marcada = i; }
             break;
         }
@@ -11286,11 +12245,15 @@ static void grid_apply(uint8_t cel)
             }
             if (id == (uint8_t)INFO_XVOLCADO)       { volcado_arranca(); }
             else if (id == (uint8_t)INFO_XVOLMICRO) { volcado_arranca_micro(); }
+            else if (id == (uint8_t)INFO_XVOLROM)   { volcado_arranca_rom(); }
             else if (id == (uint8_t)INFO_XPRUEBA)   { prueba_arranca(); }
             else if (id == (uint8_t)INFO_XRESTAURA) { restaura_arranca(); }
             else if (id == (uint8_t)INFO_XAVIONES)  { (void)datos_arranca(); }
             else if (id == (uint8_t)INFO_XBORRAF)   { borra_zona_arranca(); }
-            else if (id == (uint8_t)INFO_XTROZO)    { trozo_arranca(); }
+            else if (id == (uint8_t)INFO_XDFU) {
+                if (s_dfu_armado) { dfu_pide_reinicio(); }   /* no vuelve */
+                s_dfu_armado = 1U;
+            }
             else if (id == (uint8_t)INFO_XIPA)      { ipa_blit_pon(!ipa_blit_hay()); }
             else if (id == (uint8_t)INFO_XDMA)      { lcd_dma_pon(!lcd_dma_hay()); }
             else if (id == (uint8_t)INFO_XMSFRAME) {
@@ -11343,6 +12306,7 @@ static void grid_show(grid_pant_t p)
      * que esta escondido a proposito. Lo YA destapado no se vuelve a tapar:
      * eso solo lo hace apagar la radio. */
     s_info_toques = 0U;
+    s_dfu_armado  = 0U;   /* salir y volver desarma la fila DFU */
     s_grid_pant = p;
     s_grid_page = 0U;
     s_grid_cursor = 0;
@@ -11697,6 +12661,7 @@ static void menu_mode_preset_callback(void *widget, ui_event_t event, void *user
         if (!k_demod_modes[idx].wspr) { wspr_modo_stop(); }
         if (!k_demod_modes[idx].ais)  { ais_modo_stop(); }
         if (!k_demod_modes[idx].ale)  { ale_modo_stop(); }
+        if (!k_demod_modes[idx].jtty) { jtty_modo_stop(); }
 
         /*
          * EL FILTRO DE CANAL VA ANTES QUE EL RECEPTOR, y eso no es cosmetico:
@@ -11710,6 +12675,7 @@ static void menu_mode_preset_callback(void *widget, ui_event_t event, void *user
         if (k_demod_modes[idx].ft8)   { ft8_modo_start(12000.0f); }
         if (k_demod_modes[idx].ais)   { (void)ais_modo_start(); }
         if (k_demod_modes[idx].ale)   { (void)ale_modo_start(); }
+        if (k_demod_modes[idx].jtty)  { (void)jtty_modo_start(); }
 
         /*
          * Y el octavo: HFDL. Mismo aviso que FT8 justo arriba y por la misma
@@ -12183,11 +13149,11 @@ static char           s_kbd_lectura[16];
 
 /* Los rotulos. En espanol y en palabras, no "DEL/CLR/BACK/SET": el sitio da
  * de sobra y "Vaciar" no hay que aprenderselo. */
-static const char *const k_kbd_freq_rot[UIK_KEYS] = {
-    "1", "2", "3", "Borrar",
-    "4", "5", "6", "Vaciar",
-    "7", "8", "9", "Volver",
-    ",", "0", "kHz", "MHz",
+static const texto_t k_kbd_freq_rot[UIK_KEYS] = {
+    T("1","1"), T("2","2"), T("3","3"), T("Borrar","Delete"),
+    T("4","4"), T("5","5"), T("6","6"), T("Vaciar","Clear"),
+    T("7","7"), T("8","8"), T("9","9"), T("Volver","Back"),
+    T(",",","), T("0","0"), T("kHz","kHz"), T("MHz","MHz"),
 };
 static const uint8_t k_kbd_freq_tipo[UIK_KEYS] = {
     UIK_DIGITO, UIK_DIGITO, UIK_DIGITO, UIK_BORRA,
@@ -12195,11 +13161,11 @@ static const uint8_t k_kbd_freq_tipo[UIK_KEYS] = {
     UIK_DIGITO, UIK_DIGITO, UIK_DIGITO, UIK_VUELVE,
     UIK_DIGITO, UIK_DIGITO, UIK_ACEPTA, UIK_ACEPTA,
 };
-static const char *const k_kbd_hora_rot[UIK_KEYS] = {
-    "1", "2", "3", "Borrar",
-    "4", "5", "6", "Vaciar",
-    "7", "8", "9", "Volver",
-    0,   "0", "Poner en hora", 0,
+static const texto_t k_kbd_hora_rot[UIK_KEYS] = {
+    T("1","1"), T("2","2"), T("3","3"), T("Borrar","Delete"),
+    T("4","4"), T("5","5"), T("6","6"), T("Vaciar","Clear"),
+    T("7","7"), T("8","8"), T("9","9"), T("Volver","Back"),
+    T(0,0),     T("0","0"), T("Poner en hora","Set the clock"), T(0,0),
 };
 static const uint8_t k_kbd_hora_tipo[UIK_KEYS] = {
     UIK_DIGITO, UIK_DIGITO, UIK_DIGITO, UIK_BORRA,
@@ -12302,19 +13268,19 @@ static void kbd_show(kbd_modo_t modo)
         s_freq_entry_value = 0U;
         s_freq_entry_digits = 0U;
         s_freq_entry_point_pos = FREQ_ENTRY_NO_POINT;
-        s_kbd.titulo = "Frecuencia";
-        s_kbd.pista  = "teclea y elige la unidad";
+        s_kbd.titulo = tr("Frecuencia", "Frequency");
+        s_kbd.pista  = tr("teclea y elige la unidad", "type it and pick the unit");
         for (i = 0U; i < UIK_KEYS; i++) {
-            s_kbd.tecla[i] = k_kbd_freq_rot[i];
+            s_kbd.tecla[i] = k_kbd_freq_rot[i][idioma()];
             s_kbd.tipo[i]  = k_kbd_freq_tipo[i];
         }
     } else {
         s_time_entry_value = 0U;
         s_time_entry_digits = 0U;
-        s_kbd.titulo = "Hora";
+        s_kbd.titulo = tr("Hora", "Time");
         s_kbd.pista  = "cuatro cifras seguidas, HHMM";
         for (i = 0U; i < UIK_KEYS; i++) {
-            s_kbd.tecla[i] = k_kbd_hora_rot[i];
+            s_kbd.tecla[i] = k_kbd_hora_rot[i][idioma()];
             s_kbd.tipo[i]  = k_kbd_hora_tipo[i];
         }
     }
@@ -12533,37 +13499,38 @@ static void det_sync(void)
 
     switch (s_menu_detail_target) {
     case ENCODER_TARGET_VOLUME:
-        s_det.titulo = "Volumen";
+        s_det.titulo = tr("Volumen", "Volume");
         s_det.valor  = ajuste_valor(AJ_VOL, s_det_val);
         break;
     case ENCODER_TARGET_SQUELCH:
-        s_det.titulo = "Silenciador";
+        s_det.titulo = tr("Silenciador", "Squelch");
         s_det.valor  = ajuste_valor(AJ_SQL, s_det_val);
         break;
     case ENCODER_TARGET_PGA:
-        s_det.titulo = "Ganancia de entrada";
+        s_det.titulo = tr("Ganancia de entrada", "Input gain");
         s_det.valor  = ajuste_valor(AJ_PGA, s_det_val);
-        s_det.pie    = "PGA del códec, 0 a 47,5 dB";
+        s_det.pie    = tr("PGA del códec, 0 a 47,5 dB", "codec PGA, 0 to 47,5 dB");
         break;
     case ENCODER_TARGET_NR:
-        s_det.titulo = "Reducción de ruido";
+        s_det.titulo = tr("Reducción de ruido", "Noise reduction");
         s_det.valor  = ajuste_valor(AJ_NR, s_det_val);
         break;
     case ENCODER_TARGET_BACKLIGHT:
-        s_det.titulo = "Brillo";
+        s_det.titulo = tr("Brillo", "Brightness");
         s_det.valor  = ajuste_valor(AJ_BRILLO, s_det_val);
         break;
     case ENCODER_TARGET_SMOOTH:
-        s_det.titulo = "Suavizado";
+        s_det.titulo = tr("Suavizado", "Smoothing");
         s_det.valor  = ajuste_valor(AJ_SUAVIZ, s_det_val);
-        s_det.pie    = "cuánto se promedia entre fotogramas";
+        s_det.pie    = tr("cuánto se promedia entre fotogramas",
+                          "how much is averaged between frames");
         break;
     case ENCODER_TARGET_RTTY_SHIFT:
-        s_det.titulo = "Desplazamiento RTTY";
+        s_det.titulo = tr("Desplazamiento RTTY", "RTTY shift");
         s_det.valor  = ajuste_valor(AJ_RTTY_SHIFT, s_det_val);
         break;
     case ENCODER_TARGET_CW_TONE:
-        s_det.titulo = "Tono de CW";
+        s_det.titulo = tr("Tono de CW", "CW pitch");
         s_det.valor  = ajuste_valor(AJ_CW_TONO, s_det_val);
         break;
     case ENCODER_TARGET_FILTRO: {
@@ -12587,7 +13554,7 @@ static void det_sync(void)
             while (s_fil_det[i] != '\0') { i++; }
             s_fil_det[i++] = ' '; s_fil_det[i++] = 'H'; s_fil_det[i++] = 'z';
             s_fil_det[i] = '\0';
-            s_det.titulo = "Filtro de CW: ancho";
+            s_det.titulo = tr("Filtro de CW: ancho", "CW filter: width");
             s_det.valor  = s_fil_det;
             s_det.alt    = 0;
             s_det.alt_on = 0U;
@@ -12597,10 +13564,10 @@ static void det_sync(void)
             s_det.preset_on = fil_rapido_puesto();
             break;
         }
-        s_det.titulo = s_fil_ajusta_hi ? "Filtro: corte alto"
-                                       : "Filtro: corte bajo";
+        s_det.titulo = s_fil_ajusta_hi ? tr("Filtro: corte alto", "Filter: high cut")
+                                       : tr("Filtro: corte bajo", "Filter: low cut");
         s_det.valor  = s_fil_det;
-        s_det.alt    = "Cambiar a LO / HI";
+        s_det.alt    = tr("Cambiar a LO / HI", "Switch to LO / HI");
         s_det.alt_on = s_fil_ajusta_hi;
         for (i = 0U; i < (uint8_t)UID_PRE_N; i++) {
             s_det.preset[i] = k_fil_rapidos[i].rotulo;
@@ -12616,10 +13583,10 @@ static void det_sync(void)
         uint8_t i = 0;
         if (v < 0) { s_det_val[i++] = '-'; v = (int16_t)(-v); }
         top_u2s(&s_det_val[i], (uint32_t)v);
-        s_det.titulo = s_scale_adjust_max ? "Escala: límite alto"
-                                          : "Escala: límite bajo";
+        s_det.titulo = s_scale_adjust_max ? tr("Escala: límite alto", "Scale: upper limit")
+                                          : tr("Escala: límite bajo", "Scale: lower limit");
         s_det.valor  = s_det_val;
-        s_det.alt    = "Cambiar a LO / HI";
+        s_det.alt    = tr("Cambiar a LO / HI", "Switch to LO / HI");
         s_det.alt_on = s_scale_adjust_max;
         break;
     }
@@ -12636,6 +13603,25 @@ static void det_touch(uint16_t x, uint16_t y, uint8_t pressed)
     if (pressed) {
         if (s_det_press < 0) {
             s_det_press = ui_det_hit(x, y);
+            /*
+             * MEDIO PIE NO EXISTE CUANDO NO HAY DOS BOTONES - 30/09/2026.
+             *
+             * ui_det_hit() reparte el pie por la x -izquierda ALT, derecha
+             * VOLVER- porque es un mapa de coordenadas y no sabe cuantos
+             * botones hay. Con st->alt a 0, que son todas las pantallas de
+             * detalle menos Filtro y Escala, el pie es UN solo boton de 8 a
+             * 792. La ACCION salia bien (el `else` de det_touch cae en
+             * menu_grid_show()), pero el DIBUJO solo hunde el boton cuando
+             * lo pulsado es UID_HIT_VOLVER: tocando la mitad izquierda de
+             * "Volver" no se hundia nada. En un tactil resistivo que ya pide
+             * fuerza, eso es exactamente el "no ha entrado" que hace que des
+             * el segundo toque.
+             *
+             * Se normaliza aqui, que es donde se sabe si hay uno o dos.
+             */
+            if (!s_det.alt && s_det_press == UID_HIT_ALT) {
+                s_det_press = UID_HIT_VOLVER;
+            }
             if (s_det_press >= 0) { det_sync(); ui_det_draw(&s_det); }
         }
         return;
@@ -12652,8 +13638,10 @@ static void det_touch(uint16_t x, uint16_t y, uint8_t pressed)
         case UID_HIT_MENOS:  encoder_inject_detents(-1); break;
         case UID_HIT_MAS:    encoder_inject_detents(1);  break;
         case UID_HIT_ALT:
-            /* Solo existe en escala; en las demas ese medio pie es "Volver",
-             * que ya lo coge la otra mitad. */
+            /* Solo existe en Escala y en Filtro. En las demas ya no llega
+             * aqui: la pulsacion se normaliza a VOLVER al cogerla, para que
+             * el boton se hunda tambien por la mitad izquierda - ver el
+             * comentario de arriba. El `else` se queda como red. */
             if (s_menu_detail_target == ENCODER_TARGET_SCALE ||
                 s_menu_detail_target == ENCODER_TARGET_FILTRO) {
                 encoder_inject_press();
@@ -12663,7 +13651,24 @@ static void det_touch(uint16_t x, uint16_t y, uint8_t pressed)
             break;
         case UID_HIT_VOLVER: menu_grid_show(); break;
         default:
-            if (k >= UID_HIT_PRE0 && k < UID_HIT_PRE0 + UID_PRE_N) {
+            /*
+             * Y SOLO SI DE VERDAD HAY BOTONES - 30/09/2026.
+             *
+             * ui_det_hit() devuelve UID_HIT_PRE0+i para CUALQUIER toque en su
+             * franja (y de 316 a 375), porque no recibe el estado y no puede
+             * saber si esa fila esta pintada. La fila de ajustes rapidos solo
+             * existe en la pantalla del FILTRO (ver det_sync(), que apaga
+             * s_det.pre en todas las demas).
+             *
+             * O sea que en Volumen, Silenciador, Ganancia, Reduccion, Brillo,
+             * Suavizado, Desplazamiento, Tono y Escala esa franja esta VACIA
+             * -cero pixeles distintos del fondo- y un dedo ahi cambiaba el
+             * filtro de audio, el ancho de CW y la chapa BW de la barra de
+             * estado, y lo marcaba para guardar en CONFIG.CSV. Sin que se
+             * iluminara nada, porque no hay nada que iluminar.
+             */
+            if (s_menu_detail_target == ENCODER_TARGET_FILTRO
+                && k >= UID_HIT_PRE0 && k < UID_HIT_PRE0 + UID_PRE_N) {
                 fil_rapido_pon((uint8_t)(k - UID_HIT_PRE0));
                 det_sync();
                 ui_det_draw(&s_det);
@@ -12751,6 +13756,7 @@ static void menu_screen_close(void)
      * envolvente de cada bloque en la interrupcion para nada. hora_cerrar()
      * pasa por aqui despues de restaurar la frecuencia, asi que esto es la
      * red para las otras salidas -el boton de Ajustes, la pulsacion larga-. */
+    s_menu_qth_active = 0U;
     if (s_menu_hora_active) {
         s_menu_hora_active = 0U;
         dcf77_stop();
@@ -13204,7 +14210,11 @@ static void rf_agc_poll(void)
 #define FT8_PANEL_FILAS (uint8_t)((FT8_PANEL_H - UDG_HDR_H) / UDG_LINE_H)
 
 #define RTTY_SCOPE_GAP_H   2U /* thin gap between the scope trace and the text panel, same idea as WF_PANEL_Y's own "64+280+2" gap from the normal spectrum panel */
-#define RTTY_SCOPE_TRACE_H (uint16_t)(RTTY_TEXT_PANEL_Y - SPEC_Y - RTTY_SCOPE_GAP_H) /* 358 - 144 - 2 = 212, replaces the old SPEC_H-based bar_area_h */
+#define RTTY_SCOPE_TRACE_H (uint16_t)(RTTY_TEXT_PANEL_Y - SPEC_Y - RTTY_SCOPE_GAP_H) /* 248 - 104 - 2 = 142. Decia "358 - 144 - 2 = 212" hasta el 28/09/2026:
+    * son las constantes de antes del rediseno de la franja de estado, que
+    * subio SPEC_Y de 64 a 104 -lo explica main.c donde define RTTY_TEXT_PANEL_Y-.
+    * Un alto de traza equivocado en 70 px es con lo que alguien razona si algo
+    * cabe encima del panel de texto. Sustituye al viejo bar_area_h basado en SPEC_H */
 
 #define RTTY_TEXT_SCALE    2U
 #define RTTY_TEXT_LINE_H   ((uint16_t)UDG_LINE_H)
@@ -13857,8 +14867,8 @@ static void wspr_chapa(void)
          * arrancaria donde no toca. Dibujar una barra seria fingir que
          * hay un ciclo al que agarrarse. */
         s_digi.barra_v    = 0U;
-        s_digi.barra_txt  = "pon el reloj en hora";
-        s_digi.chip       = "sin hora";
+        s_digi.barra_txt  = tr("pon el reloj en hora", "set the clock first");
+        s_digi.chip       = tr("sin hora", "no clock");
         s_digi.enganchado = 0U;
         return;
     }
@@ -13966,7 +14976,7 @@ static void ale_chapa(void)
 
     if (!ale_modo_enganchado()) {
         s_digi.barra_v = 0U;
-        s_digi.barra_txt = "buscando palabra";
+        s_digi.barra_txt = tr("buscando palabra", "searching for a word");
     } else {
         i = 0U;
         barra[i++] = 'c'; barra[i++] = 'a'; barra[i++] = 'l'; barra[i++] = 'i';
@@ -14035,7 +15045,7 @@ static void ft8_chapa(void)
         /* Sin hora no hay ranura que dibujar, y decir "0/15" seria fingir que
          * la hay. La barra se queda vacia y lo dice con todas las letras. */
         s_digi.barra_v   = 0U;
-        s_digi.barra_txt = "pon el reloj en hora";
+        s_digi.barra_txt = tr("pon el reloj en hora", "set the clock first");
         s_digi.chip = ft8_modo_estado_txt();
         s_digi.enganchado = 0U;
         return;
@@ -14201,29 +15211,56 @@ static void ft8_mapa_pinta(gfx2_surf_t *s, void *ctx)
      *
      *   FT8    del LOCALIZADOR que viene en el mensaje. Es un cuadrado de
      *          150 km de lado, asi que se pinta su centro.
+     *   WSPR   igual, de la columna "Loc." de la baliza.
+     *   JTTY   igual, del atomo que lo traiga dentro del mensaje.
      *   HFDL   de la POSICION del avion, en grados por diez mil. Son
      *          coordenadas de verdad, medidas por el propio avion.
      *   AIS    igual, del barco.
      *
-     * Y por eso los tres van en un color distinto: no es decoracion, es
-     * que un punto de FT8 significa "por aqui cerca" y uno de AIS
-     * significa "aqui".
+     * Y por eso cada uno va en un color distinto: no es decoracion, es que
+     * un punto de FT8 significa "por aqui cerca" y uno de AIS significa
+     * "aqui".
+     *
+     *     FT8   verde      WSPR  rojo claro    JTTY  violeta
+     *     HFDL  ambar      AIS   azul
+     */
+    /*
+     * EL ORDEN DE LOS RENGLONES NO ES EL MISMO EN TODOS, Y AQUI IMPORTA.
+     *
+     * *** Descubierto el 28/09 por la tarde al poner el mapa de WSPR: el
+     * de JTTY, que puse esta misma mañana, tenia el resalte AL REVES. ***
+     *
+     * FT8 y WSPR meten el renglon nuevo en el 0 y empujan a los demas,
+     * asi que `linea(0)` es EL MAS NUEVO y sus paneles le dan la vuelta
+     * para pintar de viejo a nuevo. JTTY no: mete el nuevo AL FINAL y su
+     * panel lo pinta en orden, asi que ahi `linea(0)` es EL MAS VIEJO.
+     *
+     * Yo copie el bucle de FT8 a JTTY sin mirar eso, y el resultado era
+     * que en JTTY se rellenaban los tres puntos MAS VIEJOS y el mas viejo
+     * quedaba encima del mas nuevo. No se ve como un fallo -salen puntos,
+     * y los que salen estan bien puestos- sino como que el resalte no
+     * significa nada.
+     *
+     * Por eso los tres bucles van ahora por RANGO DE ANTIGUEDAD y no por
+     * indice: `r` = 1 es el mas nuevo, pase lo que pase con el orden de
+     * dentro. Del mas viejo al mas nuevo, y el mas nuevo ENCIMA, que es lo
+     * que hace que cuando dos estaciones caen en el mismo cuadrado se vea
+     * lo de ahora.
      */
     if (ft8_modo_activo()) {
-        uint8_t i;
+        uint8_t n = 0U, r;
 
-        /*
-         * De la mas vieja a la mas nueva, y la mas nueva ENCIMA: asi,
-         * cuando dos estaciones caen en el mismo cuadrado, lo que se ve es
-         * lo de ahora. Solo las tres ultimas se pintan rellenas.
-         */
-        for (i = (uint8_t)FT8_MODO_LINEAS; i > 0U; i--) {
+        while (n < (uint8_t)FT8_MODO_LINEAS
+               && ft8_modo_linea(n)[0] != '\0') { n++; }
+        for (r = n; r > 0U; r--) {
             char loc[8];
+            /* FT8: linea(0) es la mas nueva, o sea indice = rango - 1. */
+            const char *l = ft8_modo_linea((uint8_t)(r - 1U));
 
-            if (!mapa_loc_de_linea(ft8_modo_linea((uint8_t)(i - 1U)), loc)) { continue; }
+            if (!mapa_loc_de_linea(l, loc)) { continue; }
             if (!mapa_loc_a_px(&caja, loc, &px, &py)) { continue; }
-            mapa_marca(s, &caja, px, py, (uint8_t)(i <= 3U),
-                       gfx2_rgb((i <= 3U) ? 0x46E0A0UL : 0x2E8C68UL));
+            mapa_marca(s, &caja, px, py, (uint8_t)(r <= 3U),
+                       gfx2_rgb((r <= 3U) ? 0x46E0A0UL : 0x2E8C68UL));
         }
     } else if (hfdl_modo_activo()) {
         uint32_t n = hfdl_modo_aviones();
@@ -14249,6 +15286,70 @@ static void ft8_mapa_pinta(gfx2_surf_t *s, void *ctx)
             if (!mapa_e4_a_px(&caja, lo, la, &px, &py)) { continue; }
             mapa_marca(s, &caja, px, py, (uint8_t)(i <= 3UL),
                        gfx2_rgb((i <= 3UL) ? 0x5AC8FFUL : 0x357C9EUL));
+        }
+    } else if (wspr_modo_activo()) {
+        /*
+         * WSPR, del localizador de la baliza - 28/09/2026, por el dueño:
+         * "wspr no tiene mapa".
+         *
+         * Aqui el localizador tiene COLUMNA PROPIA -las de WSPR son Hora,
+         * Indicativo, Loc., dBm, Desvio y Cal.-, o sea el campo 3, y no hay
+         * que buscarlo por el mensaje como en JTTY. Cuando el mensaje es de
+         * los que no llevan localizador la columna viene vacia y
+         * mapa_loc_de_campo() devuelve 0, que es lo que hace falta: ese
+         * renglon simplemente no pone punto.
+         *
+         * Los localizadores de WSPR son de CUATRO caracteres, o sea un
+         * cuadrado de unos 150 km: el punto dice "por esta zona", igual que
+         * en FT8 y por lo mismo.
+         */
+        uint8_t n = (uint8_t)wspr_modo_lineas(), r;
+
+        if (n > (uint8_t)WSPR_MODO_LINEAS) { n = (uint8_t)WSPR_MODO_LINEAS; }
+        for (r = n; r > 0U; r--) {
+            char loc[8];
+            /* WSPR: linea(0) es la mas nueva, como FT8. */
+            const char *l = wspr_modo_linea((uint32_t)(r - 1U));
+
+            if (!mapa_loc_de_campo(l, 3U, loc)) { continue; }
+            if (!mapa_loc_a_px(&caja, loc, &px, &py)) { continue; }
+            mapa_marca(s, &caja, px, py, (uint8_t)(r <= 3U),
+                       gfx2_rgb((r <= 3U) ? 0xFF8A7AUL : 0xA8564BUL));
+        }
+    } else if (jtty_modo_activo()) {
+        /*
+         * JTTY, del localizador que venga en el mensaje - 28/09/2026, por
+         * el dueño: "y ademas tendra mapa digo yo".
+         *
+         * Dos diferencias con FT8, y las dos importan:
+         *
+         *   el CAMPO es el cuarto, no el quinto: las columnas de JTTY son
+         *   Hora, Desvio, Cal. y Mensaje;
+         *
+         *   y el localizador puede estar en CUALQUIER palabra, porque un
+         *   mensaje son varios atomos pegados y el localizador viene en el
+         *   suyo. Ver mapa_loc_de_campo().
+         *
+         * En su propio color, como los otros tres: un punto de JTTY
+         * significa lo mismo que uno de FT8 -"por aqui cerca", que es lo
+         * que dice un cuadrado de localizador- pero de otro modo.
+         */
+        uint8_t n = jtty_modo_lineas(), r;
+
+        if (n > (uint8_t)JTTY_MODO_LINEAS) { n = (uint8_t)JTTY_MODO_LINEAS; }
+        for (r = n; r > 0U; r--) {
+            char loc[8];
+            /*
+             * JTTY AL CONTRARIO: linea(0) es la MAS VIEJA, o sea que el
+             * indice del rango r es n - r. Aqui estaba el fallo -copie el
+             * `r - 1` de FT8- y por eso se rellenaban los tres mas viejos.
+             */
+            const char *l = jtty_modo_linea((uint8_t)(n - r));
+
+            if (!mapa_loc_de_campo(l, 4U, loc)) { continue; }
+            if (!mapa_loc_a_px(&caja, loc, &px, &py)) { continue; }
+            mapa_marca(s, &caja, px, py, (uint8_t)(r <= 3U),
+                       gfx2_rgb((r <= 3U) ? 0xC89AFFUL : 0x7A5CA8UL));
         }
     } else {
         /* nadie mas tiene mapa */
@@ -14289,10 +15390,35 @@ static void ft8_mapa_draw(void)
  * ALE a la tabla de modos y a la lista de al lado no, tres veces
  * seguidas, y el panel no cambiaba al elegirlos.
  */
+/*
+ * QUIEN TIENE MAPA, EN UN SOLO SITIO - 28/09/2026.
+ *
+ * *** Por el dueño del proyecto: "wspr no tiene mapa". ***
+ *
+ * Y la tenia escrita A MANO EN DOS SITIOS: aqui, para decidir si se pinta
+ * el mapa o la lista, y en el despacho del toque, para decidir si un dedo
+ * en esa zona es un arrastre del mapa. Añadir WSPR habria sido acordarse
+ * de los dos.
+ *
+ * Eso ya fallo dos veces en este mismo panel -`digi_panel_active()` con
+ * WSPR, AIS y ALE el 28 por la mañana, y `solo_chip()` borrando el boton
+ * del mapa tres veces seguidas-, asi que en vez de añadir un modo a dos
+ * listas se quita una de las dos.
+ *
+ * Lo que decide quien tiene mapa es si se le puede sacar una POSICION a lo
+ * que decodifica: FT8, WSPR y JTTY traen localizador en el mensaje, y HFDL
+ * y AIS traen coordenadas de verdad. ALE y los demas no traen nada.
+ */
+static uint8_t modo_tiene_mapa(void)
+{
+    return (uint8_t)(ft8_modo_activo() || hfdl_modo_activo()
+                     || ais_modo_activo() || jtty_modo_activo()
+                     || wspr_modo_activo());
+}
+
 static void panel_pinta(void)
 {
-    if (s_ft8_mapa
-        && (ft8_modo_activo() || hfdl_modo_activo() || ais_modo_activo())) {
+    if (s_ft8_mapa && modo_tiene_mapa()) {
         uint8_t k;
 
         /*
@@ -14302,8 +15428,49 @@ static void panel_pinta(void)
          * en el hueco que dejan.
          */
         for (k = 0U; k < (uint8_t)UDG_ROWS_MAX; k++) { s_digi.fila[k] = 0; }
-        s_digi.titulos = "toca el mapa para volver a la lista";
-        ui_digi_draw_texto(&s_digi);
+        /*
+         * SIN RENGLON DE TITULOS, y no por ahorrar - 30/09/2026.
+         *
+         * Aqui habia esto:
+         *
+         *     s_digi.titulos = tr("toca el mapa para volver a la lista",
+         *                         "tap the map to go back to the list");
+         *
+         * y no se ha visto NUNCA. ui_digi pinta los titulos en
+         * `st->y + UDG_HDR_H`, o sea en FT8_PANEL_Y + 30, y el mapa empieza
+         * en FT8_MAPA_Y, que es FT8_PANEL_Y + UDG_HDR_H: EL MISMO PIXEL. La
+         * linea de abajo lo tapa entero, los 18 px de alto, desde el primer
+         * repintado. Un rotulo tapado no se nota como fallo: no sale nada
+         * raro, simplemente no sale.
+         *
+         * Y encima ya era mentira. Cuando se escribio, el mapa se ponia y se
+         * quitaba TOCANDOLO. Luego aparecio el boton (btn5, "Mapa") y esta
+         * zona se dedico a arrastrar el mapa con el dedo, que es lo que pidio
+         * el dueño; desde entonces tocar el mapa no vuelve a la lista, lo
+         * mueve. O sea que el unico texto que explicaba como salir explicaba
+         * algo que ya no pasa - y por suerte no se veia.
+         *
+         * Se quita en vez de hacerlo visible porque hacerlo visible cuesta
+         * los 18 px de alto del renglon, y el mapa ocupa el hueco entero
+         * justo porque lo pidio el dueño el 28/09 ("ahora mismo deja unas
+         * franjas laterales"). Quien avisa de como se sale es el propio
+         * boton "Mapa", que se queda pulsado mientras el mapa esta puesto
+         * (ver btn5_press).
+         *
+         * tools/tapado_check.py vigila que no vuelva a aparecer.
+         */
+        s_digi.titulos = 0;
+        /*
+         * SOLO LA CABECERA, no el panel entero - 30/09/2026.
+         *
+         * Aqui habia ui_digi_draw_texto(), que pinta la cabecera Y el cuerpo
+         * con los ocho renglones vacios; y justo despues el mapa repintaba
+         * ese cuerpo entero. 800 x 318 mas 800 x 288 = 484.800 pixeles por
+         * el bus para los 254.400 que hacen falta: el 47,5 % del trabajo de
+         * cada cuadro del mapa era tirarlo. No se ve como un fallo -sale lo
+         * correcto- pero se arrastra el mapa mas despacio de lo que deberia.
+         */
+        ui_digi_draw_cabecera(&s_digi);
         ft8_mapa_draw();
     } else {
         ui_digi_draw_texto(&s_digi);   /* cabecera incluida */
@@ -14351,6 +15518,26 @@ static void ft8_panel_draw(void)
      * nueva. Mirando el numero de renglones, la pantalla se quedaria
      * congelada con las posiciones de hace cinco minutos.
      */
+    /*
+     * JTTY: lo que manda el repintado es la cuenta de ATOMOS, no la de
+     * renglones. Un mensaje largo son hasta dieciseis atomos que no se
+     * enseñan hasta que llega el ultimo, asi que mirando los renglones la
+     * pantalla se quedaria quieta treinta segundos con la radio
+     * decodificando a toda maquina.
+     */
+    if (jtty_modo_activo()) {
+        uint32_t t = jtty_modo_atomos();
+
+        digi_sync();
+
+        if (s_ft8_todo || (t != s_ft8_total_visto)) {
+            s_ft8_todo = 0U;
+            s_ft8_total_visto = t;
+            panel_pinta();
+        }
+        return;
+    }
+
     if (ale_modo_activo()) {
         uint32_t t = ale_modo_palabras();
         uint8_t  e = ale_modo_calidad();
@@ -14486,6 +15673,63 @@ static void digi_sync(void)
      * dando igual: son exclusivos. Lo que no da igual es que ninguno caiga
      * en la rama de RTTY del final.
      */
+    /*
+     * JTTY va con los demas del panel entero y el orden sigue dando igual
+     * por lo mismo: son exclusivos entre si. Lo unico que importa es que no
+     * caiga en la rama de RTTY del final.
+     */
+    if (jtty_modo_activo()) {
+        uint8_t n = (uint8_t)(FT8_PANEL_FILAS - 1U);
+        uint8_t k, hay = 0U;
+
+        if (n > (uint8_t)JTTY_MODO_LINEAS) { n = (uint8_t)JTTY_MODO_LINEAS; }
+
+        s_digi.y     = (int16_t)FT8_PANEL_Y;
+        s_digi.h     = (int16_t)FT8_PANEL_H;
+        s_digi.filas = n;
+        s_digi.btn   = tr("Borrar", "Clear");
+        s_digi.btn2  = 0;
+        s_digi.barra_w = 0;
+        /*
+         * NI BARRA NI CUENTA ATRAS, y esta vez no es que falte: es que no
+         * hay nada que contar. La barra de FT8 y la de WSPR dicen cuanto
+         * queda de ranura, y aqui no hay ranuras (ver k_demod_modes[]). Lo
+         * que dice que esto esta vivo es que suba la cuenta de la chapa.
+         */
+        s_digi.barra_on = 0U;
+        s_digi.btn3    = 0;
+        s_digi.btn4    = jtty_frec_rotulo();
+        s_digi.btn5       = tr("Mapa", "Map");
+        s_digi.btn5_press = s_ft8_mapa;
+        /*
+         * CON CEBRA desde el 28/09 por la tarde. *** Por el dueño del
+         * proyecto: "y ponle cebreado", justo despues de meter la columna
+         * del pais. ***
+         *
+         * Y es el mismo motivo que en HFDL y AIS, que ya la tienen: con
+         * cuatro columnas la vista iba del mensaje a la hora sin perderse,
+         * pero con cinco -y la ultima pegada al otro extremo de la
+         * pantalla- hay 496 px de mensaje entre el "Cal." y el pais. Leer
+         * de que pais es un mensaje que esta medio metro a la izquierda es
+         * justo donde el ojo se salta de renglon.
+         */
+        s_digi.cebra   = 1U;
+        s_digi.cols    = ui_digi_cols_jtty;
+        s_digi.ncols   = UI_DIGI_COLS_JTTY_N;
+        s_digi.titulos = tr("Hora\tDesvío\tCal.\tMensaje\tPaís",
+                            "Time\tOffset\tQual.\tMessage\tCountry");
+
+        while ((hay < n) && (hay < jtty_modo_lineas())) { hay++; }
+        for (k = 0U; k < hay; k++) {
+            s_digi.fila[k] = jtty_modo_linea(k);
+        }
+        for (k = hay; k < (uint8_t)UDG_ROWS_MAX; k++) { s_digi.fila[k] = 0; }
+
+        s_digi.chip = jtty_modo_estado_txt();
+        s_digi.enganchado = (uint8_t)(jtty_modo_atomos() != 0UL);
+        return;
+    }
+
     if (ale_modo_activo()) {
         uint8_t n = (uint8_t)(FT8_PANEL_FILAS - 1U);
         uint8_t k, hay = 0U;
@@ -14495,7 +15739,7 @@ static void digi_sync(void)
         s_digi.y     = (int16_t)FT8_PANEL_Y;
         s_digi.h     = (int16_t)FT8_PANEL_H;
         s_digi.filas = n;
-        s_digi.btn   = "Borrar";
+        s_digi.btn   = tr("Borrar", "Clear");
         s_digi.btn2  = 0;
         s_digi.barra_w = 0;
         s_digi.btn3    = 0;
@@ -14504,7 +15748,8 @@ static void digi_sync(void)
         s_digi.cebra   = 0U;  /* cinco columnas separadas y pocas filas */
         s_digi.cols    = ui_digi_cols_ale;
         s_digi.ncols   = UI_DIGI_COLS_ALE_N;
-        s_digi.titulos = "Indicativo\tTipo\tkHz\tCal.\tN";
+        s_digi.titulos = tr("Indicativo\tTipo\tkHz\tCal.\tN",
+                            "Callsign\tType\tkHz\tQual.\tN");
 
         /* Tabla, no lista: el orden es el de llegada y no se toca, igual
          * que en AIS y por la misma razon. */
@@ -14527,13 +15772,13 @@ static void digi_sync(void)
         s_digi.y     = (int16_t)FT8_PANEL_Y;
         s_digi.h     = (int16_t)FT8_PANEL_H;
         s_digi.filas = n;
-        s_digi.btn   = "Borrar";
+        s_digi.btn   = tr("Borrar", "Clear");
         s_digi.btn2  = 0;
         s_digi.barra_w = 0;      /* entera: dentro va la cuenta de barcos */
         s_digi.btn3    = 0;      /* no hay lista de frecuencias que abrir */
         s_digi.btn4    = ais_frec_rotulo();
         /* El mapa: AIS es uno de los tres que lo tienen. Ver btn5. */
-        s_digi.btn5       = "Mapa";
+        s_digi.btn5       = tr("Mapa", "Map");
         s_digi.btn5_press = s_ft8_mapa;
         /*
          * CON CEBRA, como HFDL y al reves que WSPR. Aqui si hacen falta: son
@@ -14550,8 +15795,10 @@ static void digi_sync(void)
          * columna para decir siempre lo mismo.
          */
         s_digi.titulos = (ais_modo_canal() == 0U)
-                         ? "MMSI\tNombre\tPosición\tVel\tRumbo\tN  (canal A)"
-                         : "MMSI\tNombre\tPosición\tVel\tRumbo\tN  (canal B)";
+                         ? tr("MMSI\tNombre\tPosición\tVel\tRumbo\tN  (canal A)",
+                              "MMSI\tName\tPosition\tSpd\tCourse\tN  (channel A)")
+                         : tr("MMSI\tNombre\tPosición\tVel\tRumbo\tN  (canal B)",
+                              "MMSI\tName\tPosition\tSpd\tCourse\tN  (channel B)");
 
         /*
          * SIN DARLE LA VUELTA, al reves que en los otros tres. Aqui no es
@@ -14579,7 +15826,7 @@ static void digi_sync(void)
         s_digi.y     = (int16_t)FT8_PANEL_Y;
         s_digi.h     = (int16_t)FT8_PANEL_H;
         s_digi.filas = n;
-        s_digi.btn   = "Borrar";
+        s_digi.btn   = tr("Borrar", "Clear");
         s_digi.btn2  = 0;
         /*
          * LA BARRA VA ENTERA, COMO LA DE FT8, y el cuarto boton en la franja
@@ -14599,17 +15846,42 @@ static void digi_sync(void)
         s_digi.barra_w = 0;
         s_digi.btn3    = 0;      /* no hay lista de frecuencias que abrir */
         s_digi.btn4    = wspr_frec_rotulo();
-        s_digi.btn5    = 0;   /* sin mapa: ver btn5 en ui_digi.h */
         /*
-         * SIN CEBRA. En HFDL son seis columnas apretadas y catorce filas, y
-         * el ojo pierde el renglon; aqui son seis columnas muy separadas y
-         * doce filas como mucho, casi siempre menos de cinco. Pintar el
-         * fondo alterno sobre una tabla de tres lineas es decoracion.
+         * EL MAPA. *** Por el dueño del proyecto: "wspr no tiene mapa". ***
+         * Y lo pedia a gritos: de los cinco modos con panel, WSPR es el que
+         * mas util lo tiene. Lo que se escucha son balizas de un vatio o
+         * menos, asi que la pregunta al mirar la lista no es quien ha
+         * hablado sino DESDE DONDE se ha oido -y un renglon "IO91" no
+         * contesta a eso hasta que te aprendes la rejilla-.
          */
-        s_digi.cebra   = 0U;
+        s_digi.btn5       = tr("Mapa", "Map");
+        s_digi.btn5_press = s_ft8_mapa;
+        /*
+         * CON CEBRA desde el 28/09 por la tarde. *** Por el dueño del
+         * proyecto, mirando su radio: "de hecho creo que te falta cebreado
+         * tambien en wspr". ***
+         *
+         * Aqui ponia "SIN CEBRA" con este razonamiento: "en HFDL son seis
+         * columnas apretadas y catorce filas, y el ojo pierde el renglon;
+         * aqui son seis columnas muy separadas y doce filas como mucho,
+         * CASI SIEMPRE MENOS DE CINCO. Pintar el fondo alterno sobre una
+         * tabla de tres lineas es decoracion".
+         *
+         * Lo de "casi siempre menos de cinco" me lo invente. No mire nunca
+         * cuantas balizas salen de verdad en un ciclo, y en 20 m pasan de
+         * diez sin despeinarse. Y justamente porque las columnas estan muy
+         * separadas -el indicativo en 110 y la calidad en 500- es donde mas
+         * falta hace: son 390 px de blanco entre un dato y el siguiente.
+         *
+         * El que tiene la radio delante lo ve y yo no. Se queda anotado
+         * porque el fallo no era el gusto: era razonar sobre un numero
+         * -cuantas filas hay- que no habia medido.
+         */
+        s_digi.cebra   = 1U;
         s_digi.cols    = ui_digi_cols_wspr;
         s_digi.ncols   = UI_DIGI_COLS_WSPR_N;
-        s_digi.titulos = "Hora\tIndicativo\tLoc.\tdBm\tDesvío\tCal.";
+        s_digi.titulos = tr("Hora\tIndicativo\tLoc.\tdBm\tDesvío\tCal.",
+                            "Time\tCallsign\tLoc.\tdBm\tOffset\tQual.");
 
         /* Como en FT8 y HFDL: contar los que hay y pegarlos ARRIBA. El
          * fallo de "el texto ha aparecido abajo del todo" se arregla una
@@ -14635,7 +15907,7 @@ static void digi_sync(void)
         s_digi.y     = (int16_t)FT8_PANEL_Y;
         s_digi.h     = (int16_t)FT8_PANEL_H;
         s_digi.filas = n;
-        s_digi.btn   = "Borrar";
+        s_digi.btn   = tr("Borrar", "Clear");
         s_digi.btn2  = 0;
         /*
          * La barra de HFDL solo tiene cuatro posiciones, asi que con 170 px
@@ -14644,9 +15916,9 @@ static void digi_sync(void)
          * Ver btn3 en ui_digi.h.
          */
         s_digi.barra_w = 170;
-        s_digi.btn3    = "Frec.";
+        s_digi.btn3    = tr("Frec.", "Freq.");
         s_digi.btn4    = hfdl_frec_rotulo();
-        s_digi.btn5       = "Mapa";
+        s_digi.btn5       = tr("Mapa", "Map");
         s_digi.btn5_press = s_ft8_mapa;
         /*
          * *** El dueno: "en hfdl cada fila un color para que se lea
@@ -14670,15 +15942,21 @@ static void digi_sync(void)
             static char tit[64];
             const char *gs = hfdl_modo_estacion();
             uint8_t i = 0U, c;
-            const char *base = "OACI\tModelo\tVuelo\tPosición\t";
+            const char *base = tr("OACI\tModelo\tVuelo\tPosición\t",
+                                  "ICAO\tModel\tFlight\tPosition\t");
 
             while (base[i] != '\0') { tit[i] = base[i]; i++; }
             if (gs[0] != '\0') {
                 tit[i++] = '>'; tit[i++] = ' ';
                 for (c = 0U; gs[c] != '\0' && i < 52U; c++) { tit[i++] = gs[c]; }
             } else {
-                tit[i++] = 'U'; tit[i++] = 'l'; tit[i++] = 't'; tit[i++] = 'i';
-                tit[i++] = 'm'; tit[i++] = 'o';
+                {
+                    /* "Ultimo" / "Latest", copiado con un bucle como el de
+                     * arriba. Escrito letra a letra no se podia traducir y
+                     * ademas era invisible a cualquier busqueda de cadenas. */
+                    const char *u = tr("Ultimo", "Latest");
+                    for (c = 0U; u[c] != '\0' && i < 52U; c++) { tit[i++] = u[c]; }
+                }
             }
             tit[i++] = '\t'; tit[i++] = 'N'; tit[i] = '\0';
             s_digi.titulos = tit;
@@ -14708,7 +15986,7 @@ static void digi_sync(void)
         s_digi.y     = (int16_t)FT8_PANEL_Y;
         s_digi.h     = (int16_t)FT8_PANEL_H;
         s_digi.filas = n;
-        s_digi.btn   = "Borrar";
+        s_digi.btn   = tr("Borrar", "Clear");
         s_digi.btn2  = 0;   /* su hueco lo ocupa la barra de la ranura */
         /*
          * *** El dueno: "hay que poner un boton de frec en el ft8 igual
@@ -14725,7 +16003,7 @@ static void digi_sync(void)
         s_digi.barra_w = 0; /* la de FT8 va entera: cuenta 15 segundos */
         s_digi.btn3    = 0;
         s_digi.btn4    = ft8_frec_rotulo();
-        s_digi.btn5       = "Mapa";
+        s_digi.btn5       = tr("Mapa", "Map");
         s_digi.btn5_press = s_ft8_mapa;
         s_digi.cebra   = 0U;
 
@@ -14741,7 +16019,8 @@ static void digi_sync(void)
          */
         s_digi.cols    = ui_digi_cols_ft8;
         s_digi.ncols   = UI_DIGI_COLS_FT8_N;
-        s_digi.titulos = "Hora\tHz\tdB\tDT\tMensaje\tkm\tPaís";
+        s_digi.titulos = tr("Hora\tHz\tdB\tDT\tMensaje\tkm\tPaís",
+                            "Time\tHz\tdB\tDT\tMessage\tkm\tCountry");
 
         /*
          * DE ARRIBA HACIA ABAJO, Y PEGADO ARRIBA - 25/09/2026, por el dueno
@@ -14812,7 +16091,7 @@ static void digi_sync(void)
         s_digi.fila[r] = (s_rtty_text_row_len[r] > 0U) ? s_rtty_text_grid[r] : 0;
     }
 
-    s_digi.btn   = "Borrar";
+    s_digi.btn   = tr("Borrar", "Clear");
     s_digi.btn2  = 0;     /* misma razon que en el fax: lo que no se borra se hereda */
     /* btn_press NO se toca aqui: lo pone el reparto de toques, que es quien
      * sabe si el dedo esta encima. digi_sync() corre en cada cuadro y lo
@@ -14849,7 +16128,7 @@ static void digi_sync(void)
         } else if (in.bit_sync) {
             s_digi.chip = "bits";
         } else {
-            s_digi.chip = "buscando";
+            s_digi.chip = tr("buscando", "searching");
         }
         s_digi.enganchado = in.car_sync;
     } else if (cw_get_enabled()) {
@@ -15498,9 +16777,9 @@ static const char *gsv_rotulo(void)
     static char b[16];
     uint8_t i;
 
-    if (s_gsv_fallo) { return k_sstv_gsv_estado[1]; }
-    if (!s_gsv_on)   { return k_sstv_guarda[s_sstv_guarda]; }
-    for (i = 0U; i < 10U; i++) { b[i] = k_sstv_gsv_estado[0][i]; }
+    if (s_gsv_fallo) { return k_sstv_gsv_estado[1][idioma()]; }
+    if (!s_gsv_on)   { return k_sstv_guarda[s_sstv_guarda][idioma()]; }
+    for (i = 0U; i < 10U; i++) { b[i] = k_sstv_gsv_estado[0][idioma()][i]; }
     b[10] = s_gsv_n8[4]; b[11] = s_gsv_n8[5]; b[12] = s_gsv_n8[6];
     b[13] = '\0';
     return b;
@@ -15514,9 +16793,9 @@ static const char *gsv_rotulo_fax(void)
     static char b[16];
     uint8_t i;
 
-    if (s_gsv_fallo) { return k_sstv_gsv_estado[1]; }
-    if (!s_gsv_on)   { return k_wfx_guarda[s_wfx_guarda]; }
-    for (i = 0U; i < 10U; i++) { b[i] = k_sstv_gsv_estado[0][i]; }
+    if (s_gsv_fallo) { return k_sstv_gsv_estado[1][idioma()]; }
+    if (!s_gsv_on)   { return k_wfx_guarda[s_wfx_guarda][idioma()]; }
+    for (i = 0U; i < 10U; i++) { b[i] = k_sstv_gsv_estado[0][idioma()][i]; }
     b[10] = s_gsv_n8[4]; b[11] = s_gsv_n8[5]; b[12] = s_gsv_n8[6];
     b[13] = '\0';
     return b;
@@ -15531,10 +16810,10 @@ static void fax_hdr_draw(void)
 
     wefax_info(&in);
     switch (in.estado) {
-    case WEFAX_BUSCA:  e = "Esperando el tono de arranque"; break;
-    case WEFAX_FASE:   e = "Señal de fase"; break;
-    case WEFAX_IMAGEN: e = "Recibiendo"; break;
-    default:           e = "Parado"; break;
+    case WEFAX_BUSCA:  e = tr("Esperando el tono de arranque", "Waiting for the start tone"); break;
+    case WEFAX_FASE:   e = tr("Señal de fase", "Phasing signal"); break;
+    case WEFAX_IMAGEN: e = tr("Recibiendo", "Receiving"); break;
+    default:           e = tr("Parado", "Stopped"); break;
     }
     while (*e != '\0') { *p++ = *e++; }
     *p++ = ' '; *p++ = '-'; *p++ = ' ';
@@ -15558,7 +16837,7 @@ static void fax_hdr_draw(void)
     s_digi.h = (int16_t)FAX_HDR_H;
     s_digi.chip = s_fax_txt;
     s_digi.enganchado = (uint8_t)(in.estado == WEFAX_IMAGEN);
-    s_digi.btn = "Sincroniza";
+    s_digi.btn = tr("Sincroniza", "Sync");
     s_digi.btn2 = gsv_rotulo_fax();
     ui_digi_draw_chip(&s_digi);
     ui_digi_draw_boton(&s_digi);
@@ -15711,7 +16990,8 @@ static void sstv_hdr_draw(void)
     } else {
         /* Si ha llegado un codigo que no sabemos hacer, se enseña: es lo que
          * hace falta para decidir si vale la pena anadir ese modo. */
-        e = in.vis ? "Modo no soportado, VIS " : "Esperando una imagen";
+        e = in.vis ? tr("Modo no soportado, VIS ", "Unsupported mode, VIS ")
+                   : tr("Esperando una imagen", "Waiting for a picture");
         while (*e != '\0') { *p++ = *e++; }
         if (in.vis) { p = hora_u3(p, (uint32_t)in.vis); }
     }
@@ -15721,7 +17001,7 @@ static void sstv_hdr_draw(void)
     s_digi.h = (int16_t)FAX_HDR_H;
     s_digi.chip = s_sstv_txt;
     s_digi.enganchado = (uint8_t)(in.estado == SSTV_IMAGEN);
-    s_digi.btn = "Empezar";
+    s_digi.btn = tr("Empezar", "Start");
     s_digi.btn2 = gsv_rotulo();
     ui_digi_draw_chip(&s_digi);
     ui_digi_draw_boton(&s_digi);
@@ -16257,6 +17537,19 @@ static void rtty_scope_draw(void)
             gfx_vline(nom_x, bar_y, bar_area_h, color_tema(PAL_INK_MUTE));
         }
         if (mark_x < MAIN_W) { gfx_vline(mark_x, bar_y, bar_area_h, color_tema(PAL_ACCENT)); }
+    } else if (ax25_activo()) {
+        /*
+         * APRS: los dos tonos del AFSK, 1.200 y 2.200 Hz, y no los del RTTY.
+         * Los del RTTY son un ajuste del usuario que en paquete no significa
+         * nada; estos son fijos por norma y son los MISMOS numeros con los
+         * que ax25.c afina sus dos osciladores, sacados de ax25.h. Dos rayas
+         * puestas donde no estan las cosas son peor que ninguna raya: se leen
+         * como "estas desintonizado" cuando no lo estas.
+         */
+        mark_x  = (uint16_t)((AX25_MARCA_HZ   / nyquist_hz) * (float)MAIN_W);
+        space_x = (uint16_t)((AX25_ESPACIO_HZ / nyquist_hz) * (float)MAIN_W);
+        if (mark_x < MAIN_W)  { gfx_vline(mark_x,  bar_y, bar_area_h, color_tema(PAL_ACCENT)); }
+        if (space_x < MAIN_W) { gfx_vline(space_x, bar_y, bar_area_h, color_tema(PAL_WARN)); }
     } else {
         mark_x  = (uint16_t)((rtty_get_mark_hz()  / nyquist_hz) * (float)MAIN_W);
         space_x = (uint16_t)((rtty_get_space_hz() / nyquist_hz) * (float)MAIN_W);
@@ -17225,8 +18518,13 @@ static void radio_screen_draw(void)
          * pasar al mover la barra (estas lineas seguian con el margen viejo).
          * hidden=1 ademas garantiza que, si alguien los vuelve a registrar sin
          * darse cuenta, no pinten un rectangulo en la esquina. */
+        /* Estos widgets van ocultos (hidden=1) y su etiqueta no se pinta
+         * nunca - ver el comentario de arriba-, asi que se deja la
+         * espanola y no se vuelve a montar la barra al cambiar de idioma.
+         * Lo que SI se ve es s_act.name[], que se rellena en act_fill()
+         * con el idioma puesto. */
         *k_act_slots[i].btn = (ui_button_t){0, 0, 0, 0,
-                                    k_act_slots[i].nombre,
+                                    k_act_slots[i].nombre[IDIOMA_ES],
                                     GFX_COLOR_WHITE, GFX_COLOR_DARKGRAY, GFX_COLOR_WHITE,
                                     2, 0, 1, demo_button_callback, NULL, 1};
     }
@@ -17488,7 +18786,8 @@ static void spec_tap_tune_to_x(uint16_t x)
             if (modo == DEMOD_MODE_USB) { sm = SNAP_USB; }
             else if (modo == DEMOD_MODE_LSB) { sm = SNAP_LSB; }
         }
-        bin_snap = spec_snap_bin(s_db_frame, FFT_BINS_IQ, bin, sm, &enganchado);
+        /* Sobre la TRAZA, que es lo que hay dibujado debajo del dedo. */
+        bin_snap = spec_snap_bin(s_db_traza, FFT_BINS_IQ, bin, sm, &enganchado);
     } else {
         bin_snap = bin;
     }
@@ -17754,7 +19053,8 @@ static void demo_touch_poll(void)
          */
         s_mapabtn_tap = (uint8_t)(!s_frec_tap && !s_salto_tap
             && !s_touch_owner_is_menu && !s_menu_open && digi_panel_active()
-            && (ft8_modo_activo() || hfdl_modo_activo() || ais_modo_activo())
+            && (ft8_modo_activo() || hfdl_modo_activo() || ais_modo_activo()
+                || jtty_modo_activo())
             && ui_digi_boton5_hit(&s_digi, x, y));
 
         /* El segundo boton, con la misma regla de "la zona la da ui_digi.c".
@@ -17801,7 +19101,7 @@ static void demo_touch_poll(void)
             uint8_t en_mapa = (uint8_t)(!s_borrar_tap && !s_fmt_tap && !s_frec_tap
                 && !s_salto_tap && !s_modo_tap && !s_mapabtn_tap
                 && !s_touch_owner_is_menu && !s_menu_open && s_ft8_mapa
-                && (ft8_modo_activo() || hfdl_modo_activo() || ais_modo_activo())
+                && modo_tiene_mapa()   /* la lista, en un solo sitio */
                 && x < (uint16_t)MAIN_W
                 && y >= (uint16_t)FT8_MAPA_Y
                 && y <  (uint16_t)(FT8_MAPA_Y + FT8_MAPA_H));
@@ -17911,7 +19211,12 @@ static void demo_touch_poll(void)
         }
     }
 
-    if (s_menu_hora_active && s_touch_owner_is_menu) {
+    if (s_menu_qth_active && s_touch_owner_is_menu) {
+        /* Ocupa la misma zona que las demas y no puede coexistir con
+         * ninguna: qth_show() apaga todas y menu_screen_close() la apaga
+         * a ella. */
+        qth_touch(x, y, pressed);
+    } else if (s_menu_hora_active && s_touch_owner_is_menu) {
         /* La pantalla de sincronizar la hora ocupa la misma zona que las
          * demas y no puede coexistir con ninguna: hora_show() apaga todas y
          * menu_screen_close() la apaga a ella. */
@@ -18162,6 +19467,9 @@ static void demo_touch_poll(void)
         } else if (ais_modo_activo()) {
             ais_frec_siguiente();
             s_digi.btn4 = ais_frec_rotulo();
+        } else if (jtty_modo_activo()) {
+            jtty_frec_siguiente();
+            s_digi.btn4 = jtty_frec_rotulo();
         } else {
             /* nadie mas tiene cuarto boton */
         }
@@ -18239,6 +19547,10 @@ static void demo_touch_poll(void)
             hfdl_modo_borra();
             ft8_panel_reinicia();
             debug_print("hfdl: lista borrada\n");
+        } else if (jtty_modo_activo()) {
+            jtty_modo_borra();
+            ft8_panel_reinicia();
+            debug_print("jtty: lista borrada\n");
         } else if (ale_modo_activo()) {
             /* Vacia la tabla de estaciones. Util al cambiar de frecuencia:
              * lo que habia era de otro canal. */
@@ -19207,37 +20519,33 @@ static void sdr_spectrum_waterfall_tick(void)
      * (menu_screen_open()).
      */
     {
-        static float s_db_smooth[FFT_BINS_IQ];
-        static uint8_t s_db_smooth_init = 0U;
-
-        if (!s_db_smooth_init) {
+        if (!s_db_traza_lista) {
             /* First frame ever: nothing to blend with yet - seed
              * directly, rather than blending against a zeroed array
              * (which would otherwise show a slow fade-IN from silence
              * on every boot, not just a jitter reduction). */
             for (bi = 0; bi < FFT_BINS_IQ; bi++) {
-                s_db_smooth[bi] = s_db_frame[bi];
+                s_db_traza[bi] = s_db_frame[bi];
             }
-            s_db_smooth_init = 1U;
+            s_db_traza_lista = 1U;
         } else {
             for (bi = 0; bi < FFT_BINS_IQ; bi++) {
-                s_db_smooth[bi] = s_spectrum_smooth_alpha * s_db_smooth[bi]
-                                   + (1.0f - s_spectrum_smooth_alpha) * s_db_frame[bi];
+                s_db_traza[bi] = s_spectrum_smooth_alpha * s_db_traza[bi]
+                                  + (1.0f - s_spectrum_smooth_alpha) * s_db_frame[bi];
             }
         }
-        /* s_db_frame itself becomes the smoothed result from here on
-         * - both spectrum_draw() and the waterfall colormap loop
-         * below read s_db_frame, so this keeps them visually
-         * consistent with each other without touching either call
-         * site. */
-        for (bi = 0; bi < FFT_BINS_IQ; bi++) {
-            s_db_frame[bi] = s_db_smooth[bi];
-            s_db_frame_listo = 1U;
-        }
+        /* Y AQUI NO SE COPIA DE VUELTA. Antes se volcaba s_db_traza sobre
+         * s_db_frame y por eso la cascada heredaba el suavizado - ver el
+         * comentario de los dos arrays, arriba del todo. La cascada lee
+         * s_db_frame, que se queda crudo. */
+        s_db_frame_listo = 1U;
     }
 
     if (s_spec_agc_enabled) {
-        spec_agc_step(s_db_frame, FFT_BINS_IQ, &s_db_min, &s_db_max);
+        /* La escala de color sale de la TRAZA y no del crudo, a proposito:
+         * es la misma que antes, y con ella los colores de la cascada no
+         * bailan de un cuadro a otro aunque lo que se pinte si sea nitido. */
+        spec_agc_step(s_db_traza, FFT_BINS_IQ, &s_db_min, &s_db_max);
     }
 
     g_lcd_ciclos = 0UL;   /* ver g_lcd_ciclos: se acumula durante este bloque */
@@ -19419,13 +20727,13 @@ static void sdr_spectrum_waterfall_tick(void)
          * de demodulacion ni banda de paso que sombrear, porque en audio no
          * existen. */
         if (analiz_activo()) {
-            spectrum_draw(s_db_frame, analiz_bins_utiles(),
+            spectrum_draw(s_db_traza, analiz_bins_utiles(),
                           SPC_TRACE_X, SPC_TRACE_Y,
                           SPC_TRACE_W, SPC_TRACE_H,
                           s_db_min, s_db_max,
                           0, 0U, 0, 0);
         } else {
-            spectrum_draw(s_db_frame, FFT_BINS_IQ,
+            spectrum_draw(s_db_traza, FFT_BINS_IQ,
                           SPC_TRACE_X, SPC_TRACE_Y,
                           SPC_TRACE_W, SPC_TRACE_H,
                           s_db_min, s_db_max,
@@ -19564,6 +20872,8 @@ static void sdr_spectrum_waterfall_tick(void)
         } else if (va >= 1000U) {
             s_wf_lps    = s_wf_lineas;
             s_fps       = s_fotogramas;
+            if (s_wf_lps != 0U) { s_wf_lps_vivo = s_wf_lps; }
+            if (s_fps    != 0U) { s_fps_vivo    = s_fps;    }
             s_wf_lineas = 0U;
             s_wf_lineas_antes = 0U;
             s_fotogramas = 0U;

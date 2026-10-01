@@ -7,16 +7,39 @@
 #include "dxcc.h" /* timestamp each decoded line - see the project owner's request (09/2026) to help tune real-world performance over time */
 #include <math.h>
 
-/* Your own QTH's Maidenhead grid locator (09/2026, per the project
- * owner's request to show distance-to-station on decoded CQ lines) -
- * CHANGE THIS to your own square before flashing. 4 characters
- * (field+square, e.g. "IL18") is enough for a perfectly good distance
- * estimate; 6 characters (adding the subsquare, e.g. "IL18vl") only
- * refines which ~5x5km cell within that square counts as "home" -
- * negligible next to typical HF distances, but free precision if you
- * already know your 6-character square. grid_to_latlon() below
- * accepts either length. */
-#define FT8_OWN_GRID "IL18"
+/*
+ * EL LOCALIZADOR POR DEFECTO, Y LAS DOS REGLAS QUE LO SUJETAN.
+ *
+ * *** Por el dueño del proyecto, 30/09/2026, en dos mensajes seguidos: "no
+ * tiene que haber ningun qth a fuego en el codigo, todo tiene que ir de la
+ * configuracion" y despues "si no hay qth configurado por defecto tiene que
+ * tener IN80dk". ***
+ *
+ * Las dos cosas a la vez, y no se contradicen si se separan "de donde sale
+ * el valor que usa la radio" de "con que arranca una radio virgen":
+ *
+ *   1. El valor que usa la radio sale SIEMPRE de CONFIG.CSV, clave "grid",
+ *      que escribe Ajustes -> Equipo -> QTH. Es el unico camino.
+ *   2. Esto es solo el arranque en frio, para que una radio recien flasheada
+ *      tenga algo valido antes de que nadie entre en esa pantalla.
+ *
+ * Y la regla que de verdad importa: SE APLICA UNA SOLA VEZ, en main(), ANTES
+ * de settings_load(). Nunca desde ft8_decoder_init(), porque a ese lo llama
+ * ft8_modo.c cada vez que se entra en FT8 y se llevaba por delante el QTH
+ * del usuario - el aspa saltaba de sitio y las distancias cambiaban, sin
+ * aviso, y la unica pista era mirar el mapa-. tools/qth_check.py comprueba
+ * que siga siendo asi, y que este sea el unico localizador escrito en todo
+ * el codigo.
+ *
+ * POR QUE MADRID Y NO OTRA COSA, Y LO QUE COSTO. Valio "IL18" -Canarias-
+ * durante meses, porque era el EJEMPLO del comentario original ("CHANGE THIS
+ * to your own square before flashing") y nadie lo cambio: el aspa salia en
+ * Tenerife y las distancias se median desde 1.796 km de donde tocaba, sin un
+ * solo aviso, porque un localizador valido que no es el tuyo se comporta
+ * exactamente igual que el bueno. Eso es lo que lo hace peligroso, y por eso
+ * el sitio de donde sale el valor de verdad es el fichero y no esto.
+ */
+#define FT8_GRID_POR_DEFECTO "IN80dk"
 
 /* Maidenhead grid locator -> latitude/longitude of the CELL CENTER
  * (not a corner - a corner would bias distance by up to half a
@@ -69,6 +92,86 @@ static bool grid_to_latlon(const char *grid, int len, float *lat, float *lon)
         *lon += 1.0f; /* center of the 2deg-wide 4-character square */
         *lat += 0.5f; /* center of the 1deg-tall 4-character square */
     }
+    return true;
+}
+
+/*
+ * "40.6458, -3.5417". CON PUNTO Y CON SIGNO, no "40,6458 N 3,5417 W".
+ *
+ * *** Por el dueño del proyecto, 30/09/2026: "te falta un negativo". ***
+ *
+ * Y tenia razon, aunque el numero fuese correcto. Este renglon existe para
+ * UNA cosa: comprobar que el localizador que has teclado es el tuyo. Y eso
+ * se comprueba pegandolo en un mapa. Con coma decimal no se puede: Google
+ * Maps lee la coma como el SEPARADOR entre latitud y longitud, asi que
+ * "40,6458 3,5417" lo entiende como "latitud 40, longitud 6458", no existe,
+ * y se cae a una busqueda de texto que te deja en el centro de Madrid. Eso
+ * es exactamente lo que le paso, y encima le hizo dudar de la cifra buena.
+ *
+ * La "W" tampoco vale: un mapa quiere el signo. Asi que aqui se pone punto
+ * decimal, coma como separador y menos para sur y oeste - el unico formato
+ * que se pega y funciona-, y eso manda por encima de la coherencia con el
+ * resto de la pantalla, que va en coma porque esta en español. Un renglon
+ * que no se puede usar para lo que existe no es coherente, es inutil.
+ *
+ * A mano, como todo lo que se pinta en este fichero: aqui no hay snprintf.
+ */
+static char *coord_num(char *p, int32_t v, uint8_t dec)
+{
+    char tmp[12];
+    uint8_t n = 0U, k;
+    uint32_t u = (uint32_t)((v < 0) ? -v : v);
+
+    if (v < 0) { *p++ = '-'; }
+    do { tmp[n++] = (char)('0' + (u % 10U)); u /= 10U; } while (u != 0U);
+    while (n <= dec) { tmp[n++] = '0'; }          /* 0,0123 y no ,0123 */
+    for (k = n; k > 0U; k--) {
+        if (dec != 0U && k == dec) { *p++ = '.'; }   /* punto: ver arriba */
+        *p++ = tmp[k - 1U];
+    }
+    return p;
+}
+
+bool ft8_decoder_grid_coord_txt(const char *grid, int len,
+                                char *out, size_t n)
+{
+    int32_t lat = 0, lon = 0;
+    char    buf[32];
+    char   *p = buf;
+    size_t  k;
+
+    if (out == 0 || n == 0U) { return false; }
+    out[0] = '\0';
+    if (!ft8_decoder_grid_e4(grid, len, &lat, &lon)) { return false; }
+
+    /* Con SIGNO los dos, y separados por coma y un espacio: tal cual se pega
+     * en un mapa. coord_num() ya pone el '-' cuando el valor es negativo.
+     * El peor caso es "-89.9792, -179.9583" = 19 caracteres mas el cero, o
+     * sea que en buf[32] cabe con holgura y no hace falta comprobar dentro
+     * del bucle; lo que se comprueba es que quepa en lo que nos dan. */
+    p = coord_num(p, lat, 4U);
+    *p++ = ','; *p++ = ' ';
+    p = coord_num(p, lon, 4U);
+    *p = '\0';
+
+    k = (size_t)(p - buf);
+    if (k + 1U > n) { return false; }
+    for (k = 0U; buf[k] != '\0'; k++) { out[k] = buf[k]; }
+    out[k] = '\0';
+    return true;
+}
+
+bool ft8_decoder_grid_e4(const char *grid, int len,
+                         int32_t *lat_e4, int32_t *lon_e4)
+{
+    float la, lo;
+
+    if (grid == 0 || lat_e4 == 0 || lon_e4 == 0) { return false; }
+    if (!grid_to_latlon(grid, len, &la, &lo)) { return false; }
+    /* +-0,5 antes de truncar: sin esto "IN80fp" sale 406457 en vez de
+     * 406458 y la pantalla del QTH ensena una diezmilesima de menos. */
+    *lat_e4 = (int32_t)(la * 10000.0f + ((la < 0.0f) ? -0.5f : 0.5f));
+    *lon_e4 = (int32_t)(lo * 10000.0f + ((lo < 0.0f) ? -0.5f : 0.5f));
     return true;
 }
 
@@ -131,12 +234,27 @@ static char s_own_grid[7]; /* 6 chars + NUL - see ft8_decoder_set_own_grid()'s o
 
 /* Sets the QTH used for the distance-to-grid field on decoded CQ
  * lines (see grid_to_latlon()/haversine_km() above) - called once at
- * boot with the compiled-in FT8_OWN_GRID default (see
- * ft8_decoder_init() below), and again by settings.c's settings_load()
- * if CONFIG.CSV has its own "grid" key (09/2026 #5, per the project
- * owner's request to persist this instead of needing a recompile to
- * change it - editable by hand in CONFIG.CSV for now, a proper on-
- * screen keypad editor is planned as a follow-up).
+ * boot with the compiled-in FT8_GRID_POR_DEFECTO default (see
+ * ft8_decoder_init() below).
+ *
+ * HISTORIA, porque explica por que este fichero esta escrito asi.
+ *
+ * Hasta el 29/09/2026 la cabecera afirmaba que settings.c leia una clave
+ * "grid" de CONFIG.CSV y que build_csv() la guardaba. NO EXISTIA NADA DE
+ * ESO: ni la clave, ni la llamada, ni el guardado. El unico sitio que
+ * ponia el localizador era ft8_decoder_init(), con el valor compilado, y
+ * el aspa del mapa llevaba meses clavada en Canarias.
+ *
+ * El fallo no fue el codigo: fue el comentario. Describia una
+ * funcionalidad que nadie construyo, y al leerlo se daba por hecho que el
+ * localizador se configuraba y ya nadie lo comprobaba.
+ *
+ * HOY YA NO ES ASI, y conviene decirlo aqui mismo porque el aviso que
+ * habia en este hueco se quedo describiendo el mundo de aquella tarde y
+ * paso a ser el la mentira: desde el 30/09 settings.c SI tiene la clave
+ * "grid" (settings.c, en settings_load()), SI llama a esta funcion y
+ * build_csv() SI la guarda, y la pantalla de Ajustes -> Equipo -> QTH es
+ * quien la escribe. Lo vigila tools/qth_check.py.
  *
  * len is truncated to 6 (a Maidenhead locator is never longer) before
  * storing, but the FULL original value is still handed to
@@ -177,7 +295,38 @@ void ft8_decoder_init(void)
     s_queue_tail = 0U;
     s_queue_count = 0U;
     s_total_decoded_count = 0U;
-    ft8_decoder_set_own_grid(FT8_OWN_GRID, (int)(sizeof(FT8_OWN_GRID) - 1U));
+
+    /*
+     * EL LOCALIZADOR SOLO SI NO HAY NINGUNO. 29/09/2026.
+     *
+     * Esto NO corre una vez al arrancar: ft8_modo.c lo llama cada vez que
+     * se ENTRA en FT8. Con la linea de antes -poner siempre el valor
+     * compilado- el QTH que el usuario acabara de escribir en su pantalla,
+     * o el que trajera CONFIG.CSV, se perdia en cuanto se abria FT8, y
+     * volvia el de fabrica. Sin aviso: el aspa saltaba de sitio y las
+     * distancias cambiaban, y la unica pista seria mirar el mapa.
+     *
+     * No existia el fallo mientras el localizador no se podia cambiar - el
+     * valor puesto y el compilado eran el mismo-, y ha aparecido con la
+     * pantalla de QTH. Es la clase de cosa que un "init" que no es de
+     * arranque esconde muy bien.
+     */
+    /* Y AQUI NO SE REPONE NADA, aunque exista un valor por defecto. Esta
+     * funcion la llama ft8_modo.c cada vez que se entra en FT8, asi que
+     * reponer aqui es pisar el QTH del usuario. El por defecto lo pone
+     * main() una vez y solo una - ver el comentario de arriba del todo. */
+}
+
+/*
+ * Lo que llama main() UNA vez en el arranque, ANTES de settings_load(): deja
+ * puesto el por defecto para que una radio virgen tenga algo valido. Si el
+ * fichero trae clave "grid", settings_load() lo pisa justo despues, y ese es
+ * el orden que hace que manden los ajustes y no esto.
+ */
+void ft8_decoder_grid_por_defecto(void)
+{
+    ft8_decoder_set_own_grid(FT8_GRID_POR_DEFECTO,
+                             (int)(sizeof(FT8_GRID_POR_DEFECTO) - 1U));
 }
 
 static void queue_push(const char *line)
@@ -495,7 +644,7 @@ uint8_t ft8_decoder_slot_paso(void)
          * well below the noise floor). Distance-to-grid suffix
          * (09/2026 #4) appended after the message text, only when it
          * actually contains a grid square (see the FTX_FIELD_GRID scan
-         * below) - see grid_to_latlon()/haversine_km()/FT8_OWN_GRID
+         * below) - see grid_to_latlon()/haversine_km()/FT8_GRID_POR_DEFECTO
          * above. */
         freq_hz_i = (int)((FT8_ADAPTER_MIN_RAW_BIN + cand->freq_offset + (float)cand->freq_sub / wf->freq_osr) / FT8_SYMBOL_PERIOD + 0.5f);
         snr_i = (int)(cand->score * 0.5f);

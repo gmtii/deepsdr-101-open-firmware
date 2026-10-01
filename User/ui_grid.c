@@ -25,6 +25,19 @@ static int16_t nav_w(void)
     return (int16_t)((GFX2_W - 2 * UIG_MARGIN - (NAV_N - 1) * UIG_GAP) / NAV_N);
 }
 
+/*
+ * DONDE ACABA DE VERDAD LA REJILLA: el borde de abajo de la ultima fila de
+ * celdas, mas su medio hueco. La banda de arriba usaba en su lugar
+ * UIG_GRID_Y + FILAS*(alto+hueco), que es medio hueco MAS: se tragaba tres
+ * pixeles que no son de ninguna celda y devolvia NONE en ellos, antes de que
+ * la fila de navegacion tuviera ocasion de cogerlos. Con las dos ramas
+ * cortando por el mismo sitio no puede quedar aire entre ellas.
+ */
+static int16_t rejilla_fin(void)
+{
+    return (int16_t)(cel_y((uint8_t)(UIG_CELLS - 1U)) + UIG_CELL_H + UIG_GAP / 2);
+}
+
 int8_t ui_grid_hit(uint16_t x, uint16_t y)
 {
     uint8_t i;
@@ -32,8 +45,7 @@ int8_t ui_grid_hit(uint16_t x, uint16_t y)
     /* Rejilla. Los huecos entre celdas se reparten entre las vecinas, igual
      * que en la barra de acciones: en un tactil que pide fuerza, un toque
      * que cae en la juntura y no hace nada se vive como que no ha entrado. */
-    if (y >= UIG_GRID_Y - UIG_GAP / 2 &&
-        y <  UIG_GRID_Y + UIG_ROWS * (UIG_CELL_H + UIG_GAP)) {
+    if (y >= UIG_GRID_Y - UIG_GAP / 2 && y < rejilla_fin()) {
         for (i = 0U; i < UIG_CELLS; i++) {
             int16_t cx = cel_x(i), cy = cel_y(i);
             if ((int16_t)x >= cx - UIG_GAP / 2 && (int16_t)x < cx + UIG_CELL_W + UIG_GAP / 2 &&
@@ -44,9 +56,22 @@ int8_t ui_grid_hit(uint16_t x, uint16_t y)
         return UIG_HIT_NONE;
     }
 
-    /* Fila de navegacion: se lleva todo lo que hay de la rejilla para abajo,
-     * incluido el aire, para que no haya banda muerta. */
-    if (y >= UIG_NAV_Y - 6 && y < UIG_Y + UIG_H) {
+    /*
+     * Fila de navegacion: se lleva todo lo que hay de la rejilla para abajo,
+     * incluido el aire, para que no haya banda muerta.
+     *
+     * Y HASTA EL 30/09/2026 SI LA HABIA, tres pixeles. La rama de la rejilla
+     * de arriba se queda con y hasta UIG_GRID_Y + filas*(alto+hueco) - 1, que
+     * son 383, y esta empezaba en UIG_NAV_Y - 6 = 386: los renglones 383, 384
+     * y 385 no los cogia nadie y devolvian NONE. Se ve en las pantallas
+     * paginadas -Pasos, Informacion, SSTV, canales de HFDL- como un toque
+     * justo encima de "Siguiente" que no hace nada. El comentario decia que
+     * no la habia, que es lo que hizo que nadie la buscara.
+     *
+     * Se empalma con donde acaba la rejilla en vez de escribir otro numero:
+     * asi no puede volver a abrirse un hueco si una de las dos se mueve.
+     */
+    if (y >= rejilla_fin() && y < UIG_Y + UIG_H) {
         for (i = 0U; i < NAV_N; i++) {
             if ((int16_t)x >= nav_x(i) - UIG_GAP / 2 &&
                 (int16_t)x <  nav_x(i) + nav_w() + UIG_GAP / 2) {

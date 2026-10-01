@@ -78,8 +78,13 @@
  * Lo usa SSTV para elegir en que formato se guardan las fotos en el
  * pendrive (o si no se guardan). Entre el primer boton y la chapa de
  * estado hay casi 500 px libres en los 800 de pantalla, asi que cabe sin
- * apretar a nadie, y va del mismo ancho que el primero para que la
- * cabecera no quede coja.
+ * apretar a nadie.
+ *
+ * Y NO va del mismo ancho que el primero, que es lo que ponia aqui hasta el
+ * 30/09/2026: UDG_BTN_W son 104 y UDG_BTN2_W son 140, y el comentario del
+ * propio UDG_BTN2_W -diez lineas mas abajo- ya decia "mas ancho que el
+ * primero" con la razon correcta. Dos frases opuestas a diez lineas de
+ * distancia; se queda la que cuadra con el numero.
  */
 #define UDG_BTN2_GAP  10
 #define UDG_BTN2_X   (UDG_BTN_X + UDG_BTN_W + UDG_BTN2_GAP)
@@ -243,6 +248,10 @@ typedef struct {
 } ui_digi_state_t;
 
 void    ui_digi_draw_texto(const ui_digi_state_t *st);  /* el panel de renglones */
+/* Solo la franja de la cabecera (botones, barra y chapa), sin tocar el
+ * cuerpo. Para quien pinta el cuerpo el mismo - el mapa- y no quiere que se
+ * pinte dos veces. Ver su comentario en ui_digi.c. */
+void    ui_digi_draw_cabecera(const ui_digi_state_t *st);
 void    ui_digi_draw_fila(const ui_digi_state_t *st, uint8_t i); /* solo uno */
 void    ui_digi_draw_chip(const ui_digi_state_t *st);   /* la chapa de estado */
 void    ui_digi_draw_barra(const ui_digi_state_t *st);  /* solo la barra de progreso */
@@ -260,6 +269,8 @@ extern const int16_t ui_digi_cols_wspr[6];
 extern const int16_t ui_digi_cols_ais[6];
 #define UI_DIGI_COLS_ALE_N 5U
 extern const int16_t ui_digi_cols_ale[5];
+#define UI_DIGI_COLS_JTTY_N 5U
+extern const int16_t ui_digi_cols_jtty[5];
 #define UI_DIGI_COLS_FT8_N 7
 void    ui_digi_draw_boton(const ui_digi_state_t *st);
 uint8_t ui_digi_boton_hit(const ui_digi_state_t *st, uint16_t x, uint16_t y);
@@ -279,6 +290,10 @@ uint8_t ui_digi_boton5_hit(const ui_digi_state_t *st, uint16_t x, uint16_t y);
 /* Solo para el banco: ver su comentario en ui_digi.c. */
 int16_t ui_digi_btn5_x_dbg(const ui_digi_state_t *st);
 int16_t ui_digi_btn5_w_dbg(const ui_digi_state_t *st);
+int16_t ui_digi_btn4_x_dbg(const ui_digi_state_t *st);
+int16_t ui_digi_btn4_w_dbg(const ui_digi_state_t *st);
+int16_t ui_digi_chip_x_dbg(const ui_digi_state_t *st);
+int16_t ui_digi_chip_w_dbg(const ui_digi_state_t *st);
 uint8_t ui_digi_chip_hit(const ui_digi_state_t *st, uint16_t x, uint16_t y);
 
 #endif /* UI_DIGI_H_INCLUDED */

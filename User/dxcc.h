@@ -36,4 +36,13 @@ const char *dxcc_pais(const char *indicativo);
 /* Cuantos prefijos conoce. Lo usa la ventana de informacion y el banco. */
 unsigned dxcc_cuantos(void);
 
+/*
+ * El prefijo de la fila `i`, o 0 si se pasa. Existe SOLO para los bancos:
+ * con esto sim/dxcc_test.c puede recorrer la tabla entera y medir TODOS los
+ * nombres en los dos idiomas, en vez de llevar una lista de los mas largos
+ * escrita a mano - que es la clase de lista que se queda vieja el dia que se
+ * anade un pais y nadie se entera.
+ */
+const char *dxcc_prefijo(unsigned i);
+
 #endif /* DXCC_H */

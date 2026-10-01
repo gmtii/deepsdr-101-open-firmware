@@ -248,15 +248,29 @@ void wspr_modo_poll(void)
     rtc_hw_get(&h);
 
     /*
-     * "HAY HORA" SE MIDE IGUAL QUE EN FT8, y a proposito: el RTC arranca
-     * en 2026-01-01 00:00:00 cuando nunca se ha puesto en hora (ver
-     * rtc_hw_init()), asi que esa fecha exacta quiere decir "nadie me ha
-     * dicho que hora es". No es elegante, pero es el unico dato que hay,
-     * y tener DOS formas distintas de contestar la misma pregunta seria
-     * peor: el dia que una cambie, la otra se queda mintiendo.
+     * "HAY HORA" SE MIDE IGUAL QUE EN FT8 - y las dos estaban mal.
+     *
+     * 30/09/2026. Lo de antes miraba si la FECHA seguia siendo 2026-01-01,
+     * la de arranque en frio, y decia: "No es elegante, pero es el unico
+     * dato que hay". Eso era FALSO, y ahi estaba el fallo: desde 09/2026
+     * existe rtc_hw_has_ever_synced(), que contesta exactamente esta
+     * pregunta y lo hace bien. El comentario afirmaba que no habia
+     * alternativa sin haberlo comprobado, y al leerlo nadie la buscaba.
+     *
+     * El sintoma, con una radio nueva delante: pones la hora con el
+     * teclado -que NO toca la fecha, ver rtc_pon_hora() en main.c-, FT8
+     * decodifica de maravilla porque el reloj esta bien, y encima del
+     * panel sigue poniendo "pon el reloj en hora". El aviso mentia, no el
+     * decodificador.
+     *
+     * rtc_hw_has_ever_synced() lo marca rtc_hw_set(), por donde pasan
+     * TODOS los caminos que ponen el reloj -teclado, RDS y DCF77-, y vive
+     * en un registro de respaldo que aguanta el apagado con la pila. Solo
+     * se borra si se pierde la VBAT, que es justo cuando el calendario
+     * deja de ser de fiar.
      */
-    s_hay_hora = (uint8_t)(!((h.year == 2026U) && (h.month == 1U) &&
-                             (h.day == 1U)));
+    (void)h;
+    s_hay_hora = (uint8_t)(rtc_hw_has_ever_synced() ? 1U : 0U);
 
 
     /*

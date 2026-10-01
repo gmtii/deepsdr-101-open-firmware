@@ -237,9 +237,16 @@ static void trama_fin(void)
 
         /*
          * Si el bucle principal no ha vaciado, se TIRA LA NUEVA y no se
-         * pisa la vieja. Con cuatro huecos y una trama cada cuatro
+         * pisa la vieja. Con DOS huecos (ANILLO_N, ver el bloque de arriba
+         * que razona por que dos bastan) y una trama cada cuatro
          * milisegundos como mucho, esto no deberia pasar nunca; si pasara,
          * perder la ultima es menos malo que entregar media.
+         *
+         * Aqui ponia "cuatro huecos" hasta el 30/09/2026, contradiciendo al
+         * propio ANILLO_N y al comentario de veinte lineas mas arriba que
+         * dice "DOS HUECOS BASTAN". El razonamiento no cambia -sobra sitio de
+         * todas formas- pero un numero que no es el del codigo invita a
+         * calcular con el.
          */
         if (sig != s_col) {
             memcpy(s_anillo[s_cab].bits, s_bits, sizeof s_bits);

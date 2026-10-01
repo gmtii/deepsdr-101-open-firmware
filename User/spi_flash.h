@@ -406,13 +406,27 @@ uint8_t spi_flash_async_save_start(const char name8[8], const char ext3[3],
 /* Call once per main loop iteration while a save is in progress. */
 spi_flash_async_status_t spi_flash_async_save_poll(void);
 
-/* Diagnostic bring-up probe #3 - walks CHANNEL.CSV's FAT12 cluster
- * chain and prints its content. See spi_flash_probe_channel_csv()'s
- * comment in spi_flash.c for why this specific file (found by
- * spi_flash_probe_root_dir() on real hardware, 17/08/2026) is worth
- * reading. Same DEBUG_UART_ENABLED requirement, same read-only
- * guarantee. */
-void spi_flash_probe_channel_csv(void);
+/*
+ * AQUI HABIA UN TERCER PROBE QUE NO EXISTE - quitado el 30/09/2026.
+ *
+ * La declaracion era esta:
+ *
+ *     void spi_flash_probe_channel_csv(void);
+ *
+ * y su comentario decia que recorre la cadena de agrupaciones de
+ * CHANNEL.CSV y la imprime, y remitia a "su comentario en spi_flash.c"
+ * para por que ese fichero merece leerse. Ese comentario no existe, y la
+ * funcion tampoco: nunca se escribio. Solo estaba la promesa.
+ *
+ * No rompia la compilacion porque nadie la llamaba, y eso es justo lo que
+ * la hace mala: una cabecera que anuncia una herramienta de diagnostico
+ * que no hay. Quien la lea buscando con que mirar la flash pierde el rato
+ * dos veces, primero buscandola y luego al enlazar.
+ *
+ * Los dos probes que SI existen son spi_flash_probe_root_dir() y el de la
+ * geometria; si algun dia hace falta leer un fichero concreto, se escribe
+ * y entonces se declara.
+ */
 
 
 /*

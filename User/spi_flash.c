@@ -1,4 +1,5 @@
 #include "spi_flash.h"
+#include "idioma.h"
 #include "gd32f4xx.h"
 #include "debug_uart.h"
 
@@ -81,6 +82,43 @@ static inline void f_cs(uint8_t level)
  * XPT2046 is, and at this bit-banged rate (~1us/edge, microseconds
  * per bit vs. these chips' typical tens-of-MHz SCLK ratings) there is
  * enormous timing margin either way. */
+#ifdef CARGADOR_ARRANQUE
+/*
+ * EN EL CARGADOR, ESTE BUS VA POR HARDWARE - 01/10/2026.
+ *
+ * *** El dueno: "el usb sigue sin funcionar" ... "incluso creo que aparece
+ * la unidad por un instante, pero luego nada". ***
+ *
+ * Y la causa es esta funcion. A pelo por las patas son unos 2 us por bit,
+ * o sea 16 us por byte: **un sector de 512 bytes tarda 8,2 ms**. La clase
+ * de almacenamiento del USB llama a disco_lee() desde la INTERRUPCION del
+ * USB, asi que durante esos 8,2 ms el USB no atiende a nada. Y Windows no
+ * lee de sector en sector: pide bloques de 8 a 64, o sea entre 65 y 500 ms
+ * dentro de la interrupcion. El host da el dispositivo por muerto y lo
+ * suelta. "Aparece un instante y luego nada" es justo eso.
+ *
+ * El de serie no tiene el problema porque usa el SPI por hardware: en
+ * 0x08001E56 configura PB3, PB4 y PB5 en funcion alternativa 5, que es
+ * SPI0. Son exactamente nuestros tres pines.
+ *
+ * Aqui se hace igual, y SOLO en el cargador. La aplicacion se queda con el
+ * bus a patadas porque alli lo comparte con el tactil (ver la cabecera de
+ * este fichero), y eso es lo que no se puede romper. El cargador no usa el
+ * tactil, asi que no hay nada que compartir.
+ *
+ * SPI0 cuelga del APB2, que con el reloj del cargador a 192 MHz son 96.
+ * Con divisor 8 salen 12 MHz: 24 veces mas rapido que a patadas, y muy por
+ * debajo de los 50 MHz que admite el W25Q16 leyendo con el comando 0x03.
+ * Un sector pasa de 8,2 ms a 0,34.
+ */
+static uint8_t spi_xfer_byte(uint8_t out)
+{
+    while (RESET == spi_i2s_flag_get(SPI0, SPI_FLAG_TBE)) { }
+    spi_i2s_data_transmit(SPI0, (uint16_t)out);
+    while (RESET == spi_i2s_flag_get(SPI0, SPI_FLAG_RBNE)) { }
+    return (uint8_t)spi_i2s_data_receive(SPI0);
+}
+#else
 static uint8_t spi_xfer_byte(uint8_t out)
 {
     uint8_t i;
@@ -97,6 +135,7 @@ static uint8_t spi_xfer_byte(uint8_t out)
     }
     return in;
 }
+#endif
 
 void spi_flash_init(void)
 {
@@ -105,11 +144,39 @@ void spi_flash_init(void)
     /* SCLK/MOSI/MISO: same mode/speed touch_init() already configures
      * these pins with - see this file's header comment for why
      * reconfiguring them again here is harmless. */
+#ifdef CARGADOR_ARRANQUE
+    /* Los mismos tres pines, pero en alternativa 5 = SPI0, igual que el
+     * cargador de serie (0x08001E56 del boot.bin). Ver spi_xfer_byte(). */
+    {
+        uint32_t pines = F_SCLK_PIN | F_MISO_PIN | F_MOSI_PIN;
+        spi_parameter_struct cfg;
+
+        rcu_periph_clock_enable(RCU_SPI0);
+        gpio_mode_set(GPIOB, GPIO_MODE_AF, GPIO_PUPD_NONE, pines);
+        gpio_output_options_set(GPIOB, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, pines);
+        gpio_af_set(GPIOB, GPIO_AF_5, pines);
+
+        spi_i2s_deinit(SPI0);
+        spi_struct_para_init(&cfg);
+        cfg.trans_mode           = SPI_TRANSMODE_FULLDUPLEX;
+        cfg.device_mode          = SPI_MASTER;
+        cfg.frame_size           = SPI_FRAMESIZE_8BIT;
+        /* Modo 0: reposo en bajo, muestreo en el primer flanco. Es el que
+         * imitaba el bit-bang y el que quiere el W25Q16. */
+        cfg.clock_polarity_phase = SPI_CK_PL_LOW_PH_1EDGE;
+        cfg.nss                  = SPI_NSS_SOFT;   /* el CS es PB6, a mano */
+        cfg.prescale             = SPI_PSC_8;      /* 96/8 = 12 MHz */
+        cfg.endian               = SPI_ENDIAN_MSB;
+        spi_init(SPI0, &cfg);
+        spi_enable(SPI0);
+    }
+#else
     gpio_mode_set(F_SCLK_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, F_SCLK_PIN);
     gpio_output_options_set(F_SCLK_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_2MHZ, F_SCLK_PIN);
     gpio_mode_set(F_MOSI_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, F_MOSI_PIN);
     gpio_output_options_set(F_MOSI_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_2MHZ, F_MOSI_PIN);
     gpio_mode_set(F_MISO_PORT, GPIO_MODE_INPUT, GPIO_PUPD_NONE, F_MISO_PIN);
+#endif
 
     /* This chip's OWN chip-select (PB6) - deselect FIRST, before
      * anything else on this shared bus, same defensive ordering
@@ -117,8 +184,10 @@ void spi_flash_init(void)
     gpio_mode_set(F_CS_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, F_CS_PIN);
     gpio_output_options_set(F_CS_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_2MHZ, F_CS_PIN);
     f_cs(1);
+#ifndef CARGADOR_ARRANQUE
     f_clk(0);
     f_mosi(0);
+#endif
 
     debug_print("spi_flash_init: done (bus shared with touch - see header comment)\n");
 }
@@ -342,6 +411,54 @@ static void borrador_suelta(uint8_t cual)
 uint16_t spi_flash_choques_borrador(void)
 {
     return s_borrador_choques;
+}
+
+/*
+ * ESCRIBE LOS DATOS DE UN FICHERO SIN TOCAR A LOS VECINOS - 30/09/2026.
+ *
+ * Aqui estaban los dos fallos mas serios que ha tenido este fichero, y los
+ * dos salian de la misma linea: rellenar 4 kB de 0xFF, copiar encima los
+ * datos y llamar a spi_flash_write_block_4k().
+ *
+ * 1. SE LLEVABA POR DELANTE A LOS VECINOS. Un bloque son 4 kB, o sea OCHO
+ *    clusters de 512. CONFIG.CSV ocupa tres. Los otros cinco se borraban y
+ *    se reprogramaban a 0xFF en cada guardado, aunque la FAT dijera que
+ *    eran de otro fichero. Reproducido con CHANNEL.CSV, que viene de
+ *    fabrica en el volumen: sus 1024 bytes pasaban a 0xFF tras un solo
+ *    guardado, y el guardado informaba de que habia ido bien.
+ *
+ *    La cabecera decia "the whole confirmed-free block becomes this file's
+ *    data", y eso solo es cierto en el instante de crearlo: la FAT marca
+ *    los clusters USADOS, asi que nada impide que otro tome los de al lado
+ *    despues -por ejemplo copiando un fichero desde el PC por USB-.
+ *    icao24_db.c ya se protegia con un relleno de 4 kB, pero era un apaño
+ *    local a ese fichero.
+ *
+ * 2. SI EL FICHERO NO EMPEZABA EN FRONTERA DE BLOQUE, ESCRIBIA EN OTRO
+ *    SITIO. spi_flash_write_block_4k() hace `& ~4095`, asi que los datos
+ *    iban al PRINCIPIO del bloque y los clusters de verdad del fichero se
+ *    quedaban a 0xFF. Pasa siempre que (cluster-2) % 8 != 0, o sea con
+ *    probabilidad 7/8 en cuanto alguien edita o restaura CONFIG.CSV desde
+ *    el PC. Y el sintoma es el peor: cada guardado dice que ha ido bien y
+ *    cada arranque lee 0xFF. Ajustes perdidos en silencio.
+ *
+ * Esto escribe en la direccion DE VERDAD, conserva lo que haya alrededor
+ * dentro de cada bloque de 4 kB, y parte el trabajo si el fichero cruza una
+ * frontera. Cuesta una lectura de 4 kB mas por bloque; el borrado, que es
+ * lo que de verdad tarda, ya estaba.
+ */
+static void escribe_datos_fichero(uint32_t addr, const uint8_t *data, uint32_t len)
+{
+    while (len > 0U) {
+        uint32_t off = addr & (uint32_t)(FLASH_SECTOR_SIZE - 1U);
+        uint32_t trozo = (uint32_t)FLASH_SECTOR_SIZE - off;
+
+        if (trozo > len) { trozo = len; }
+        spi_flash_block_read_modify_write(addr, off, data, trozo);
+        addr += trozo;
+        data += trozo;
+        len  -= trozo;
+    }
 }
 
 void spi_flash_block_read_modify_write(uint32_t any_addr_in_block,
@@ -775,14 +892,14 @@ const char *spi_flash_geo_txt(void)
 {
     (void)geo_lee();
     switch (s_geo.porque) {
-    case GEO_OK:          return "se puede escribir";
-    case GEO_NO_ES_FAT:   return "no es un FAT12";
-    case GEO_SECTOR:      return "sector no es de 512";
-    case GEO_CLUSTER:     return "cluster de varios sec";
-    case GEO_COPIAS:      return "no hay 2 copias FAT";
-    case GEO_FAT_GRANDE:  return "FAT demasiado grande";
-    case GEO_DESALINEADO: return "datos sin alinear";
-    default:              return "sin mirar";
+    case GEO_OK:          return tr("se puede escribir", "writable");
+    case GEO_NO_ES_FAT:   return tr("no es un FAT12", "not a FAT12");
+    case GEO_SECTOR:      return tr("sector no es de 512", "sector is not 512");
+    case GEO_CLUSTER:     return tr("cluster de varios sec", "multi-sector cluster");
+    case GEO_COPIAS:      return tr("no hay 2 copias FAT", "no 2 FAT copies");
+    case GEO_FAT_GRANDE:  return tr("FAT demasiado grande", "FAT too large");
+    case GEO_DESALINEADO: return tr("datos sin alinear", "data not aligned");
+    default:              return tr("sin mirar", "not checked");
     }
 }
 
@@ -1200,23 +1317,11 @@ static int write_file_data_and_entry(uint32_t dir_off, uint8_t write_terminator,
         fat_write_chain(FAT1_LBA + FAT_SECTORS, first_cluster, num_clusters);
     }
 
-    /* Aqui habia otro uint8_t de 4 kB en la pila, y ademas ANIDADO: los
-     * fat_write_chain() de arriba ya usaban el suyo. Ahora es el borrador
-     * comun, y se puede porque los dos usos son estrictamente seguidos -
-     * cuando se llega aqui las dos copias de la FAT ya estan escritas y
-     * aquel contenido ya no hace falta. El cerrojo esta para que si algun
-     * dia alguien mete algo en medio, salte en vez de corromper. */
-    if (!borrador_coge(BORRADOR_SECTOR)) {
-        return 0;
-    }
-    for (i = 0U; i < FLASH_SECTOR_SIZE; i++) {
-        s_sector[i] = 0xFFU;
-    }
-    for (i = 0U; (i < len) && (i < FLASH_SECTOR_SIZE); i++) {
-        s_sector[i] = data[i];
-    }
-    spi_flash_write_block_4k(scan->free_block_byte_addr, s_sector);
-    borrador_suelta(BORRADOR_SECTOR);
+    /* Los datos, en su direccion de verdad y sin tocar a los vecinos: ver
+     * el comentario de escribe_datos_fichero(). El borrador lo coge y lo
+     * suelta cada paso de ahi dentro, asi que aqui ya no se coge - antes se
+     * cogia aqui y se llenaba de 0xFF a mano, que era el fallo. */
+    escribe_datos_fichero(scan->free_block_byte_addr, data, len);
 
     for (i = 0U; i < entry_write_len; i++) {
         entry_buf[i] = 0x00U;
@@ -1376,9 +1481,13 @@ int spi_flash_write_or_update_file(const char name8[8], const char ext3[3],
              *
              * This matters a lot in practice, not just in theory: this
              * driver's one real caller (settings.c's CONFIG.CSV) is a
-             * small fixed-shape CSV that always fits in a single
-             * 512-byte cluster, so old_num_clusters==new_num_clusters
-             * (both 1) on essentially every save - meaning THIS path,
+             * small FIXED-SIZE CSV - 1536 bytes, o sea TRES clusters de
+             * 512, no uno: hasta el 30/09/2026 aqui ponia "a single
+             * 512-byte cluster... (both 1)", y de esa frase salia el dar
+             * por hecho que el bloque entero era de este fichero, que es
+             * el fallo que se arreglo ese dia (ver
+             * escribe_datos_fichero()) - so old_num_clusters ==
+             * new_num_clusters on essentially every save - meaning THIS path,
              * not the slow one below, is what actually runs almost
              * every time. Added 17/08/2026 after the project owner
              * noticed each save visibly froze the spectrum/waterfall
@@ -1677,14 +1786,39 @@ uint8_t spi_flash_async_save_start(const char name8[8], const char ext3[3],
         return 0U; /* cluster count would change - not the fast path, see spi_flash.h's comment */
     }
 
-    first_data_sector = DATA_START_SECTOR + ((uint32_t)old_cluster - 2U);
-    for (i = 0U; i < FLASH_SECTOR_SIZE; i++) {
-        s_async_scratch[i] = 0xFFU;
+    /*
+     * EL CAMINO ASINCRONO, CON LAS DOS MISMAS CORRECCIONES - 30/09/2026.
+     * Ver el comentario de escribe_datos_fichero(): aqui habia exactamente
+     * la misma linea, y por tanto los mismos dos fallos.
+     *
+     * Aqui no se puede partir el trabajo en dos bloques como alli, porque
+     * esta maquina de estados escribe UN bloque y luego la entrada de
+     * directorio. Asi que si el fichero cruza una frontera de 4 kB, este
+     * camino DICE QUE NO (devuelve 0) y quien llama se va al bloqueante,
+     * que si sabe partirlo. Decir que no es barato: con CONFIG.CSV pasa en
+     * dos de las ocho posiciones posibles dentro del bloque, y lo unico que
+     * se pierde es el guardado rapido de esa vez.
+     */
+    {
+        uint32_t addr = (uint32_t)(DATA_START_SECTOR + ((uint32_t)old_cluster - 2U))
+                        * ROOT_DIR_SECTOR_BYTES;
+        uint32_t bloque = addr & ~(uint32_t)(FLASH_SECTOR_SIZE - 1U);
+        uint32_t off = addr - bloque;
+
+        if ((off + len) > (uint32_t)FLASH_SECTOR_SIZE) {
+            return 0U;   /* cruza de bloque: que lo haga el camino lento */
+        }
+
+        /* Se LEE el bloque antes de tocarlo, para conservar lo que haya de
+         * los vecinos, y los datos se colocan en su sitio dentro de el. */
+        spi_flash_read(bloque, s_async_scratch, FLASH_SECTOR_SIZE);
+        for (i = 0U; i < len; i++) {
+            s_async_scratch[off + i] = data[i];
+        }
+        spi_flash_async_write_block_start(&s_async_block_op, bloque, s_async_scratch);
+        first_data_sector = 0U;   /* ya no se usa: la direccion la manda `bloque` */
+        (void)first_data_sector;
     }
-    for (i = 0U; (i < len) && (i < FLASH_SECTOR_SIZE); i++) {
-        s_async_scratch[i] = data[i];
-    }
-    spi_flash_async_write_block_start(&s_async_block_op, first_data_sector * ROOT_DIR_SECTOR_BYTES, s_async_scratch);
 
     s_async_dir_off = dir_off;
     s_async_cluster = old_cluster;
@@ -2371,15 +2505,15 @@ uint8_t spi_flash_volcado_porque(void) { return s_vol_porque; }
 const char *spi_flash_volcado_porque_txt(void)
 {
     switch (s_vol_porque) {
-    case SPI_VOL_OK:        return "listo";
-    case SPI_VOL_ZONA:      return "no hay zona arriba";
-    case SPI_VOL_NO_ESTA:   return "no encuentro el .BIN";
-    case SPI_VOL_VACIO:     return "el .BIN mide cero";
-    case SPI_VOL_TROCEADO:  return "el .BIN está troceado";
-    case SPI_VOL_CORTO:     return "el .BIN está a medias";
-    case SPI_VOL_SOLAPA:    return "origen pisa destino";
-    case SPI_VOL_DESTINO:   return "destino no permitido";
-    default:                return "tocar";
+    case SPI_VOL_OK:        return tr("listo", "ready");
+    case SPI_VOL_ZONA:      return tr("no hay zona arriba", "no upper area");
+    case SPI_VOL_NO_ESTA:   return tr("no encuentro el .BIN", "cannot find the .BIN");
+    case SPI_VOL_VACIO:     return tr("el .BIN mide cero", "the .BIN is empty");
+    case SPI_VOL_TROCEADO:  return tr("el .BIN está troceado", "the .BIN is fragmented");
+    case SPI_VOL_CORTO:     return tr("el .BIN está a medias", "the .BIN is incomplete");
+    case SPI_VOL_SOLAPA:    return tr("origen pisa destino", "source overlaps target");
+    case SPI_VOL_DESTINO:   return tr("destino no permitido", "target not allowed");
+    default:                return tr("tocar", "tap");
     }
 }
 
@@ -2885,13 +3019,13 @@ uint8_t spi_flash_fichero_cabecera_pon(const char name8[8], const char ext3[3],
 const char *spi_flash_anade_porque_txt(spi_anade_r_t r)
 {
     switch (r) {
-    case SPI_ANADE_OK:         return "hecho";
-    case SPI_ANADE_SIN_SITIO:  return "el disco está lleno";
-    case SPI_ANADE_DIR_LLENO:  return "directorio lleno";
-    case SPI_ANADE_CADENA:     return "la cadena no cuadra";
-    case SPI_ANADE_TOPE:       return "ya tiene 200 trozos";
-    case SPI_ANADE_RARO:       return "el fichero es de otro";
-    case SPI_ANADE_GEOMETRIA:  return "formato no reconocido";
+    case SPI_ANADE_OK:         return tr("hecho", "done");
+    case SPI_ANADE_SIN_SITIO:  return tr("el disco está lleno", "the disk is full");
+    case SPI_ANADE_DIR_LLENO:  return tr("directorio lleno", "directory full");
+    case SPI_ANADE_CADENA:     return tr("la cadena no cuadra", "the chain does not add up");
+    case SPI_ANADE_TOPE:       return tr("ya tiene 200 trozos", "already has 200 chunks");
+    case SPI_ANADE_RARO:       return tr("el fichero es de otro", "the file belongs to another");
+    case SPI_ANADE_GEOMETRIA:  return tr("formato no reconocido", "format not recognised");
     default:                   return "?";
     }
 }

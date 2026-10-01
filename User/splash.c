@@ -216,8 +216,13 @@ static void pinta_titulo(gfx2_surf_t *s, void *ctx)
  * la pantalla de arranque es donde eso se dice.
  *
  * La linea cabe entera y va centrada (font_ui_14, medido en sim/splashtest.c,
- * no estimado). Si algun dia se le anade algo mas, medirlo antes -
- * gfx2_text_in() recorta por la derecha sin avisar.
+ * no estimado). Si algun dia se le anade algo mas, medirlo antes - y medirlo
+ * DE VERDAD, porque gfx2_text_in() NO recorta: alinea y pinta entero, asi que
+ * lo que se pase se dibuja encima de lo de al lado (ver gfx2.h). Aqui ponia
+ * lo contrario -"recorta por la derecha sin avisar"- hasta el 30/09/2026, que
+ * es justo la frase que le dice a quien toque esta linea que no hace falta
+ * medir. Lo que salva esta en concreto es que va centrada en los 800 px de
+ * pantalla y que sim/splashtest.c la mide; no el recorte, que no existe.
  */
 static void pinta_creditos(gfx2_surf_t *s, void *ctx)
 {

@@ -1,4 +1,5 @@
 #include "ui_det.h"
+#include "idioma.h"
 #include "gfx2.h"
 #include "palette.h"
 #include "font_ui_14.h"
@@ -31,10 +32,20 @@ int8_t ui_det_hit(uint16_t x, uint16_t y)
         if ((int16_t)x >= UID_BTN_X1 - 10)           { return UID_HIT_MAS; }
         return UID_HIT_NONE;   /* el numero */
     }
-    /* La fila de ajustes rapidos, entre los botones grandes y el pie. Se
+    /*
+     * La fila de ajustes rapidos, entre los botones grandes y el pie. Se
      * mira ANTES que el pie porque su franja acaba justo donde empieza la
-     * del pie, y solo responde si de verdad hay botones - ver el
-     * comentario de UID_PRE_N en ui_det.h. */
+     * del pie.
+     *
+     * OJO: esto devuelve UID_HIT_PRE0+i HAYA O NO HAYA BOTONES pintados.
+     * Esta funcion no recibe el estado -es un mapa de coordenadas, nada
+     * mas- asi que no puede saberlo. Hasta el 30/09/2026 el comentario de
+     * aqui decia "y solo responde si de verdad hay botones", que era
+     * mentira y costo un fallo de verdad: en las nueve pantallas de detalle
+     * sin fila de presets, un dedo en esta franja vacia cambiaba el filtro
+     * de audio. Quien llama es quien tiene el estado, y es quien filtra
+     * - ver det_touch() en main.c.
+     */
     if (y >= UID_PRE_Y - 4 && y < UID_PIE_Y - 8) {
         int16_t rx = (int16_t)x - UID_PRE_X0;
         int16_t paso = UID_PRE_W + UID_PRE_GAP;
@@ -151,7 +162,8 @@ static void draw_all(gfx2_surf_t *s, void *ctx)
               &font_ui_14b, (uint8_t)(st->pressed == UID_HIT_ALT), st->alt_on);
     }
     boton(s, pie_x((uint8_t)(n - 1U), n), UID_PIE_Y, pie_w(n), UID_PIE_H, 7,
-          "Volver", &font_ui_14b, (uint8_t)(st->pressed == UID_HIT_VOLVER), 0U);
+          tr("Volver", "Back"), &font_ui_14b,
+          (uint8_t)(st->pressed == UID_HIT_VOLVER), 0U);
 }
 
 static void draw_val(gfx2_surf_t *s, void *ctx)

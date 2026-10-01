@@ -129,8 +129,16 @@ static uint32_t s_n_a1, s_n_a2, s_n_m1, s_buenas;
  * indistinguible de un CRC malo.
  *
  * Y no es un caso raro. Medido con los ocho giros (ver hfdl_ram.h): el giro
- * 6 -1200 bps en ranura doble- pide 51.088 bytes y hay 49.824. El 7 pide
+ * 6 -1200 bps en ranura doble- pide 51.088 bytes y hay 45.216. El 7 pide
  * 76.288 y no cabra jamas en una union de 54 kB.
+ *
+ * (Aqui ponia 49.824 hasta el 28/09/2026. Eso es la union menos SOLO las
+ * tablas de preambulo, o sea una cabecera que no existe. Lo que el
+ * decodificador ve de verdad es lo que devuelve hfdl_scope_get_hfdl_ram():
+ * 54.432 - HFDL_RAM_CABECERA = 45.216, y asi lo dice hfdl_ram.h en los tres
+ * sitios donde lo repite. La conclusion no cambia -el giro 6 no cabe- pero
+ * el margen del giro 3, que si cabe, es de 12.128 bytes y no de 16.736, y
+ * ese es el numero con el que alguien decidira si se puede ensanchar algo.)
  *
  * O sea que dos de los ocho tipos de trama no se decodifican, y el unico
  * sintoma es que el contador de buenas sube menos de lo que deberia. Este

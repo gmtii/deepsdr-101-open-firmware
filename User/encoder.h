@@ -70,6 +70,22 @@ void encoder_tick(void);
 int32_t encoder_take_delta(void);
 
 /*
+ * SENTIDO DEL MANDO - 30/09/2026.
+ *
+ * El cableado del encoder no es igual en todas las placas: en una unidad
+ * girar en sentido horario sube la frecuencia y en otra la baja. La
+ * constante ENCODER_DIRECTION de encoder.c es el sentido POR DEFECTO de la
+ * placa con la que se desarrollo; esto es la vuelta que le puede dar el
+ * usuario, desde Ajustes -> Equipo -> Mando.
+ *
+ * Solo afecta a los pasos que salen de encoder_take_delta(), o sea al mando
+ * de verdad. Los botones "-" y "+" de la pantalla de detalle inyectan pasos
+ * ya con su signo y no se tocan: ahi "mas" es mas en las dos posiciones.
+ */
+void    encoder_invertido_pon(uint8_t v);
+uint8_t encoder_invertido(void);
+
+/*
  * Nivel del boton ya antirrebotado: 1 mientras esta apretado.
  *
  * Para gestos de "apretar y girar a la vez". Las tres funciones

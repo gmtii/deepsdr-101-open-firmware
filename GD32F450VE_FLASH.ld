@@ -27,12 +27,26 @@ _Min_Heap_Size  = 0x0;
 
 /* Minimo que el enlazador EXIGE que quede libre para pila. No es cuanta pila
  * hay -la pila usa todo el hueco entre 'end' y _estack- sino el suelo por
- * debajo del cual fallar. Subido de 0x800 a 0xC00 (3 kB) el 24/09/2026:
- * el peor caso medido es de 3.080 bytes, asi que si alguien mete otro buffer
- * gordo en el TCM y el hueco baja de 3 kB, falla AQUI, en el enlazador, con
- * el numero delante. La comprobacion fina la hace tools/pila.py; esto es la
- * red de debajo, por si algun dia se salta esa. */
-_Min_Stack_Size = 0xC00;
+ * debajo del cual fallar. Si alguien mete otro buffer gordo en el TCM y el
+ * hueco baja de aqui, falla AQUI, en el enlazador, con el numero delante. La
+ * comprobacion fina la hace tools/pila.py; esto es la red de debajo, por si
+ * algun dia se salta esa.
+ *
+ * 0x1600 (5,5 kB) desde el 30/09/2026. Estuvo en 0x800, luego en 0xC00 (3 kB)
+ * el 24/09 "porque el peor caso medido es de 3.080 bytes" - y ese numero se
+ * quedo ahi mientras el peor caso crecia hasta 5.464. O sea que la red de
+ * debajo llevaba una semana 2.400 bytes POR DEBAJO de lo que decia proteger:
+ * el enlazador habria dado el visto bueno con 3,1 kB de hueco y el unico que
+ * se habria quejado es pila.py, que es justo la comprobacion que esto
+ * respalda.
+ *
+ * El peor caso de hoy, con el anidamiento de interrupciones contado (tres
+ * niveles de prioridad, ver User/irq_prio.h), son 5.464 bytes de 6.056 de
+ * hueco. Este suelo se pone un poco por encima de ese peor caso, no por
+ * debajo: la idea es que el enlazador avise ANTES de que pila.py falle, no
+ * despues.
+ */
+_Min_Stack_Size = 0x1600;
 
 MEMORY
 {
@@ -154,9 +168,12 @@ SECTIONS
    * falta rebalancear, basta con borrar una linea de aqui y esa tabla vuelve
    * abajo, o anadir el nombre de otra tabla gorda para subirla.
    *
-   * Los comodines que no casan con nada no molestan: hoy font_ui_24b,
-   * font_title_60 y font_rain_16 no los usa nadie y --gc-sections ya se los
-   * ha llevado antes de llegar aqui.
+   * Los comodines que no casan con nada no molestan: font_ui_24b y
+   * font_title_60 ya no existen -se borraron de fonts_data.c el 30/09/2026
+   * por no usarlas nadie, ver el comentario que quedo alli- asi que sus
+   * lineas de abajo no casan con nada y da igual. font_rain_16 SI se usa
+   * (la lluvia de la pantalla de arranque, splash.c) y por tanto esta: aqui
+   * ponia que tampoco la usaba nadie, y eso llevaba tiempo siendo falso.
    *
    * Esta seccion va ANTES que .rodata en este fichero y eso no es casualidad:
    * el enlazador asigna cada seccion de entrada a la PRIMERA de salida que
@@ -188,6 +205,24 @@ SECTIONS
     *(.rodata.font_num_44_glyphs)  *(.rodata.font_num_44_ranges)
     *(.rodata.font_num_20_glyphs)  *(.rodata.font_num_20_ranges)
     *(.rodata.font_rain_16_glyphs) *(.rodata.font_rain_16_ranges)
+    /*
+     * Los paises del DXCC (30/09/2026). El bloque de nombres, su tabla de
+     * desplazamientos y los 329 prefijos: 6.076 bytes que estaban en la
+     * region de la aplicacion, que se habia quedado con 829 libres de
+     * 262.144. Son datos puros que se leen por indice; da igual donde
+     * vivan mientras esten mapeados. Ver el comentario de k_pais_txt[] en
+     * User/dxcc.c.
+     */
+    *(.rodata.k_pais_txt)
+    *(.rodata.k_pais_off)
+    *(.rodata.k_dxcc)
+    /* La costa del mapa del mundo: 7.262 bytes de coordenadas que se leen
+     * en orden para trazar las lineas. Estaba subiendo al desvan por su
+     * cuenta -su atributo decia ".arriba", que es el nombre de ESTA seccion
+     * de salida y no de una de entrada, asi que el enlazador la ponia como
+     * huerfana DETRAS de _earriba y quedaba fuera de la cuenta-. Ver el
+     * comentario de MAPA_DESVAN en User/mapa.h. */
+    *(.rodata.k_mapa_pts)
     /* Las paletas de la cascada: seis tablas de 512 bytes que se leen por
      * indice y no cambian nunca. */
     *(.rodata.k_lut_viridis)
@@ -262,6 +297,7 @@ SECTIONS
     _edata = .;
   } >RAM AT> FLASH
 
+
   . = ALIGN(4);
   .bss :
   {
@@ -312,6 +348,36 @@ SECTIONS
    * calculaba con LOADADDR(.tcmram), que ya no existe; esto es lo mismo
    * pero sin depender de que .tcmram tenga copia. */
   _eflash = LOADADDR(.data) + SIZEOF(.data);
+
+  /*
+   * UNA VARIABLE QUE SOBREVIVE AL REINICIO - 01/10/2026.
+   *
+   * NOLOAD y fuera de .bss a proposito: el arranque pone .bss a cero y .data
+   * a su valor inicial, asi que ninguna de las dos sirve para pasarle un
+   * recado al OTRO lado de un NVIC_SystemReset(). Esta no se toca.
+   *
+   * Y va DESPUES de .bss, no antes. *** 01/10/2026: la primera version la
+   * puso en 0x20000178 y el testigo no sobrevivia. El motivo no es nuestro
+   * arranque -que la respeta- sino el GESTOR DE ARRANQUE, que corre en
+   * medio: barriendo sus literales, referencia SRAM de 0x20000000 a
+   * 0x200074E0, o sea que el 0x20000178 cae dentro de su propio .bss y lo
+   * pone a cero antes de saltar a la aplicacion. ***
+   *
+   * Detras de .bss cae sobre 0x2002F110, muy por encima de donde llega el
+   * gestor.
+   *
+   * La usa dfu_salto.c para el truco del testigo: la fila de Informacion
+   * escribe la palabra magica y reinicia; al arrancar, lo PRIMERO que hace
+   * main() es mirarla. Asi el salto a la ROM sale de una maquina recien
+   * reseteada y no de una con el DMA del audio y la pantalla en marcha.
+   */
+  .noinit (NOLOAD) :
+  {
+    . = ALIGN(4);
+    *(.noinit)
+    *(.noinit*)
+    . = ALIGN(4);
+  } >RAM
 
   ._user_heap_stack :
   {

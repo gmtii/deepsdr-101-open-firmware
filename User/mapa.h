@@ -49,9 +49,31 @@
  * escribio esto quedaban 308 bytes libres.
  */
 
-/* La tabla de la costa. La genera tools/mapa_pack.py; ver su cabecera. */
+/*
+ * La tabla de la costa. La genera tools/mapa_pack.py; ver su cabecera.
+ *
+ * LA SECCION SE LLAMA ".rodata.k_mapa_pts" Y NO ".arriba" - 30/09/2026.
+ *
+ * Ponia ".arriba" a secas, que es el nombre de la seccion de SALIDA del
+ * guion del enlazador, no de una de entrada. Y esa seccion de salida tiene
+ * la lista de entradas ESCRITA A MANO a proposito (ver GD32F450VE_FLASH.ld),
+ * asi que no hay ningun `*(.arriba)` que la recoja: el enlazador la colocaba
+ * como seccion huerfana al final de la de salida del mismo nombre, o sea
+ * DESPUES de _earriba.
+ *
+ * Funcionaba -acababa en el desvan igual- pero dejaba sus 7.262 bytes fuera
+ * de [_sarriba, _earriba), y esa resta es lo que enseña la fila del desvan
+ * en Ajustes -> Equipo -> Informacion. Decia "51,0 de 64 kB" cuando lo
+ * grabado de verdad son 58,1: parecia que quedaban 13 kB libres cuando
+ * quedaban 5,9. Justo el numero en el que uno se apoya para decidir si sube
+ * otra tabla al desvan, y justo ahora que el desvan esta al 91 %.
+ *
+ * Con el nombre de entrada de verdad entra por la lista como todo lo demas,
+ * que ademas es lo que el guion del enlazador dice querer: que subir algo al
+ * desvan sea una linea escrita ahi y no un efecto secundario.
+ */
 #ifndef MAPA_DESVAN
-#define MAPA_DESVAN __attribute__((section(".arriba")))
+#define MAPA_DESVAN __attribute__((section(".rodata.k_mapa_pts")))
 #endif
 
 extern const int16_t  k_mapa_pts[];
@@ -168,6 +190,29 @@ void mapa_arrastra(mapa_caja_t *c, int16_t dx, int16_t dy);
  * forma no se distinguen.
  */
 uint8_t mapa_loc_de_linea(const char *linea, char *out);
+
+/*
+ * LO MISMO, PERO BUSCANDO EN TODAS LAS PALABRAS DE UN CAMPO - 28/09/2026.
+ *
+ * *** El dueño, sobre JTTY: "y ademas tendra mapa digo yo". ***
+ *
+ * Y lo tiene, pero no sirve la funcion de arriba. En FT8 el localizador, si
+ * lo hay, es SIEMPRE la ultima palabra del mensaje, y por eso aquella mira
+ * solo esa. En JTTY un mensaje son varios atomos pegados -"CQ K1ABC CQ
+ * FN42 599 123"- y el localizador viene en SU PROPIO atomo, que puede caer
+ * en cualquier sitio. Mirar solo la ultima palabra dejaria el mapa vacio
+ * justo en los mensajes que si dicen donde esta el otro.
+ *
+ * Asi que esta recorre TODAS las palabras del campo `campo` (contando
+ * desde 1) y devuelve la primera que sea un localizador de verdad, con las
+ * mismas reglas y el mismo guarda de RR73 que la de arriba.
+ *
+ * Y por eso la de FT8 no se cambia por esta: en FT8, "buscar en todas"
+ * aceptaria como localizador cualquier palabra de cuatro con forma de
+ * localizador que apareciera antes del final, y el mensaje de FT8 tiene de
+ * eso. La regla de cada modo es la suya.
+ */
+uint8_t mapa_loc_de_campo(const char *linea, uint8_t campo, char *out);
 
 /* Pinta el fondo, la rejilla y la costa. Se llama desde un callback de
  * gfx2_render(), una vez por banda. */

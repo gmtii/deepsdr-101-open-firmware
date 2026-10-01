@@ -1,4 +1,5 @@
 #include "ft8_modo.h"
+#include "idioma.h"
 #include "ft8_decimator.h"
 #include "ft8_waterfall_adapter.h"
 #include "ft8_fft1024.h"
@@ -95,12 +96,41 @@ static uint8_t  s_ultima;
  * contento. Por eso el panel ensena ademas el segundo dentro de la ranura -
  * si no cuadra con lo que dice un reloj de verdad, ahi esta el problema.
  */
+/*
+ * "HAY RELOJ" = ALGUIEN LO HA PUESTO, no "la fecha no es la de fabrica".
+ *
+ * 30/09/2026, avisado por el dueno: radio nueva, reloj puesto a mano, y FT8
+ * seguia diciendo "pon el reloj en hora".
+ *
+ * La comprobacion de antes era esta:
+ *
+ *     s_hay_hora = !(t.year == 2026 && t.month == 1 && t.day == 1);
+ *
+ * o sea, mirar si la FECHA sigue siendo la de arranque en frio. Y el
+ * teclado de la hora no toca la fecha: rtc_pon_hora() en main.c escribe
+ * hora, minuto y segundo y deja el dia como estaba, con su comentario
+ * explicando por que -"la fecha no la sabe nadie aqui: el teclado solo pide
+ * horas y minutos"-. Las dos decisiones son razonables por separado y se
+ * contradicen en el borde: pones el reloj, la fecha se queda en 2026-01-01,
+ * y esto sigue creyendo que no hay hora.
+ *
+ * Ahora se pregunta a quien lo sabe. rtc_hw_has_ever_synced() existe desde
+ * 09/2026 y responde exactamente esto: lo marca rtc_hw_set() -por donde
+ * pasan TODOS los caminos que ponen el reloj: el teclado, el RDS, el DCF77-
+ * y vive en un registro de respaldo que aguanta el apagado con la pila y
+ * que solo se borra si se pierde la VBAT, que es justo cuando el calendario
+ * deja de ser de fiar.
+ *
+ * El caso que se escapaba no era raro: era el de cualquier radio recien
+ * salida de fabrica en la que pones la hora a mano. Nunca lo vimos porque
+ * en las de aqui la fecha ya venia movida de alguna prueba anterior.
+ */
 static void mira_reloj(void)
 {
     rtc_hw_datetime_t t;
 
     rtc_hw_get(&t);
-    s_hay_hora = (uint8_t)(!((t.year == 2026U) && (t.month == 1U) && (t.day == 1U)));
+    s_hay_hora = (uint8_t)(rtc_hw_has_ever_synced() ? 1U : 0U);
     s_seg = (uint8_t)(((uint16_t)t.second + FT8_RANURA_S
                        - (uint16_t)s_desfase) % FT8_RANURA_S);
 }
@@ -306,10 +336,10 @@ const char *ft8_modo_linea(uint8_t i)
 
 const char *ft8_modo_estado_txt(void)
 {
-    if (!s_on)        { return "apagado"; }
-    if (!s_hay_hora)  { return "sin hora"; }
-    if (s_decodificando) { return "decodificando"; }
-    return "escuchando";
+    if (!s_on)        { return tr("apagado", "off"); }
+    if (!s_hay_hora)  { return tr("sin hora", "no clock"); }
+    if (s_decodificando) { return tr("decodificando", "decoding"); }
+    return tr("escuchando", "listening");
 }
 
 void ft8_modo_come(const float *muestras, uint16_t n)

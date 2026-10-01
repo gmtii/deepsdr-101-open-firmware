@@ -15,8 +15,41 @@ uint32_t ms5351_get_xtal_hz(void)
     return s_xtal_hz;
 }
 
+/*
+ * CON RANGO, Y AQUI - 30/09/2026.
+ *
+ * Esto se aplica desde settings_load() con lo que venga en CONFIG.CSV, y
+ * CONFIG.CSV lo puede editar cualquiera desde el PC. Era el UNICO numero del
+ * fichero que no pasaba ni por un recorte de quien lo llama.
+ *
+ * Lo que costaba: manual_atou32() para en el primer caracter que no es
+ * digito, asi que "26.000.000" o "26 000 000" dan 26, y un valor vacio da 0.
+ * Con 0, frac_divide() hace `fvco / s_xtal_hz` y `fvco % s_xtal_hz`: division
+ * entera por cero. Con 26, la PLL queda programada con basura y la radio no
+ * recibe en ninguna banda. Y NO SE SALE DESDE LA PANTALLA: la baldosa de
+ * CAL PPM calcula el valor nuevo como `viejo * (1 - ppm/1e6)`, que con 0
+ * sigue dando 0, y build_csv() vuelve a guardar el valor malo en cada
+ * guardado. O sea que un dedo torpe en el PC dejaba la radio sorda para
+ * siempre.
+ *
+ * La guarda va AQUI y no en settings.c: asi protege a todos los que llamen,
+ * no solo al que se conocia. Fuera de rango se deja lo que hubiera - en el
+ * arranque, MS5351_XTAL_HZ_DEFAULT-, que es lo mismo que hace el fichero
+ * cuando no trae la clave.
+ *
+ * El rango: de 24 a 28 MHz. El cristal de esta placa son 26 y el de la
+ * mayoria de los modulos Si5351/MS5351 son 25 o 27, asi que esto acepta
+ * cualquiera de los tres con margen de sobra para su calibracion (una
+ * correccion de 3 ppm son 78 Hz) y rechaza lo que no es un cristal.
+ */
+#define XTAL_MIN_HZ 24000000UL
+#define XTAL_MAX_HZ 28000000UL
+
 void ms5351_set_xtal_hz(uint32_t xtal_hz)
 {
+    if (xtal_hz < XTAL_MIN_HZ || xtal_hz > XTAL_MAX_HZ) {
+        return;
+    }
     s_xtal_hz = xtal_hz;
 }
 

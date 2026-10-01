@@ -1,4 +1,5 @@
 #include "ui_hora.h"
+#include "idioma.h"
 #include "gfx2.h"
 #include "palette.h"
 #include "font_ui_14.h"
@@ -101,8 +102,8 @@ static void draw_all(gfx2_surf_t *s, void *ctx)
                      &font_ui_14, gfx2_rgb(PAL_INK_MUTE), GFX2_ALIGN_C);
     }
 
-    barra(s, BARRA1_Y, "Nivel", st->nivel, 1U);
-    barra(s, BARRA2_Y, "Marca", st->marca, st->latido);
+    barra(s, BARRA1_Y, tr("Nivel", "Level"), st->nivel, 1U);
+    barra(s, BARRA2_Y, tr("Marca", "Mark"), st->marca, st->latido);
 
     /* La hora, en grande, en cuanto haya algo que ensenar. Ocupa el hueco
      * entre la segunda barra y los botones. */
@@ -117,9 +118,9 @@ static void draw_all(gfx2_surf_t *s, void *ctx)
 
     boton(s, btn_x(0), st->emisora, 1U,
           (uint8_t)(st->pressed == UIH_HIT_EMISORA));
-    boton(s, btn_x(1), "Aplicar", st->puede_aplicar,
+    boton(s, btn_x(1), tr("Aplicar", "Apply"), st->puede_aplicar,
           (uint8_t)(st->pressed == UIH_HIT_APLICAR));
-    boton(s, btn_x(2), "Salir", 1U,
+    boton(s, btn_x(2), tr("Salir", "Exit"), 1U,
           (uint8_t)(st->pressed == UIH_HIT_SALIR));
 }
 

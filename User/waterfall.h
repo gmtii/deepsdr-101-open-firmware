@@ -18,12 +18,20 @@
  * PRESUPUESTO DE RAM (actualizado 01/09/2026 - ver el propio comentario
  * de WATERFALL_WIDTH sobre el traslado de buffers DSP/FFT/espectro a
  * TCM RAM, lo que hizo viable este ensanche):
- *   tamano_buffer = WATERFALL_WIDTH * WATERFALL_ROWS * 2 bytes
- *   Con los valores actuales (796 x 72): 114624 bytes (~112KB). Antes
- *   del ensanche a pantalla completa: 672x72 = 96768 bytes (~94.5KB).
- *   Sigue siendo la mitad larga de los 192KB
- *   disponibles - probablemente haya que BAJAR WATERFALL_ROWS en cuanto
- *   se sepa cuanta RAM piden los buffers de FFT/IQ.
+ *   tamano_buffer = WATERFALL_WIDTH * WATERFALL_ROWS * 1 byte
+ *   Con los valores de HOY (756 x 72 x 1): 54.432 bytes.
+ *
+ *   ESTE PARRAFO DECIA 114.624 (~112 KB) Y ERA FALSO POR PARTIDA DOBLE,
+ *   corregido el 28/09/2026: el ancho es 756 desde la etapa 3b -lo dice
+ *   WATERFALL_WIDTH veinte lineas mas abajo- y se guarda UN byte por
+ *   celda, no dos, porque el historial son indices de paleta -lo dice el
+ *   bloque "CAMBIO DE ALMACENAMIENTO" cincuenta lineas mas abajo-. O sea
+ *   que los dos datos que hacian falta para corregirlo ya estaban en este
+ *   mismo fichero; lo que faltaba era rehacer la multiplicacion.
+ *
+ *   El numero de verdad se puede leer del binario sin creerse a nadie:
+ *       arm-none-eabi-nm --print-size build/firmware.elf | grep shared_ram
+ *       -> 0000d4a0 = 54.432
  *
  * MODELO DE SCROLL: el buffer se trata como un anillo logico simple:
  *   - waterfall_push_line() desplaza todas las filas una posicion hacia

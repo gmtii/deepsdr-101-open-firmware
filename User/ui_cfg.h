@@ -91,7 +91,7 @@
 #define UIC_GRID_Y   (UIG_Y + 4)                       /* 108 */
 
 #define UIC_HIT_NONE   (-1)
-#define UIC_HIT_CAT0   (UIC_CELLS)                     /* 9..12 */
+#define UIC_HIT_CAT0   (UIC_CELLS)                     /* 16..20 */
 #define UIC_HIT_COUNT  (UIC_CELLS + UIC_CATS)
 
 typedef struct {

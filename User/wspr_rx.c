@@ -403,7 +403,10 @@ uint8_t wspr_rx_decodifica(wspr_msg_t *m, int16_t *hz_out, uint8_t *calidad_out)
 
     if (!s_rx.arrancado || s_rx.paso < WSPR_RX_PASOS) { return 0U; }
 
-    /* Los cuatro tonos tienen que caber: f0 va de 0 a BINS-4. Y el
+    /* Los cuatro tonos tienen que caber, y estan separados DOS medios bines
+     * cada uno (0, 2, 4 y 6), asi que f0 va de 0 a BINS-7 y no a BINS-4 como
+     * ponia aqui hasta el 30/09/2026. El bucle de abajo siempre estuvo bien
+     * (`f0 + 3*WSPR_PASO_TONO < WSPR_RX_BINS`); era el comentario. Y el
      * arranque, de 0 al margen que sobra despues de 162 simbolos. */
     for (t0 = 0U; t0 + 2U * WSPR_SIMBOLOS <= WSPR_RX_PASOS; t0++) {
         for (f0 = 0U; f0 + 3U * WSPR_PASO_TONO < WSPR_RX_BINS; f0++) {

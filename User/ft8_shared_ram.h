@@ -34,13 +34,18 @@
  * waterfall - ft8_waterfall_reset()/feed_subblock() are simply never
  * called outside FT8 mode.
  *
- * SIZE: the waterfall's own buffer (WATERFALL_WIDTH*WATERFALL_ROWS*2 =
- * 114624 bytes) is comfortably the larger member - everything FT8
- * needs together (mag[] + the FFT-1024 tables + the cascade history +
- * the sliding analysis window + FFT scratch) totals ~74.2KB, ~40KB
- * less than the waterfall buffer alone - so this union costs exactly
- * what the waterfall buffer already cost by itself: NO net RAM
- * increase for adding all of FT8's needs.
+ * SIZE: this paragraph is the ORIGINAL from the hfdl branch and its
+ * numbers do NOT apply here - see "ADAPTADO A ESTE ARBOL" below, which
+ * corrects them. Left in place because the reasoning is still the right
+ * reasoning; only the figures changed. It said: the waterfall's own
+ * buffer (WATERFALL_WIDTH*WATERFALL_ROWS*2 = 114624 bytes) is comfortably
+ * the larger member, everything FT8 needs totals ~74.2KB, so the union is
+ * free.
+ *
+ * In THIS tree the waterfall buffer is 54.432 bytes (756 x 72 x 1) and
+ * FT8's member is 52.484, so the union is NOT free by a mile: only 1.948
+ * bytes of slack. Anyone sizing something new against "~40KB less" would
+ * be working from the wrong tree's numbers.
  *
  * ONE instance, defined (not just declared extern) in waterfall.c -
  * see that file's own comment at the point it replaced its old
@@ -58,17 +63,27 @@
  *     aqui juega en contra, porque el buffer con el que se comparte memoria
  *     es la mitad de grande: 54.432 bytes contra sus 114.624.
  *
- *  2. Fuera el miembro de HFDL: aqui no hay HFDL (todavia).
+ *  2. Fuera el miembro de HFDL... y eso DEJO DE SER VERDAD. Ver mas abajo.
  *
- * LO QUE ESO OBLIGA. Con 256 bins (1600 Hz) el bloque de FT8 mide 121.856
- * bytes y a ellos les cabia casi entero dentro de su cascada. A nosotros no:
- * seria pedir 67 kB de mas y solo hay 19 libres. Con 64 bins (400 Hz) mide
- * 47.360, o sea MENOS que nuestra cascada, y entonces esta union no cuesta
- * absolutamente nada - ocupa lo que ya ocupaba el buffer de la cascada.
+ * DOS COSAS DE AQUI SE QUEDARON VIEJAS, y se corrigen el 30/09/2026 en vez
+ * de borrarse, porque las dos se leian como razones para no tocar nada:
  *
- * Y 64 bins no es un recorte a la desesperada: es la configuracion que ELLOS
- * llegaron a publicar, con su A/B contra el corpus de ft8_lib detras (ver
- * ft8_waterfall_adapter.h). Ensancharla es cambiar FT8_ADAPTER_NUM_BINS.
+ *  - "aqui no hay HFDL (todavia)". Lo hay desde el 25/09, y es el mayor
+ *    inquilino de esta misma union: hfdl_ram.c reparte g_ft8_shared_ram con
+ *    HFDL_RAM_CABECERA, y con el entraron WSPR, AIS, ALE y JTTY. Son SEIS
+ *    modos repartiendose estos bytes, no uno.
+ *
+ *  - las cifras de "121.856 con 256 bins" y "47.360 con 64" son de cuando
+ *    TIME_OSR y FREQ_OSR valian 2. Hoy valen 1, este arbol usa 256 bins
+ *    (1600 Hz, ver ft8_waterfall_adapter.h) y el miembro de FT8 mide 52.484
+ *    bytes: medido compilando una sonda contra esta cabecera, no calculado.
+ *    Contra los 54.432 del buffer de la cascada eso deja 1.948 bytes de
+ *    holgura, o sea que la union SI cuesta algo -poco- y no "absolutamente
+ *    nada" como decia aqui.
+ *
+ * El parrafo de arriba (el de los 52.484 y los 1.948 de holgura) es el que
+ * esta al dia; este bloque decia "corregir" aquellos numeros y llevaba una
+ * semana corrigiendolos hacia atras.
  */
 typedef union
 {

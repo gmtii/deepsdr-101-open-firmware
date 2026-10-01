@@ -15,10 +15,21 @@
  * (ver ft8_shared_ram.h). Quien entra, presta; quien sale, devuelve. No hay
  * forma de estar en dos a la vez porque el modo es uno.
  *
- * LO QUE TODAVIA NO HACE: no lo llama nadie. Esta puesto para poder MEDIR
- * lo que ocupa HFDL de verdad una vez enlazado - hasta que algo lo
- * referencia, --gc-sections tira los 23 modulos enteros y el binario dice
- * que HFDL es gratis, que es mentira.
+ * ESTE PARRAFO DECIA QUE NO LO LLAMABA NADIE, Y YA NO ES VERDAD.
+ *
+ * Decia: "no lo llama nadie. Esta puesto para poder MEDIR lo que ocupa
+ * HFDL de verdad una vez enlazado - hasta que algo lo referencia,
+ * --gc-sections tira los 23 modulos enteros y el binario dice que HFDL es
+ * gratis, que es mentira". Eso fue cierto el dia que se porto el modulo.
+ *
+ * HOY HFDL ES UN MODO DE LA RADIO, cableado entero: lo arranca
+ * main.c:11818, lo para main.c:11790, le mete audio demod_am.c:3008 y
+ * hfdl_modo_activo() se consulta desde diecisiete sitios. Son 24 ficheros
+ * hfdl_*.c, no 23.
+ *
+ * Se corrige porque el parrafo viejo INVITA A ROMPER LA RADIO: quien lo
+ * lea pensara que la llamada de main.c es un andamio de medicion y que
+ * puede quitarla, y lo que apagaria es un modo que funciona.
  */
 
 /* Arranca el modo: presta la RAM de la cascada y deja la cadena en cero.

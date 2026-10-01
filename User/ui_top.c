@@ -1,4 +1,5 @@
 #include "ui_top.h"
+#include "idioma.h"
 #include <string.h>
 #include "gfx2.h"
 #include "palette.h"
@@ -136,17 +137,17 @@ ui_top_hit_t ui_top_hit(uint16_t x, uint16_t y)
 static const char *knob_name(ui_knob_t k)
 {
     switch (k) {
-    case UI_KNOB_TUNE:       return "Sintonía";
-    case UI_KNOB_VOLUME:     return "Volumen";
-    case UI_KNOB_BACKLIGHT:  return "Brillo";
-    case UI_KNOB_SCALE_LO:   return "Escala mín.";
-    case UI_KNOB_SCALE_HI:   return "Escala máx.";
-    case UI_KNOB_SQUELCH:    return "Silenciador";
-    case UI_KNOB_SMOOTH:     return "Suavizado";
-    case UI_KNOB_PGA:        return "Ganancia";
-    case UI_KNOB_NR:         return "Reducción";
+    case UI_KNOB_TUNE:       return tr("Sintonía", "Tuning");
+    case UI_KNOB_VOLUME:     return tr("Volumen", "Volume");
+    case UI_KNOB_BACKLIGHT:  return tr("Brillo", "Brightness");
+    case UI_KNOB_SCALE_LO:   return tr("Escala mín.", "Scale min.");
+    case UI_KNOB_SCALE_HI:   return tr("Escala máx.", "Scale max.");
+    case UI_KNOB_SQUELCH:    return tr("Silenciador", "Squelch");
+    case UI_KNOB_SMOOTH:     return tr("Suavizado", "Smoothing");
+    case UI_KNOB_PGA:        return tr("Ganancia", "Gain");
+    case UI_KNOB_NR:         return tr("Reducción", "Noise red.");
     case UI_KNOB_RTTY_SHIFT: return "RTTY";
-    case UI_KNOB_CW_TONE:    return "Tono CW";
+    case UI_KNOB_CW_TONE:    return tr("Tono CW", "CW pitch");
     default:                 return "?";
     }
 }
@@ -273,12 +274,28 @@ static void draw_header(gfx2_surf_t *s, void *ctx)
 /* ===========================================================================
  * BARRA DE ESTADO
  * =========================================================================== */
+static int16_t chip_w(const char *label, const char *value, int active);
+
 static void chip(gfx2_surf_t *s, int16_t x, int16_t y,
                  const char *label, const char *value, int active)
 {
+    /*
+     * EL ANCHO SALE DE chip_w(), NO DE UNA COPIA - 30/09/2026.
+     *
+     * Aqui habia la misma cuenta escrita otra vez, y con OTRO numero: +18
+     * mientras chip_w() pone +16 (y su propio comentario habla de 14). Tres
+     * numeros para la misma cosa.
+     *
+     * Quien reparte los chips de derecha a izquierda usa chip_w(), asi que
+     * cada chip se pintaba 2 px mas ancho de lo que el reparto le habia
+     * guardado: el ultimo pixel caia en x=791 con ST_CHIP_R en 790, y el aire
+     * entre chips quedaba en 6 px en vez de los 8 de ST_CHIP_GAP. No se
+     * solapaba nada -el sobrante crece hacia el hueco- ni la zona de toque se
+     * quedaba corta, pero sim/chipstest.c medía con chip_w(), o sea con el
+     * numero que NO era el que se dibujaba.
+     */
     int16_t lw = gfx2_text_w(label, active ? &font_ui_14b : &font_ui_14);
-    int16_t vw = value ? gfx2_text_w(value, &font_ui_14b) : 0;
-    int16_t w  = (int16_t)(lw + (value ? vw + 6 : 0) + 18);
+    int16_t w  = chip_w(label, value, active);
 
     /*
      * Activo y apagado se distinguen por TRES cosas a la vez: relleno frente
@@ -435,7 +452,7 @@ static void draw_status(gfx2_surf_t *s, void *ctx)
              * el sitio de algo que no vale, en vez de tapar un dato bueno.
              * Sigue siendo la palabra entera y en rojo, nunca solo el color.
              */
-            gfx2_text(s, x, (int16_t)(Y + 10), "SOBRECARGA", &font_ui_14b,
+            gfx2_text(s, x, (int16_t)(Y + 10), tr("SOBRECARGA", "OVERLOAD"), &font_ui_14b,
                       gfx2_rgb(PAL_CRIT));
         } else {
             if (st->s_units > 9u) {
@@ -466,7 +483,7 @@ static void draw_status(gfx2_surf_t *s, void *ctx)
                  * Ojo con el texto: la raya larga (U+2014) NO esta en el juego
                  * de caracteres de las fuentes generadas, y saldria como un
                  * hueco. */
-                gfx2_text(s, x, (int16_t)(Y + 12), "AGC activo", &font_ui_14,
+                gfx2_text(s, x, (int16_t)(Y + 12), tr("AGC activo", "AGC active"), &font_ui_14,
                           gfx2_rgb(PAL_INK_MUTE));
             }
         }
@@ -597,7 +614,7 @@ static void draw_status(gfx2_surf_t *s, void *ctx)
          * segun el estado. */
         lbl[n] = "NCO"; val[n] = 0; act[n] = st->nco_on;
         id[n] = UI_TOP_HIT_NCO; n++;
-        if (st->spk_muted) { lbl[n] = "MUDO"; val[n] = 0; act[n] = 1U;
+        if (st->spk_muted) { lbl[n] = tr("MUDO", "MUTED"); val[n] = 0; act[n] = 1U;
                              id[n] = UI_TOP_HIT_SPK; n++; }
         /* Que el array siga siendo mas grande que el numero maximo de chips
          * que se pueden llegar a meter. No se puede comprobar en tiempo de
@@ -671,6 +688,38 @@ static void rds_franja(gfx2_surf_t *s, void *ctx)
         gfx2_text(s, (int16_t)(x1 - st->rds_off), (int16_t)UI_TOP_RDS_MAR_Y,
                   st->rds, &font_ui_14, gfx2_rgb(PAL_INK_DIM));
     }
+
+    /*
+     * Y EL ERROR DE PLL DE SAM, QUE VIVE DENTRO DE ESTA MISMA FRANJA.
+     * 28/09/2026.
+     *
+     * *** Es la QUINTA vez que aparece esta familia de fallo en el
+     * proyecto: una funcion que repinta una franja FIJA y borra algo que
+     * dibuja otro dentro de ella. Las cuatro anteriores fueron el tercer
+     * boton con la barra, el cuarto con la chapa, y el del mapa con
+     * solo_chip() -esa, tres veces seguidas-. ***
+     *
+     * Medido antes de tocar nada: la huella del PPM son 304 px en
+     * x[566..628] y[42..55], y 300 de ellos -el 98%- caen dentro de esta
+     * franja. Poniendo y quitando st->sam_ppm sobre el dibujado completo
+     * cambian 4 pixeles de 384.000, que son los dos renglones de cola por
+     * debajo de y=54, adonde la franja no llega. O sea que el numero NO SE
+     * VE, y es el unico indicador de si el enganche de SAM es bueno.
+     *
+     * Y NO BASTA CON REORDENAR ui_top_draw(). La franja se repinta tambien
+     * desde emis_marq_poll() y emisoras_tick() (main.c), en cualquier modo
+     * que no sea WFM -SAM incluido- cada RDS_MARQ_MS. Arreglarlo solo en el
+     * dibujado completo lo dejaria borrado igual dos decimas de segundo
+     * despues.
+     *
+     * Asi que se repinta AQUI DENTRO, detras del degradado, que es
+     * exactamente lo que hace solo_chip() con los botones cuarto y quinto
+     * por este mismo motivo.
+     */
+    if (st->sam_ppm && st->sam_ppm[0] != '\0') {
+        gfx2_text_in(s, 470, 40, 160, st->sam_ppm, &font_ui_14,
+                     gfx2_rgb(PAL_INK_DIM), GFX2_ALIGN_R);
+    }
 }
 
 int16_t ui_top_rds_nombre_w(const char *t)
@@ -709,6 +758,49 @@ void ui_top_draw_status(const ui_top_state_t *st)
 {
     gfx2_render(0, UI_STATUS_Y, GFX2_W, UI_STATUS_H, draw_status, (void *)st);
 }
+
+/*
+ * SOLO LA PARTE QUE SE MUEVE CON LA SEÑAL - 30/09/2026.
+ *
+ * *** Por el dueño del proyecto: "se sigue ralentizando cuando recibe
+ * señal". ***
+ *
+ * Y tenia razon, aunque el espectro no tenga nada que ver: medido con
+ * lcd_sim, pintar el espectro cuesta 155.002 accesos al bus HAYA O NO HAYA
+ * señal - es exactamente el mismo trabajo-. Lo que cambia con la señal es
+ * otra cosa: la barra de S se mueve, y smeter_draw() repinta LA FRANJA
+ * ENTERA, 800 x 40 = 32.051 accesos mas por fotograma. Sin señal la barra no
+ * se mueve, smeter_draw() sale por la primera linea y esos 32.051 no se
+ * gastan. De ahi que con señal el fotograma cueste un 21 % mas.
+ *
+ * Pero de esa franja, lo unico que cambia con la señal vive a la izquierda
+ * de ST_KNOB_X: la barra, las unidades S, el dBm y el aviso de sobrecarga.
+ * El destino del mando y los chips de la derecha no se mueven.
+ *
+ * Asi que esto pinta el MISMO dibujo con la ventana recortada a esa parte.
+ * No hay una segunda funcion de dibujo que mantener al dia: es draw_status()
+ * otra vez, y lo que cae fuera de la ventana lo recorta gfx2. 284 de 800 px,
+ * o sea 11.379 accesos en vez de 32.051.
+ */
+/*
+ * El ancho: hasta donde empieza el destino del mando, MAS seis pixeles de
+ * aire. El peor caso de la lectura -"S9+60" seguido de "AGC activo" o de
+ * "AGC active"- acaba justo en 284, o sea con CERO margen, y una traduccion
+ * o una fuente distinta lo recortaria un pixel sin que se notara mas que
+ * como una letra rara. Los seis de mas repintan el borde izquierdo de la
+ * pastilla del mando, que se dibuja igual de bien recortada. Lo vigila
+ * sim/top_franjas.c.
+ */
+#define ST_MOVIL_W  (ST_KNOB_X + 6)
+
+void ui_top_draw_smeter(const ui_top_state_t *st)
+{
+    gfx2_render(0, UI_STATUS_Y, ST_MOVIL_W, UI_STATUS_H, draw_status, (void *)st);
+}
+
+/* Para el banco: ver ui_top_chip_w_dbg(). El enlazador la tira. */
+int16_t ui_top_movil_w_dbg(void)  { return (int16_t)ST_MOVIL_W; }
+int16_t ui_top_read_x_dbg(void)   { return (int16_t)ST_READ_X; }
 
 /*
  * PARA LOS BANCOS DEL SIMULADOR, y por eso estan aqui y no alli.

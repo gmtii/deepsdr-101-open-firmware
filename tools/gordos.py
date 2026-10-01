@@ -41,10 +41,34 @@ sec = collections.defaultdict(lambda: collections.defaultdict(int))
 ent = []
 pend = None
 
+#
+# LA FLASH SON DOS REGIONES, NO UNA - 28/09/2026.
+#
+# Esta herramienta decia "FLASH 304.793 de 262.144 usados, -42.649 libres" y
+# nadie lo miraba. Un numero imposible es la forma mas amable que tiene una
+# herramienta de avisar de que esta mal - lo dice su propio comentario
+# treinta lineas mas abajo, a proposito de otro imposible que si se
+# arreglo en su dia.
+#
+# La causa: desde que se desensamblo el gestor de arranque, la flash esta
+# PARTIDA. Abajo viven los 256 kB de la imagen que el gestor carga; en
+# 0x08060000 hay 8 bytes de firma, y por encima un desvan de 64 kB
+# (.arriba) donde se suben a mano fuentes y tablas. Ver el comentario
+# grande de GD32F450VE_FLASH.ld.
+#
+# Sumar las dos y compararlas con 262.144 es sumar peras con manzanas. El
+# Makefile ya lo hace bien y por eso dice "OK: cabe" mientras esto decia
+# que faltaban 42 kB.
+#
+FLASH_BAJA_FIN = 0x08040000   # 256 kB: donde acaba la imagen que carga el gestor
+FIRMA_DIR      = 0x08060000   # los 8 bytes de firma, ver el .ld
+
 def region_de(dirn):
-    if 0x08000000 <= dirn < 0x08100000:   return 'FLASH'
-    if 0x20000000 <= dirn < 0x20030000:   return 'SRAM'
-    if 0x10000000 <= dirn < 0x10010000:   return 'TCM'
+    if 0x08000000 <= dirn < FLASH_BAJA_FIN:  return 'FLASH'
+    if FIRMA_DIR  <= dirn < 0x08100000:      return 'DESVAN'
+    if 0x08000000 <= dirn < 0x08100000:      return 'FLASH'   # entre medias no hay nada
+    if 0x20000000 <= dirn < 0x20030000:      return 'SRAM'
+    if 0x10000000 <= dirn < 0x10010000:      return 'TCM'
     return None
 
 lineas = txt.split('\n')
@@ -128,7 +152,7 @@ for region, dirn, tam, obj in ent:
         sec[region][obj] += fin - ini
         alto[region] = fin
 
-TOPE = {'FLASH': 262144, 'SRAM': 196608, 'TCM': 65536}
+TOPE = {'FLASH': 262144, 'DESVAN': 65520, 'SRAM': 196608, 'TCM': 65536}
 
 #
 # Y ESTA HERRAMIENTA DICE CUANTO SE EQUIVOCA.
@@ -153,13 +177,17 @@ def real_del_elf(ruta_map):
         return None
 real = real_del_elf(MAPA)
 if real is not None:
-    medido = sum(sec['FLASH'].values())
-    print("  (el binario dice %s bytes de flash; aqui salen %s, %+d de "
-          "hueco entre secciones)" %
+    # LAS DOS REGIONES JUNTAS, que es lo que cuenta arm-none-eabi-size: suma
+    # text+data de TODO el binario, y en este firmware eso incluye el desvan.
+    # Compararlo solo con la region baja daba "-55.267 de hueco", que es el
+    # tamano del desvan disfrazado de error de medida. Ver region_de().
+    medido = sum(sec['FLASH'].values()) + sum(sec['DESVAN'].values())
+    print("  (el binario dice %s bytes de flash -las dos regiones-; aqui "
+          "salen %s, %+d de hueco entre secciones)" %
           (format(real, ',d').replace(',', '.'),
            format(medido, ',d').replace(',', '.'), medido - real))
 
-for region in ('FLASH', 'SRAM', 'TCM'):
+for region in ('FLASH', 'DESVAN', 'SRAM', 'TCM'):
     d = sec[region]
     total = sum(d.values())
     print("\n%s  %s de %s usados, %s libres" %

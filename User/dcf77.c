@@ -1,4 +1,5 @@
 #include "dcf77.h"
+#include "idioma.h"
 #include "hora_rbu.h"
 #include "hora_wwv.h"
 #include "hora_comun.h"
@@ -267,6 +268,10 @@ uint32_t dcf77_freq_hz(hora_emisora_t e)
 
 const char *dcf77_nombre(hora_emisora_t e)
 {
+    /* La fila del RDS es la unica cuyo nombre es una frase y no un
+     * indicativo de emisora: las demas ("DCF77 - 77,5 kHz, Alemania") son
+     * nombres propios y no se traducen. */
+    if (e == HORA_RDS) { return tr("RDS - la FM que escuches", "RDS - whatever FM you tune"); }
     return (e < HORA_N) ? k_emisoras[e].nombre : k_emisoras[0].nombre;
 }
 
@@ -712,13 +717,33 @@ static void feed_fase(float fase)
             && (s_elem_n == 0U
                 || (ms - s_elem_ultimo_ms) >= (uint32_t)ELEM_REFRACTARIO_MS)) {
             s_fase_arriba = 1U;
-            s_elem_ultimo_ms = ms;
             if (s_elem_n == 0U) {
                 s_ms_ciclo = (uint16_t)ms;   /* aqui empieza el segundo */
                 s_n_desde_flanco = 0U;
                 s_elem_cerrado = 0U;
                 ms = 0U;
             }
+            /*
+             * DESPUES DEL REINICIO, NO ANTES - 30/09/2026.
+             *
+             * Esta linea estaba ARRIBA, antes del bloque que pone el reloj
+             * del segundo a cero. O sea que para el primer elemento de cada
+             * segundo se guardaba el `ms` de la base VIEJA -tipicamente 900
+             * o mas- y acto seguido la base se reiniciaba a 0.
+             *
+             * El segundo elemento llega a ms ~ 100 y se evaluaba contra
+             * ~900: la resta es uint32_t, se va por abajo a ~4.294e9, y la
+             * condicion `>= ELEM_REFRACTARIO_MS` se cumplia SIEMPRE. O sea
+             * que el periodo refractario no bloqueaba absolutamente nada.
+             *
+             * Y lo que tenia que bloquear es justo el rebote del integrador
+             * con fuga: con ruido, ese rebote cruza el umbral y se contaba
+             * como segundo elemento. Un segundo que lleva un '0' -un
+             * elemento- se leia como '1' -dos-. Eso rompe las paridades y la
+             * trama entera se rechaza, asi que ALS162 no llegaba nunca a
+             * DCF_LISTO y no habia ningun indicio de por que.
+             */
+            s_elem_ultimo_ms = ms;
             if (s_elem_n < 255U) { s_elem_n++; }
             s_ms_marca = (uint16_t)(s_elem_n * 100U);
         }

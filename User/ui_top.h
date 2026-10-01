@@ -182,6 +182,13 @@ void ui_top_draw(const ui_top_state_t *st);
 
 /* Solo la barra de estado, para los refrescos periodicos del S-meter. */
 void ui_top_draw_status(const ui_top_state_t *st);
+/* Solo la parte de la franja de estado que se mueve con la señal: la barra
+ * de S, las unidades, el dBm y la sobrecarga. Ver su comentario en ui_top.c:
+ * repintar la franja entera cada vez que la barra se mueve era el 21 % de
+ * mas que costaba el fotograma cuando entraba señal. */
+void ui_top_draw_smeter(const ui_top_state_t *st);
+int16_t ui_top_movil_w_dbg(void);
+int16_t ui_top_read_x_dbg(void);
 
 /*
  * --- toques en la barra de estado ---------------------------------------

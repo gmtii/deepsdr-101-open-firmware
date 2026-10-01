@@ -27,6 +27,7 @@
  * no lleva la marca de cerrada, se salta, y las de antes siguen ahi.
  */
 #include "img_store.h"
+#include "idioma.h"
 
 #include <string.h>
 
@@ -313,11 +314,11 @@ void    imgs_fuerza_veredicto(uint8_t v) { s_veredicto = v; }
 const char *imgs_veredicto_texto(void)
 {
     switch (s_veredicto) {
-    case IMGS_OK:          return "disponible";
-    case IMGS_CHIP_CHICO:  return "no: chip de fábrica";
-    case IMGS_ZONA_AJENA:  return "no: final ocupado";
-    case IMGS_POCO_SITIO:  return "no: casi sin libre";
-    default:               return "no: chip sin medir";
+    case IMGS_OK:          return tr("disponible", "available");
+    case IMGS_CHIP_CHICO:  return tr("no: chip de fábrica", "no: stock chip");
+    case IMGS_ZONA_AJENA:  return tr("no: final ocupado", "no: end in use");
+    case IMGS_POCO_SITIO:  return tr("no: casi sin libre", "no: almost full");
+    default:               return tr("no: chip sin medir", "no: chip unmeasured");
     }
 }
 

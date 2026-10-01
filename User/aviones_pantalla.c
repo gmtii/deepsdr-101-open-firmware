@@ -1,4 +1,5 @@
 #include "aviones_pantalla.h"
+#include "idioma.h"
 #include "gfx2.h"
 #include "palette.h"
 #include "font_ui_14.h"
@@ -110,13 +111,14 @@ static void pinta(gfx2_surf_t *s, void *ctx)
 
     /* Titulo, centrado, con una raya fina debajo como en los paneles. */
     gfx2_text_in(s, 0, TIT_Y, GFX2_W,
-                 (c->titulo != 0) ? c->titulo : "Base de datos de aviones",
+                 (c->titulo != 0) ? c->titulo : tr("Base de datos de aviones", "Aircraft database"),
                  &font_ui_18b, gfx2_rgb(PAL_ACCENT), GFX2_ALIGN_C);
     gfx2_hline(s, x0, (int16_t)(TIT_Y + 44), BARRA_W, gfx2_rgb(PAL_LINE));
 
     gfx2_text_in(s, 0, (int16_t)(TIT_Y + 74), GFX2_W,
                  (c->que != 0) ? c->que
-                               : "ICAO24.BIN, del disco a la zona alta de la flash",
+                               : tr("ICAO24.BIN, del disco a la zona alta de la flash",
+                                      "ICAO24.BIN, from disk to the upper flash area"),
                  &font_ui_14, gfx2_rgb(PAL_INK_MUTE), GFX2_ALIGN_C);
 
     /*
@@ -144,7 +146,7 @@ static void pinta(gfx2_surf_t *s, void *ctx)
     /* Y debajo, en que va. */
     switch (c->fase) {
     case AVIP_BUSCANDO:
-        gfx2_text_in(s, 0, PIE_Y, GFX2_W, "Abriendo...",
+        gfx2_text_in(s, 0, PIE_Y, GFX2_W, tr("Abriendo...", "Opening..."),
                      &font_ui_14, gfx2_rgb(PAL_INK), GFX2_ALIGN_C);
         break;
     case AVIP_COPIANDO:
@@ -181,7 +183,7 @@ static void pinta(gfx2_surf_t *s, void *ctx)
          * lee como que la copia ha empezado de nuevo.
          */
         pon_pct(linea, c->pct);
-        gfx2_text_in(s, 0, PIE_Y, GFX2_W, "Comprobando lo copiado...",
+        gfx2_text_in(s, 0, PIE_Y, GFX2_W, tr("Comprobando lo copiado...", "Verifying the copy..."),
                      &font_ui_14, gfx2_rgb(PAL_INK), GFX2_ALIGN_C);
         gfx2_text_in(s, 0, CUENTA_Y, GFX2_W, linea,
                      &font_ui_14, gfx2_rgb(PAL_INK_MUTE), GFX2_ALIGN_C);
@@ -191,8 +193,8 @@ static void pinta(gfx2_surf_t *s, void *ctx)
         {
             uint8_t i = 0U;
             char t[64];
-            const char *a = "Cargada: ";
-            const char *b = " bytes. Borrada del disco.";
+            const char *a = tr("Cargada: ", "Loaded: ");
+            const char *b = tr(" bytes. Borrada del disco.", " bytes. Deleted from the disk.");
             while (*a != '\0') { t[i++] = *a++; }
             { uint8_t k = 0U; while (linea[k] != '\0') { t[i++] = linea[k++]; } }
             while (*b != '\0') { t[i++] = *b++; }
@@ -209,7 +211,7 @@ static void pinta(gfx2_surf_t *s, void *ctx)
          * arreglan de maneras distintas.
          */
         gfx2_text_in(s, 0, PIE_Y, GFX2_W,
-                     (c->motivo != (const char *)0) ? c->motivo : "No se pudo",
+                     (c->motivo != (const char *)0) ? c->motivo : tr("No se pudo", "Failed"),
                      &font_ui_14, gfx2_rgb(PAL_INK), GFX2_ALIGN_C);
         break;
     }
@@ -224,7 +226,7 @@ static void pinta(gfx2_surf_t *s, void *ctx)
     if (c->fase == AVIP_BUSCANDO || c->fase == AVIP_COPIANDO ||
         c->fase == AVIP_COMPROBANDO) {
         gfx2_text_in(s, 0, AVISO_Y, GFX2_W,
-                     "No apagues la radio hasta que termine",
+                     tr("No apagues la radio hasta que termine", "Do not switch the radio off until it finishes"),
                      &font_ui_14, gfx2_rgb(PAL_LINE), GFX2_ALIGN_C);
     }
 }

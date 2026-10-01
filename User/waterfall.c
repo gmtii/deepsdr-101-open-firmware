@@ -5,7 +5,7 @@
 #include "gfx.h"
 #include "rm68120_exmc.h"
 
-/* .bss, RAM principal (0x20000000). WATERFALL_WIDTH*WATERFALL_ROWS*2 bytes,
+/* .bss, RAM principal (0x20000000). WATERFALL_WIDTH*WATERFALL_ROWS*1 byte,
  * ver presupuesto documentado en waterfall.h antes de subir WATERFALL_ROWS.
  *
  * MODELO DE ANILLO (reescrito 30/07/2026): la version anterior hacia un

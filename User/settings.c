@@ -5,6 +5,7 @@
 #include "ms5351.h"
 #include "backlight.h"  /* backlight_pct - read/applied directly, see settings.h's header comment */
 #include "spectrum.h"   /* spectrum_style - read/applied directly, see settings.h's header comment */
+#include "ft8_decoder.h" /* el localizador: clave "grid", aplicada aqui mismo */
 
 extern volatile uint32_t g_msticks; /* same free-running ms counter touch.c/touch_calib.c/spi_flash.c already use */
 
@@ -52,7 +53,11 @@ static uint32_t s_dirty_since_ms = 0U;
  * spi_flash_async_save_start() only references it, doesn't copy it -
  * see spi_flash.h's comment. A stack-local buffer would be gone the
  * instant settings_poll() returns, so this has to be static. */
-/* 23/09/2026: 1024. Y ya no se discute en un comentario: el tamano lo mide
+/* 23/09/2026: 1024, y hoy 1600 (ver s_async_csv_buf justo debajo; el fichero
+ * en si mide CSV_TAMANO = 1536 y el buffer lleva sitio para el cero y para el
+ * aviso). El "1024" de esta linea se quedo escrito cuando se subio, y a dos
+ * lineas de aqui el mismo comentario ya cuenta la subida a 1536: corregido el
+ * 30/09/2026. Y ya no se discute en un comentario: el tamano lo mide
  * tools/csvlen_check.py del simulador a partir de ESTE fichero, y ese banco
  * ya ha ganado su sitio: el 23/09/2026, al anadir el noise blanker, dejo el
  * peor caso en 1021 bytes contra un buffer de 1024 -TRES bytes de holgura,
@@ -196,7 +201,10 @@ static const char *const k_extra_claves[] = {
     "filtro_sam",       /* SET_X_FIL_SAM    */
     "filtro_nfm",       /* SET_X_FIL_NFM    */
     "sstv_guardar",     /* SET_X_SSTV_GUARDA */
-    "wefax_guardar"     /* SET_X_WFX_GUARDA  */
+    "wefax_guardar",    /* SET_X_WFX_GUARDA  */
+    "idioma",           /* SET_X_IDIOMA      */
+    "encoder_inv",      /* SET_X_ENC_INV     */
+    "nr_on"             /* SET_X_NR_ON       */
 };
 _Static_assert(sizeof(k_extra_claves) / sizeof(k_extra_claves[0]) == (size_t)SET_X_N,
                "k_extra_claves[] y settings_extra_id_t se han desincronizado");
@@ -282,6 +290,17 @@ static uint32_t build_csv(uint8_t *buf, uint32_t buf_size,
      * itself - so applying this directly from settings_load(), before
      * spectrum_init() runs, is safe; see settings.h's header comment). */
     p = append_str(buf, p, buf_size, "spectrum_palette,"); p = append_str(buf, p, buf_size, spectrum_palette_to_str(spectrum_get_palette())); p = append_str(buf, p, buf_size, "\n");
+    /*
+     * El localizador Maidenhead (29/09/2026). Se guarda como TEXTO y no
+     * empaquetado en un entero de los de tabla, para que CONFIG.CSV siga
+     * leyendose de un vistazo en el ordenador: "grid,IN80dk" dice lo que es
+     * y se puede corregir a mano; un numero no.
+     *
+     * Si el valor que hay puesto no validara, ft8_decoder_get_own_grid()
+     * devuelve "" y aqui sale "grid," a secas - que es justo la senal
+     * visible de que algo no cuadro, en vez de guardar basura.
+     */
+    p = append_str(buf, p, buf_size, "grid,"); p = append_str(buf, p, buf_size, ft8_decoder_get_own_grid()); p = append_str(buf, p, buf_size, "\n");
     /* HEATMAP trace white/color-matched toggle (08/09/2026) - read
      * straight from spectrum.c's own getter, same "no ordering
      * hazard, no threading through call sites" reasoning as
@@ -404,7 +423,7 @@ static uint8_t key_is(const uint8_t *key, uint32_t key_len, const char *literal)
 
 uint8_t settings_load(settings_loaded_t *out)
 {
-    /* Ver s_async_csv_buf, arriba, para por que 1024 y no una cuenta a ojo. */
+    /* Ver s_async_csv_buf, arriba, para por que 1600 y no una cuenta a ojo. */
     uint8_t buf[1600];
     uint32_t n;
     uint32_t pos = 0U;
@@ -559,6 +578,18 @@ uint8_t settings_load(settings_loaded_t *out)
             /* spec_trace_white (08/09/2026): applied DIRECTLY here,
              * same shape/reasoning as spectrum_style/spectrum_palette
              * above - no ordering hazard. */
+            else if (key_is(key, key_len, "grid")) {
+                /* Aplicado DIRECTAMENTE aqui, como spectrum_palette: no hay
+                 * dependencia de orden con el arranque de main() -el
+                 * localizador no toca la radio, solo el aspa de los mapas y
+                 * las distancias- asi que no necesita su par have_/valor.
+                 *
+                 * ft8_decoder_set_own_grid() valida por su cuenta y deja el
+                 * localizador VACIO si el valor no es bueno, que es mejor
+                 * que una distancia calculada desde un sitio inventado. */
+                ft8_decoder_set_own_grid((const char *)val, (int)val_len);
+                got_any = 1U;
+            }
             else if (key_is(key, key_len, "spec_trace_white")) { spectrum_set_heatmap_trace_white((uint8_t)manual_atou32(val, val_len)); got_any = 1U; }
             else if (key_is(key, key_len, "ms5351_xtal_hz")) {
                 /* Applied directly, same as touch_set_calibration()
@@ -685,8 +716,12 @@ void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, au
      * spi_flash_async_save_start() only succeeds if CONFIG.CSV
      * already exists AND the new content needs the exact same
      * cluster count as before - true on essentially every save in
-     * practice, since this schema always fits in one 512-byte
-     * cluster. If it can't (the very first save ever, before
+     * practice, since CSV_TAMANO is fixed. (It is 1536 bytes, o sea
+     * TRES clusters de 512, no uno: aqui ponia "one 512-byte cluster"
+     * hasta el 30/09/2026, y esa frase era justo la razon por la que
+     * nadie se preocupaba de los vecinos del bloque de 4 kB - que es
+     * el fallo que se arreglo ese dia, ver escribe_datos_fichero() en
+     * spi_flash.c.) If it can't (the very first save ever, before
      * CONFIG.CSV exists yet), fall back to the old blocking
      * settings_save_now() just this once - correct either way, just
      * not smooth that one time.

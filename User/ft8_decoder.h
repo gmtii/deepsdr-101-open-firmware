@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>   /* size_t, para ft8_decoder_grid_coord_txt() */
 
 /*
  * Orchestrates a real decode pass over a captured slot: calls
@@ -37,14 +38,76 @@ typedef struct
 void ft8_decoder_init(void);
 
 /* Sets/reads the QTH grid used for the distance-to-grid field on
- * decoded CQ lines - see their own comments in ft8_decoder.c.
- * ft8_decoder_init() above already seeds this from the compiled-in
- * FT8_OWN_GRID default; settings.c's settings_load() calls
- * ft8_decoder_set_own_grid() again afterward if CONFIG.CSV has its
- * own "grid" key, and its build_csv() calls
- * ft8_decoder_get_own_grid() to persist whatever is currently set. */
+ * decoded CQ lines Y para el aspa de "donde estamos" en los mapas de
+ * FT8, WSPR, AIS y JTTY - see their own comments in ft8_decoder.c.
+ * ft8_decoder_init() above seeds this from the compiled-in
+ * FT8_GRID_POR_DEFECTO default, que a dia de hoy es el UNICO sitio de donde
+ * sale.
+ *
+ * HISTORIA, porque explica por que este fichero esta escrito asi.
+ *
+ * Hasta el 29/09/2026 la cabecera afirmaba que settings.c leia una clave
+ * "grid" de CONFIG.CSV y que build_csv() la guardaba. NO EXISTIA NADA DE
+ * ESO: ni la clave, ni la llamada, ni el guardado. El unico sitio que
+ * ponia el localizador era ft8_decoder_init(), con el valor compilado, y
+ * el aspa del mapa llevaba meses clavada en Canarias.
+ *
+ * El fallo no fue el codigo: fue el comentario. Describia una
+ * funcionalidad que nadie construyo, y al leerlo se daba por hecho que el
+ * localizador se configuraba y ya nadie lo comprobaba.
+ *
+ * HOY YA NO ES ASI, y conviene decirlo aqui mismo porque el aviso que
+ * habia en este hueco se quedo describiendo el mundo de aquella tarde y
+ * paso a ser el la mentira: desde el 30/09 settings.c SI tiene la clave
+ * "grid" (settings.c, en settings_load()), SI llama a esta funcion y
+ * build_csv() SI la guarda, y la pantalla de Ajustes -> Equipo -> QTH es
+ * quien la escribe. Lo vigila tools/qth_check.py. */
 void ft8_decoder_set_own_grid(const char *grid, int len);
 const char *ft8_decoder_get_own_grid(void);
+
+
+/*
+ * UN LOCALIZADOR A COORDENADAS, en DIEZMILESIMAS DE GRADO (40,6458 sale
+ * como 406458; al sur y al oeste, negativo). Devuelve false si el
+ * localizador no vale, y entonces no toca las salidas.
+ *
+ * POR QUE ES PUBLICA - 30/09/2026. *** El dueño, con la foto de la
+ * pantalla del QTH delante: "creo que las coordenadas no estan bien". ***
+ * Y no lo estaban: la pantalla del QTH de main.c se habia escrito SU
+ * PROPIA conversion, en enteros, y la subcuadricula iba multiplicada por
+ * diez (8333 donde tocaba 833). "IN80fp" -Madrid, 40,6458 N 3,5417 W-
+ * salia como 46,4573 N 0,5831 E, o sea en Francia.
+ *
+ * Lo grave no es la cifra, es que hubiera dos conversiones. La de aqui
+ * -la que mueve el aspa de los mapas y mide las distancias de los CQ-
+ * estaba bien, asi que el fallo no se veia por ningun lado salvo en esa
+ * pantalla, que es justo la que existe para DARTE CUENTA de que te has
+ * equivocado de letra. Ahora hay una sola, esta, y main.c solo formatea.
+ */
+/*
+ * Pone el localizador POR DEFECTO (IN80dk, Madrid capital). Se llama UNA vez
+ * en el arranque, antes de settings_load(), y desde ningun otro sitio: es
+ * para que una radio recien flasheada tenga algo valido, no para reponer
+ * nada. ft8_decoder_init() NO lo hace, a proposito - ver su comentario.
+ */
+void ft8_decoder_grid_por_defecto(void);
+
+bool ft8_decoder_grid_e4(const char *grid, int len,
+                         int32_t *lat_e4, int32_t *lon_e4);
+
+/*
+ * Y EL RENGLON YA HECHO: "40.6458, -3.5417". Devuelve false -y deja `out`
+ * vacio- si el localizador no vale o si no cabe.
+ *
+ * El FORMATO es parte de la respuesta y por eso vive aqui y no en quien
+ * pinta: punto decimal, coma como separador y menos para sur y oeste. *** Por
+ * el dueño, 30/09/2026: "te falta un negativo". *** Este renglon existe para
+ * pegarlo en un mapa y comprobar que el localizador teclado es el tuyo, y con
+ * coma decimal eso no se puede - un mapa lee la coma como el separador entre
+ * las dos cifras-. Lo mide sim/qthcoord.c, cadena por cadena.
+ */
+bool ft8_decoder_grid_coord_txt(const char *grid, int len,
+                                char *out, size_t n);
 
 /* Runs ftx_find_candidates() + ftx_decode_candidate() +
  * ftx_message_decode() over whatever ft8_waterfall_get() currently

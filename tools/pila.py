@@ -33,7 +33,7 @@ tiene:
   - alloca() y arrays de tamano variable: gcc los marca "dynamic" en el
     .su y aqui salen senalados, porque su coste real no se sabe.
 """
-import re, sys, os, glob, subprocess, collections
+import re, sys, os, glob, subprocess, collections, io
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ELF  = sys.argv[1] if len(sys.argv) > 1 else os.path.join(RAIZ, 'build', 'firmware.elf')
@@ -42,9 +42,14 @@ GCC  = 'arm-none-eabi-'
 
 # Margen para la interrupcion que caiga encima del peor caso: 32 bytes que
 # apila el hardware al entrar + 72 mas si toca guardar los registros de coma
-# flotante, redondeado a 104. Solo UNA interrupcion, porque en este proyecto
-# todas tienen la misma prioridad y por tanto no se anidan entre ellas. Si
-# alguna vez se sube la prioridad de una, este numero hay que multiplicarlo.
+# flotante, redondeado a 104. SE MULTIPLICA POR EL NUMERO DE NIVELES DE
+# PRIORIDAD que de verdad hay, y esos se leen del codigo - ver el bloque de
+# PRIOS, mas abajo.
+#
+# Hasta el 30/09/2026 aqui decia "solo UNA interrupcion, porque en este
+# proyecto todas tienen la misma prioridad... si alguna vez se sube la
+# prioridad de una, este numero hay que multiplicarlo". Ya se habia subido, y
+# nadie vino a multiplicarlo. De ahi que ahora se cuente en vez de suponerse.
 APILADO_HW = 104
 
 #
@@ -106,8 +111,20 @@ for ln in dis.splitlines():
     if m:
         act = m.group(1); marco.setdefault(act, 0); continue
     if act is None: continue
-    m = re.search(r'\sblx?\s+[0-9a-f]+ <([^+>]+)', ln)
-    if m:
+    # bl/blx Y TAMBIEN b/b.w A OTRA FUNCION - 30/09/2026.
+    #
+    # gcc convierte una llamada en la ultima linea de una funcion en un SALTO
+    # (`b.w otra`), y con solo `blx?` esas no se veian. En este binario hay
+    # 206, y la que importa es la del SysTick: SysTick_Handler acaba en
+    # `b.w encoder_tick`, asi que pila.py decia tranquilamente que el SysTick
+    # gasta 0 bytes cuando gasta 32.
+    #
+    # Se cuentan como llamadas normales, o sea SUMANDO el marco del que salta.
+    # En un salto de cola de verdad gcc ya ha soltado ese marco, asi que esto
+    # se pasa de largo - y pasarse de largo en una red de seguridad es lo
+    # correcto. Medido: main y DMA0_Channel3 no cambian.
+    m = re.search(r'\s(?:bl|blx|b|b\.w)\s+[0-9a-f]+ <([^+>]+)', ln)
+    if m and m.group(1) != act:
         llama[act].add(m.group(1)); continue
     if re.search(r'\sblx?\s+r\d', ln):
         indirectas[act] += 1
@@ -167,8 +184,79 @@ if 'main' not in entradas:
 res = sorted(((prof(f), f) for f in entradas), reverse=True)
 
 principal = next(d for d, f in res if f == 'main')
-isr_d, isr_n = max([(d, f) for d, f in res if f != 'main'] + [(0, '-')])
-total = principal + isr_d + APILADO_HW
+
+#
+# LAS INTERRUPCIONES SE ANIDAN, Y ANTES ESTO NO LO CONTABA - 30/09/2026.
+#
+# El comentario de APILADO_HW decia: "Solo UNA interrupcion, porque en este
+# proyecto todas tienen la misma prioridad y por tanto no se anidan entre
+# ellas. Si alguna vez se sube la prioridad de una, este numero hay que
+# multiplicarlo."
+#
+# Y ya habia pasado. User/irq_prio.h reparte TRES niveles distintos -SysTick
+# 0, el audio 1, el tactil 2- con NVIC_PRIGROUP_PRE4_SUB0, o sea los cuatro
+# bits a expropiacion. Un dedo en el tactil, encima el bloque de audio, y
+# encima el tic: tres niveles de anidamiento, y esto sumaba uno.
+#
+# Ahora se lee QUIEN esta en QUE nivel del propio codigo -de los
+# nvic_irq_enable() y NVIC_SetPriority() de User/*.c, resolviendo las macros
+# contra irq_prio.h- y se suma la peor de cada nivel, con su apilado de
+# hardware. Leerlo del codigo y no escribirlo aqui es lo unico que impide que
+# esto vuelva a quedarse atras: si alguien mueve una prioridad, esto se
+# entera.
+#
+PRIOS = {}
+_pri_txt = ''
+for _f in sorted(glob.glob(os.path.join(RAIZ, 'User', '*.c'))
+                 + glob.glob(os.path.join(RAIZ, 'User', '*.h'))):
+    try:
+        _pri_txt += io.open(_f, encoding='utf-8', errors='replace').read()
+    except OSError:
+        pass
+_macros = dict(re.findall(r'#define\s+(IRQ_PRIO_\w+)\s+(\d+)U?', _pri_txt))
+_asigna = (re.findall(r'nvic_irq_enable\s*\(\s*(\w+)\s*,\s*(\w+)', _pri_txt)
+           + re.findall(r'NVIC_SetPriority\s*\(\s*(\w+)\s*,\s*(\w+)', _pri_txt))
+
+def _manejador(irqn):
+    """IRQn del fabricante -> nombre del manejador que hay en el binario."""
+    base = irqn[:-5] if irqn.endswith('_IRQn') else irqn
+    for cand in (base + '_IRQHandler', base + '_Handler'):
+        if cand in marco:
+            return cand
+    return None
+
+_sin_resolver = []
+for _irqn, _pm in _asigna:
+    _h = _manejador(_irqn)
+    if _h is None:
+        continue
+    if _pm in _macros:
+        PRIOS.setdefault(int(_macros[_pm]), []).append(_h)
+    else:
+        _sin_resolver.append((_h, _pm))
+
+_isrs = [f for d, f in res if f != 'main']
+_colocados = set(h for v in PRIOS.values() for h in v)
+_huerfanos = [h for h in _isrs if h not in _colocados]
+
+if not PRIOS:
+    # Sin prioridades legibles se vuelve al modelo viejo, pero DICIENDOLO.
+    isr_d, isr_n = max([(prof(f), f) for f in _isrs] + [(0, '-')])
+    niveles = [(isr_d, isr_n, 0)]
+else:
+    niveles = []
+    for _p in sorted(PRIOS):
+        _d, _n = max([(prof(h), h) for h in PRIOS[_p]] + [(0, '-')])
+        niveles.append((_d, _n, _p))
+    # Los manejadores que nadie habilita con prioridad explicita se quedan al
+    # nivel por defecto (0), que es el que mas expropia: el peor caso.
+    if _huerfanos:
+        _d, _n = max((prof(h), h) for h in _huerfanos)
+        niveles.append((_d, _n, -1))
+    isr_d = sum(d for d, _n, _p in niveles)
+    isr_n = ' + '.join('%s' % n for _d, n, _p in niveles if _d > 0) or '-'
+
+total = principal + isr_d + APILADO_HW * max(1, len(niveles))
 
 # --- 4) cuanta pila hay DE VERDAD, sacada del propio .elf ---
 sim = {}
@@ -185,8 +273,13 @@ sitio = sim['_estack'] - sim['end'] - MONTON
 
 print("PILA (peor caso, sobre el binario enlazado)")
 print("  camino de main .......... %6d" % principal)
-print("  peor interrupcion ....... %6d  (%s)" % (isr_d, isr_n))
-print("  apilado del hardware .... %6d" % APILADO_HW)
+for _d, _n, _p in niveles:
+    print("  interrupcion nivel %-4s . %6d  (%s)"
+          % (('def' if _p < 0 else str(_p)), _d, _n))
+print("  interrupciones, en total  %6d  (se anidan: %d niveles)"
+      % (isr_d, len(niveles)))
+print("  apilado del hardware .... %6d  (%d x %d)"
+      % (APILADO_HW * max(1, len(niveles)), max(1, len(niveles)), APILADO_HW))
 print("  TOTAL ................... %6d bytes" % total)
 print("  sitio real .............. %6d bytes  (_estack - end - %d de monton)" % (sitio, MONTON))
 if sitio > 0:

@@ -7,7 +7,12 @@
  *
  *   cabecera, 56 bytes
  *     0   'E','M','I','S'
- *     4   u8  version = 1
+ *     4   u8  version = 2   (era 1 cuando se escribio esta especificacion;
+ *                             el lector exige 2 y tools/emisoras_pack.py
+ *                             empaqueta 2 - corregido el 30/09/2026, que un
+ *                             tercer empaquetador escrito leyendo esto
+ *                             produciria un fichero que la radio rechaza sin
+ *                             decir por que)
  *     5   u8  n_paises (cuantas cadenas del final son codigos ITU)
  *     6   u16 n_textos
  *     8   u32 n_frecuencias

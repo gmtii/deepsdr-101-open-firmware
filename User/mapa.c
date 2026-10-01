@@ -289,6 +289,87 @@ void mapa_arrastra(mapa_caja_t *c, int16_t dx, int16_t dy)
     ajusta(c);
 }
 
+/*
+ * LAS REGLAS DE QUE ES UN LOCALIZADOR, EN UN SOLO SITIO.
+ *
+ * Estaban dentro de mapa_loc_de_linea(). Se sacan aqui porque desde el
+ * 28/09/2026 hay DOS buscadores -el de FT8, que mira la ultima palabra, y
+ * el de JTTY, que mira todas- y dos copias de estas reglas son dos copias
+ * que un dia se separan. Lo que cambia entre los dos modos es DONDE se
+ * busca, no que se acepta.
+ */
+static uint8_t loc_vale(const char *w, uint8_t n)
+{
+    if (n != 4U && n != 6U) { return 0U; }
+
+    /*
+     * LOS QUE TIENEN FORMA DE LOCALIZADOR Y NO LO SON. RR73 es como acaba
+     * casi todo contacto de FT8 y caeria en el Pacifico, al noreste de
+     * Fiyi: cada QSO terminado pondria una marca donde no hay nadie.
+     */
+    if (w[0] == 'R' && w[1] == 'R' && w[2] == '7'
+        && (w[3] == '1' || w[3] == '2' || w[3] == '3')) { return 0U; }
+
+    if (w[0] < 'A' || w[0] > 'R' || w[1] < 'A' || w[1] > 'R'
+        || w[2] < '0' || w[2] > '9' || w[3] < '0' || w[3] > '9') { return 0U; }
+    if (n == 6U) {
+        if (w[4] < 'A' || w[4] > 'X' || w[5] < 'A' || w[5] > 'X') { return 0U; }
+    }
+    return 1U;
+}
+
+/* El principio del campo `campo` (contando desde 1), o 0 si no lo hay. */
+static const char *campo_de(const char *linea, uint8_t campo)
+{
+    const char *p = linea;
+    uint8_t tabs = 0U;
+
+    if (campo <= 1U) { return linea; }
+    while (*p != '\0') {
+        if (*p == '\t') {
+            tabs++;
+            if (tabs == (uint8_t)(campo - 1U)) { return p + 1; }
+        }
+        p++;
+    }
+    return 0;
+}
+
+uint8_t mapa_loc_de_campo(const char *linea, uint8_t campo, char *out)
+{
+    const char *p;
+
+    if (linea == 0 || out == 0) { return 0U; }
+    out[0] = '\0';
+    p = campo_de(linea, campo);
+    if (p == 0) { return 0U; }
+
+    while (*p != '\0' && *p != '\t') {
+        uint8_t n = 0U;
+        char w[8];
+
+        /* Una palabra: hasta el espacio, el tabulador o el final. */
+        while (p[n] != '\0' && p[n] != '\t' && p[n] != ' ' && n < 7U) {
+            w[n] = p[n];
+            n++;
+        }
+        w[n] = '\0';
+        /* Si se paro por el tope de siete, no era una palabra de 4 ni de 6
+         * y hay que saltarla entera, no tomar sus primeros siete. */
+        if (n < 7U && loc_vale(w, n)) {
+            uint8_t k;
+
+            for (k = 0U; k <= n; k++) { out[k] = w[k]; }
+            return 1U;
+        }
+        p += n;
+        while (*p == ' ') { p++; }
+        if (n == 7U) { while (*p != '\0' && *p != '\t' && *p != ' ') { p++; }
+                       while (*p == ' ') { p++; } }
+    }
+    return 0U;
+}
+
 uint8_t mapa_loc_de_linea(const char *linea, char *out)
 {
     const char *p = linea;
@@ -327,31 +408,9 @@ uint8_t mapa_loc_de_linea(const char *linea, char *out)
         if (ult[n] != '\0' && ult[n] != '\t' && ult[n] != ' ') { out[0] = '\0'; return 0U; }
     }
     out[n] = '\0';
-    if (n != 4U && n != 6U) { out[0] = '\0'; return 0U; }
-
-    /*
-     * LOS QUE TIENEN FORMA DE LOCALIZADOR Y NO LO SON. Ver el comentario
-     * de esta funcion en mapa.h: RR73 es como acaba casi todo contacto de
-     * FT8 y caeria en el Pacifico.
-     */
-    if (out[0] == 'R' && out[1] == 'R' && out[2] == '7'
-        && (out[3] == '1' || out[3] == '2' || out[3] == '3')) {
-        out[0] = '\0';
-        return 0U;
-    }
-
-    /* Y que sea un localizador de verdad, no cualquier cosa de cuatro. */
-    if (out[0] < 'A' || out[0] > 'R' || out[1] < 'A' || out[1] > 'R'
-        || out[2] < '0' || out[2] > '9' || out[3] < '0' || out[3] > '9') {
-        out[0] = '\0';
-        return 0U;
-    }
-    if (n == 6U) {
-        if (out[4] < 'A' || out[4] > 'X' || out[5] < 'A' || out[5] > 'X') {
-            out[0] = '\0';
-            return 0U;
-        }
-    }
+    /* Las reglas de que vale son las mismas para los dos buscadores y
+     * viven en loc_vale(), arriba. */
+    if (!loc_vale(out, n)) { out[0] = '\0'; return 0U; }
     return 1U;
 }
 
@@ -464,10 +523,23 @@ static int16_t mz_y(const mapa_caja_t *c)
 {
     return (int16_t)(c->y + c->h - MZ_MARGEN - MAPA_MZ_LADO);
 }
+/*
+ * EL MENOS A LA IZQUIERDA Y EL MAS A LA DERECHA - 30/09/2026, por el dueno.
+ *
+ * Estaba al reves. Es el orden de todo lo demas de esta radio -ver los dos
+ * botones grandes de ui_det.c, y los de la pantalla de QTH- y el de
+ * cualquier escala: lo que resta a la izquierda, lo que suma a la derecha.
+ *
+ * Esta funcion la usan LAS DOS: mz_uno() para dibujar y mapa_zoom_hit()
+ * para el toque. Por eso el cambio va aqui y en un solo sitio: con las
+ * posiciones escritas dos veces, invertir el dibujo y dejarse el toque deja
+ * unos botones que hacen lo contrario de lo que ponen, y eso no lo ve el
+ * compilador.
+ */
 static int16_t mz_x(const mapa_caja_t *c, uint8_t mas)
 {
     return (int16_t)(c->x + MZ_MARGEN
-                     + (mas ? 0 : (MAPA_MZ_LADO + MZ_MARGEN)));
+                     + (mas ? (MAPA_MZ_LADO + MZ_MARGEN) : 0));
 }
 
 static void mz_uno(gfx2_surf_t *s, const mapa_caja_t *c, uint8_t mas, uint8_t vale)

@@ -13,8 +13,21 @@
  * backwards with ENCODER_DIRECTION=1 (i.e. A leading B is actually
  * counter-clockwise on this knob, opposite of what was assumed when
  * this flag was first added - see encoder.h's encoder_take_delta()
- * comment). Flipped here rather than swapping the A/B wires. */
+ * comment). Flipped here rather than swapping the A/B wires.
+ *
+ * 30/09/2026: esto es el sentido de ESTA placa, no el de todas. El dueno
+ * estreno otra unidad y giraba al reves que la suya de siempre: "giraba en
+ * sentido horario y la frecuencia crecia, aqui la frecuencia decrece". O
+ * sea que el cableado del mando varia entre placas y una constante de
+ * compilacion no puede acertar en las dos.
+ *
+ * Asi que esto se queda como el sentido POR DEFECTO de la placa, y encima
+ * va s_invertido, que el usuario pone desde Ajustes -> Equipo -> Mando y se
+ * guarda en CONFIG.CSV. Uno es de fabrica y el otro es tuyo. */
 #define ENCODER_DIRECTION -1
+
+/* 0 = como venga la placa, 1 = al reves. Ver encoder_invertido_pon(). */
+static uint8_t s_invertido;
 
 /* Quarter-steps per detent of the mechanical encoder. The common
  * EC11-style part gives one full quadrature cycle (4 transitions) per
@@ -171,7 +184,28 @@ int32_t encoder_take_delta(void)
     s_qsteps = q % QUARTER_STEPS_PER_DETENT;
     __set_PRIMASK(primask);
 
-    return detents * ENCODER_DIRECTION;
+    /* El ajuste del usuario se aplica AQUI, en el unico sitio por donde
+     * salen los pasos del mando de verdad. Los pasos INYECTADOS -los
+     * botones "-" y "+" de la pantalla de detalle, ver s_inject_detents en
+     * main.c- no pasan por aqui y no deben invertirse: esos ya vienen en
+     * "mas" y "menos", no en "horario" y "antihorario".
+     *
+     * Comprobado en la placa el 30/09/2026, que es lo unico que vale aqui:
+     * con "Mando" = "Invertido", girando en sentido horario la frecuencia
+     * sube, y los botones "-" y "+" de detalle siguen bajando y subiendo en
+     * las DOS posiciones del ajuste. El banco no puede ver esto: mide el
+     * signo que sale de esta funcion, no hacia donde gira un mando fisico. */
+    return detents * ENCODER_DIRECTION * (s_invertido ? -1 : 1);
+}
+
+void encoder_invertido_pon(uint8_t v)
+{
+    s_invertido = (uint8_t)(v ? 1U : 0U);
+}
+
+uint8_t encoder_invertido(void)
+{
+    return s_invertido;
 }
 
 uint8_t encoder_take_press(void)

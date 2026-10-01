@@ -125,30 +125,61 @@ void backlight_set_percent(uint8_t percent)
     s_backlight_percent = percent;
 
     /*
-     * EL 100% YA NO PARA EL PIN. 25/09/2026.
+     * EL 100% ES 100%, Y EL RECORTE QUE HABIA AQUI FUE UN ERROR MIO.
+     * 28/09/2026.
      *
-     * La cuenta da CCR=4992 para el 100%, un paso MAS ALLA del ARR de
-     * 4991. En modo PWM0 eso deja la salida permanentemente activa: el pin
-     * se queda quieto y no da un solo flanco en todo el periodo.
+     * *** Por el dueño del proyecto: "hay que revisar el tema del brillo de
+     * la pantalla comparandolo con el repo de esteban" ... "parece que
+     * nuestra version con el brillo 100% brilla menos". ***
      *
-     * Eso es corriente continua, no PWM. Y aunque la pantalla negra del
-     * 31/07/2026 tuvo otra causa -la polaridad al reves, ver el comentario
-     * del valor de arranque- hay drivers de retroiluminacion que usan los
-     * propios flancos para su conmutacion interna y se apagan si les llega
-     * un nivel fijo. Si este es uno de ellos, no se sabe, porque nunca se
-     * ha probado el 100% con la polaridad correcta.
+     * Tenia razon, y la unica diferencia funcional entre este fichero y el
+     * del proyecto padre era esta linea, que yo añadi el 25/09:
      *
-     * Asi que se limita el CCR al ARR. El pin sigue conmutando a 20 kHz,
-     * con un hueco de UN paso de 4.992: el 99,98% del tiempo encendido.
-     * Cuesta dos centesimas de por ciento de luz -invisible, y el ojo no
-     * distingue eso ni de lejos- y a cambio el fallo deja de ser posible
-     * en vez de ser improbable.
+     *     if (ccr > BACKLIGHT_PWM_PERIOD) { ccr = BACKLIGHT_PWM_PERIOD; }
      *
-     * Es la diferencia entre "seguramente va bien" y "no puede ir mal",
-     * por dos centesimas.
+     * Con ella, el 100% daba CCR=4991 en vez de 4992, o sea que la salida
+     * dejaba de estar permanentemente activa y volvia a conmutar con un
+     * hueco de UN paso de 4.992.
+     *
+     * LO QUE ESCRIBI PARA JUSTIFICARLO. Que costaba "dos centesimas de por
+     * ciento de luz - invisible, y el ojo no distingue eso ni de lejos" y
+     * que era "la diferencia entre 'seguramente va bien' y 'no puede ir
+     * mal', por dos centesimas".
+     *
+     * LAS DOS CENTESIMAS ERAN DE CICLO DE TRABAJO, NO DE LUZ. 4991/4992 es
+     * el 99,98% del TIEMPO, y eso lo calcule bien; lo que hice mal fue
+     * darlo por bueno como porcentaje de BRILLO. En medio hay un driver de
+     * retroiluminacion cuya funcion de transferencia no he medido nunca, y
+     * el hueco que le estaba metiendo son 10 ns por periodo -mas corto que
+     * lo que tarda el propio pin en conmutar con GPIO_OSPEED_2MHZ- veinte
+     * mil veces por segundo. Eso no es una perturbacion pequeña para un
+     * convertidor conmutado: es un glitch en cada ciclo. Se nota, y se ve.
+     *
+     * Y DE DONDE SALIO LA IDEA. Del propio proyecto padre, que el 31/07
+     * apunto una hipotesis para una pantalla negra al 100%: "muchos
+     * drivers usan los propios flancos del PWM... NOT confirmed against
+     * this board's actual driver IC - just the most common failure mode
+     * for this symptom. If true, the fix is to cap at something like 99%".
+     * Ellos NO lo aplicaron -bajaron el arranque al 50%- y esa hipotesis
+     * se quedo escrita.
+     *
+     * La pantalla negra tenia otra causa, y esta escrita dos pantallas
+     * arriba en este mismo fichero: la POLARIDAD estaba al reves. Yo
+     * diagnostique eso bien el 25/09... y aplique aqui abajo el arreglo de
+     * la teoria que acababa de descartar. Las dos cosas en el mismo cambio.
+     *
+     * POR QUE QUITARLO NO ES CAMBIAR UNA SUPOSICION POR OTRA. Porque el
+     * experimento ya esta hecho y no lo hice yo: el firmware de Esteban
+     * lleva CCR=4992 y corre en ESTA radio, y lo que el dueño ve es que
+     * brilla MAS -no que se quede negra-. Con la polaridad correcta,
+     * permanentemente activo quiere decir pin permanentemente BAJO, que en
+     * este panel es la luz al maximo.
+     *
+     * Asi que la cuenta vuelve a ser la del padre: percent=100 da CCR=4992,
+     * un paso mas alla del ARR, y en modo PWM0 eso deja la salida activa
+     * todo el periodo. 100% de verdad.
      */
     ccr = ((uint32_t)(BACKLIGHT_PWM_PERIOD + 1U) * percent) / 100U;
-    if (ccr > BACKLIGHT_PWM_PERIOD) { ccr = BACKLIGHT_PWM_PERIOD; }
     timer_channel_output_pulse_value_config(TIMER1, TIMER_CH_3, ccr);
 }
 

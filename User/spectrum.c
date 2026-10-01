@@ -1,4 +1,5 @@
 #include "spectrum.h"
+#include "idioma.h"
 #include "gfx.h"
 #include "gfx2.h"
 #include <string.h> /* memcpy() - see build_lut()'s comment for the six palettes copied straight from a 256-entry source table */
@@ -474,7 +475,7 @@ static uint16_t palette_eval_websdr(float t)        { return palette_lerp_stops(
  * u otro, nunca los dos.
  */
 typedef struct {
-    const char     *nombre;            /* para la pantalla: "Clasica verde" */
+    texto_t         nombre;            /* para la pantalla: "Clasica verde" */
     const char     *clave;             /* para CONFIG.CSV: "CLASSIC_GREEN"  */
     const uint16_t *tabla;             /* 256 colores ya hechos, o 0        */
     uint16_t      (*eval)(float);      /* generador, o 0                    */
@@ -483,22 +484,22 @@ typedef struct {
 /* El orden de las filas ES el orden de spectrum_palette_t: la fila i
  * describe la paleta i. Lo comprueba spectrum_palette_tabla_ok(). */
 static const spectrum_paleta_t k_paletas[] = {
-    { "Cl\xC3\xA1sica",       "CLASSIC",       0,           palette_eval_classic       },
-    { "Fuego",                "FIRE",          0,           palette_eval_fire          },
-    { "Viridis",              "VIRIDIS",       k_lut_viridis, 0                        },
-    { "Grises",               "GRAYSCALE",     0,           palette_eval_grayscale     },
-    { "Turbo",                "TURBO",         k_lut_turbo, 0                          },
-    { "Inferno",              "INFERNO",       k_lut_inferno, 0                        },
-    { "Magma",                "MAGMA",         k_lut_magma, 0                          },
-    { "Plasma",               "PLASMA",        k_lut_plasma, 0                         },
-    { "GQRX",                 "GQRX",          k_lut_gqrx,  0                          },
-    { "El\xC3\xA9" "ctrica",  "ELECTRIC",      0,           palette_eval_electric      },
-    { "Cl\xC3\xA1sica verde", "CLASSIC_GREEN", 0,           palette_eval_classic_green },
-    { "Humo",                 "SMOKE",         0,           palette_eval_smoke         },
-    { "Templada",             "TEMPER_COLORS", 0,           palette_eval_temper_colors },
-    { "Viva",                 "VIVID",         0,           palette_eval_vivid         },
-    { "WebSDR",               "WEBSDR",        0,           palette_eval_websdr        },
-    { "F\xC3\xB3sforo",         "PHOSPHOR",      0,           palette_eval_fosforo       },
+    { T("Cl\xC3\xA1sica", "Classic"),       "CLASSIC",       0,           palette_eval_classic       },
+    { T("Fuego", "Fire"),                "FIRE",          0,           palette_eval_fire          },
+    { T("Viridis", "Viridis"),              "VIRIDIS",       k_lut_viridis, 0                        },
+    { T("Grises", "Greyscale"),               "GRAYSCALE",     0,           palette_eval_grayscale     },
+    { T("Turbo", "Turbo"),                "TURBO",         k_lut_turbo, 0                          },
+    { T("Inferno", "Inferno"),              "INFERNO",       k_lut_inferno, 0                        },
+    { T("Magma", "Magma"),                "MAGMA",         k_lut_magma, 0                          },
+    { T("Plasma", "Plasma"),               "PLASMA",        k_lut_plasma, 0                         },
+    { T("GQRX", "GQRX"),                 "GQRX",          k_lut_gqrx,  0                          },
+    { T("El\xC3\xA9" "ctrica", "Electric"),  "ELECTRIC",      0,           palette_eval_electric      },
+    { T("Cl\xC3\xA1sica verde", "Classic green"), "CLASSIC_GREEN", 0,           palette_eval_classic_green },
+    { T("Humo", "Smoke"),                 "SMOKE",         0,           palette_eval_smoke         },
+    { T("Templada", "Tempered"),             "TEMPER_COLORS", 0,           palette_eval_temper_colors },
+    { T("Viva", "Vivid"),                 "VIVID",         0,           palette_eval_vivid         },
+    { T("WebSDR", "WebSDR"),               "WEBSDR",        0,           palette_eval_websdr        },
+    { T("F\xC3\xB3sforo", "Phosphor"),         "PHOSPHOR",      0,           palette_eval_fosforo       },
 };
 
 #define PALETA_COUNT ((uint8_t)(sizeof k_paletas / sizeof k_paletas[0]))
@@ -515,7 +516,7 @@ uint8_t spectrum_palette_count(void)
 
 const char *spectrum_palette_nombre(uint8_t i)
 {
-    return (i < PALETA_COUNT) ? k_paletas[i].nombre : "";
+    return (i < PALETA_COUNT) ? k_paletas[i].nombre[idioma()] : "";
 }
 
 const char *spectrum_palette_clave(uint8_t i)
@@ -532,8 +533,14 @@ const char *spectrum_palette_clave(uint8_t i)
  * tanto el espectro y la cascada estarian leyendo la LUT equivocada.
  *
  * Las de tabla es un indice; las de eval se calculan al vuelo. Sale a unas
- * pocas decenas de ciclos por color, y solo se llama al pintar la pantalla
- * de paletas (unos 200 colores), no por pixel ni por columna.
+ * pocas decenas de ciclos por color, no por pixel ni por columna.
+ *
+ * QUIEN LA LLAMA, corregido el 28/09/2026: aqui ponia "solo se llama al
+ * pintar la pantalla de paletas". EN EL FIRMWARE NO LA LLAMA NADIE - el
+ * enlazador la tira, sale en la lista de descartadas del .map- y esa
+ * "pantalla de paletas" no existe en la radio: vive en el simulador
+ * (sim/paletas.c y sim/paletachk.c), que es quien la usa de verdad. Se
+ * queda por eso, no por la radio.
  */
 uint16_t spectrum_palette_muestra(uint8_t i, uint8_t idx)
 {

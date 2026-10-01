@@ -295,6 +295,7 @@ uint8_t jtty_msg_lee(const uint8_t carga[JTTY_CARGA_BITS], jtty_atomo_t *out)
     if (carga == 0 || out == 0) { return 0U; }
     out->texto[0] = '\0';
     out->fin = 0U;
+    out->texto5 = 0U;
 
     /* El bit 33 va siempre a cero; si no, esto no es un atomo valido. */
     if (carga[JTTY_BIT_RESERVADO - 1U] != 0U) { return 0U; }
@@ -313,17 +314,32 @@ uint8_t jtty_msg_lee(const uint8_t carga[JTTY_CARGA_BITS], jtty_atomo_t *out)
 
     if (i2 == 3UL) {
         /*
-         * TEXT5: cinco caracteres de seis bits, en orden de emision. El
-         * relleno de espacios de la derecha NO es parte del mensaje, asi
-         * que se quita - pero solo el de la DERECHA: un espacio en medio
-         * de "DE EA4" si lo es.
+         * TEXT5: cinco caracteres de seis bits, en orden de emision.
+         *
+         * LOS ESPACIOS DE LA DERECHA SOLO SOBRAN EN EL ULTIMO - 28/09/2026.
+         *
+         * Aqui se quitaban SIEMPRE, y eso parecia razonable: "HI___" es
+         * "HI". Lo es cuando el atomo es el mensaje entero. Cuando no,
+         * "ALLY " y "NEED " son trozos de una cadena mas larga y ese
+         * espacio de la derecha es el que separa las dos palabras: al
+         * quitarlo y volver a poner otro al juntar, la cuenta sale igual
+         * por casualidad... hasta que el trozo NO acaba en espacio, y
+         * entonces "WE REALLY" sale "WE RE ALLY".
+         *
+         * Se vio en antena: "WE RE ALLY NEED EO ON".
+         *
+         * Asi que solo se recorta si este atomo cierra el mensaje, que es
+         * lo unico que el bit 34 ya nos esta diciendo.
          */
+        out->texto5 = 1U;
         for (i = 0U; i < 5U; i++) {
             p[i] = k_abc64[saca(carga, (uint8_t)(6U * i), 6U)];
         }
         p[5] = '\0';
-        i = 5U;
-        while (i > 0U && p[i - 1U] == ' ') { i--; p[i] = '\0'; }
+        if (out->fin) {
+            i = 5U;
+            while (i > 0U && p[i - 1U] == ' ') { i--; p[i] = '\0'; }
+        }
         return 1U;
     }
 
@@ -351,4 +367,114 @@ uint8_t jtty_msg_lee(const uint8_t carga[JTTY_CARGA_BITS], jtty_atomo_t *out)
         *p = '\0';
         return 1U;
     }
+}
+
+/* ---------------------------------------------------------------- */
+/* Ver jtty_msg.h: la regla de juntar, donde el banco la puede medir. */
+
+void jtty_msg_pega(char *dst, uint32_t max, const jtty_atomo_t *a, uint8_t ant5)
+{
+    uint32_t n = 0UL;
+    uint8_t k = 0U;
+
+    if (dst == 0 || a == 0 || max < 2UL) { return; }
+    while (dst[n] != '\0') { n++; }
+
+    /*
+     * DOS TEXT5 SEGUIDOS SE PEGAN SIN NADA EN MEDIO: son trozos de cinco
+     * caracteres de la misma cadena y ya traen sus propios espacios. Todo
+     * lo demas son frases enteras y van separadas.
+     */
+    if (n > 0UL && !(ant5 && a->texto5) && n < (max - 2UL)) {
+        dst[n++] = ' ';
+    }
+    while (a->texto[k] != '\0' && n < (max - 1UL)) { dst[n++] = a->texto[k++]; }
+    dst[n] = '\0';
+}
+
+/* Una letra A-Z (los mensajes de JTTY van en mayusculas). */
+static uint8_t es_letra(char c) { return (uint8_t)(c >= 'A' && c <= 'Z'); }
+static uint8_t es_cifra(char c) { return (uint8_t)(c >= '0' && c <= '9'); }
+
+/* Un trozo sin barras: prefijo(1-2, con letra) + digito + 1..4 letras. */
+static uint8_t forma_de_indicativo(const char *p, uint8_t n)
+{
+    uint8_t i = 0U, pref = 0U, letras = 0U, suf;
+
+    if (n < 3U || n > 10U) { return 0U; }
+
+    /* El prefijo: uno o dos alfanumericos, y al menos uno letra. */
+    while (i < n && pref < 2U) {
+        if (es_letra(p[i])) { letras++; }
+        else if (!es_cifra(p[i])) { return 0U; }
+        /* Se para en cuanto lo que viene es "digito + letra", que es el
+         * digito de zona: "F4JUO" tiene prefijo F, "IK3CHK" tiene IK. */
+        if (es_cifra(p[i]) && (i + 1U) < n && es_letra(p[i + 1U])
+            && letras > 0U) {
+            break;
+        }
+        i++; pref++;
+    }
+    if (letras == 0U || i >= n) { return 0U; }
+
+    /* El digito de zona. */
+    if (!es_cifra(p[i])) { return 0U; }
+    i++;
+
+    /* Y el sufijo: de una a cuatro letras y se acaba el testigo. */
+    suf = 0U;
+    while (i < n && es_letra(p[i])) { i++; suf++; }
+    return (uint8_t)((i == n) && suf >= 1U && suf <= 4U);
+}
+
+/* El testigo entero vale si CUALQUIERA de sus trozos entre barras vale. */
+static uint8_t indicativo_vale(const char *p, uint8_t n)
+{
+    uint8_t i = 0U, ini = 0U;
+
+    for (i = 0U; i <= n; i++) {
+        if (i == n || p[i] == '/') {
+            if (forma_de_indicativo(&p[ini], (uint8_t)(i - ini))) { return 1U; }
+            ini = (uint8_t)(i + 1U);
+        }
+    }
+    return 0U;
+}
+
+uint8_t jtty_msg_indicativo(const char *texto, char *out)
+{
+    uint32_t i = 0UL;
+    uint8_t hay = 0U;
+
+    if (texto == 0 || out == 0) { return 0U; }
+    out[0] = '\0';
+
+    while (texto[i] != '\0') {
+        uint32_t ini;
+        uint8_t n;
+
+        while (texto[i] == ' ' || texto[i] == '\t') { i++; }
+        ini = i;
+        while (texto[i] != '\0' && texto[i] != ' ' && texto[i] != '\t') { i++; }
+        n = (uint8_t)((i - ini > 15UL) ? 15UL : (i - ini));
+        if (n > 0U && (uint32_t)n == (i - ini)
+            && indicativo_vale(&texto[ini], n)) {
+            uint8_t k;
+
+            /* El ULTIMO gana, asi que se apunta y se sigue buscando. */
+            for (k = 0U; k < n; k++) { out[k] = texto[ini + k]; }
+            out[n] = '\0';
+            hay = 1U;
+        }
+    }
+    return hay;
+}
+
+void jtty_msg_cierra(char *dst)
+{
+    uint32_t n = 0UL;
+
+    if (dst == 0) { return; }
+    while (dst[n] != '\0') { n++; }
+    while (n > 0UL && dst[n - 1U] == ' ') { n--; dst[n] = '\0'; }
 }

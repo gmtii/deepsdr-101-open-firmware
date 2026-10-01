@@ -18,7 +18,28 @@ void hfdl_ram_coge(void)
 void hfdl_ram_suelta(void)
 {
     s_cogida = 0U;
+    /*
+     * BORRAR AL DEVOLVER, NO SOLO BAJAR EL CERROJO - 30/09/2026.
+     *
+     * Aqui solo estaba el waterfall_presta(0U), y eso deja en el buffer lo
+     * ultimo que escribio el decodificador. En cuanto el cerrojo baja,
+     * waterfall_blit() vuelve a tratar esos bytes como PIXELES y pinta las
+     * 72 filas enteras -hasta 54.432 bytes- del ecualizador de HFDL o del
+     * espectrograma de WSPR interpretados como colores de la paleta.
+     *
+     * Se ve al salir de HFDL, WSPR, AIS, ALE o JTTY a cualquier modo
+     * analogico, y tarda en irse solo: la cascada repone UNA fila por
+     * volcado, o sea 72 volcados, que son 2,4 s a "Rapida" y 24 s a "Muy
+     * lenta".
+     *
+     * FT8 ya lo hacia -ver ft8_modo_stop(), que llama a waterfall_init()
+     * justo detras-, y los cinco modos que entraron despues copiaron el
+     * stop() sin esa linea. Se pone AQUI, en el unico sitio por donde los
+     * cinco devuelven el prestamo, para que el sexto que llegue no tenga
+     * que acordarse.
+     */
     waterfall_presta(0U);
+    waterfall_init();   /* el memset que los vuelve a hacer pixeles */
 }
 
 uint8_t *hfdl_scope_get_hfdl_ram(uint32_t *capacity_out)

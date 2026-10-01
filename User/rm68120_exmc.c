@@ -160,7 +160,57 @@ void rm68120_exmc_bus_init(void)
     timing_init_struct.asyn_access_mode      = EXMC_ACCESS_MODE_A;
     timing_init_struct.syn_data_latency      = EXMC_DATALAT_2_CLK;
     timing_init_struct.syn_clk_division      = EXMC_SYN_CLOCK_RATIO_DISABLE;
+#ifdef CARGADOR_ARRANQUE
+    /*
+     * LA TEMPORIZACION DEL DE SERIE, TAL CUAL - 01/10/2026.
+     *
+     * *** El dueno: "estoy probando la radio y el espectro vuelve a
+     * ralentizarse". ***
+     *
+     * Y es culpa del cargador, aunque el espectro lo pinte la aplicacion:
+     * la aplicacion NO configura este bus, lo HEREDA (main.c linea 912,
+     * "the bootloader already brings the panel up correctly - EXMC bus
+     * config included"). Asi que el numero que deje el cargador es el que
+     * manda en cada escritura de pixel, y un fotograma son 384.000.
+     *
+     * Del boot.bin de serie, funcion de 0x08002D6C:
+     *
+     *   setup de direccion = 2    hold de direccion = 0
+     *   setup de dato      = 5    vuelta de bus     = 0
+     *
+     * Nosotros teniamos 3 / 3 / 15 / 3: el dato tres veces mas lento.
+     *
+     * Y AQUI ME EQUIVOQUE, Y LO CORRIJO - 01/10/2026.
+     *
+     * Dije que los ciclos del de serie se podian copiar tal cual "porque
+     * su reloj tiene que ser el mismo que el nuestro: su USB funciona,
+     * luego saca 48 MHz exactos, luego esta a 192". Era una deduccion, no
+     * un dato, y era falsa.
+     *
+     * Desensamblada su configuracion de reloj (0x08003E74 en adelante,
+     * la estructura que le pasa a su HAL):
+     *
+     *   PLLM = 8   PLLN = 188   PLLP = 2   PLLQ = 6
+     *
+     * 12,288 / 8 = 1,536 -> VCO 288,768 -> sistema **144,384 MHz**, y el
+     * USB a 48,128, que es un +0,27%: fuera de la norma por poco, pero le
+     * funciona. O sea que hay mas de una forma de sacar un USB que tira, y
+     * yo di por buena la unica que se me habia ocurrido.
+     *
+     * Y eso cambia los ciclos, porque un ciclo no dura lo mismo:
+     *
+     *   de serie:  5 ciclos a 144,384 MHz = 34,6 ns
+     *   nosotros:  5 ciclos a 192 MHz     = 26,0 ns
+     *
+     * Nuestras escrituras al panel iban un 33% MAS RAPIDAS que las suyas.
+     * Lo que hay que copiar es el TIEMPO, no el numero: 5 x 192/144,384 =
+     * 6,65, que redondeando hacia arriba son 7. Y la direccion, 2 x 1,33 =
+     * 2,66 -> 3.
+     */
+    timing_init_struct.bus_latency           = 0;
+#else
     timing_init_struct.bus_latency           = 3;
+#endif
     /* Ya no es 15 fijo: ver rm68120_bus_dato_pon() justo encima. El aviso
      * de arriba decia "si la imagen sale limpia se puede seguir bajando
      * metodicamente" y llevaba desde julio sin que nadie lo hiciera, porque
@@ -171,13 +221,49 @@ void rm68120_exmc_bus_init(void)
      * El reloj es de 200 MHz con el AHB sin dividir (ver system_gd32f4xx.c,
      * __SYSTEM_CLOCK_200M_PLL_25M_HXTAL y RCU_AHB_CKSYS_DIV1), o sea 5 ns
      * por ciclo. Con 15 el ciclo de escritura sale a unos 100 ns. */
+#ifdef CARGADOR_ARRANQUE
+    /* Los del de serie, sin traducir: el cargador corre a su mismo reloj
+     * (144,384 MHz), asi que 5 ciclos son sus 34,6 ns exactos. */
+    timing_init_struct.asyn_data_setuptime   = 5;
+    timing_init_struct.asyn_address_holdtime = 0;
+    timing_init_struct.asyn_address_setuptime= 2;
+#else
     timing_init_struct.asyn_data_setuptime   = 15;
     timing_init_struct.asyn_address_holdtime = 3;
     timing_init_struct.asyn_address_setuptime= 3;
+#endif
 
     exmc_init_struct.norsram_region    = EXMC_BANK0_NORSRAM_REGION0; /* NE0 = tu CS (PD7) */
     exmc_init_struct.address_data_mux  = DISABLE;
+#ifdef CARGADOR_ARRANQUE
+    /*
+     * NOR, NO SRAM - 01/10/2026.
+     *
+     * *** El dueno, con el reloj y los tiempos ya identicos a los del de
+     * serie: "color distinto al original". ***
+     *
+     * Descartada la temporizacion -mismo reloj, mismos ciclos- y
+     * comprobado que las tres secuencias del panel estan extraidas fielmente
+     * (el camino de la rama B son 1.469 instrucciones sin un solo salto
+     * condicional), quedaba sin mirar la estructura de configuracion del
+     * EXMC entera, mas alla de los tiempos. Decodificada la suya
+     * (0x08002D78, la que le pasa a su HAL) campo por campo, TODO coincide
+     * con lo nuestro -banco 0, sin multiplexar, bus de 16 bits, sin rafaga,
+     * escritura habilitada, sin NWAIT, sin modo extendido- menos UNO:
+     *
+     *   [+16] = 8   ->  MemoryType = NOR
+     *
+     * y nosotros poniamos SRAM. Es el campo MTYP del SNCTL, y cambia como
+     * el controlador conduce el bus. Es la unica diferencia que queda en
+     * pie entre su configuracion y la nuestra.
+     *
+     * Solo en el cargador: es el que arranca el panel, y es su estado el
+     * que hereda la aplicacion.
+     */
+    exmc_init_struct.memory_type       = EXMC_MEMORY_TYPE_NOR;
+#else
     exmc_init_struct.memory_type       = EXMC_MEMORY_TYPE_SRAM;
+#endif
     exmc_init_struct.databus_width     = EXMC_NOR_DATABUS_WIDTH_16B;
     exmc_init_struct.burst_mode        = DISABLE;
     exmc_init_struct.nwait_polarity    = EXMC_NWAIT_POLARITY_LOW;

@@ -125,9 +125,15 @@ typedef struct {
 	 *
 	 * La cabecera de hfdl_hfnpdu.h pide "the LPDU's user-data bytes" y
 	 * remite a "demod_am.c's call site" para saber de donde salen. Ese
-	 * fichero es suyo y no lo tenemos, y sin el dato no hay forma de
-	 * llamar al decodificador de posicion - que existe, esta probado
-	 * contra una captura real, y no lo llama nadie en todo el repo.
+	 * fichero es suyo y no lo tenemos, y sin el dato no habia forma de
+	 * llamar al decodificador de posicion.
+	 *
+	 * ESO YA ESTA RESUELTO Y ESTE PARRAFO SE QUEDO ATRAS: decia que ese
+	 * decodificador "no lo llama nadie en todo el repo". Lo llama
+	 * hfdl_modo.c:663, en apunta_trama(), con el mismo campo `user_data`
+	 * que este comentario documenta, y de ahi salen la latitud, la
+	 * longitud y el distintivo de vuelo de la tabla de aviones. Describe
+	 * el problema que el mismo resolvio, pero se lee como el estado de hoy.
 	 *
 	 * Se da como PUNTERO y no como desplazamiento a proposito: el que
 	 * recorre los LPDU ya tiene el puntero a mano y no tiene el principio

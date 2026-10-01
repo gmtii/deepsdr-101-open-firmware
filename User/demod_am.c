@@ -31,6 +31,7 @@
 #include "wspr_modo.h"
 #include "ais_modo.h"
 #include "ale_modo.h"  /* y el de FT8 - etapa 30 */
+#include "jtty_modo.h" /* JTTY: banda lateral a 12 kHz, como FT8 y WSPR */
 #include "ax25.h"       /* y el de APRS, que se engancha en la rama de FM */
 #include "rtty_scope.h" /* dedicated audio-domain tuning scope for RTTY,
                            * see this file's RTTY INTEGRATION comment
@@ -2287,6 +2288,62 @@ uint8_t demod_am_get_active_rate_is_48k(void)
 {
     return s_active_rate_is_48k;
 }
+/*
+ * EL OSCILOSCOPIO DE TONO EN APRS - 30/09/2026.
+ *
+ * *** Por el dueño del proyecto: "en aprs se queda parado el espectro" · "y
+ * ahi ni espectro ni pollas". ***
+ *
+ * Y tenia razon: en APRS no habia NADA encima del panel de texto. No es que
+ * el espectro se parase, es que no lo pintaba nadie.
+ *
+ * POR QUE. APRS es un modo digital, asi que digi_panel_active() dice que si
+ * y el bucle principal pinta el osciloscopio de tono EN LUGAR del espectro
+ * de radiofrecuencia. Pero a ese osciloscopio solo le llegaba audio desde
+ * la rama de BANDA LATERAL (rtty_scope_feed() con s_ssb_dec), y APRS es el
+ * unico modo digital que va en FM: su audio sale del discriminador. O sea
+ * que el osciloscopio se quedaba sin una sola muestra y pintaba el hueco
+ * vacio. En NFM a secas el espectro se mueve porque ahi digi_panel_active()
+ * dice que no y no se cede el sitio - por eso el fallo solo salia en APRS.
+ *
+ * LA TASA. El osciloscopio tiene 12 kHz metidos en el hueso
+ * (rtty_scope_hz_per_bin() = 12000/512), y el discriminador entrega a la
+ * tasa de radiofrecuencia: 48 o 96 kHz segun el ajuste. Asi que aqui se
+ * diezma por 4 u 8 antes de dar de comer. Promediando los N, no cogiendo
+ * uno de cada N: el promedio es un filtro paso bajo de los pobres, y sin
+ * el, todo lo que hay por encima de 6 kHz se dobla hacia abajo y aparece
+ * como tonos que no existen justo en la zona que interesa mirar.
+ *
+ * Y lo que se ve al final son los dos tonos del AFSK -1.200 y 2.200 Hz-,
+ * que es exactamente lo que sirve para saber si estas sintonizado.
+ */
+static void aprs_scope_feed(const float *x, uint32_t n)
+{
+    static float    s_suma;
+    static uint16_t s_cuenta;
+    float    lote[64];
+    uint16_t m = 0U;
+    uint32_t k;
+    uint16_t dec = (uint16_t)(demod_am_active_fs_hz() / 12000.0f + 0.5f);
+
+    if (dec < 1U) { dec = 1U; }
+
+    for (k = 0U; k < n; k++) {
+        s_suma += x[k];
+        s_cuenta++;
+        if (s_cuenta < dec) { continue; }
+        lote[m] = s_suma / (float)dec;
+        m++;
+        s_suma = 0.0f;
+        s_cuenta = 0U;
+        if (m >= (uint16_t)(sizeof lote / sizeof lote[0])) {
+            rtty_scope_feed(lote, m);
+            m = 0U;
+        }
+    }
+    if (m > 0U) { rtty_scope_feed(lote, m); }
+}
+
 
 /*
  * Shared FM discriminator (delay-and-conjugate-multiply -> atan2f(),
@@ -2952,6 +3009,7 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          */
         if (ax25_activo()) {
             ax25_process(s_env, SDR_RX_BLOCK_SAMPLES);
+            aprs_scope_feed(s_env, SDR_RX_BLOCK_SAMPLES);
         }
         /*
          * Y AIS, del mismo sitio exacto y por las mismas razones: crudo, a
@@ -3196,6 +3254,22 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
         if (ale_modo_activo()) {
             ale_modo_mete(s_ssb_dec, (uint16_t)s_dec_block_samples);
         }
+        /*
+         * Y JTTY, del mismo sitio y cruda como las demas: la banda lateral
+         * ya diezmada a 12 kHz. Lo que busca son cuatro tonos separados
+         * 31,25 Hz, o sea justo del tamaño que la sustraccion espectral se
+         * lleva por delante tomandolo por ruido.
+         *
+         * Lo que hace por bloque es mezclar, diezmar por 24 y una DFT de
+         * 16 puntos en 32 frecuencias cada media fila de simbolo -cada 16
+         * ms-, mas la correlacion de sincronismo. Todo acotado y
+         * proporcional al bloque. El Viterbi de 512 estados NO esta aqui:
+         * corre en jtty_modo_poll(), desde el bucle principal, porque ahi
+         * dentro cortaria el audio.
+         */
+        if (jtty_modo_activo()) {
+            jtty_modo_mete(s_ssb_dec, (uint16_t)s_dec_block_samples);
+        }
         /* El osciloscopio de sintonia lo comparten los dos: al RTTY le
          * ensena donde caen las dos frecuencias y al CW donde cae el
          * tono, que es exactamente lo que hay que mirar para sintonizar
@@ -3243,7 +3317,12 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
         anotch_process(s_ssb_dec, s_dec_block_samples);
 
         /* 3. Interpolate the 12kHz SSB audio (NR'd above, if it was on)
-         * back up to 192kHz (32 samples -> 512), straight into s_env[] -
+         * back up to the ACTIVE RF rate - 96kHz or 48kHz, see
+         * demod_am_active_fs_hz(); s_env[] is 256 samples. The "192kHz
+         * (32 samples -> 512)" this used to say is from before the rate
+         * dropped (fixed 30/09/2026 - the x16 interpolation factor below
+         * is the one that is still right, and it is what matters here) -
+         * straight into s_env[] -
          * everything downstream (DC blocker, ALPF, AGC, output) is
          * shared with AM, unchanged. INTERP_COEFFS carries the x16
          * gain that compensates the zero-stuffing loss (see the

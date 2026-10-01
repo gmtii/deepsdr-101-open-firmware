@@ -21,10 +21,49 @@ static uint8_t nfilas(const ui_digi_state_t *st)
     uint8_t n = st->filas ? st->filas : (uint8_t)UDG_ROWS;
     return (n > (uint8_t)UDG_ROWS_MAX) ? (uint8_t)UDG_ROWS_MAX : n;
 }
+/*
+ * LA CHAPA Y EL QUINTO BOTON SE PELEABAN POR EL SITIO - 28/09/2026.
+ *
+ * *** Por el dueño del proyecto: "el boton de mapa y el boton de la
+ * derecha tienen una guerra constante por el espacio, cuando el % es de un
+ * solo digito el tamaño es uno pero si el % es de dos digitos se hace mas
+ * grande comiendole espacio al tamaño del boton mapa". ***
+ *
+ * Exacto, y medido antes de tocar nada -con ui_digi_btn5_*_dbg()-:
+ *
+ *     JTTY, la chapa de 1 a 4 cifras   btn5 x617 -> x590   se MUEVE 27 px
+ *     HFDL, "5% 12/34" -> "95% 12/34"  btn5 w 91 -> w 82   se ESTRECHA
+ *     HFDL, "100% 999/999"             btn5 w  0           DESAPARECE
+ *
+ * La causa es que la caja de la chapa medía lo que midiera su texto, asi
+ * que su borde izquierdo se movia, y el quinto boton se colocaba contra
+ * ese borde. Un boton cuyo sitio y tamaño dependen de un contador que
+ * cambia solo no se encuentra con el dedo - y lo tercero es peor que las
+ * dos primeras: el boton no se encogia, se iba-.
+ *
+ * AHORA LA DERECHA DE LA CABECERA ES FIJA. La chapa tiene reservado
+ * UDG_CHIP_RES pase lo que pase con su texto, el quinto boton tiene ancho
+ * y sitio constantes, y el cuarto se queda con lo que hay entre el
+ * principio de la zona y el quinto - que tambien sale constante-. Ninguno
+ * de los tres depende ya de lo que los otros esten enseñando.
+ *
+ * El texto de la chapa se pega a la DERECHA, contra el punto de
+ * sincronismo, para que un contador crezca hacia la izquierda desde un
+ * sitio fijo en vez de empujar. Con la caja pegada al texto -los modos sin
+ * quinto boton, SSTV y wefax- sale en x+10, que es donde estaba.
+ */
+#define UDG_CHIP_RES  140
+
 static int16_t chip_w(const ui_digi_state_t *st)
 {
+    int16_t w;
+
     if (!st->chip) { return 0; }
-    return (int16_t)(gfx2_text_w(st->chip, &font_ui_14b) + 34);
+    w = (int16_t)(gfx2_text_w(st->chip, &font_ui_14b) + 34);
+    /* Con quinto boton, nunca menos que lo reservado: es lo que impide que
+     * el borde izquierdo se mueva y arrastre al boton. */
+    if (st->btn5 && w < (int16_t)UDG_CHIP_RES) { w = (int16_t)UDG_CHIP_RES; }
+    return w;
 }
 static int16_t chip_x(const ui_digi_state_t *st)
 {
@@ -70,7 +109,11 @@ static void pinta_chip(gfx2_surf_t *s, const ui_digi_state_t *st)
     x = chip_x(st);
     gfx2_rrect(s, x, btn_y(st), w, UDG_BTN_H, 6, gfx2_rgb(PAL_SURF_2));
     gfx2_rrect_outline(s, x, btn_y(st), w, UDG_BTN_H, 6, 1, gfx2_rgb(PAL_LINE));
-    gfx2_text(s, (int16_t)(x + 10), (int16_t)(btn_y(st) + 4),
+    /* Pegado a la derecha: con la caja justa sale en x+10 -donde estaba- y
+     * con la caja reservada el numero crece hacia la izquierda desde el
+     * punto en vez de empujar al boton. Ver chip_w(). */
+    gfx2_text(s, (int16_t)(x + w - 24 - gfx2_text_w(st->chip, &font_ui_14b)),
+              (int16_t)(btn_y(st) + 4),
               st->chip, &font_ui_14b, gfx2_rgb(PAL_INK));
     /* El punto: verde cuando lo que llega tiene forma de Morse, apagado
      * cuando no. No es adorno - es la diferencia entre "esta leyendo" y
@@ -191,8 +234,37 @@ static void pinta_barra(gfx2_surf_t *s, const ui_digi_state_t *st)
  * dentro. 150 es lo que da un boton de proporcion normal al lado de
  * "Frec.", que mide 104.
  */
+/*
+ * EL TOPE BAJA DE 150 A 112, y es lo que paga el sitio fijo del quinto.
+ *
+ * La zona de la derecha mide 364 px y ahora se reparte en constantes:
+ * 112 el cuarto, 10 de hueco, 92 el quinto, 10 de hueco y 140 la chapa.
+ * Suman 364 justos -lo comprueba el _Static_assert de abajo-.
+ *
+ * Con 150 no salia: la chapa de HFDL en su caso peor pide 139, y
+ * 150+10+139 ya se come los 364 sin dejar nada para el quinto. Eso es
+ * exactamente lo que pasaba -btn5 con ancho 0, medido-, solo que en vez de
+ * quedarse sin sitio de una manera visible el boton simplemente no se
+ * pintaba.
+ *
+ * 112 sigue pareciendo un boton al lado de "Frec.", que mide 104, y le
+ * sobra para "11.184" -que mide 55-.
+ */
 #define UDG_BTN4_MIN_W 90
-#define UDG_BTN4_MAX_W 150
+#define UDG_BTN4_MAX_W 112
+
+/* El quinto boton: dos constantes. Ver pinta_boton5(). */
+#define UDG_BTN5_W  92
+#define UDG_BTN5_X  (GFX2_W - UDG_PAD_X - UDG_CHIP_RES \
+                     - UDG_BTN2_GAP - UDG_BTN5_W)
+
+/* La zona de la derecha, repartida en constantes y sin que sobre ni falte. */
+_Static_assert(UDG_CHIP_X0_F + UDG_BTN4_MAX_W + UDG_BTN2_GAP + UDG_BTN5_W
+               + UDG_BTN2_GAP + UDG_CHIP_RES == GFX2_W - UDG_PAD_X,
+               "la cabecera digital no cuadra: cuarto + quinto + chapa");
+/* Y el quinto empieza justo donde acaba el cuarto en su tope. */
+_Static_assert(UDG_BTN5_X == UDG_CHIP_X0_F + UDG_BTN4_MAX_W + UDG_BTN2_GAP,
+               "el quinto boton no cae detras del cuarto");
 static int16_t btn4_x(const ui_digi_state_t *st)
 {
     (void)st;
@@ -203,7 +275,13 @@ static int16_t btn4_w(const ui_digi_state_t *st)
     int16_t w;
 
     if (!st->btn4) { return 0; }
-    w = (int16_t)(chip_x(st) - btn4_x(st) - UDG_BTN2_GAP);
+    /*
+     * El tope de la derecha es el quinto boton cuando lo hay -que esta en
+     * un sitio FIJO- y la chapa cuando no. Antes era siempre la chapa, y
+     * por eso el cuarto tambien se movia con el contador.
+     */
+    w = (int16_t)((st->btn5 ? (int16_t)UDG_BTN5_X : chip_x(st))
+                  - btn4_x(st) - UDG_BTN2_GAP);
     if (w > UDG_BTN4_MAX_W) { w = UDG_BTN4_MAX_W; }
     return (w >= UDG_BTN4_MIN_W) ? w : 0;
 }
@@ -228,25 +306,26 @@ static void pinta_boton4(gfx2_surf_t *s, const ui_digi_state_t *st)
  * Y si no cabe, no sale. Lo mismo que el tercero y el cuarto: mas vale que
  * falte a que se monte encima de la chapa.
  */
-#define UDG_BTN5_MIN_W 72
-#define UDG_BTN5_MAX_W 124
-
+/*
+ * Y AQUI NO SE CALCULA NADA: DOS CONSTANTES.
+ *
+ * Esto era un hueco medido entre lo de la izquierda y la chapa, con un
+ * minimo y un maximo, y de ahi salian las tres cosas que veia el dueño de
+ * la radio -el boton se movia, se estrechaba y a veces desaparecia-.
+ *
+ * Un boton que se toca con el dedo tiene que estar SIEMPRE en el mismo
+ * sitio y del mismo tamaño, asi que su rectangulo no puede depender de lo
+ * que los vecinos esten enseñando. Se reserva y punto.
+ */
 static int16_t btn5_w(const ui_digi_state_t *st)
 {
-    int16_t hueco, izq;
-
-    if (!st->btn5) { return 0; }
-    /* Lo que queda entre lo que haya a la izquierda y la chapa. */
-    izq = (btn4_w(st) != 0) ? (int16_t)(btn4_x(st) + btn4_w(st))
-                            : (int16_t)UDG_CHIP_X0_F;
-    hueco = (int16_t)(chip_x(st) - izq - 2 * UDG_BTN2_GAP);
-    if (hueco > UDG_BTN5_MAX_W) { hueco = UDG_BTN5_MAX_W; }
-    return (hueco >= UDG_BTN5_MIN_W) ? hueco : 0;
+    return st->btn5 ? (int16_t)UDG_BTN5_W : 0;
 }
 
 static int16_t btn5_x(const ui_digi_state_t *st)
 {
-    return (int16_t)(chip_x(st) - UDG_BTN2_GAP - btn5_w(st));
+    (void)st;
+    return (int16_t)UDG_BTN5_X;
 }
 
 static void pinta_boton5(gfx2_surf_t *s, const ui_digi_state_t *st)
@@ -424,6 +503,48 @@ const int16_t ui_digi_cols_hfdl[UI_DIGI_COLS_HFDL_N] = { 8, 72, 298, 366, 484, -
  * cortado.
  */
 const int16_t ui_digi_cols_wspr[UI_DIGI_COLS_WSPR_N] = { 8, 110, 260, 380, 500, -792 };
+
+/*
+ * JTTY: hora, desvio, calidad, el mensaje y el pais.
+ *
+ * EL PAIS ENTRO EL 28/09 POR LA TARDE. *** Por el dueño del proyecto:
+ * "estaria bien poner una columna en jtty con el pais", y de las tres
+ * maneras que habia de sacarle el sitio eligio esta. ***
+ *
+ * Las tres primeras siguen estrechas a proposito: lo que
+ * se lee aqui es el MENSAJE, y en JTTY un mensaje son varios atomos
+ * pegados -"CQ K1ABC CQ FN42 599 123"- que se van largos enseguida. Las
+ * otras tres son para afinar la sintonia y para saber cuanto fiarse, y se
+ * miran de reojo.
+ *
+ * SE ESTRECHARON el 28/09 por la tarde, al entrar el pais. *** Por el
+ * dueño del proyecto: "la hora y el cal los puedes hacer menos anchos". ***
+ * Y sobraba sitio de verdad: la hora tenia 92 px para un contenido de 41 y
+ * la calidad 60 para uno de 29.
+ *
+ * Anchos medidos con gfx2_text_w() y font_ui_14b, no estimados. La columna
+ * es lo que mide el contenido mas ancho o el titulo -lo que mande de los
+ * dos- mas 13 px de aire:
+ *
+ *                 contenido          titulo      manda   columna
+ *     Hora        "23:59"      41    "Hora"   36    41     8..62
+ *     Desvío      "-437 Hz"    57    "Desvío" 51    57    62..132
+ *     Cal.        "100"        27    "Cal."   29    29   132..176
+ *     Mensaje                                           176..672
+ *     País        "Nueva Zel." 115   "País"   32   115   672..800
+ *
+ * El mensaje se queda con 496 px de los 560 que tenia antes del pais: de
+ * los 140 que costaba la columna nueva, 64 los devuelven la hora y la
+ * calidad y 12 mas el pais, que con 128 px sigue teniendo 13 de aire sobre
+ * su peor caso.
+ *
+ * 672 y no pegado a la derecha como en FT8, a proposito. Alli el pais va
+ * detras de los kilometros y el recorte del mensaje lo marca ESE, con la
+ * reserva de UDG_COL_RESERVA -60 px, que a un numero de cinco cifras le
+ * sobra-. Aqui el pais va justo detras del mensaje y 60 px no le llegan.
+ * Con la columna fija, el mensaje se recorta donde tiene que recortarse.
+ */
+const int16_t ui_digi_cols_jtty[UI_DIGI_COLS_JTTY_N] = { 8, 62, 132, 176, 672 };
 
 /*
  * AIS: quien es el barco, como se llama, donde esta y a que va.
@@ -631,9 +752,27 @@ static void texto(gfx2_surf_t *s, void *ctx)
     {
         uint8_t n = nfilas(st);
         uint8_t ultimo = fila_viva(st);
+        /*
+         * HASTA DONDE LLEGA EL PANEL - 30/09/2026.
+         *
+         * nfilas() topa en UDG_ROWS_MAX, que son 24, y eso no tiene nada que
+         * ver con cuantas CABEN: con la altura de siempre (174 px, cabecera
+         * de 30 y renglones de 18) caben ocho. Un inquilino que pidiera 24
+         * -el campo `filas` es suyo y nadie lo comprobaba- pintaba doce
+         * renglones por DEBAJO del panel, encima de la barra de acciones, y
+         * gfx2 no se queja porque el recorte es a la PANTALLA, no a la caja
+         * de este panel.
+         *
+         * No ha pasado todavia: hoy el que mas pide son los ocho de siempre
+         * y el de RDS pide dos. Pero es un fallo que no avisa -se pinta y ya
+         * esta- y se arregla con una resta, asi que se pone la resta. La
+         * misma guarda va en ui_digi_draw_fila(), que pinta por indice.
+         */
+        int16_t y_tope = (int16_t)(st->y + st->h);
         for (i = 0U; i < n; i++) {
             int16_t y = (int16_t)(st->y + UDG_HDR_H + alto_titulos(st)
                                   + i * UDG_LINE_H);
+            if ((int16_t)(y + UDG_LINE_H) > y_tope) { break; }
             fondo_fila(s, st, i, y);
             if (!st->fila[i] || st->fila[i][0] == '\0') { continue; }
             /* Los renglones viejos, mas apagados. Lo que acaba de llegar
@@ -645,9 +784,38 @@ static void texto(gfx2_surf_t *s, void *ctx)
     }
 }
 
+static void solo_cabecera(gfx2_surf_t *s, void *ctx)
+{
+    const ui_digi_state_t *st = (const ui_digi_state_t *)ctx;
+
+    /* El fondo de SU franja nada mas: lo de abajo lo pinta quien se queda
+     * con el cuerpo. gfx2 entrega la banda en negro, asi que lo que no se
+     * pinte sale negro - ver fondo_fila(). */
+    gfx2_fill(s, 0, st->y, GFX2_W, UDG_HDR_H, gfx2_rgb(PAL_SURF_0));
+    cabecera(s, st);
+}
+
 void ui_digi_draw_texto(const ui_digi_state_t *st)
 {
     gfx2_render(0, st->y, GFX2_W, st->h, texto, (void *)st);
+}
+
+/*
+ * SOLO LA CABECERA, para quien se queda con el cuerpo - 30/09/2026.
+ *
+ * Con el mapa puesto, main.c pintaba el panel ENTERO con
+ * ui_digi_draw_texto() -renglones vacios incluidos- y acto seguido el mapa
+ * repintaba encima todo el cuerpo. El resultado eran 484.800 pixeles
+ * enviados al panel para 254.400 que hacian falta: el 47,5 % de lo que se
+ * manda por el bus en cada cuadro del mapa era trabajo tirado, y eso se
+ * nota en el refresco justo donde mas duele, porque el mapa se repinta
+ * entero cada vez que se arrastra un dedo o se toca el zoom.
+ *
+ * No es un fallo que se vea: sale lo correcto. Solo va mas despacio.
+ */
+void ui_digi_draw_cabecera(const ui_digi_state_t *st)
+{
+    gfx2_render(0, st->y, GFX2_W, UDG_HDR_H, solo_cabecera, (void *)st);
 }
 
 /*
@@ -680,10 +848,15 @@ static void una_fila(gfx2_surf_t *s, void *ctx)
 
 void ui_digi_draw_fila(const ui_digi_state_t *st, uint8_t i)
 {
+    int16_t y;
+
     if (i >= nfilas(st)) { return; }
+    y = (int16_t)(st->y + UDG_HDR_H + alto_titulos(st) + i * UDG_LINE_H);
+    /* Y que ese renglon quepa en el panel: ver la guarda del bucle de
+     * texto(). Aqui importa lo mismo y por lo mismo. */
+    if ((int16_t)(y + UDG_LINE_H) > (int16_t)(st->y + st->h)) { return; }
     s_fila = (int8_t)i;
-    gfx2_render(0, (int16_t)(st->y + UDG_HDR_H + alto_titulos(st) + i * UDG_LINE_H),
-                GFX2_W, UDG_LINE_H, una_fila, (void *)st);
+    gfx2_render(0, y, GFX2_W, UDG_LINE_H, una_fila, (void *)st);
 }
 
 /* Repintados sueltos. Los dos caen FUERA del trazo, asi que repintarlos no
@@ -863,6 +1036,10 @@ uint8_t ui_digi_boton5_hit(const ui_digi_state_t *st, uint16_t x, uint16_t y)
  * copia de ella. Ver sim/digi.c. */
 int16_t ui_digi_btn5_x_dbg(const ui_digi_state_t *st) { return btn5_x(st); }
 int16_t ui_digi_btn5_w_dbg(const ui_digi_state_t *st) { return btn5_w(st); }
+int16_t ui_digi_btn4_x_dbg(const ui_digi_state_t *st) { return btn4_x(st); }
+int16_t ui_digi_btn4_w_dbg(const ui_digi_state_t *st) { return btn4_w(st); }
+int16_t ui_digi_chip_x_dbg(const ui_digi_state_t *st) { return chip_x(st); }
+int16_t ui_digi_chip_w_dbg(const ui_digi_state_t *st) { return chip_w(st); }
 
 static void solo_boton2(gfx2_surf_t *s, void *ctx)
 {

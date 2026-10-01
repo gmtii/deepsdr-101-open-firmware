@@ -138,6 +138,38 @@ typedef enum {
     SET_X_FIL_NFM,
     SET_X_SSTV_GUARDA,  /* fotos de SSTV al pendrive: 0=no, 1=BMP 24, 2=BMP 16 */
     SET_X_WFX_GUARDA,   /* cartas de fax al pendrive: 0=no, 1=BMP gris */
+    /* Idioma de la interfaz: 0=espanol, 1=ingles (ver User/idioma.h).
+     *
+     * Entro AL FINAL de la lista a proposito -le toco el bit 31 de
+     * `presentes`-, y el razonamiento vale para toda clave nueva: un
+     * CONFIG.CSV escrito por una version anterior simplemente no la trae
+     * -bit a 0- y arranca con el valor por defecto compilado. Ningun fichero
+     * guardado se queda sin leer por anadir claves al final.
+     *
+     * Ya no es la ultima: SET_X_ENC_INV entro detras el mismo dia. Lo que no
+     * se puede hacer nunca es meter una clave EN MEDIO, porque eso corre
+     * todos los bits de despues y un fichero viejo se lee entero al reves. */
+    SET_X_IDIOMA,
+    /* Sentido del mando: 0 = como venga la placa, 1 = al reves. El
+     * cableado del encoder varia entre unidades (ver encoder.h). */
+    SET_X_ENC_INV,
+    /*
+     * ENCENDIDO DE LA REDUCCION DE RUIDO - 01/10/2026.
+     *
+     * *** El dueno, viendo dos videos suyos con el mismo CONFIG.CSV y el
+     * boton de Ruido en estados distintos: "pero estas tonto? los dos cogen
+     * el mismo config". *** Y tenia razon: no era que el fichero fallara,
+     * es que **este dato no estaba en el fichero**. Se guardaba la
+     * intensidad (SET_X_NR, "nr_strength") pero no el interruptor, asi que
+     * la NR arrancaba apagada siempre por mucho que la dejaras puesta.
+     *
+     * Entra AL FINAL, como manda el comentario de SET_X_IDIOMA: un
+     * CONFIG.CSV escrito por una version anterior no trae esta clave, su
+     * bit queda a 0 y arranca con el valor compilado. Meterla en medio
+     * correria los bits de todas las de despues y un fichero viejo se
+     * leeria entero al reves.
+     */
+    SET_X_NR_ON,        /* reduccion de ruido encendida, 0/1 */
     SET_X_N
 } settings_extra_id_t;
 

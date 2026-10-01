@@ -24,6 +24,18 @@
  * hfdl_payload_decode.c apunta aqui en vez de a hfdl_scope.h. La funcion se
  * llama igual a proposito, para que el resto de sus ficheros y de sus
  * comentarios sigan valiendo tal cual.
+ *
+ * Y POR ESO EL NOMBRE SIGUE DICIENDO "scope" - 30/09/2026. En nuestro arbol
+ * ya no hay ningun hfdl_scope.c: teniamos uno a medio integrar, de la fase 1
+ * del plan por etapas (un detector de rafagas con FFT propia, escrito cuando
+ * todavia no habia demodulador), y se ha borrado porque el demodulador
+ * terminado contesta mejor lo que aquel venia a contestar -hfdl_modo_senal()
+ * y hfdl_modo_embudo(), que miran el preambulo de HFDL y no "energia en banda
+ * ancha", que salta igual con un chasquido de estatica-.
+ *
+ * El nombre NO se renombra a hfdl_ram_get(): se mantiene el del padre para
+ * que sus ficheros y sus comentarios sigan valiendo sin tocar. Si buscas
+ * hfdl_scope.c en este arbol, no esta y no falta; la funcion esta aqui.
  */
 
 /*
@@ -63,17 +75,24 @@ uint8_t *hfdl_scope_get_hfdl_ram(uint32_t *capacity_out);
  * caben, igual que no cabian antes: el 7 pide 76 kB y no entrara nunca en
  * una union de 54.
  *
- * El margen que queda son 296 bytes, y no es "por si acaso": lo vigila el
+ * El margen que queda son 396 bytes, y no es "por si acaso": lo vigila el
  * _Static_assert de hfdl_modo.c, que ya cazo una vez el ecualizador cuando
  * se paso por 208.
+ *
+ * (Decia 296 hasta el 28/09/2026. El numero importa porque este mismo
+ * parrafo lo usa como argumento: quien dimensione algo nuevo contra 296 se
+ * deja 100 bytes sin usar, y quien decida que 296 es poco y suba
+ * HFDL_RAM_CABECERA se los quita al decodificador para nada. Comprobado con
+ * una sonda de compilacion: sizeof(hfdl_estado_t) == 4212, y
+ * 9216 - 4608 - 4212 == 396.)
  */
 /*
  * La cabecera guarda, por este orden:
  *   - las tablas de referencia del preambulo (4.572 bytes, ver
  *     build_refs_once() en hfdl_preamble_sync.c), que antes eran estaticas
  *     y se comian el 5 por 1 de la SRAM libre de la radio;
- *   - los estados del modo (4.312 medidos, ver hfdl_modo.c).
- * 9.216 para 8.884, y el margen lo vigila un _Static_assert.
+ *   - los estados del modo (4.212 medidos, ver hfdl_modo.c).
+ * 9.216 para 8.784, y el margen lo vigila un _Static_assert.
  */
 #define HFDL_RAM_PREAMBULO 4608U
 #define HFDL_RAM_CABECERA  9216U

@@ -142,7 +142,42 @@ static uint16_t s_renorm;
 static float    s_ac_r, s_ac_i;
 static uint8_t  s_ac_n;
 
-/* filtro adaptado: suma corrida de 32 a 1000 Hz */
+/*
+ * FILTRO ADAPTADO: UNA SUMA CORRIDA DE 32, Y ESO SE MIDIO.
+ *
+ * 32 muestras a 1000 Hz son 1/31,25 s clavados. La suma corrida de esa
+ * longitud tiene CEROS en +-31,25 Hz, +-62,5 Hz..., o sea justo donde estan
+ * las emisiones de al lado -en 14.070 hay una cada 50 Hz- y cuesta O(1) por
+ * muestra: entra una, sale otra.
+ *
+ * PERO NO ES EL FILTRO ADAPTADO DE VERDAD, y conviene dejar escrito por que
+ * se queda igual. El pulso de PSK31 dura DOS simbolos -0,5*(1 - cos(pi*u))
+ * con u de 0 a 2, una ventana de Hann de 2T, y los simbolos se solapan medio
+ * pulso-, asi que el filtro adaptado es esa misma ventana de 64 muestras.
+ *
+ * Se midio, el 30/09/2026, con sim/psk31_aire.c en modo `medir`: la misma
+ * emision, el mismo ruido y el mismo vecino, cuatro tandas de semillas
+ * distintas para tener barra de error. Tres formas:
+ *
+ *                              sensibilidad (50 %)    vecino a +31,25 Hz
+ *   rectangulo de 32 (esta)      -11,85 dB              +4,7 dB
+ *   coseno de 32                 -11,3  dB              -0,7 dB
+ *   coseno de 64 (el adaptado)   -11,97 dB              +5,0 dB
+ *
+ * El coseno de 32 es CLARAMENTE peor en las dos cosas: no es ningun filtro
+ * adaptado, es una ventana que no cuadra con nada.
+ *
+ * Y el adaptado de verdad gana 0,12 dB de sensibilidad -consistente: las
+ * cuatro tandas le dan el mismo signo- y unos 0,3 dB de rechazo al vecino,
+ * que ya baila de signo entre tandas y por tanto no se puede afirmar. 0,12
+ * dB son un 3 % en amplitud. En onda corta el desvanecimiento mueve la señal
+ * decenas de dB en segundos.
+ *
+ * O sea que cuesta 64 multiplicaciones por muestra en vez de dos sumas, mas
+ * 256 bytes de RAM, para ganar algo que no se puede notar. Se queda el
+ * rectangulo. Esto no es "no se hizo", es "se midio y no compensaba", y por
+ * eso el numero esta aqui: para no volver a abrirlo.
+ */
 static float    s_anillo_r[SPS], s_anillo_i[SPS];
 static uint8_t  s_anillo_p;
 static float    s_suma_r, s_suma_i;
@@ -389,7 +424,36 @@ static void simbolo(float zr, float zi)
 
     s_afc_n++;
     if (s_afc_n >= 32U) {
-        float mod = sqrtf(s_afc_r * s_afc_r + s_afc_i * s_afc_i);
+        /*
+         * hypotf() Y NO sqrtf(a*a + b*b) - 30/09/2026.
+         *
+         * Los dos acumuladores llevan |z|^4 sumado treinta y dos veces, y
+         * |z| es la salida del filtro adaptado: treinta y dos muestras que
+         * a su vez son sumas de doce. Con el audio a la escala de la radio
+         * (AGC_TARGET = 18000) eso son |z| ~ 6,9e6, |d| ~ 4,8e13 y los
+         * acumuladores ~7,3e28 - que en float caben-, pero el CUADRADO de
+         * uno de ellos son 5,3e57 y FLT_MAX es 3,4e38.
+         *
+         * O sea que `mod` salia +inf y `coh = mod / s_afc_m` tambien, asi
+         * que la puerta `coh > 0,55` de mas abajo pasaba SIEMPRE. Dos
+         * consecuencias, las dos malas: el seguimiento de frecuencia
+         * corregia tambien con ruido o con voz, hasta los topes de +-12 Hz,
+         * y la rama que devuelve la sintonia a donde dijo el usuario
+         * quedaba INALCANZABLE. Es exactamente la regresion que el
+         * comentario de aqui abajo dice haber arreglado ("en el banco llego
+         * a -17 Hz escuchando ruido puro"): escuchabas ruido un rato y
+         * cuando aparecia una emision de verdad el receptor arrancaba
+         * desintonizado, con psk31_diag() informando de un desvio inventado.
+         *
+         * En el banco no se veia porque alli la emision vale amplitud ~1 y
+         * el ruido ~1: |z| ~ 400 y los cuadrados caben de sobra. El fallo
+         * solo existe a la escala de la radio.
+         *
+         * hypotf() escala antes de elevar al cuadrado, que es justo lo que
+         * hace falta, y esto corre una vez cada treinta y dos simbolos - o
+         * sea una vez por segundo-, asi que lo que cueste da igual.
+         */
+        float mod = hypotf(s_afc_r, s_afc_i);
         float coh = (s_afc_m > 1e-12f) ? (mod / s_afc_m) : 0.0f;
         float ang = atan2f(s_afc_i, s_afc_r);
         float err = ang * BAUDIO * 0.25f / 3.14159265f;   /* ang/(4*pi*T) */
@@ -443,7 +507,7 @@ static void baja(float zr, float zi)
 {
     float ant_mu = s_mu;
 
-    /* suma corrida: entra una, sale la de hace 32 */
+    /* suma corrida: entra una, sale la de hace 32. O(1) por muestra. */
     s_suma_r += zr - s_anillo_r[s_anillo_p];
     s_suma_i += zi - s_anillo_i[s_anillo_p];
     s_anillo_r[s_anillo_p] = zr;
