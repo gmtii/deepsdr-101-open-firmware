@@ -8,13 +8,13 @@
  * nada del gestor actual: no anade CRC, no anade ranuras A/B, no levanta
  * el techo de 0x50000 y no mueve la firma de 0x08060000. Hace exactamente
  * lo mismo, y por eso se puede comprobar: el criterio de aprobado es "se
- * comporta igual que el que ya funciona", con el update4.bin de verdad
+ * comporta igual que el que ya funciona", con el update.bin de verdad
  * como vector de prueba.
  *
  * Lo que hace el gestor actual, desensamblado en 0x0800A7CA y anotado en
  * el GD32F450VE_FLASH.ld:
  *
- *   1. monta el USB y busca UPDATE4.BIN en el volumen FAT12 del W25Q16
+ *   1. monta el USB y busca UPDATE.BIN en el volumen FAT12 del W25Q16
  *      -esto ANTES de comprobar nada, que es lo que salva la radio
  *      cuando se graba una imagen mala-;
  *   2. si lo encuentra y mide 0x50000 o menos: borra los sectores 5, 6 y
@@ -46,20 +46,45 @@
 
 #include <stdint.h>
 
-/* El mapa que impone el gestor actual y que aqui se respeta tal cual. */
-#define CARGA_APP_BASE      0x08020000UL
-#define CARGA_FIRMA_ADDR    0x08060000UL
-#define CARGA_TAM_MAX       0x50000UL      /* "cmp.w r4, #0x50000" */
-#define CARGA_BORRA_HASTA   0x08080000UL   /* sectores 5, 6 y 7 */
-#define CARGA_FIRMA_BYTES   8U
+/*
+ * EL MAPA DE LA RAMA "reload".  02/10/2026.
+ *
+ * Ya no lo impone el gestor de fabrica, lo imponemos nosotros, asi que es
+ * de una pieza: el cargador abajo y TODO lo demas para la aplicacion.
+ *
+ *   0x08000000  cargador            48 kB   sectores 0, 1 y 2
+ *   0x0800C000  aplicacion     475.136 B    sectores 3, 4, 5, 6 y 7
+ *   0x08080000  fin de la flash
+ *
+ * La base tiene que ser frontera de sector (el borrado es por sectores y
+ * el cargador no puede borrarse a si mismo) y estar alineada a 512 por lo
+ * menos (el VTOR).  0x0800C000 cumple las dos: es el principio del S3.
+ */
+#define CARGA_APP_BASE      0x0800C000UL
+#define CARGA_BORRA_HASTA   0x08080000UL
+#define CARGA_TAM_MAX       (CARGA_BORRA_HASTA - CARGA_APP_BASE)   /* 475.136 */
+
+/*
+ * LA CABECERA DE LA IMAGEN.  Ver User/cabecera_app.c para el formato y
+ * para por que sustituye a los ocho bytes de firma del gestor viejo.
+ *
+ * Va en un desplazamiento FIJO, detras del vector de interrupciones, para
+ * que el cargador la encuentre sin tener que saber cuanto mide el vector.
+ */
+#define CARGA_CAB_OFF       0x200UL
+#define CARGA_CAB_ADDR      (CARGA_APP_BASE + CARGA_CAB_OFF)
+#define CARGA_CAB_BYTES     16U
+#define CARGA_CAB_MAGIA     0x52445344UL   /* "DSDR" en un volcado */
 
 typedef enum {
     CARGA_ARRANCA = 0,      /* la imagen de dentro pasa las dos pruebas */
-    CARGA_GRABADA,          /* se grabo un UPDATE4.BIN y ahora arranca */
-    CARGA_SIN_APP,          /* "APP Not Programmed !": la pila no esta en el TCM */
-    CARGA_SIN_FIRMA,        /* "Running APP---": los 8 bytes no cuadran */
+    CARGA_GRABADA,          /* se grabo un UPDATE.BIN y ahora arranca */
+    CARGA_SIN_APP,          /* la pila inicial no esta en el TCM */
+    CARGA_SIN_CABECERA,     /* no hay magia: ahi no hay una imagen nuestra */
+    CARGA_CAB_RARA,         /* magia buena pero longitud imposible */
+    CARGA_CRC_MALO,         /* la imagen esta incompleta o corrompida */
     CARGA_NO_HAY_VOLUMEN,
-    CARGA_FICHERO_GRANDE,   /* mas de 0x50000: el gestor lo ignora */
+    CARGA_FICHERO_GRANDE,   /* no cabe en la region de la aplicacion */
     CARGA_FICHERO_ROTO,     /* la cadena de clusters no tiene sentido */
     CARGA_ERROR_BORRAR,
     CARGA_ERROR_GRABAR
@@ -86,11 +111,21 @@ carga_r_t cargador_arranca(const carga_fmc_t *fmc);
 /* Para el mensaje de la pantalla y para el banco. */
 const char *cargador_porque_txt(carga_r_t r);
 
+/*
+ * El CRC32 que usa la cabecera: CRC-32/MPEG-2, polinomio 0x04C11DB7, que
+ * empieza en 0xFFFFFFFF y NO lleva reflejo ni xor final.  Se expone para
+ * que el banco pueda compararlo contra la implementacion independiente de
+ * tools/cabecera.py, que es quien escribe el numero que esto comprueba.
+ *
+ * Llamadas encadenadas: el valor devuelto se vuelve a pasar como `crc`.
+ */
+uint32_t cargador_crc32(uint32_t crc, const uint8_t *datos, uint32_t n);
+
 /* Bytes copiados del volumen a la flash interna en la ultima pasada. */
 uint32_t cargador_grabados(void);
 
 /* Partes sueltas, expuestas para que el banco pueda probarlas una a una. */
 uint8_t cargador_imagen_vale(const carga_fmc_t *fmc, carga_r_t *porque);
-uint32_t cargador_busca_update4(uint32_t *primer_cluster);
+uint32_t cargador_busca_update(uint32_t *primer_cluster);
 
 #endif /* CARGADOR_H */

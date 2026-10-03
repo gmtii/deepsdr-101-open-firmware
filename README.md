@@ -13,6 +13,17 @@ DEEPSDR radio features.
 We would welcome any collaboration or assistance with its development. 
 Regards.
 
+![deepsdrp reloaded](images/photo_2026-09-28_08-25-59.jpg)
+![deepsdrp reloaded](images/photo_2026-09-28_08-26-48.jpg)
+![deepsdrp reloaded](images/photo_2026-09-28_08-27-41.jpg)
+![deepsdrp reloaded](images/photo_2026-09-28_08-35-39.jpg)
+![deepsdrp reloaded](images/photo_2026-09-28_09-39-19.jpg)
+![deepsdrp reloaded](images/photo_2026-09-28_18-25-19.jpg)
+![deepsdrp reloaded](images/photo_2026-09-28_19-42-58.jpg)
+![deepsdrp reloaded](images/photo_2026-09-28_19-54-17.jpg)
+![deepsdrp reloaded](images/photo_2026-09-28_19-59-06.jpg)
+![deepsdrp reloaded](images/photo_2026-09-29_22-08-24.jpg)
+
 ## Disclaimer
 
 This firmware is provided **"as is"**, without warranty of any kind,

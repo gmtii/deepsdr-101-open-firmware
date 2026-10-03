@@ -1964,6 +1964,86 @@ static uint32_t alta_mide_tam(void)
     return 1UL << 24;
 }
 
+/*
+ * LA CAPACIDAD DEL CHIP, BARATA Y CACHEADA - 02/10/2026.
+ *
+ * *** Por el dueño: "el software tiene que ser capaz de montar 1 mega si el
+ * chip es de 2, 7 megas si el chip es de 8, y todas las variantes
+ * posibles". ***
+ *
+ * De esto cuelgan el tamaño del disco USB y donde empieza la zona alta, o
+ * sea que se pregunta al arrancar y ANTES de enumerar el USB. Por eso no
+ * vale spi_flash_mira_alta(), que recorre bloque a bloque y tarda una
+ * decima por MB: esto son ocho lecturas de 64 bytes.
+ *
+ * DOS FUENTES, Y EN ESTE ORDEN, QUE NO ES CAPRICHO:
+ *
+ *  1. LA MEDIDA POR ALIAS (alta_mide_tam). Un chip de 2 MB leido en 2 MB
+ *     devuelve lo que hay en 0, porque la direccion da la vuelta. Eso es
+ *     una medida: se comprueba lo que el chip HACE.
+ *
+ *  2. EL CODIGO JEDEC, solo si la medida no vale. Vale cuando el chip esta
+ *     recien borrado: los primeros 64 bytes son todos 0xFF, cualquier
+ *     direccion "coincide" y el alias no distingue nada. Justo el caso de
+ *     un chip nuevo recien soldado, que es cuando mas falta hace.
+ *     Es peor fuente porque es lo que el chip DICE, y los clones mienten.
+ *
+ * Y UN SUELO DE 2 MB, que es la parte importante. Si las dos fuentes
+ * fallan, la respuesta es 2 MB: lo que la radio ha tenido siempre.
+ *
+ * ANUNCIAR DE MENOS NO ROMPE NADA -se desaprovecha sitio-. ANUNCIAR DE MAS
+ * SI: el disco USB le diria a Windows que tiene bloques que no existen, y
+ * al escribir ahi la direccion daria la vuelta y machacaria el principio
+ * del volumen. O sea que ante la duda, el numero pequeño.
+ *
+ * El techo son 16 MB porque el comando de lectura (0x03) lleva tres bytes
+ * de direccion. Un chip de 32 MB pediria el modo de cuatro bytes, que este
+ * controlador no usa; de uno asi se aprovecharian los primeros 16 MB.
+ */
+#define CAP_SUELO   (2UL * 1024UL * 1024UL)
+#define CAP_TECHO   (16UL * 1024UL * 1024UL)
+
+static uint32_t s_cap;        /* 0 = aun no se ha preguntado */
+
+/*
+ * Tirar la medida para que la siguiente pregunta vuelva a medir.
+ *
+ * Existe POR EL BANCO, y lo digo aqui para que nadie la use pensando que
+ * sirve para algo mas: en la radio el chip no cambia en caliente. Sin
+ * esto, sim/capacidad.c mediria el primer chip simulado y daria por bueno
+ * ese numero para los otros tres, o sea que no comprobaria nada.
+ *
+ * Son ocho bytes de codigo y es lo que hace comprobable toda la cuenta del
+ * tamaño del disco. Barato.
+ */
+void spi_flash_olvida_capacidad(void) { s_cap = 0UL; }
+
+uint32_t spi_flash_capacidad(void)
+{
+    uint32_t tam;
+
+    if (s_cap != 0UL) { return s_cap; }
+
+    tam = alta_mide_tam();        /* 0 si el metodo no vale aqui */
+
+    if (tam == 0UL) {
+        spi_flash_jedec_id_t id;
+        spi_flash_read_jedec_id(&id);
+        /* El codigo de capacidad es el log2 del tamaño en bytes. Se acota
+         * a un rango con sentido antes de desplazar: un 0xFF -un chip que
+         * no contesta- daria un desplazamiento indefinido. */
+        if (id.capacity_code >= 18U && id.capacity_code <= 24U) {
+            tam = 1UL << id.capacity_code;
+        }
+    }
+
+    if (tam < CAP_SUELO) { tam = CAP_SUELO; }
+    if (tam > CAP_TECHO) { tam = CAP_TECHO; }
+
+    s_cap = tam;
+    return s_cap;
+}
+
 /* Donde acaba el sistema de ficheros, segun EL PROPIO sistema de
  * ficheros. Devuelve 0 si su sector de arranque no tiene sentido. */
 static uint32_t alta_mide_fs(void)
@@ -2183,7 +2263,7 @@ static uint8_t fichero_busca(const char name8[8], const char ext3[3],
 /*
  * IGUAL, PERO ADMITIENDO QUE EL FICHERO ESTE TROCEADO - 28/09/2026.
  *
- * *** El dueño, probando la carga de DATOS.BIN: "el datos.bin no lo ha
+ * *** El dueño, probando la carga de BD.BIN: "el datos.bin no lo ha
  * flsehado" ... "el fichero esta, te lo aseguro". ***
  *
  * Y estaba. Lo que pasaba es que fichero_busca() EXIGE que la cadena de
@@ -2194,7 +2274,7 @@ static uint8_t fichero_busca(const char name8[8], const char ext3[3],
  *      el sitio equivocado SIN QUE NADA SE QUEJE"
  *
  * Esa razon era buena. Ya no lo es: desde que las bases de datos van en
- * un DATOS.BIN con una suma por seccion (ver zona_alta.h), un mapa mal
+ * un BD.BIN con una suma por seccion (ver zona_alta.h), un mapa mal
  * escrito NO pasa desapercibido - la verificacion lo pilla, y ademas
  * antes de borrar el fichero del disco-.
  *
@@ -2206,7 +2286,7 @@ static uint8_t fichero_busca(const char name8[8], const char ext3[3],
  * Y UNA COSA MAS QUE COSTO UN RATO: fichero_busca() devuelve 0 por cuatro
  * motivos -no esta, mide cero, el cluster no vale, esta troceado- y quien
  * llamaba lo contaba como "falta el fichero". En la pantalla salia "falta
- * DATOS.BIN" con el fichero delante. El motivo de verdad esta en
+ * BD.BIN" con el fichero delante. El motivo de verdad esta en
  * s_vol_porque desde siempre; lo que faltaba era mirarlo.
  */
 static uint8_t fichero_busca_cadena(const char name8[8], const char ext3[3],
@@ -2398,7 +2478,7 @@ uint8_t spi_flash_restaura_abre(const char name8[8], const char ext3[3],
 
     /*
      * SE ADMITE TROCEADO - 28/09/2026. Ver fichero_busca_cadena(): el
-     * motivo por el que el fichero se trocea es nuestro (un DATOS.BIN de
+     * motivo por el que el fichero se trocea es nuestro (un BD.BIN de
      * medio mega en un volumen de uno), y la suma por seccion de la zona
      * alta pilla cualquier error del recorrido antes de que llegue a
      * usarse. `ini` ya no hace falta: la lectura va por la cadena.
@@ -2494,7 +2574,7 @@ uint8_t spi_flash_fichero_hay(const char name8[8], const char ext3[3])
      * POR LA CADENA, no exigiendola seguida - 28/09/2026. "Esta el
      * fichero" y "esta el fichero Y ademas seguido" son dos preguntas
      * distintas, y esta funcion se llama para la primera. Con la version
-     * estricta, un DATOS.BIN troceado contestaba "no esta" y el arranque
+     * estricta, un BD.BIN troceado contestaba "no esta" y el arranque
      * se iba sin decir nada. Ver fichero_busca_cadena().
      */
     return fichero_busca_cadena(name8, ext3, 0, 0);

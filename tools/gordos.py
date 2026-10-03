@@ -50,23 +50,23 @@ pend = None
 # treinta lineas mas abajo, a proposito de otro imposible que si se
 # arreglo en su dia.
 #
-# La causa: desde que se desensamblo el gestor de arranque, la flash esta
-# PARTIDA. Abajo viven los 256 kB de la imagen que el gestor carga; en
-# 0x08060000 hay 8 bytes de firma, y por encima un desvan de 64 kB
-# (.arriba) donde se suben a mano fuentes y tablas. Ver el comentario
-# grande de GD32F450VE_FLASH.ld.
+# La causa de aquello: la flash estaba PARTIDA en dos regiones que no eran
+# intercambiables -256 kB abajo, 8 bytes de firma en 0x08060000 y un desvan
+# de 64 kB por encima- y sumarlas para compararlas con 262.144 era sumar
+# peras con manzanas.
 #
-# Sumar las dos y compararlas con 262.144 es sumar peras con manzanas. El
-# Makefile ya lo hace bien y por eso dice "OK: cabe" mientras esto decia
-# que faltaban 42 kB.
+# EN LA RAMA "reload" ESO SE ACABO (02/10/2026): con cargador propio la
+# region es UNA, de 0x0800C000 a 0x08080000. Se deja aqui escrito porque
+# este comentario explica un fallo de medida que costo un rato entender, y
+# porque el mismo error se volveria a cometer el dia que alguien parta la
+# flash otra vez por cualquier motivo.
 #
-FLASH_BAJA_FIN = 0x08040000   # 256 kB: donde acaba la imagen que carga el gestor
-FIRMA_DIR      = 0x08060000   # los 8 bytes de firma, ver el .ld
+APP_BASE = 0x0800C000         # = CARGA_APP_BASE, lo vigila tools/mapa.py
+APP_FIN  = 0x08080000
 
 def region_de(dirn):
-    if 0x08000000 <= dirn < FLASH_BAJA_FIN:  return 'FLASH'
-    if FIRMA_DIR  <= dirn < 0x08100000:      return 'DESVAN'
-    if 0x08000000 <= dirn < 0x08100000:      return 'FLASH'   # entre medias no hay nada
+    if APP_BASE   <= dirn < APP_FIN:         return 'FLASH'
+    if 0x08000000 <= dirn < APP_BASE:        return 'FLASH'   # el cargador, si acaso
     if 0x20000000 <= dirn < 0x20030000:      return 'SRAM'
     if 0x10000000 <= dirn < 0x10010000:      return 'TCM'
     return None
@@ -152,7 +152,7 @@ for region, dirn, tam, obj in ent:
         sec[region][obj] += fin - ini
         alto[region] = fin
 
-TOPE = {'FLASH': 262144, 'DESVAN': 65520, 'SRAM': 196608, 'TCM': 65536}
+TOPE = {'FLASH': APP_FIN - APP_BASE, 'SRAM': 196608, 'TCM': 65536}
 
 #
 # Y ESTA HERRAMIENTA DICE CUANTO SE EQUIVOCA.
@@ -177,17 +177,13 @@ def real_del_elf(ruta_map):
         return None
 real = real_del_elf(MAPA)
 if real is not None:
-    # LAS DOS REGIONES JUNTAS, que es lo que cuenta arm-none-eabi-size: suma
-    # text+data de TODO el binario, y en este firmware eso incluye el desvan.
-    # Compararlo solo con la region baja daba "-55.267 de hueco", que es el
-    # tamano del desvan disfrazado de error de medida. Ver region_de().
-    medido = sum(sec['FLASH'].values()) + sum(sec['DESVAN'].values())
-    print("  (el binario dice %s bytes de flash -las dos regiones-; aqui "
+    medido = sum(sec['FLASH'].values())
+    print("  (el binario dice %s bytes de flash; aqui "
           "salen %s, %+d de hueco entre secciones)" %
           (format(real, ',d').replace(',', '.'),
            format(medido, ',d').replace(',', '.'), medido - real))
 
-for region in ('FLASH', 'DESVAN', 'SRAM', 'TCM'):
+for region in ('FLASH', 'SRAM', 'TCM'):
     d = sec[region]
     total = sum(d.values())
     print("\n%s  %s de %s usados, %s libres" %

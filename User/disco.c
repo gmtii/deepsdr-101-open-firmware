@@ -27,11 +27,47 @@
  */
 #include "disco.h"
 #include "spi_flash.h"
+#include "zona_alta.h"
 
-#define DISCO_BYTES   (1024UL * 1024UL)    /* la mitad de abajo del W25Q16 */
 #define FLASH_SECTOR_4K  4096UL
 
-uint32_t disco_bloques(void) { return DISCO_BYTES / DISCO_BLOQUE; }
+/*
+ * EL DISCO ES TODO EL CHIP MENOS EL ULTIMO MEGABYTE - 02/10/2026.
+ *
+ * *** Por el dueño: "el software tiene que ser capaz de montar 1 mega si el
+ * chip es de 2, 7 megas si el chip es de 8, y todas las variantes
+ * posibles". ***
+ *
+ * Aqui habia un 1 MB fijo, "la mitad de abajo del W25Q16". Ahora sale de
+ * spi_flash_capacidad() menos la region de datos, asi que:
+ *
+ *     W25Q16   2 MB  ->  disco de 1 MB    (exactamente lo de siempre)
+ *     W25Q64   8 MB  ->  disco de 7 MB
+ *     W25Q128 16 MB  ->  disco de 15 MB
+ *
+ * ESTO ES LO QUE EL MSC LE DICE A WINDOWS, asi que anunciar de mas seria
+ * grave: Windows escribiria en bloques que no existen, la direccion daria
+ * la vuelta en el chip y machacaria el principio del propio volumen. Por
+ * eso spi_flash_capacidad() contesta de MENOS ante la duda, con suelo de
+ * 2 MB. Ver su comentario.
+ *
+ * Y SIGUE SIN ENTRAR LA ZONA ALTA, que es lo que protegia el numero fijo:
+ * el ultimo megabyte queda FUERA del disco pase lo que pase, asi que un
+ * formateo desde Windows no puede llevarse las bases de datos por delante.
+ * Antes eso dependia de que el chip midiera 2 MB; ahora es verdad en
+ * cualquier chip.
+ *
+ * LO QUE HAY QUE SABER AL CAMBIAR EL CHIP: el tamaño que se anuncia cambia,
+ * pero el volumen que haya dentro sigue diciendo en su BPB lo que media al
+ * formatearlo. Windows hace caso al BPB, asi que hasta que no se formatee
+ * el chip nuevo se vera el disco pequeño de antes. Es lo correcto -nadie
+ * debe estirar un sistema de ficheros por su cuenta- pero conviene saberlo
+ * para no pensar que esto no funciona.
+ */
+uint32_t disco_bloques(void)
+{
+    return (spi_flash_capacidad() - ZA_BYTES_REGION) / DISCO_BLOQUE;
+}
 
 uint8_t disco_lee(uint32_t lba, uint8_t *buf)
 {

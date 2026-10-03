@@ -70,6 +70,22 @@ void spi_flash_init(void);
  * confirmed yet. Use this FIRST. */
 void spi_flash_read_jedec_id(spi_flash_jedec_id_t *out);
 
+/*
+ * La capacidad USABLE del chip, en bytes. Se mide una vez y se recuerda.
+ *
+ * De esto cuelgan el tamaño del disco USB (disco.c) y donde empieza la
+ * zona alta (zona_alta.h), asi que la radio se adapta sola al chip que
+ * tenga soldado: 2 MB -> disco de 1 MB; 8 MB -> disco de 7 MB.
+ *
+ * Nunca devuelve menos de 2 MB ni mas de 16. El por que de las dos cotas,
+ * y por que ante la duda se contesta de MENOS, esta en spi_flash.c.
+ */
+uint32_t spi_flash_capacidad(void);
+
+/* Tira la medida para que la siguiente pregunta vuelva a medir. Es para el
+ * banco (sim/capacidad.c): en la radio el chip no cambia en caliente. */
+void spi_flash_olvida_capacidad(void);
+
 /* Reads `len` bytes starting at flash byte address `addr` into `buf`,
  * via the standard READ command (0x03, 24-bit address, no dummy
  * cycles - the slowest but most universally-supported read variant,

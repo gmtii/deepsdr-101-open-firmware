@@ -1,4 +1,7 @@
 #include "gd32f4xx.h"
+/* Por CARGA_APP_BASE: el VTOR de abajo y el cargador tienen que sacar la
+ * direccion base del MISMO sitio. Ver el comentario de SCB->VTOR. */
+#include "cargador.h"
 #include "rm68120_exmc.h"
 #include "debug_uart.h"
 #include "gfx.h"
@@ -864,12 +867,32 @@ int main(void)
      * CMSIS/GD/GD32F4xx/Source/system_gd32f4xx.c.
      */
 
-    /* Critical when chained after a bootloader: our vector table is no
-     * longer at 0x08000000 (that's the bootloader's), but at
-     * 0x08020000. Without this, any interrupt (including our own
-     * SysTick) would look up its handler in the BOOTLOADER's vector
-     * table, not ours - this must be the FIRST thing we do. */
-    SCB->VTOR = 0x08020000;
+    /*
+     * Critical when chained after a bootloader: our vector table is not at
+     * 0x08000000 (that's the bootloader's) but at CARGA_APP_BASE. Without
+     * this, any interrupt - our own SysTick included - would look up its
+     * handler in the BOOTLOADER's vector table, not ours.
+     *
+     * *** Y AQUI PONIA 0x08020000 A PELO. 02/10/2026, y costo una radio
+     * colgada. ***
+     *
+     * Al mover la aplicacion a 0x0800C000 cambie el VTOR de SystemInit()
+     * y me deje ESTE, que corre despues y lo deshacia. El resultado es el
+     * peor posible de depurar: el firmware enlaza, el cargador graba al
+     * 100 %, salta... y la radio se queda con la pantalla del cargador
+     * congelada, porque se estrella en la primera interrupcion con el
+     * vector apuntando a mitad de su propio .text. Ni un mensaje.
+     *
+     * Lo gracioso es que el aviso estaba escrito: tools/mapa.py existe
+     * justo para esto y decia "si alguien mueve la base y se deja ese, la
+     * radio se cuelga en la primera interrupcion". Lo que no hacia era
+     * BUSCAR los SCB->VTOR que no conocia de antemano - miraba uno solo,
+     * en un fichero concreto-. Ahora los busca todos, en todo el arbol.
+     *
+     * Por eso ya no hay ningun numero escrito aqui: sale de CARGA_APP_BASE
+     * (User/cargador.h), que es el mismo sitio del que lo saca el cargador.
+     */
+    SCB->VTOR = CARGA_APP_BASE;
 
     /* Lo segundo, y antes de que nadie llame a nada: pintar el hueco de la
      * pila para poder medir despues hasta donde llega. Ver pila_pinta(). */
@@ -9617,7 +9640,6 @@ static volatile uint16_t s_push_us;   /* de los de arriba, lo que se fue en empu
 
 
 extern uint32_t _sdata, _edata, _sbss, _ebss, _stcmram, _etcmram, _eflash;
-extern uint32_t _sarriba, _earriba;
 
 /* ---------------------------------------------------------------------
  * MARCA DE AGUA DE LA PILA. 24/09/2026.
@@ -9668,20 +9690,22 @@ static uint32_t pila_usada(void)
     return (uint32_t)((uint32_t)fin - (uint32_t)p);
 }
 
-#define INFO_FLASH_ORIGEN 0x08020000UL
-#define INFO_FLASH_TOPE   (256UL * 1024UL)   /* ver el comentario de arriba */
 /*
- * El desvan: 0x08060008..0x0806FFFF, los 64 kB que hay por encima de la
- * firma que mira el gestor de arranque. Se llego a ellos el 27/09/2026
- * desensamblando el gestor: acepta ficheros de hasta 320 kB y de la imagen
- * solo comprueba ocho bytes en 0x08060000. El reparto de que sube ahi
- * arriba esta en la seccion .arriba de GD32F450VE_FLASH.ld.
+ * LA FLASH, QUE DESDE LA RAMA "reload" ES UN SOLO NUMERO.
  *
- * Son dos numeros y no uno porque las dos regiones NO son intercambiables:
- * el enlazador no derrama de una a otra, lo que sube se elige a mano. Que
- * el desvan tenga sitio no significa que quepa una linea de codigo mas.
+ * Aqui habia DOS filas, "Flash" y "Flash alta", y no era un capricho de
+ * presentacion: con el gestor de fabrica la flash estaba partida en una
+ * region baja de 256 kB y un desvan de 64 kB por encima de su firma, y las
+ * dos NO eran intercambiables -el enlazador no derrama de una a otra, lo
+ * que subia al desvan se elegia a mano seccion por seccion-. Que el desvan
+ * tuviera sitio no significaba que cupiera una linea de codigo mas, y por
+ * eso habia que enseñar los dos numeros por separado.
+ *
+ * Con cargador propio la region es de una pieza, 0x0800C000..0x08080000, y
+ * un solo numero vuelve a decir la verdad entera.
  */
-#define INFO_FLASH2_TOPE  (64UL * 1024UL)
+#define INFO_FLASH_ORIGEN 0x0800C000UL
+#define INFO_FLASH_TOPE   (0x08080000UL - INFO_FLASH_ORIGEN)   /* 475.136 */
 #define INFO_SRAM_TOPE    (192UL * 1024UL)
 #define INFO_TCM_TOPE     (64UL  * 1024UL)
 
@@ -9758,7 +9782,27 @@ static void imgs_monta(void)
     if (s_imgs_hecho) { return; }
     a = alta_mira();
     s_imgs_hecho = 1U;
-    (void)imgs_init(&k_imgs_medio, a->fs_bytes, a->bytes_mide);
+    /*
+     * EL SUELO ES ZA_TOPE, NO EL FINAL DEL SISTEMA DE FICHEROS. 02/10/2026.
+     *
+     * Antes se le pasaba a->fs_bytes (1 MB), o sea el megabyte de arriba
+     * ENTERO, y el almacen de imagenes repartia desde la cola hacia abajo
+     * cogiendo bloques borrados. Mientras la zona alta acababa en 0x180000
+     * eso no chocaba con nada... pero tampoco lo impedia NADA: lo unico que
+     * los separaba era que la zona alta estuviera llena.
+     *
+     * Con ZA_TOPE en el final del chip, el hueco que deje un BD.BIN mas
+     * pequeño que su region seguiria pareciendole libre al almacen, lo
+     * usaria, y el siguiente BD.BIN mas gordo se lo llevaria por delante.
+     * Un fallo que solo aparece cuando crece el fichero de datos, o sea
+     * meses despues y sin relacion aparente.
+     *
+     * Pasandole ZA_TOPE como suelo, las dos cosas no pueden solaparse
+     * aunque la zona alta este medio vacia. Hoy eso significa que el
+     * almacen se queda sin sitio y lo dice, que es la respuesta correcta y
+     * explicita en vez de una convivencia que funciona por casualidad.
+     */
+    (void)imgs_init(&k_imgs_medio, ZA_TOPE, a->bytes_mide);
 }
 
 /*
@@ -9928,7 +9972,7 @@ static void restaura_arranca(void)
  * era el firmware decidiendo cuanto puede ocupar cada base: para cambiarlo
  * habia que recompilar, y ya se quedo corto la primera vez.
  *
- * Ahora lo dice el directorio de DATOS.BIN, que escribe el PC mirando lo
+ * Ahora lo dice el directorio de BD.BIN, que escribe el PC mirando lo
  * que miden las dos de verdad. Ver zona_alta.h y datos_arranca().
  */
 
@@ -9984,7 +10028,7 @@ static void restaura_arranca(void)
  * era el firmware decidiendo cuanto puede ocupar cada base: para cambiarlo
  * habia que recompilar, y ya se quedo corto la primera vez.
  *
- * Ahora lo dice el directorio de DATOS.BIN, que escribe el PC mirando lo
+ * Ahora lo dice el directorio de BD.BIN, que escribe el PC mirando lo
  * que miden las dos de verdad. Ver zona_alta.h y datos_arranca().
  */
 
@@ -10064,7 +10108,7 @@ static void espera_ms(uint32_t ms)
  * causa que a lo mejor no era la suya. Dos formas de mentir en un sitio
  * donde lo unico que hay es el mensaje.
  *
- * AHORA HAY UN CARGADOR Y UN FICHERO. DATOS.BIN lleva un directorio
+ * AHORA HAY UN CARGADOR Y UN FICHERO. BD.BIN lleva un directorio
  * delante que dice donde vive cada base, lo escribe tools/datos_pack.py
  * mirando lo que miden de verdad, y se copia entero de una vez. No puede
  * haber solape porque no hay dos cosas que solapar, y no hay reparto que
@@ -10088,16 +10132,16 @@ static uint8_t datos_arranca(void)
                             "the flash is busy with another copy");
         return 0U;
     }
-    if (!spi_flash_fichero_tam("DATOS   ", "BIN", &tam) || tam == 0UL) {
-        s_datos_porque = tr("DATOS.BIN esta en el disco pero no se puede medir",
-                            "DATOS.BIN is on the disk but cannot be measured");
+    if (!spi_flash_fichero_tam("BD      ", "BIN", &tam) || tam == 0UL) {
+        s_datos_porque = tr("BD.BIN esta en el disco pero no se puede medir",
+                            "BD.BIN is on the disk but cannot be measured");
         s_vol_estado = 3U;
         return 0U;
     }
     bloques = (tam + 4095UL) & ~4095UL;
     if (bloques > (DATOS_TOPE - DATOS_BASE)) {
-        s_datos_porque = tr("DATOS.BIN es mayor que la zona alta",
-                            "DATOS.BIN is bigger than the upper area");
+        s_datos_porque = tr("BD.BIN es mayor que la zona alta",
+                            "BD.BIN is bigger than the upper area");
         s_vol_estado = 3U;
         return 0U;
     }
@@ -10110,14 +10154,26 @@ static uint8_t datos_arranca(void)
         s_vol_estado = 3U;
         return 0U;
     }
-    if (a->bytes_mide < DATOS_TOPE || DATOS_BASE < a->fs_bytes) {
+    /*
+     * DATOS_TOPE sale de spi_flash_capacidad(), que mide por alias y, si
+     * eso no vale -chip recien borrado-, tira del codigo JEDEC. Aqui se
+     * compara contra esa misma respuesta y no contra a->bytes_mide, que es
+     * SOLO la medida por alias: con un chip nuevo vale 0, y esta condicion
+     * rechazaria la carga diciendo que la zona alta no llega, con el chip
+     * entero delante. Ver spi_flash_capacidad().
+     *
+     * Lo que si tiene que cumplirse es que la zona de datos empiece por
+     * encima del sistema de ficheros: si el volumen fuera mas grande de lo
+     * que el disco anuncia, escribir las bases se lo llevaria por delante.
+     */
+    if (DATOS_TOPE > spi_flash_capacidad() || DATOS_BASE < a->fs_bytes) {
         s_datos_porque = tr("la zona alta de este chip no llega hasta aqui",
                             "this chip's upper area does not reach that far");
         s_vol_sin_zona = 1U;
         s_vol_estado = 3U;
         return 0U;
     }
-    if (spi_flash_restaura_abre("DATOS   ", "BIN", DATOS_BASE, bloques,
+    if (spi_flash_restaura_abre("BD      ", "BIN", DATOS_BASE, bloques,
                                 a->fs_bytes, DATOS_TOPE)) {
         s_vol_aviones = 0U;   /* el borrado del disco lo hace datos_al_arrancar */
         s_vol_estado = 1U;
@@ -10134,8 +10190,8 @@ static uint8_t datos_arranca(void)
 /* El rotulo de la pantalla. Se pasa a proposito: ver aviones_pantalla_t(). */
 static const char *k_datos_tit(void) { return tr("Bases de datos", "Databases"); }
 static const char *k_datos_que(void)
-{ return tr("DATOS.BIN, del disco a la zona alta de la flash",
-            "DATOS.BIN, from disk to the upper flash area"); }
+{ return tr("BD.BIN, del disco a la zona alta de la flash",
+            "BD.BIN, from disk to the upper flash area"); }
 
 static void datos_cartel(avip_fase_t f, uint8_t pct, const char *motivo,
                          uint32_t bytes)
@@ -10169,7 +10225,7 @@ static uint8_t datos_al_arrancar(void)
     uint32_t total, ultimo_pct = 0xFFFFUL;
     int8_t paso;
 
-    if (!spi_flash_fichero_hay("DATOS   ", "BIN")) { return 0U; }
+    if (!spi_flash_fichero_hay("BD      ", "BIN")) { return 0U; }
 
     datos_cartel(AVIP_BUSCANDO, 0U, (const char *)0, 0UL);
     if (!datos_arranca()) {
@@ -10221,7 +10277,7 @@ static uint8_t datos_al_arrancar(void)
     } else if (!zona_alta_verifica_p(datos_comprobando)) {
         datos_cartel(AVIP_FALLO, 0U, tr("Copiado, pero las sumas no cuadran",
                                         "Copied, but the checksums do not match"), 0UL);
-    } else if (spi_flash_fichero_borra("DATOS   ", "BIN")) {
+    } else if (spi_flash_fichero_borra("BD      ", "BIN")) {
         datos_cartel(AVIP_HECHO, 100U, (const char *)0, total);
     } else {
         datos_cartel(AVIP_FALLO, 0U,
@@ -10593,7 +10649,7 @@ static uint8_t info_hex32(char *b, uint8_t i, uint32_t v)
  * enteras: la primera solo le dice algo a quien compila, y la segunda dice
  * el modelo de la radio a quien la tiene en la mano.
  */
-enum { INFO_VERSION = 0, INFO_MICRO, INFO_FLASH, INFO_FLASH2,
+enum { INFO_VERSION = 0, INFO_MICRO, INFO_FLASH,
        INFO_SRAM, INFO_TCM, INFO_PILA, INFO_CASCADA, INFO_TEMP, INFO_BATT, INFO_TICS, INFO_RTC,
        INFO_XCHIP, INFO_XFS, INFO_XFORMATO, INFO_XALTA, INFO_XFIRMA, INFO_XIMG,
        INFO_XVOLCADO, INFO_XVOLMICRO, INFO_XVOLROM, INFO_XPRUEBA, INFO_XRESTAURA, INFO_XAVIONES,
@@ -10642,7 +10698,7 @@ static uint8_t s_dfu_armado = 0U;
 
 static const texto_t k_info_nombres[INFO_COUNT] = {
     T("Versión", "Version"), T("Micro", "MCU"), T("Flash", "Flash"),
-    T("Flash alta", "Upper flash"), T("SRAM", "SRAM"), T("TCM", "TCM"),
+    T("SRAM", "SRAM"), T("TCM", "TCM"),
     T("Pila", "Stack"), T("Cascada", "Waterfall"),
     T("Temp. del chip", "Chip temp."), T("Batería", "Battery"),
     T("Reloj", "Clock"), T("RTC", "RTC"),
@@ -10749,9 +10805,39 @@ static const char *info_valor(uint8_t id, char *buf)
          * porque cinco toques sin ninguna respuesta se sienten como un
          * boton roto y acabas dando veinte.
          */
+        /*
+         * LA VERSION LLEVA EL CRC DETRAS - 02/10/2026.
+         *
+         * *** Por el dueño, y con razon: "no estas cambiando el numero de
+         * version en los updates". ***
+         *
+         * Salieron SEIS update.bin distintos llamados todos V3.00. Subir
+         * el numero cada vez es lo primero, pero depende de que yo me
+         * acuerde, y eso ya se ha demostrado que no basta.
+         *
+         * Esto no depende de que nadie se acuerde: el CRC32 sale de la
+         * cabecera que tools/cabecera.py le pega a la imagen, o sea que es
+         * del CONTENIDO. Dos binarios distintos no pueden enseñar el mismo
+         * numero aunque los dos digan V3.00, y comparar el de la pantalla
+         * con el que imprime el make dice sin ninguna duda cual esta
+         * grabado.
+         *
+         * Se lee de la flash interna, en CARGA_APP_BASE + 0x200 + 8. Ver
+         * User/cabecera_app.c para el formato.
+         */
         const char *v = CONFIG_FW_VERSION;
         uint8_t i = 0U, faltan;
-        if (s_info_avanzado || s_info_toques < 2U) { return v; }
+        const uint8_t *cab = (const uint8_t *)(CARGA_CAB_ADDR);
+        if (s_info_avanzado || s_info_toques < 2U) {
+            uint32_t crc;
+            while (v[i] != '\0') { buf[i] = v[i]; i++; }
+            crc = (uint32_t)cab[8] | ((uint32_t)cab[9] << 8)
+                | ((uint32_t)cab[10] << 16) | ((uint32_t)cab[11] << 24);
+            buf[i++] = ' '; buf[i++] = '/'; buf[i++] = ' ';
+            i = (uint8_t)(i + info_hex32(&buf[i], 0U, crc));
+            buf[i] = '\0';
+            return buf;
+        }
         while (v[i] != '\0') { buf[i] = v[i]; i++; }
         faltan = (uint8_t)(INFO_TOQUES - s_info_toques);
         buf[i++] = ' '; buf[i++] = '(';
@@ -10975,7 +11061,7 @@ static const char *info_valor(uint8_t id, char *buf)
          * Y AQUI NO SE DICE "FALTA" SIN HABERLO COMPROBADO - 28/09/2026.
          *
          * *** El dueño: "el fichero esta, te lo aseguro". *** Y estaba:
-         * la celda decia "falta DATOS.BIN" con el fichero delante, porque
+         * la celda decia "falta BD.BIN" con el fichero delante, porque
          * spi_flash_fichero_hay() devuelve 0 por CUATRO motivos -no esta,
          * mide cero, el primer cluster no vale, o la cadena esta
          * troceada- y yo los contaba todos como "falta".
@@ -10983,8 +11069,8 @@ static const char *info_valor(uint8_t id, char *buf)
          * El motivo de verdad lleva desde siempre en s_vol_porque. Lo que
          * faltaba era mirarlo.
          */
-        if (spi_flash_fichero_hay("DATOS   ", "BIN")) {
-            return tr("tocar: DATOS.BIN", "tap: DATOS.BIN");
+        if (spi_flash_fichero_hay("BD      ", "BIN")) {
+            return tr("tocar: BD.BIN", "tap: BD.BIN");
         }
         return spi_flash_volcado_porque_txt();
     case INFO_XVOLROM:
@@ -11020,12 +11106,6 @@ static const char *info_valor(uint8_t id, char *buf)
          * inicial de 48 kB de ceros que nadie llegaba a usar. Ya no la
          * guarda, asi que ya no hay que sumarla. */
         info_kb(buf, (uint32_t)&_eflash - INFO_FLASH_ORIGEN, INFO_FLASH_TOPE);
-        return buf;
-    case INFO_FLASH2:
-        /* Lo que hay grabado por encima de la firma. Hoy: los mapas de bits
-         * y los glifos de las fuentes y las paletas de la cascada. */
-        info_kb(buf, (uint32_t)&_earriba - (uint32_t)&_sarriba,
-                INFO_FLASH2_TOPE);
         return buf;
     case INFO_SRAM:
         info_kb(buf, ((uint32_t)&_edata - (uint32_t)&_sdata) +
@@ -17835,11 +17915,31 @@ static void tune_encoder_poll(void)
      * LIVE, no-recompile adjustment. Checked first, before touching
      * s_encoder_target/press/long_press below, and returns
      * immediately - same "intercept before the normal target logic"
-     * shape as the long-press handler right after this block. Button
-     * press/long-press are silently swallowed while in this mode (no
-     * tune-step-cycle, no "back to TUNE" gesture) - fine while RTTY
-     * doesn't have its own detail-view controls yet, not worth the
-     * extra complexity of wiring those here too.
+     * shape as the long-press handler right after this block.
+     *
+     * *** SOLO CUANDO EL MANDO ESTA SINTONIZANDO. 02/10/2026, por un
+     * fallo que nos reportaron: "although the volume mode can be
+     * selected (light blue highlight), moving the encoder does not
+     * change the volume level when in either RTTY mode". ***
+     *
+     * Y tenian razon. Esta rama estaba ANTES de mirar s_encoder_target,
+     * asi que en RTTY se quedaba con TODOS los detentes pasara lo que
+     * pasara: le dabas al boton VOL de la barra de abajo, se encendia en
+     * azul -porque encenderse solo depende de s_encoder_target, que SI
+     * cambiaba- y el mando seguia moviendo mark/space. El boton decia una
+     * cosa y el mando hacia otra, que es la peor forma de fallar.
+     *
+     * Lo que esta rama sustituye es SINTONIZAR, no "todo lo que haga el
+     * mando": en RTTY las dos frecuencias son lo que se ajusta al vuelo
+     * en vez de la del VFO. En cuanto el usuario pide explicitamente otra
+     * cosa -VOL, SQL, PGA, lo que sea- eso manda, y al soltarlo (por el
+     * timeout de VOL o por la pulsacion larga) el mando vuelve a TUNE y
+     * esta rama vuelve a coger los detentes ella sola.
+     *
+     * Con el destino en TUNE la pulsacion corta y la larga se las sigue
+     * tragando esta rama, como antes. Eso no molesta: la corta cambia el
+     * paso de sintonia, que en RTTY no se usa, y la larga significa
+     * "devuelveme el mando a TUNE", donde ya esta.
      *
      * *** !s_menu_open added 08/08/2026 *** - without it, the encoder
      * kept nudging mark/space even while MENU/MODE was open, hijacking
@@ -17848,7 +17948,8 @@ static void tune_encoder_poll(void)
      * as rtty_scope_draw() not checking s_menu_open, just on the input
      * side instead of the display side.
      */
-    if (rtty_encoder_grabs_tuning() && !s_menu_open) {
+    if (rtty_encoder_grabs_tuning() && !s_menu_open
+        && s_encoder_target == ENCODER_TARGET_TUNE) {
         if (detents != 0) {
             float step = (float)detents * CONFIG_RTTY_ENCODER_STEP_HZ;
             float mark  = rtty_get_mark_hz()  + step;

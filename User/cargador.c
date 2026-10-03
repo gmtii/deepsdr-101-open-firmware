@@ -2,30 +2,131 @@
  * EL CARGADOR DE ARRANQUE. Ver cargador.h para el por que y para el
  * comportamiento exacto que se esta copiando.
  *
- * UNA SOLA REGLA AL ESCRIBIR ESTO: no mejorar nada. Cada vez que apetece
- * anadir una comprobacion -un CRC, la longitud, releer lo escrito- hay que
- * acordarse de que el criterio de aprobado es "hace lo mismo que el que
- * ya funciona". Las mejoras vienen DESPUES, cuando esto arranque en una
- * placa de verdad, y cada una con su banco. Si se mejora ahora no hay
- * forma de saber si un fallo es del cargador nuevo o de la mejora.
+ * ESTO SE ESCRIBIO CON LA REGLA DE "no mejorar nada": el criterio de
+ * aprobado era "hace lo mismo que el gestor de fabrica, que ya funciona",
+ * y cada vez que apetecia anadir un CRC o una longitud habia que aguantarse,
+ * porque mejorando a la vez no hay forma de saber si un fallo es del
+ * cargador nuevo o de la mejora.
+ *
+ * ESA ETAPA YA PASO. El cargador arranco en la placa el 01/10/2026 y lleva
+ * desde entonces funcionando, asi que en la rama "reload" si se mejora, y
+ * cada mejora trae su banco:
+ *
+ *  - La aplicacion empieza en 0x0800C000 y la region es de una pieza, sin
+ *    firma clavada en medio ni tope de 0x50000.  Ver cargador.h.
+ *  - El borrado va por TABLA de sectores y no por un bucle que sumaba
+ *    0x20000: con S3 y S4 en medio -que miden 16 y 64 kB- ese bucle se
+ *    saltaba sectores.
+ *  - La validacion es cabecera + longitud + CRC32 en vez de ocho bytes
+ *    constantes, asi que una imagen grabada a medias ya no arranca.
  */
 #include "cargador.h"
 #include "spi_flash.h"
 #include <string.h>
 
-/* Los ocho bytes que el gestor compara en 0x08060000. Estan aqui y en
- * User/firma_app.c; son el mismo numero por los dos lados y si alguna vez
- * cambia uno tiene que cambiar el otro. El banco lo comprueba. */
-static const uint8_t k_firma[CARGA_FIRMA_BYTES] = {
-    0x8FU, 0x25U, 0xC8U, 0x65U, 0x59U, 0x9CU, 0x55U, 0x31U
+/*
+ * EL CRC32, Y CUAL DE ELLOS.
+ *
+ * Hay mas de un "CRC32" y no dan el mismo numero.  Este es CRC-32/MPEG-2:
+ * polinomio 0x04C11DB7, empieza en 0xFFFFFFFF, SIN reflejar la entrada ni
+ * la salida y SIN xor final.  Su valor de control sobre "123456789" es
+ * 0x0376E6E7, y esta comprobado -no recordado- en tools/cabecera.py, que
+ * es quien tiene que dar exactamente el mismo numero que esto.
+ *
+ * NO es el de zlib.crc32() de Python ni el de los ficheros ZIP, que van
+ * reflejados y con xor final y dan otra cosa.  Si alguien reescribe
+ * cabecera.py con zlib, el cargador rechazara todas las imagenes y el
+ * motivo no se vera por ningun lado.  Por eso el banco compara los dos.
+ *
+ * Es ademas el mismo que calcula la unidad de CRC por hardware del chip,
+ * por si algun dia interesa cambiar esto por cuatro escrituras a un
+ * registro.  Hoy va en software A PROPOSITO: asi el banco del PC ejecuta
+ * ESTA funcion y no una imitacion.
+ *
+ * La tabla es de nibble -16 entradas, 64 bytes- en vez de la de 256 (1 kB).
+ * Sale a unos 18 ms para los 320 kB de imagen de hoy, que al arrancar no
+ * se notan, y ahorra 960 bytes de un cargador que vive en 48 kB.
+ */
+static const uint32_t k_crc_nib[16] = {
+    0x00000000U, 0x04C11DB7U, 0x09823B6EU, 0x0D4326D9U,
+    0x130476DCU, 0x17C56B6BU, 0x1A864DB2U, 0x1E475005U,
+    0x2608EDB8U, 0x22C9F00FU, 0x2F8AD6D6U, 0x2B4BCB61U,
+    0x350C9B64U, 0x31CD86D3U, 0x3C8EA00AU, 0x384FBDBDU
 };
+
+uint32_t cargador_crc32(uint32_t crc, const uint8_t *p, uint32_t n)
+{
+    while (n-- > 0U) {
+        crc ^= (uint32_t)(*p++) << 24;
+        crc  = (crc << 4) ^ k_crc_nib[(crc >> 28) & 0x0FU];
+        crc  = (crc << 4) ^ k_crc_nib[(crc >> 28) & 0x0FU];
+    }
+    return crc;
+}
+
+/* Leer una palabra little-endian de un buffer. El Cortex-M4 es little
+ * endian y podria hacerse con un cast, pero un cast a uint32_t* sobre un
+ * puntero que no se sabe alineado es comportamiento indefinido y aqui no
+ * hace falta correr. */
+static uint32_t le32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8)
+         | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/*
+ * LOS SECTORES QUE OCUPA LA APLICACION, UNO A UNO.
+ *
+ * Antes esto era un bucle "for (s = BASE; s < HASTA; s += 0x20000)", y
+ * funcionaba porque TODOS los sectores de la aplicacion median 128 kB.
+ * Con la base en 0x0800C000 eso deja de ser verdad: el S3 mide 16 kB y el
+ * S4 mide 64, asi que sumar 0x20000 desde 0x0800C000 daria 0x0802C000
+ * -dentro del S5- y el S4 no se borraria NUNCA.  La imagen se grabaria
+ * encima de un sector sin borrar, que en una flash NOR significa que los
+ * bits a 0 se quedan a 0: pasaria el CRC solo si los datos viejos y los
+ * nuevos encajaran por casualidad, o sea nunca.
+ *
+ * Con la tabla delante, el dia que la base cambie el que no cuadre salta
+ * en el _Static_assert de abajo y no en la radio.
+ */
+static const uint32_t k_sectores[] = {
+    0x0800C000UL,   /* S3,  16 kB */
+    0x08010000UL,   /* S4,  64 kB */
+    0x08020000UL,   /* S5, 128 kB */
+    0x08040000UL,   /* S6, 128 kB */
+    0x08060000UL    /* S7, 128 kB */
+};
+#define N_SECTORES  (sizeof k_sectores / sizeof k_sectores[0])
+
+_Static_assert(0x0800C000UL == CARGA_APP_BASE,
+               "la tabla de sectores no empieza donde empieza la aplicacion");
 
 #define SECTOR_BYTES   512U
 
-/* El nombre 8.3 tal y como esta en el directorio. El gestor original abre
- * "update4.bin" por FatFs, que normaliza a mayusculas; aqui se compara
- * contra la entrada del directorio, que es donde Windows lo deja. */
-static const char k_nombre[8] = { 'U','P','D','A','T','E','4',' ' };
+/*
+ * EL NOMBRE 8.3 TAL Y COMO ESTA EN EL DIRECTORIO.
+ *
+ * *** "update.bin", desde el 02/10/2026 y por el dueño: "vamos a dejar de
+ * usar el nombre update4.bin, quiero que todo el sistema funcione con el
+ * nombre update.bin". ***
+ *
+ * El "4" venia del gestor de fabrica, que abre "update4.bin" por FatFs.
+ * Nuestro cargador no tiene por que heredar su nomenclatura, y en la rama
+ * "reload" ya no hereda nada mas suyo.
+ *
+ * OJO AL RELLENO: son OCHO caracteres de nombre, rellenados con espacios,
+ * mas tres de extension, porque asi es como lo guarda el directorio FAT.
+ * "UPDATE" son seis letras, asi que van dos espacios detras. Un espacio de
+ * menos y la comparacion de mas abajo no casa nunca, y el sintoma seria
+ * una radio que ignora el fichero sin decir nada.
+ *
+ * EFECTO SECUNDARIO QUE CONVIENE SABER: un UPDATE4.BIN que quedara de
+ * antes en el volumen ya no lo mira nadie. No molesta -no se graba ni se
+ * borra- pero ocupa su sitio hasta que se borre a mano por USB.
+ */
+static const char k_nombre[8] = { 'U','P','D','A','T','E',' ',' ' };
+#define K_NOMBRE_DIR  "UPDATE  BIN"   /* los 8+3 seguidos, como en el directorio */
+_Static_assert(sizeof(K_NOMBRE_DIR) == 12, "el nombre del directorio son 11 caracteres");
 static const char k_ext[3]    = { 'B','I','N' };
 
 static uint8_t  s_buf[SECTOR_BYTES];
@@ -65,7 +166,7 @@ static uint16_t fat_siguiente(uint32_t cluster)
 }
 
 /*
- * Buscar UPDATE4.BIN en el directorio raiz.
+ * Buscar UPDATE.BIN en el directorio raiz.
  *
  * Tres cosas que hay que respetar y que se han roto alguna vez en este
  * proyecto (ver sim/fat_troceado.c): una entrada a 0x00 significa FIN del
@@ -75,7 +176,7 @@ static uint16_t fat_siguiente(uint32_t cluster)
  * cuelan-. El raiz tiene 32 sectores, no uno: un fichero copiado desde
  * Windows a un volumen con historia cae mas adelante.
  */
-uint32_t cargador_busca_update4(uint32_t *primer_cluster)
+uint32_t cargador_busca_update(uint32_t *primer_cluster)
 {
     uint32_t sect, i;
     uint32_t sectores_raiz;
@@ -92,7 +193,7 @@ uint32_t cargador_busca_update4(uint32_t *primer_cluster)
             if (e[0] == 0xE5U)            { continue; }    /* borrada */
             if ((e[11] & 0x0FU) == 0x0FU) { continue; }    /* nombre largo */
             if ((e[11] & 0x08U) != 0U)    { continue; }    /* etiqueta */
-            if (memcmp(e, "UPDATE4 BIN", 11) != 0) { continue; }
+            if (memcmp(e, K_NOMBRE_DIR, 11) != 0) { continue; }
 
             *primer_cluster = (uint32_t)e[26] | ((uint32_t)e[27] << 8);
             return (uint32_t)e[28] | ((uint32_t)e[29] << 8)
@@ -105,10 +206,14 @@ uint32_t cargador_busca_update4(uint32_t *primer_cluster)
 /*
  * Copiar el fichero a la flash interna, cluster a cluster.
  *
- * "Tal cual y sin mirar nada", igual que el gestor de ahora: se copian
- * exactamente `tam` bytes del fichero a 0x08020000 y no se comprueba
- * ninguno. El unico limite es el que ya impone el gestor, 0x50000, y se
- * decide ANTES de borrar nada: si el fichero no cabe no se toca la flash.
+ * Se copian exactamente `tam` bytes del fichero a CARGA_APP_BASE sin mirar
+ * ninguno: quien mira es la comprobacion de DESPUES, que recalcula el CRC
+ * sobre lo que ha quedado escrito en la flash -no sobre lo que creiamos
+ * estar escribiendo-, que es justo la diferencia que hace que una copia
+ * cortada a la mitad no arranque.
+ *
+ * Que el fichero quepa se decide ANTES de borrar nada: si no cabe, la
+ * flash no se toca y la imagen que hubiera dentro sigue entera.
  */
 static carga_r_t copia(const carga_fmc_t *fmc, uint32_t tam, uint32_t cluster)
 {
@@ -116,8 +221,8 @@ static carga_r_t copia(const carga_fmc_t *fmc, uint32_t tam, uint32_t cluster)
     uint32_t quedan = tam;
     uint32_t s;
 
-    for (s = CARGA_APP_BASE; s < CARGA_BORRA_HASTA; s += 0x20000UL) {
-        if (!fmc->borra(s)) { return CARGA_ERROR_BORRAR; }
+    for (s = 0U; s < N_SECTORES; s++) {
+        if (!fmc->borra(k_sectores[s])) { return CARGA_ERROR_BORRAR; }
     }
 
     while (quedan > 0U) {
@@ -139,31 +244,87 @@ static carga_r_t copia(const carga_fmc_t *fmc, uint32_t tam, uint32_t cluster)
 }
 
 /*
- * Las dos unicas pruebas que hace el gestor, y en su orden.
+ * LAS TRES PRUEBAS, Y EN SU ORDEN.
  *
- * La primera es la que sorprende: la pila inicial de la aplicacion -la
- * primera palabra del vector, en 0x08020000- tiene que estar en el TCM.
- * En el original son tres instrucciones: ubfx r0, r0, #17, #12 y comparar
- * con 0x800, que es lo mismo que exigir 0x10000000..0x1001FFFF. Sirve de
- * "hay algo con pinta de aplicacion aqui", y una flash recien borrada
- * (0xFFFFFFFF) no pasa.
+ * 1. LA PILA INICIAL EN EL TCM.  Es la que viene del gestor de fabrica
+ *    -tres instrucciones suyas: "ubfx r0,r0,#17,#12" y comparar con
+ *    0x800, o sea exigir 0x10000000..0x1001FFFF- y se queda porque es la
+ *    mas barata que existe de "aqui dentro hay algo con pinta de
+ *    aplicacion".  Una flash recien borrada (0xFFFFFFFF) no la pasa.
+ *
+ * 2. LA CABECERA.  Magia "DSDR" y una longitud que tenga sentido.  Separa
+ *    "no hay imagen" de "hay una imagen y esta mal", que desde la pantalla
+ *    del cargador son dos cosas muy distintas de arreglar.
+ *
+ * 3. EL CRC32 DE LA IMAGEN ENTERA.  Es la que no tenia el gestor viejo y
+ *    la que de verdad importa: con ocho bytes constantes, una imagen
+ *    grabada a medias arrancaba.
+ *
+ * EL CRC SE CALCULA CON EL CAMPO DEL PROPIO CRC CONTADO COMO CERO, porque
+ * si no es la pescadilla: el valor que hay que meter en la cabecera
+ * depende de la cabecera.  La alternativa -dejar la cabecera fuera del
+ * calculo- se descarto a proposito: dejaria sin cubrir el vector de
+ * interrupciones, que son los primeros 428 bytes, o sea justo la parte
+ * cuya corrupcion hace que la radio no arranque de forma entendible.
+ *
+ * Se lee de la flash en trozos de 64 bytes en vez de de un cast al puntero
+ * porque este modulo no toca la flash directamente NUNCA: todo pasa por
+ * carga_fmc_t, y eso es lo que permite que el banco del PC ejecute esta
+ * misma funcion contra una flash simulada.
  */
+static uint32_t crc_trozo(const carga_fmc_t *fmc, uint32_t desde,
+                          uint32_t hasta, uint32_t crc)
+{
+    uint8_t t[64];
+
+    while (desde < hasta) {
+        uint32_t n = hasta - desde;
+        if (n > sizeof t) { n = (uint32_t)sizeof t; }
+        fmc->lee(CARGA_APP_BASE + desde, t, n);
+        crc = cargador_crc32(crc, t, n);
+        desde += n;
+    }
+    return crc;
+}
+
 uint8_t cargador_imagen_vale(const carga_fmc_t *fmc, carga_r_t *porque)
 {
-    uint8_t  v[CARGA_FIRMA_BYTES];
-    uint32_t sp;
+    static const uint8_t k_ceros[4] = { 0U, 0U, 0U, 0U };
+    uint8_t  v[CARGA_CAB_BYTES];
+    uint32_t sp, longitud, crc;
 
     fmc->lee(CARGA_APP_BASE, v, 4U);
-    sp = (uint32_t)v[0] | ((uint32_t)v[1] << 8)
-       | ((uint32_t)v[2] << 16) | ((uint32_t)v[3] << 24);
+    sp = le32(v);
     if (((sp >> 17) & 0x0FFFU) != 0x800U) {
         *porque = CARGA_SIN_APP;
         return 0U;
     }
 
-    fmc->lee(CARGA_FIRMA_ADDR, v, CARGA_FIRMA_BYTES);
-    if (memcmp(v, k_firma, CARGA_FIRMA_BYTES) != 0) {
-        *porque = CARGA_SIN_FIRMA;
+    fmc->lee(CARGA_CAB_ADDR, v, CARGA_CAB_BYTES);
+    if (le32(&v[0]) != CARGA_CAB_MAGIA) {
+        *porque = CARGA_SIN_CABECERA;
+        return 0U;
+    }
+
+    longitud = le32(&v[4]);
+    /* Tiene que llegar por lo menos hasta el final de la propia cabecera,
+     * no pasarse de la region, y ser multiplo de 4 -el enlazador alinea
+     * todas las secciones a 4, asi que una longitud impar significa que
+     * quien escribio la cabecera se equivoco-. */
+    if (longitud < (CARGA_CAB_OFF + CARGA_CAB_BYTES)
+     || longitud > CARGA_TAM_MAX
+     || (longitud & 3U) != 0U) {
+        *porque = CARGA_CAB_RARA;
+        return 0U;
+    }
+
+    crc = 0xFFFFFFFFU;
+    crc = crc_trozo(fmc, 0U, CARGA_CAB_OFF + 8U, crc);
+    crc = cargador_crc32(crc, k_ceros, 4U);
+    crc = crc_trozo(fmc, CARGA_CAB_OFF + 12U, longitud, crc);
+
+    if (crc != le32(&v[8])) {
+        *porque = CARGA_CRC_MALO;
         return 0U;
     }
 
@@ -181,7 +342,7 @@ carga_r_t cargador_arranca(const carga_fmc_t *fmc)
     /*
      * El fichero PRIMERO, antes de comprobar la imagen. Es lo que salva la
      * radio: con una imagen mala dentro, el siguiente arranque vuelve a
-     * leer el volumen y se recupera copiando un update4.bin bueno, sin
+     * leer el volumen y se recupera copiando un update.bin bueno, sin
      * SWD. Si esto se moviera detras de la comprobacion, una imagen mala
      * seria un ladrillo.
      */
@@ -192,15 +353,15 @@ carga_r_t cargador_arranca(const carga_fmc_t *fmc)
         return CARGA_NO_HAY_VOLUMEN;
     }
 
-    tam = cargador_busca_update4(&cluster);
+    tam = cargador_busca_update(&cluster);
     if (tam > CARGA_TAM_MAX) {
         /*
          * MAS DE 0x50000: el gestor cierra el fichero y salta DIRECTO a la
          * comprobacion (0x800a68e: f_close y "b 0x800a7ca"), saltandose el
-         * f_unlink. O sea que un update4.bin demasiado grande se queda en
-         * el disco para siempre y se vuelve a mirar -y a descartar- en cada
-         * arranque. No es un descuido que convenga arreglar aqui: si se
-         * borrara, el dueno perderia el fichero sin enterarse de por que.
+         * f_unlink.  Aqui se hace lo mismo, y a proposito: un update.bin
+         * que no cabe se queda en el disco y se vuelve a mirar -y a
+         * descartar- en cada arranque.  Si se borrara, el dueno perderia
+         * el fichero sin enterarse de por que.
          */
         (void)cargador_imagen_vale(fmc, &porque);
         return CARGA_FICHERO_GRANDE;
@@ -234,10 +395,12 @@ const char *cargador_porque_txt(carga_r_t r)
     switch (r) {
     case CARGA_ARRANCA:         return "arranca";
     case CARGA_GRABADA:         return "grabada y arranca";
-    case CARGA_SIN_APP:         return "APP Not Programmed !";
-    case CARGA_SIN_FIRMA:       return "Running APP---";
+    case CARGA_SIN_APP:         return "no hay aplicacion";
+    case CARGA_SIN_CABECERA:    return "sin cabecera: ahi no hay imagen";
+    case CARGA_CAB_RARA:        return "cabecera con longitud imposible";
+    case CARGA_CRC_MALO:        return "imagen incompleta o corrompida";
     case CARGA_NO_HAY_VOLUMEN:  return "no se lee el volumen";
-    case CARGA_FICHERO_GRANDE:  return "update4.bin de mas de 0x50000";
+    case CARGA_FICHERO_GRANDE:  return "update.bin no cabe en la flash";
     case CARGA_FICHERO_ROTO:    return "la cadena del fichero no cuadra";
     case CARGA_ERROR_BORRAR:    return "no se pudo borrar";
     case CARGA_ERROR_GRABAR:    return "no se pudo grabar";

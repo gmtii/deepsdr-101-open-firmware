@@ -1,0 +1,3 @@
+# version,crc32 del ultimo update.bin generado con ese numero.
+# Lo escribe tools/cabecera.py. Ver avisa_version().
+V3.01,B7CC1046

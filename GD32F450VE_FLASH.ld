@@ -1,122 +1,96 @@
 /*
+ * MAPA CONTIGUO - rama "reload", 02/10/2026.
+ *
  * Linker script para GD32F450VET6 (LQFP100)
  *  - Flash: 512 KB  (variante "VE")
  *  - RAM:   192 KB en 0x20000000 (SRAM0+SRAM1+SRAM2) + 64 KB TCM en 0x10000000
- *    (192 + 64 = 256 KB, coincide con los 256 KB de SRAM listados para la
- *    variante VE en el datasheet). El TCM solo es accesible por el bus de
- *    datos del core, no lo uses para buffers que acceda DMA/EXMC.
+ *    El TCM solo es accesible por el bus de datos del core, no lo uses para
+ *    buffers que acceda DMA/EXMC.
+ *
+ * QUE CAMBIA RESPECTO A LA RAMA "deepsdr", Y POR QUE SE PUEDE.
+ *
+ * El mapa de siempre lo imponia el gestor de arranque DE FABRICA, que no es
+ * nuestro y no se puede cambiar: exigia la aplicacion en 0x08020000, ocho
+ * bytes de firma clavados en 0x08060000 y ficheros de como mucho 0x50000.
+ * De ahi salian las tres regiones -la baja de 256 kB, la firma, y un
+ * "desvan" de 64 kB por encima- y de ahi salia tambien que el desvan NO
+ * sirviera para codigo: el enlazador no derrama de una region a otra, asi
+ * que lo que subia ahi se elegia A MANO, seccion por seccion, y solo valian
+ * tablas inertes.
+ *
+ * Con cargador propio ese mapa deja de ser una imposicion. Este fichero lo
+ * sustituye por UNA SOLA REGION:
+ *
+ *     0x08000000  +--------------------------+
+ *                 |  cargador (S0,S1,S2)     |  48 kB,  33.768 usados
+ *     0x0800C000  +--------------------------+  <- la aplicacion empieza aqui
+ *                 |                          |
+ *                 |  aplicacion, de una      |  475.136 bytes
+ *                 |  pieza: codigo, rodata,  |  (S3 16k, S4 64k, S5..S7 128k)
+ *                 |  tablas, lo que sea      |
+ *                 |                          |
+ *     0x08080000  +--------------------------+
+ *
+ * Se acabaron .arriba, FLASH2, _sarriba/_earriba y la lista a mano de
+ * secciones. Lo que crezca, crece, y si no cabe lo dice el ENLAZADOR con los
+ * bytes que sobran delante, que es como tiene que ser.
+ *
+ * LO QUE SE PIERDE A CAMBIO: esta imagen NO arranca con el boot.bin de
+ * fabrica ni con nuestro cargador v1.1. Hace falta el cargador del mapa
+ * contiguo, y hay que grabarlo ANTES. Si se graba esta imagen con un
+ * cargador viejo, la radio se queda en la pantalla de actualizacion -no es
+ * un ladrillo: el cargador lee el pendrive antes de validar nada, asi que
+ * se vuelve atras copiando el update4.bin de siempre-. Y por debajo sigue
+ * estando el gesto del mando para entrar en DFU, que no necesita abrir la
+ * radio.
  */
 
 ENTRY(Reset_Handler)
 
-_estack = 0x10010000; /* CAMBIADO: el bootloader exige que el SP inicial de la app este en el
-    rango 0x10000000-0x1001FFFF (TCM RAM), verificado con precision analizando su chequeo
-    de validez ((SP<<3)>>20 == 0x800). Usar la SRAM principal (0x2003xxxx) da "APP not
-    Programmed" aunque el resto este bien. */
-/* MONTON A CERO, 24/09/2026. Este firmware no llama a malloc ni a nada que
- * lo arrastre: comprobado con "arm-none-eabi-nm build/firmware.elf | grep
- * malloc", que no devuelve nada. Reservarle 1 kB era quitarselo a la pila,
- * que es lo unico que de verdad se usa en esa zona y que iba justa.
+/*
+ * LA PILA EN EL TCM, Y POR QUE SIGUE AHI AUNQUE YA NO ESTEMOS OBLIGADOS.
  *
- * Si algun dia entra malloc, el enlazador NO va a avisar de esto. Lo que
- * avisa es tools/pila.py, que lee _Min_Heap_Size de aqui mismo y descuenta
- * lo que ponga. Asi que si hace falta monton, se sube este numero y el
- * calculo de pila se ajusta solo.
+ * El gestor de fabrica EXIGIA que el SP inicial de la aplicacion cayera en
+ * 0x10000000-0x1001FFFF: tres instrucciones suyas, "ubfx r0,r0,#17,#12" y
+ * comparar con 0x800. Nuestro cargador ya no esta obligado a exigir eso...
+ * pero lo exige igual, y a proposito: es la comprobacion mas barata que
+ * existe de "aqui dentro hay algo con pinta de aplicacion", una flash recien
+ * borrada (0xFFFFFFFF) no la pasa, y cambiarla no ganaria nada. Ademas la
+ * pila VA de verdad en el TCM por rendimiento, asi que no es una concesion.
+ */
+_estack = 0x10010000;
+
+/* MONTON A CERO, 24/09/2026. Este firmware no llama a malloc ni a nada que
+ * lo arrastre. Lo vigila tools/pila.py, que lee _Min_Heap_Size de aqui
+ * mismo y descuenta lo que ponga.
  */
 _Min_Heap_Size  = 0x0;
 
-/* Minimo que el enlazador EXIGE que quede libre para pila. No es cuanta pila
- * hay -la pila usa todo el hueco entre 'end' y _estack- sino el suelo por
- * debajo del cual fallar. Si alguien mete otro buffer gordo en el TCM y el
- * hueco baja de aqui, falla AQUI, en el enlazador, con el numero delante. La
- * comprobacion fina la hace tools/pila.py; esto es la red de debajo, por si
- * algun dia se salta esa.
- *
- * 0x1600 (5,5 kB) desde el 30/09/2026. Estuvo en 0x800, luego en 0xC00 (3 kB)
- * el 24/09 "porque el peor caso medido es de 3.080 bytes" - y ese numero se
- * quedo ahi mientras el peor caso crecia hasta 5.464. O sea que la red de
- * debajo llevaba una semana 2.400 bytes POR DEBAJO de lo que decia proteger:
- * el enlazador habria dado el visto bueno con 3,1 kB de hueco y el unico que
- * se habria quejado es pila.py, que es justo la comprobacion que esto
- * respalda.
- *
- * El peor caso de hoy, con el anidamiento de interrupciones contado (tres
- * niveles de prioridad, ver User/irq_prio.h), son 5.464 bytes de 6.056 de
- * hueco. Este suelo se pone un poco por encima de ese peor caso, no por
- * debajo: la idea es que el enlazador avise ANTES de que pila.py falle, no
- * despues.
- */
+/* Minimo que el enlazador EXIGE que quede libre para pila; ver el comentario
+ * largo del mismo fichero en la rama "deepsdr". El peor caso medido con anidamiento de
+ * interrupciones son 5.464 bytes, y este suelo se pone un poco POR ENCIMA
+ * para que avise el enlazador antes que pila.py. */
 _Min_Stack_Size = 0x1600;
+
+/*
+ * DONDE EMPIEZA LA APLICACION. Un solo sitio, y de aqui lo leen tambien la
+ * cabecera de mas abajo y (por -D en el Makefile) el cargador.
+ *
+ * 0x0800C000 es el principio del sector 3. Tiene que ser frontera de sector
+ * porque el cargador borra por sectores y no puede borrarse a si mismo; y
+ * tiene que estar alineado a 512 como minimo por el VTOR.
+ */
+_app_base = 0x0800C000;
 
 MEMORY
 {
-  RAM (xrw)   : ORIGIN = 0x20000000, LENGTH = 192K
+  RAM    (xrw) : ORIGIN = 0x20000000, LENGTH = 192K
   /*
-   * LA FLASH PARTIDA EN DOS, Y POR QUE. 27/09/2026.
-   *
-   * Hasta hoy aqui ponia 256K de una pieza, con el razonamiento de que el
-   * formato update4.bin mete una firma de 8 bytes en el desplazamiento
-   * 0x40000 EXACTO y por tanto el binario tiene que caber por debajo.
-   *
-   * Desensamblando el gestor de arranque entero resulta que eso era la
-   * mitad de la historia. Lo que hace el gestor, en 0x0800A7CA, es:
-   *
-   *     ldr.w r0, [r8]        ; r8 = 0x08020000, la pila inicial de la app
-   *     ubfx  r0, r0, #17, #12
-   *     cmp   r0, #0x800      ; -> el SP tiene que estar en el TCM
-   *     bne   "APP Not Programmed !"
-   *     movs  r2, #8
-   *     ldr   r1, =0x08060000
-   *     ldr   r0, =0x0800be2c
-   *     bl    memcmp          ; 8 bytes, y nada mas
-   *     cbz   r0, "Running APP..."   ; iguales -> arranca
-   *     ...                          ; distintos -> "Running APP---" y cuelga
-   *
-   * O sea: la firma NO es un remate que el gestor sepa quitar. Son,
-   * literalmente, los 8 bytes que haya en la direccion 0x08060000. Se
-   * comprueban en CADA arranque, no solo al actualizar. Y no hay checksum,
-   * ni CRC, ni longitud: del resto de la imagen no se mira un solo byte.
-   *
-   * La receta de update4.bin rellenaba con ceros hasta 0x40000 y pegaba la
-   * firma al final porque la imagen era mas pequena. Pero si la imagen es
-   * mas grande y lleva esos 8 bytes DENTRO, en su desplazamiento 0x40000,
-   * el gestor arranca igual. Y el camino de actualizacion:
-   *
-   *   - acepta ficheros de hasta 0x50000 (327.680 bytes: "cmp.w r4, #0x50000")
-   *   - borra los sectores 5, 6 y 7, o sea 0x08020000..0x0807FFFF
-   *   - copia el fichero tal cual a 0x08020000, sin mirar nada
-   *
-   * Asi que el techo de verdad son 320 kB, no 256, y se llega sin SWD.
-   *
-   * De ahi las tres regiones: la baja como siempre, ocho bytes clavados
-   * para la firma, y un desvan de 64 kB por encima. Lo que sube al desvan
-   * se elige a mano en la seccion .arriba, mas abajo.
-   *
-   * SI ALGO SALE MAL: el gestor monta el USB y busca update4.bin ANTES de
-   * llegar a esta comprobacion, asi que una imagen mala deja la radio
-   * colgada en "Running APP---" pero el siguiente arranque vuelve a leer el
-   * pendrive. Se recupera copiando el update4.bin bueno. Sin SWD.
+   * 475.136 = 0x08080000 - 0x0800C000. Toda la flash menos el cargador.
+   * Ni firma en medio, ni tope de 0x50000, ni desvan.
    */
-  FLASH  (rx) : ORIGIN = 0x08020000, LENGTH = 0x40000
-  FIRMA  (r)  : ORIGIN = 0x08060000, LENGTH = 8
-  /*
-   * 65.520 y no 65.528, que es lo que queda hasta 0x50000. Los 8 bytes que
-   * faltan son para la receta de update4 del Makefile, que hace
-   *
-   *     firmware + b'\x00' * (0x40000 - len(firmware)) + firma
-   *
-   * y con una imagen de mas de 0x40000 ese multiplicador sale NEGATIVO: el
-   * relleno se queda vacio -bien, la firma ya va dentro- pero los 8 bytes
-   * se pegan igual al final. Son inofensivos (caen en zona ya borrada), pero
-   * cuentan para el tamano del fichero. Dejandoles sitio aqui, el limite de
-   * 0x50000 no se puede pasar ni en el peor caso, y quien avisa es el
-   * ENLAZADOR con los bytes que sobran delante. El Makefile no se puede
-   * tocar desde aqui (ver el comentario del -include de avisos.mk), asi que
-   * la cuenta se ajusta por este lado. avisos.mk lo vuelve a comprobar sobre
-   * el fichero ya generado, por si esta cuenta se queda vieja.
-   */
-  FLASH2 (rx) : ORIGIN = 0x08060008, LENGTH = 65520
-  TCMRAM (rw) : ORIGIN = 0x10000000, LENGTH = 64K
+  FLASH  (rx)  : ORIGIN = 0x0800C000, LENGTH = 475136
+  TCMRAM (rw)  : ORIGIN = 0x10000000, LENGTH = 64K
 }
 
 SECTIONS
@@ -129,111 +103,38 @@ SECTIONS
   } >FLASH
 
   /*
-   * LOS OCHO BYTES QUE MIRA EL GESTOR DE ARRANQUE.
+   * LA CABECERA DE LA IMAGEN - 16 bytes en _app_base + 0x200.
    *
-   * Tienen que estar en 0x08060000 y valer 8F 25 C8 65 59 9C 55 31. El
-   * contenido esta en User/firma_app.c; aqui solo se clava la direccion.
-   * KEEP() es obligatorio: no hay ni una referencia a esa variable en todo
-   * el firmware, asi que --gc-sections se la llevaria por delante y la radio
-   * se quedaria colgada en "Running APP---" sin que nadie hubiera tocado una
-   * linea de codigo.
+   * Sustituye a los 8 bytes de firma del gestor de fabrica, y no es el mismo
+   * truco con otro nombre: aquella firma era un valor constante en una
+   * direccion fija, o sea que una imagen grabada A MEDIAS con esos ocho
+   * bytes puestos pasaba la prueba, arrancaba y se estrellaba. Aqui hay
+   * longitud y CRC32, asi que una imagen incompleta o corrompida NO pasa.
    *
-   * La region FIRMA mide 8 bytes justos: si algun dia alguien mete otra cosa
-   * en la seccion .firma, falla el enlazado en vez de desplazar la firma.
+   *   +0x00  magia     0x52445344  ("DSDR" leido en un volcado)
+   *   +0x04  longitud  bytes de la imagen, desde _app_base
+   *   +0x08  crc32     de esos bytes, con ESTE campo contado como cero
+   *   +0x0C  version   la del firmware, para enseniarla el cargador
+   *
+   * Los cuatro los deja a cero el compilador (User/cabecera_app.c) y los
+   * rellena tools/cabecera.py sobre el .bin ya enlazado, que es el unico
+   * momento en que se conocen la longitud y el CRC.
+   *
+   * POR QUE EN +0x200 Y NO PEGADA AL VECTOR: para que el cargador la
+   * encuentre en un sitio fijo sin tener que saber cuanto mide el vector de
+   * interrupciones. El vector de este chip ocupa 428 bytes; el ASSERT de
+   * abajo es el que se entera si algun dia crece.
    */
-  .firma :
+  .cabecera _app_base + 0x200 :
   {
-    KEEP(*(.firma))
-  } >FIRMA
+    KEEP(*(.cabecera))
+    . = ALIGN(4);
+  } >FLASH
 
-  /*
-   * EL DESVAN: 64 kB por encima de la firma.
-   *
-   * El enlazador NO derrama solo de una region a otra. Lo que sube aqui se
-   * elige a mano, por nombre de seccion de entrada, aprovechando que el
-   * proyecto compila con -ffunction-sections -fdata-sections y cada simbolo
-   * tiene ya su propia seccion.
-   *
-   * De momento suben los mapas de bits y los glifos de las fuentes y las
-   * paletas de la cascada: 42.052 bytes de tablas que no cambian nunca, que
-   * no referencian nada y a las que nadie referencia por direccion fija.
-   * Son el candidato perfecto porque son grandes, inertes y autocontenidas.
-   * Con eso la region baja pasa de 3.988 bytes libres a 45.640.
-   *
-   * LA LISTA ES EXPLICITA A PROPOSITO. Con un comodin ".rodata.font_*"
-   * quedaria mas corto, pero entonces anadir una fuente nueva la mandaria
-   * aqui arriba, y el dia que el desvan se llene el fallo aparecera en una
-   * compilacion que no tiene nada que ver. Con la lista a mano, lo que se
-   * anada cae en la region BAJA, que es la que se vigila. Si algun dia hace
-   * falta rebalancear, basta con borrar una linea de aqui y esa tabla vuelve
-   * abajo, o anadir el nombre de otra tabla gorda para subirla.
-   *
-   * Los comodines que no casan con nada no molestan: font_ui_24b y
-   * font_title_60 ya no existen -se borraron de fonts_data.c el 30/09/2026
-   * por no usarlas nadie, ver el comentario que quedo alli- asi que sus
-   * lineas de abajo no casan con nada y da igual. font_rain_16 SI se usa
-   * (la lluvia de la pantalla de arranque, splash.c) y por tanto esta: aqui
-   * ponia que tampoco la usaba nadie, y eso llevaba tiempo siendo falso.
-   *
-   * Esta seccion va ANTES que .rodata en este fichero y eso no es casualidad:
-   * el enlazador asigna cada seccion de entrada a la PRIMERA de salida que
-   * la casa, y el "*(.rodata*)" de .rodata se las tragaria todas.
-   */
-  .arriba :
-  {
-    . = ALIGN(4);
-    _sarriba = .;
-    *(.rodata.font_ui_24b_bitmap)
-    *(.rodata.font_ui_18b_bitmap)
-    *(.rodata.font_ui_14b_bitmap)
-    *(.rodata.font_ui_14_bitmap)
-    *(.rodata.font_title_60_bitmap)
-    *(.rodata.font_num_44_bitmap)
-    *(.rodata.font_num_20_bitmap)
-    *(.rodata.font_rain_16_bitmap)
-    /* Y las tablas de glifos y rangos de esas mismas fuentes. Se referencian
-     * SIEMPRE por puntero desde la estructura de la fuente (que se queda
-     * abajo, son 16 bytes), asi que separarlas de su mapa de bits no cambia
-     * nada. Las fuentes que --gc-sections ya haya tirado -hoy font_ui_24b,
-     * font_title_60 y font_rain_16, que no las usa nadie- no aparecen y el
-     * comodin vacio no molesta. */
-    *(.rodata.font_ui_24b_glyphs)  *(.rodata.font_ui_24b_ranges)
-    *(.rodata.font_ui_18b_glyphs)  *(.rodata.font_ui_18b_ranges)
-    *(.rodata.font_ui_14b_glyphs)  *(.rodata.font_ui_14b_ranges)
-    *(.rodata.font_ui_14_glyphs)   *(.rodata.font_ui_14_ranges)
-    *(.rodata.font_title_60_glyphs) *(.rodata.font_title_60_ranges)
-    *(.rodata.font_num_44_glyphs)  *(.rodata.font_num_44_ranges)
-    *(.rodata.font_num_20_glyphs)  *(.rodata.font_num_20_ranges)
-    *(.rodata.font_rain_16_glyphs) *(.rodata.font_rain_16_ranges)
-    /*
-     * Los paises del DXCC (30/09/2026). El bloque de nombres, su tabla de
-     * desplazamientos y los 329 prefijos: 6.076 bytes que estaban en la
-     * region de la aplicacion, que se habia quedado con 829 libres de
-     * 262.144. Son datos puros que se leen por indice; da igual donde
-     * vivan mientras esten mapeados. Ver el comentario de k_pais_txt[] en
-     * User/dxcc.c.
-     */
-    *(.rodata.k_pais_txt)
-    *(.rodata.k_pais_off)
-    *(.rodata.k_dxcc)
-    /* La costa del mapa del mundo: 7.262 bytes de coordenadas que se leen
-     * en orden para trazar las lineas. Estaba subiendo al desvan por su
-     * cuenta -su atributo decia ".arriba", que es el nombre de ESTA seccion
-     * de salida y no de una de entrada, asi que el enlazador la ponia como
-     * huerfana DETRAS de _earriba y quedaba fuera de la cuenta-. Ver el
-     * comentario de MAPA_DESVAN en User/mapa.h. */
-    *(.rodata.k_mapa_pts)
-    /* Las paletas de la cascada: seis tablas de 512 bytes que se leen por
-     * indice y no cambian nunca. */
-    *(.rodata.k_lut_viridis)
-    *(.rodata.k_lut_turbo)
-    *(.rodata.k_lut_plasma)
-    *(.rodata.k_lut_magma)
-    *(.rodata.k_lut_inferno)
-    *(.rodata.k_lut_gqrx)
-    . = ALIGN(4);
-    _earriba = .;
-  } >FLASH2
+  ASSERT(SIZEOF(.isr_vector) <= 0x200,
+         "El vector de interrupciones ha crecido por encima de 0x200 y pisa la cabecera de imagen")
+  ASSERT(SIZEOF(.cabecera) == 16,
+         "La cabecera de imagen tiene que medir 16 bytes justos")
 
   .text :
   {
@@ -249,6 +150,11 @@ SECTIONS
     _etext = .;
   } >FLASH
 
+  /*
+   * Y aqui ya no hay nada que elegir a mano: las fuentes, las paletas, los
+   * mapas de bits y lo que venga caen todos en el mismo sitio que el resto
+   * del .rodata. Esto es lo que de verdad desaparece con el mapa contiguo.
+   */
   .rodata :
   {
     . = ALIGN(4);

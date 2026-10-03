@@ -271,7 +271,14 @@ void SystemInit (void)
 #ifdef CARGADOR_ARRANQUE
     SCB->VTOR = 0x08000000;     /* el cargador: su tabla esta en la base */
 #else
-    SCB->VTOR = 0x08020000;
+    /* 0x0800C000 desde la rama "reload": la aplicacion bajo de 0x08020000
+     * al principio del sector 3 cuando el mapa de flash dejo de imponerlo
+     * el gestor de fabrica. El numero esta ademas en CARGA_APP_BASE
+     * (User/cargador.h) y en el MEMORY del enlazador; aqui no se puede
+     * incluir cargador.h -este fichero lo comparten la aplicacion y el
+     * cargador, y es anterior a todo-, asi que lo comprueba avisos.mk
+     * leyendo los tres sitios. */
+    SCB->VTOR = 0x0800C000;
 #endif
 
     /* FPU settings */

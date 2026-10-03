@@ -2,7 +2,7 @@
  * EL CARGADOR DE ARRANQUE NUESTRO: LA PARTE QUE TOCA HARDWARE.
  *
  * Todo lo que DECIDE esta en User/cargador.c y se prueba en el PC contra el
- * update4.bin de verdad (ver sim/cargador.c y `make cargador`). Aqui solo
+ * update.bin de verdad (ver sim/cargador.c y `make cargador`). Aqui solo
  * hay lo que no se puede probar sin placa: el reloj, la pantalla, el FMC y
  * el salto. Y a proposito, nada de esto decide nada.
  *
@@ -223,7 +223,7 @@ static void borra_linea(uint16_t y)
  * SUBIRLA al tocar cualquier cosa del cargador. Si no se sube, miente, y
  * un numero de version que miente es peor que no tenerlo.
  */
-#define CARGADOR_VERSION  "v1.1"
+#define CARGADOR_VERSION  "v2.0"
 
 /*
  * *** El dueno, viendo el tuneo: "Numero de s54486357 04333833". *** La
@@ -304,20 +304,30 @@ static uint8_t fmc_borra(uint32_t addr)
     uint32_t sector;
 
     /*
-     * El mapa del manual (tabla 2-1): los sectores 5, 6 y 7 son los de
-     * 128 kB que empiezan en 0x08020000, 0x08040000 y 0x08060000.
+     * El mapa del manual (tabla 2-1).  Ojo a que NO son todos del mismo
+     * tamano, que es justo lo que hacia falso el bucle de "+= 0x20000" que
+     * habia en cargador.c:
+     *
+     *   S0..S3   16 kB    0x08000000 / 04000 / 08000 / 0C000
+     *   S4       64 kB    0x08010000
+     *   S5..S7  128 kB    0x08020000 / 40000 / 60000
+     *
+     * El cargador vive en S0, S1 y S2, y la aplicacion empieza en el S3.
      *
      * Las dos puertas, y las dos importan:
-     *  - por abajo, nunca el sector del propio cargador ni los de antes;
-     *  - por arriba, nada mas alla de 0x08080000. Hoy no se llama con eso,
-     *    pero el dia que la aplicacion crezca en un chip mas grande, sin
-     *    esta linea un 0x08080000 caeria en el "else if" de arriba y
-     *    borraria el sector 7 otra vez, en silencio.
+     *  - por abajo, NUNCA el sector del propio cargador ni los de antes.
+     *    Esta es la linea que separa "se ha ido la luz grabando" de "la
+     *    radio no vuelve a arrancar nunca y hay que destaparla".
+     *  - por arriba, nada mas alla de 0x08080000: sin esta linea un
+     *    0x08080000 caeria en el "else if" de arriba y borraria el sector
+     *    7 otra vez, en silencio.
      */
     if (addr >= CARGA_BORRA_HASTA) { return 0U; }
     if      (addr >= 0x08060000UL) { sector = CTL_SECTOR_NUMBER_7; }
     else if (addr >= 0x08040000UL) { sector = CTL_SECTOR_NUMBER_6; }
     else if (addr >= 0x08020000UL) { sector = CTL_SECTOR_NUMBER_5; }
+    else if (addr >= 0x08010000UL) { sector = CTL_SECTOR_NUMBER_4; }
+    else if (addr >= CARGA_APP_BASE) { sector = CTL_SECTOR_NUMBER_3; }
     else                           { return 0U; }   /* nunca el del cargador */
 
     return (fmc_sector_erase(sector) == FMC_READY) ? 1U : 0U;
@@ -327,7 +337,7 @@ static uint8_t fmc_borra(uint32_t addr)
  * LA BARRA DE PROGRESO - 01/10/2026.
  *
  * *** El dueno: "tiene que salir una barra de progreso cuando graba
- * update4.bin". *** Y sale de aqui, que es el unico sitio donde se sabe
+ * update.bin". *** Y sale de aqui, que es el unico sitio donde se sabe
  * por donde va: cargador_arranca() no vuelve hasta que termina, pero
  * llama a fmc_escribe() una vez por bloque y le pasa la direccion.
  *
@@ -665,7 +675,7 @@ static void modo_actualizacion(void)
 
     rm68120_fill_screen(FONDO);
     cabecera("MODO ACTUALIZACION",
-             "La radio es un disco USB. Copia update4.bin y reinicia.");
+             "La radio es un disco USB. Copia update.bin y reinicia.");
     ficha();
 
     /*
@@ -719,7 +729,7 @@ static void modo_actualizacion(void)
     usb_intr_config();
 
     borra_linea(360U);
-    texto(16U, 360U, "USB: listo. Copia update4.bin y reinicia.", VERDE);
+    texto(16U, 360U, "USB: listo. Copia update.bin y reinicia.", VERDE);
     texto(16U, 390U, "Para arrancar la radio: apaga y enciende SIN pulsar.", GRIS);
 
     /*
@@ -874,7 +884,7 @@ int main(void)
      *
      *   1. mando pulsado        -> modo actualizacion, que es una pantalla
      *                              entera y tiene que verse;
-     *   2. hay update4.bin      -> grabar tarda segundos y en silencio
+     *   2. hay update.bin      -> grabar tarda segundos y en silencio
      *                              pareceria colgada;
      *   3. algo va mal          -> el motivo, que es justo cuando hace
      *                              falta leerlo.
@@ -883,7 +893,7 @@ int main(void)
 
     if (boton_pulsado()) {
         cabecera("DEEPSDR 101  -  cargador de arranque",
-                 "Copia update4.bin al disco USB y reinicia para actualizar");
+                 "Copia update.bin al disco USB y reinicia para actualizar");
         ficha();
         modo_actualizacion();                      /* no vuelve */
     }
@@ -898,13 +908,13 @@ int main(void)
      */
     {
         uint32_t cl = 0U;
-        s_grabar_total = cargador_busca_update4(&cl);
+        s_grabar_total = cargador_busca_update(&cl);
     }
     if (s_grabar_total != 0U) {
         cabecera("DEEPSDR 101  -  actualizando",
                  "No apagues la radio hasta que termine.");
         ficha();
-        texto(24U, 300U, "Grabando update4.bin en la flash interna...", AMBAR);
+        texto(24U, 300U, "Grabando update.bin en la flash interna...", AMBAR);
         /* El marco de la barra, una sola vez. A partir de aqui solo se
          * pinta lo que avanza. */
         rect(24U, 340U, 752U, 28U, BARRA);
@@ -929,7 +939,7 @@ int main(void)
     cabecera("DEEPSDR 101  -  no se puede arrancar", (const char *)0);
     ficha();
     texto(24U, 300U, cargador_porque_txt(r), ROJO);
-    texto(24U, 330U, "Copia un update4.bin valido al disco USB: enciende con "
+    texto(24U, 330U, "Copia un update.bin valido al disco USB: enciende con "
                      "el mando pulsado.", ETIQUETA);
 
     /* Como el de siempre: si la imagen no vale, aqui se queda. El mensaje

@@ -22,7 +22,7 @@
  * recompilando. La primera vez que se eligio ya salio corta: el fichero de
  * aviones del dueño media 515 kB y hubo que recortarlo a 258.
  *
- * AHORA HAY UN SOLO FICHERO -DATOS.BIN- CON UN DIRECTORIO DELANTE, y el
+ * AHORA HAY UN SOLO FICHERO -BD.BIN- CON UN DIRECTORIO DELANTE, y el
  * reparto lo decide el empaquetador del PC mirando lo que miden las dos de
  * verdad. El firmware no opina: lee donde le dicen que esta cada cosa.
  *
@@ -44,8 +44,50 @@
  * actualizar. Ver zona_alta_donde().
  */
 
-#define ZA_BASE   0x101000UL
-#define ZA_TOPE   0x180000UL
+/*
+ * DONDE ESTA LA ZONA ALTA: EL ULTIMO MEGABYTE DEL CHIP, SEA EL QUE SEA.
+ * 02/10/2026.
+ *
+ * *** Por el dueño: "el software tiene que ser capaz de montar 1 mega si el
+ * chip es de 2, 7 megas si el chip es de 8, y todas las variantes
+ * posibles". ***
+ *
+ * Esto eran dos constantes, 0x101000 y 0x180000 (y luego 0x200000). Ahora
+ * son dos cuentas sobre spi_flash_capacidad():
+ *
+ *     za_tope() = capacidad
+ *     za_base() = capacidad - ZA_BYTES_REGION + ZA_HUECO
+ *     el disco USB = capacidad - ZA_BYTES_REGION     (ver disco.c)
+ *
+ * Con el W25Q16 de fabrica sale EXACTAMENTE lo de siempre -base 0x101000,
+ * tope 0x200000, disco de 1 MB-, asi que esto no cambia nada en la radio
+ * de hoy. Con un W25Q64 sale base 0x701000, tope 0x800000 y un disco de
+ * 7 MB, sin tocar una linea.
+ *
+ * LA REGION DE DATOS MIDE SIEMPRE LO MISMO, 1.044.480 bytes utiles, ponga
+ * el chip que se ponga. Eso es a proposito y tiene dos consecuencias:
+ *
+ *   - un BD.BIN vale en cualquier chip. El directorio guarda
+ *     DESPLAZAMIENTOS desde za_base(), no direcciones absolutas (ver el
+ *     mapa de bytes en zona_alta.c), asi que el mismo fichero se carga
+ *     igual en un chip de 2 MB que en uno de 16;
+ *   - y todo lo que de un chip mas grande va al DISCO del usuario, no a
+ *     las bases. Si algun dia hace falta lo contrario, se cambia
+ *     ZA_BYTES_REGION y ya: es un solo numero y nadie mas opina.
+ *
+ * EL HUECO DE 4 kB entre el final del disco y el principio de los datos se
+ * conserva tal cual. Es un bloque de borrado de margen: lo ultimo que
+ * escribe el volumen y lo primero que escribe la zona alta no comparten
+ * bloque, asi que ninguno de los dos puede borrar al otro por el camino.
+ */
+#define ZA_BYTES_REGION  0x100000UL   /* el ultimo mega, disco aparte */
+#define ZA_HUECO         0x1000UL     /* un bloque de borrado de margen */
+
+uint32_t za_base(void);
+uint32_t za_tope(void);
+
+#define ZA_BASE   za_base()
+#define ZA_TOPE   za_tope()
 #define ZA_CAB    4096UL          /* lo que ocupa el directorio */
 /*
  * CUANTAS SECCIONES CABEN. Cuatro, no ocho: cada una cuesta 16 bytes de

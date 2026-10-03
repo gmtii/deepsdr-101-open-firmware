@@ -1,4 +1,17 @@
 #include "zona_alta.h"
+#include "spi_flash.h"
+
+/*
+ * Las dos cuentas. Ver el comentario de ZA_BYTES_REGION en zona_alta.h:
+ * la region de datos es el ultimo megabyte del chip, mida lo que mida el
+ * chip, y spi_flash_capacidad() ya cachea su respuesta.
+ */
+uint32_t za_tope(void) { return spi_flash_capacidad(); }
+
+uint32_t za_base(void)
+{
+    return spi_flash_capacidad() - ZA_BYTES_REGION + ZA_HUECO;
+}
 
 /*
  * EL DIRECTORIO, byte a byte. Todo entero de menor peso primero.
@@ -7,7 +20,7 @@
  *    4   u8  version = 1
  *    5   u8  cuantas secciones
  *    6   u16 cero
- *    8   u32 lo que mide DATOS.BIN entero
+ *    8   u32 lo que mide BD.BIN entero
  *   12   u32 suma de los bytes 0..11 y de las secciones de abajo
  *   16   secciones, 16 bytes cada una:
  *          +0   u32 tipo ('I24B', 'EMIS')
@@ -147,7 +160,7 @@ uint8_t zona_alta_donde(uint32_t tipo, uint32_t *addr, uint32_t *tam)
      * volver a cargar los datos que ya estaban.
      */
     if (tipo == ZA_TIPO_AVIONES) {
-        if (addr != 0) { *addr = 0x101000UL; }
+        if (addr != 0) { *addr = za_base(); }
         if (tam != 0)  { *tam = 0UL; }        /* no se sabe, la lee su cabecera */
         return 1U;
     }

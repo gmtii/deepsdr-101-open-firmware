@@ -30,7 +30,7 @@ $(USER_OBJECTS): CFLAGS += $(WARN_USER)
 #
 # Paso hoy mismo, al subir la version a V1.11: el .bin seguia diciendo
 # "Rediseño 11" y solo se vio porque se fue a buscar la cadena dentro del
-# fichero. Es el mismo fallo del update4.bin viejo de anteayer, otra vez:
+# fichero. Es el mismo fallo del update.bin viejo de anteayer, otra vez:
 # una herramienta que entrega en silencio algo que no es lo que se pidio.
 #
 # -MMD hace que gcc escriba, al lado de cada .o, un .d con la lista de
@@ -173,7 +173,7 @@ $(addprefix $(BUILD_DIR)/,$(CALIENTES)): CFLAGS += -O2
 # esta escrito entero ahi y en el comentario de los borradores de
 # spi_flash.c: esto ya paso, y paso en silencio.
 #
-# Cuelga de "all" y de "update4" a proposito: no se puede generar un
+# Cuelga de "all" y de "update" a proposito: no se puede generar un
 # binario para la radio sin que esto haya pasado por medio.
 CFLAGS += -fstack-usage
 
@@ -196,7 +196,7 @@ pila: $(BUILD_DIR)/$(TARGET).elf
 	@python3 tools/pila.py $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)
 
 all: pila
-update4: pila
+update: pila
 
 $(OBJECTS): avisos.mk
 
@@ -214,26 +214,38 @@ DMA ?= 1
 CFLAGS += -DLCD_DMA_ON_DEF=$(DMA)U
 
 # ---------------------------------------------------------------------
-# LA FIRMA DE ARRANQUE, COMPROBADA EN CADA COMPILACION. 27/09/2026.
+# EL MAPA DE FLASH, COMPROBADO EN CADA COMPILACION. 02/10/2026.
 #
-# Desde que la imagen pasa de 0x40000 bytes, los ocho bytes que el gestor
-# de arranque mira en 0x08060000 van DENTRO del binario (User/firma_app.c)
-# en vez de pegados al final por la receta de update4. Eso abre tres formas
-# de generar un update4.bin que la radio rechaza sin decir por que -que
-# --gc-sections se lleve la firma, que acabe en otra direccion, o que el
-# fichero pase de 0x50000-, y las tres se ven igual: nada.
+# Aqui habia una comprobacion de "la firma de arranque": que los ocho bytes
+# que el gestor de fabrica miraba en 0x08060000 hubieran acabado en el
+# desplazamiento 0x40000 del .bin. Ya no hay firma; hay cabecera con
+# longitud y CRC32, y de comprobarla se encarga tools/cabecera.py al
+# generarla, que es el momento en que se puede hacer algo al respecto.
 #
-# tools/firma.py las caza sobre el .bin ya generado. Cuelga de "all" y de
-# "update4" por el mismo motivo que "pila": no se puede sacar un binario
-# para la radio sin que esto haya pasado por medio. El razonamiento entero,
-# con el desensamblado del gestor, esta en la cabecera de ese fichero y en
-# el comentario de MEMORY de GD32F450VE_FLASH.ld.
-.PHONY: firma
-firma: $(BUILD_DIR)/$(TARGET).bin
-	@python3 tools/firma.py $(BUILD_DIR)/$(TARGET).bin
+# Lo que SI hay que vigilar desde aqui es otra cosa, y es nueva de esta
+# rama: la direccion donde empieza la aplicacion esta escrita en TRES
+# sitios que no se pueden incluir entre ellos.
+#
+#   GD32F450VE_FLASH.ld                        ORIGIN del MEMORY
+#   User/cargador.h                            CARGA_APP_BASE
+#   CMSIS/GD/GD32F4xx/Source/system_gd32f4xx.c SCB->VTOR
+#
+# El tercero es el que duele: system_gd32f4xx.c lo comparten la aplicacion
+# y el cargador y es anterior a todo, asi que no puede incluir cargador.h.
+# Si alguien mueve la base y se deja ese, el firmware enlaza perfectamente,
+# el cargador salta perfectamente, y la radio se cuelga en la primera
+# interrupcion con el vector del cargador puesto. Es exactamente la clase
+# de fallo que no se ve: no hay aviso, no hay mensaje, y el sintoma -se
+# queda negra- es el mismo que el de otras seis cosas.
+#
+# Son tres greps. Cuelga de "all" por el mismo motivo que "pila": no se
+# saca un binario sin que esto haya pasado por medio.
+.PHONY: mapa
+mapa:
+	@python3 tools/mapa.py
 
-all: firma
-update4: firma
+all: mapa
+update: mapa
 
 # ---------------------------------------------------------------------
 # EL PANEL DIGITAL, VIGILADO. 28/09/2026.
@@ -245,10 +257,10 @@ update4: firma
 # ventana no cambia".
 #
 # Ahora sale de k_demod_modes[] y esto comprueba que sigue saliendo de ahi.
-# Cuelga de "all" y de "update4" como pila y firma.
+# Cuelga de "all" y de "update" como pila y mapa.
 .PHONY: panel
 panel: User/main.c
 	@python3 tools/panel_check.py User/main.c
 
 all: panel
-update4: panel
+update: panel

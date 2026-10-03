@@ -1,10 +1,20 @@
 /*
  * EL CARGADOR DE ARRANQUE NUESTRO - 01/10/2026.
  *
- * Vive donde vive el de siempre: 0x08000000, 128 kB (sectores 0 a 4). La
- * aplicacion sigue empezando en 0x08020000 y no se toca, asi que este
- * cargador es un REEMPLAZO: si sale rana, se regraba el boot.bin original
- * por SWD y la misma imagen de la radio vuelve a arrancar.
+ * RAMA "reload", 02/10/2026: 0x08000000, 48 kB (sectores 0, 1 y 2).
+ *
+ * Antes se reservaban 128 kB porque era lo que ocupaba el gestor de
+ * fabrica y la aplicacion empezaba en 0x08020000 pasara lo que pasara. Al
+ * dejar de depender de aquel gestor, lo que se reserva es lo que hace
+ * falta: el cargador ocupa 33.768 bytes, los sectores 0 a 2 son 49.152, y
+ * los 79 kB que sobraban se le dan a la aplicacion.
+ *
+ * NO SE PUEDE SUBIR DE 48 kB SIN MOVER LA APLICACION. Los sectores 0 a 3
+ * miden 16 kB cada uno, asi que el siguiente escalon es 64 kB y se come el
+ * sector 3, que es donde empieza ahora la aplicacion (CARGA_APP_BASE). Si
+ * algun dia el cargador no cabe, el enlazador lo dice aqui, y lo que hay
+ * que mover son LOS DOS a la vez: este LENGTH y CARGA_APP_BASE, y volver a
+ * grabar la pareja entera.
  *
  * La pila del cargador va en la SRAM, no en el TCM. El TCM se deja
  * intacto a proposito: ahi es donde la aplicacion pone la suya (su
@@ -35,7 +45,7 @@ _Min_Stack_Size = 0x2000;
 MEMORY
 {
   RAM    (xrw) : ORIGIN = 0x20000000, LENGTH = 192K
-  FLASH  (rx)  : ORIGIN = 0x08000000, LENGTH = 128K
+  FLASH  (rx)  : ORIGIN = 0x08000000, LENGTH = 48K
   TCMRAM (rw)  : ORIGIN = 0x10000000, LENGTH = 64K
 }
 

@@ -70,10 +70,10 @@ hoy dejando sitio a las emisoras de ahora.
 El flujo entero son tres ordenes:
 
     python3 emisoras_pack.py eibi.txt aoki.txt EMISORAS.BIN 2
-    python3 icao24.py <el CSV de OpenSky> ICAO24.BIN 294912
-    python3 datos_pack.py DATOS.BIN ICAO24.BIN EMISORAS.BIN
+    python3 icao24.py <el CSV de OpenSky> ICAO24.BIN 827392
+    python3 datos_pack.py BD.BIN ICAO24.BIN EMISORAS.BIN
 
-y lo que se copia al disco USB de la radio es DATOS.BIN, uno solo.
+y lo que se copia al disco USB de la radio es BD.BIN, uno solo.
 """
 import collections, csv, os, struct, sys
 
@@ -94,15 +94,28 @@ NAME_LEN   = 24          # lo que espera icao24_db.c: no se toca
 # quepan los turbohelices.
 REC_LEN    = 5
 HDR_LEN    = 16
+
+# LA ZONA ALTA ENTERA, que es el techo absoluto de lo que se puede pedir.
+# 0x101000 .. 0x200000 desde el 02/10/2026 (antes acababa en 0x180000, ver
+# ZA_TOPE en User/zona_alta.h). Esto NO es lo que le toca a los aviones
+# -eso lo reparte datos_pack.py mirando lo que miden las dos bases-, es
+# solo el "mas que esto no existe".
+ZA_BYTES   = 0x200000 - 0x101000
 # Lo que le queda a los aviones despues del directorio de DATOS.BIN y de
 # la base de emisoras de hoy. Ver la cabecera: el numero bueno lo dice
 # datos_pack.py, y se pasa como tercer argumento.
 TOPE       = 294912
 
-# QUIEN ENTRA Y POR QUE. En la zona alta caben 520.192 bytes, o sea unos
-# 100.000 aviones. El CSV de OpenSky trae 359.000 con codigo de tipo: NO
-# CABEN, sobran por tres. Asi que no se recorta a ojo, se recorta por lo
-# unico que importa aqui: quien lleva radio de onda corta.
+# QUIEN ENTRA Y POR QUE. En la zona alta caben ahora 1.040.384 bytes -eran
+# 520.192 hasta el 02/10/2026- o sea unos 200.000 aviones contando solo los
+# registros. El CSV de OpenSky de 2025 trae 616.743 filas; con codigo de
+# tipo son unos 359.000. SIGUEN SIN CABER, aunque ahora sobren por menos.
+#
+# Que el sitio se doble no cambia el criterio: no se recorta a ojo, se
+# recorta por lo unico que importa aqui, quien lleva radio de onda corta.
+# Un L1P -un motor, helice- es un Cessna de aeroclub que no va a salir en
+# la pantalla jamas y gasta sus cinco bytes igual. Lo que el sitio nuevo
+# permite es bajar mas escalones de la lista, no meterlos todos.
 #
 # La columna "icaoAircraftClass" lo dice en tres letras: L2J = avion de ala
 # fija, 2 motores, reactor. Los de HFDL son los de linea y carga; un L1P
@@ -411,9 +424,9 @@ def main():
         except ValueError:
             print('el tope tiene que ser un numero de bytes', file=sys.stderr)
             return 1
-        if TOPE < HDR_LEN + NAME_LEN or TOPE > 0x180000 - 0x101000:
+        if TOPE < HDR_LEN + NAME_LEN or TOPE > ZA_BYTES:
             print('el tope tiene que estar entre %d y %d bytes'
-                  % (HDR_LEN + NAME_LEN, 0x180000 - 0x101000), file=sys.stderr)
+                  % (HDR_LEN + NAME_LEN, ZA_BYTES), file=sys.stderr)
             return 1
 
     # Y ademas se comprueba que la entrada NO es ya un ICAO24.BIN. Pasarle

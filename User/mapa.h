@@ -43,34 +43,32 @@
  * llega a ellos arrastrando. El norte de Escandinavia no desaparece, hay
  * que ir a buscarlo.
  *
- * NO GASTA NI UN BYTE DE SRAM. La costa vive en el desvan de la flash
- * (7,1 kB) y se dibuja directamente sobre la banda que gfx2 esta
- * componiendo. En esta radio eso no es una virtud abstracta: cuando se
- * escribio esto quedaban 308 bytes libres.
+ * NO GASTA NI UN BYTE DE SRAM. La costa vive en la flash (7,1 kB) y se
+ * dibuja directamente sobre la banda que gfx2 esta componiendo. En esta
+ * radio eso no era una virtud abstracta: cuando se escribio esto quedaban
+ * 308 bytes libres.
  */
 
 /*
  * La tabla de la costa. La genera tools/mapa_pack.py; ver su cabecera.
  *
- * LA SECCION SE LLAMA ".rodata.k_mapa_pts" Y NO ".arriba" - 30/09/2026.
+ * EL NOMBRE "MAPA_DESVAN" YA NO QUIERE DECIR NADA - 02/10/2026.
  *
- * Ponia ".arriba" a secas, que es el nombre de la seccion de SALIDA del
- * guion del enlazador, no de una de entrada. Y esa seccion de salida tiene
- * la lista de entradas ESCRITA A MANO a proposito (ver GD32F450VE_FLASH.ld),
- * asi que no hay ningun `*(.arriba)` que la recoja: el enlazador la colocaba
- * como seccion huerfana al final de la de salida del mismo nombre, o sea
- * DESPUES de _earriba.
+ * Aqui habia tres parrafos sobre el desvan: la region de 64 kB por encima
+ * de la firma del gestor de fabrica, a la que las tablas gordas subian una
+ * a una porque el enlazador no derrama de una region a otra. Esta tabla
+ * llego a estar MAL puesta -en ".arriba", que era el nombre de la seccion
+ * de salida y no de entrada- y sus 7.262 bytes se quedaban fuera de la
+ * cuenta que enseñaba Informacion.
  *
- * Funcionaba -acababa en el desvan igual- pero dejaba sus 7.262 bytes fuera
- * de [_sarriba, _earriba), y esa resta es lo que enseña la fila del desvan
- * en Ajustes -> Equipo -> Informacion. Decia "51,0 de 64 kB" cuando lo
- * grabado de verdad son 58,1: parecia que quedaban 13 kB libres cuando
- * quedaban 5,9. Justo el numero en el que uno se apoya para decidir si sube
- * otra tabla al desvan, y justo ahora que el desvan esta al 91 %.
+ * En la rama "reload" no hay desvan: la flash es una sola region y todo el
+ * .rodata cae en el mismo sitio sin que nadie elija nada. La macro se
+ * queda -quitarla obligaria a tocar mapa_datos.c, que lo genera un guion-
+ * pero no hace nada especial: ".rodata.k_mapa_pts" lo recoge el
+ * "*(.rodata*)" de siempre.
  *
- * Con el nombre de entrada de verdad entra por la lista como todo lo demas,
- * que ademas es lo que el guion del enlazador dice querer: que subir algo al
- * desvan sea una linea escrita ahi y no un efecto secundario.
+ * Si algun dia hubiera que volver a partir la flash, el historial de esto
+ * esta en la rama "deepsdr".
  */
 #ifndef MAPA_DESVAN
 #define MAPA_DESVAN __attribute__((section(".rodata.k_mapa_pts")))

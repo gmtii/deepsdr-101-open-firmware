@@ -29,10 +29,31 @@
  * arranca igual. Hay un volcado guardado por si algun dia se vuelve al
  * firmware de serie.
  *
- * LO QUE NO SE TOCA: de 0x180000 arriba. Ese medio mega borrado son
+ * LO QUE NO SE TOCABA, Y POR QUE YA SE TOCA - 02/10/2026.
+ *
+ * Aqui ponia: "de 0x180000 arriba no se toca. Ese medio mega borrado son
  * exactamente dos imagenes de 256 kB y sigue siendo el candidato a area de
  * preparacion del gestor de arranque. Escribir ahi y acertar mal deja la
- * radio sin forma de recibir la siguiente version.
+ * radio sin forma de recibir la siguiente version."
+ *
+ * Era prudente y era correcto MIENTRAS el gestor de arranque fuera el de
+ * fabrica, porque de un programa que no escribimos nosotros no se puede
+ * saber donde escribe: solo se puede medir que hoy no escribe, que no es
+ * lo mismo.
+ *
+ * El cargador de la rama "reload" es nuestro y no usa area de preparacion
+ * ninguna: lee update.bin del volumen FAT y lo programa directo en la flash
+ * interna, sin pasar por la SPI. Asi que ese medio mega deja de ser "el
+ * sitio donde quiza escribe alguien a quien no conocemos" y pasa a ser
+ * sitio nuestro. ZA_TOPE (User/zona_alta.h) sube a 0x200000.
+ *
+ * Y NO, LAS IMAGENES NO VIVEN AHI. Lo parecia -img_store.h habla de "la
+ * cola de bloques borrados por encima del sistema de ficheros"- y por eso
+ * casi no lo tocamos. Pero las fotos de SSTV y WEFAX se guardan como BMP en
+ * el VOLUMEN FAT, el disco que se ve por USB (gsv_abre(), en main.c). De la
+ * zona alta solo tiraba "Probar imagenes", el diagnostico, y ese a partir
+ * de ahora dira que no tiene sitio. Es un diagnostico; la base de aviones
+ * es la radio.
  */
 /*
  * DONDE ESTA LA BASE: LO DICE EL DIRECTORIO, NO ESTE FICHERO - 28/09/2026.
@@ -45,11 +66,15 @@
  * despues se puso la de emisoras-. Dos sitios con el reparto escrito a
  * mano, y el dia que cambio uno el otro se quedo atras.
  *
- * Ahora las dos cosas salen de zona_alta_donde(): si hay un DATOS.BIN
+ * Ahora las dos cosas salen de zona_alta_donde(): si hay un BD.BIN
  * cargado, del directorio; si no lo hay, de la distribucion vieja, para
  * que una radio que ya tenia sus datos siga funcionando tras actualizar.
  */
-#define I24_BASE_VIEJA 0x101000U
+/* La distribucion vieja empezaba donde empieza la zona alta, que hasta el
+ * 02/10/2026 era 0x101000 a pelo. Ahora sale de za_base(), que en el chip
+ * de fabrica da ese mismo numero: las radios que tengan datos cargados del
+ * reparto viejo siguen encontrandolos. */
+#define I24_BASE_VIEJA za_base()
 /*
  * Hasta donde puede llegar la base. Por arriba manda 0x180000, que es donde
  * empieza el medio mega intocable (ver arriba). Son 520.192 bytes: a cinco
@@ -61,8 +86,13 @@
  * datos acaban mas arriba de aqui, el fichero se rechaza entero.
  */
 /* Solo para la distribucion vieja; con directorio manda el tamaño que
- * diga el directorio. Ver i24_limites(). */
-#define I24_TOPE_VIEJO (0x140000U - I24_BASE_VIEJA)
+ * diga el directorio. Ver i24_limites().
+ *
+ * El reparto viejo daba a los aviones de 0x101000 a 0x140000, o sea
+ * 258.048 bytes. Se escribe como la RESTA y no como el numero para que
+ * siga diciendo lo mismo ahora que la base se calcula: lo que define el
+ * reparto viejo es su tamaño, no las direcciones donde cayo. */
+#define I24_TOPE_VIEJO (0x140000UL - 0x101000UL)
 #include "debug_uart.h"
 
 #define I24_HDR_LEN   16U
@@ -81,8 +111,12 @@ static const char *s_fail_reason; /* why s_state is 2, so icao24_db_report() can
 static uint8_t  s_hdr[I24_HDR_LEN];  /* first 16 bytes of the file exactly as read, kept for the diagnostic below */
 static uint8_t  s_hdr2[I24_HDR_LEN]; /* the 16 bytes at offset I24_PAD (where a padded file has its header) */
 static uint8_t  s_hdr_valid;
-static uint32_t s_zona_base = I24_BASE_VIEJA;  /* donde empieza la seccion */
-static uint32_t s_zona_tope = I24_TOPE_VIEJO;  /* cuanto puede ocupar */
+/* A cero hasta que i24_limites() los rellene: I24_BASE_VIEJA ya no es una
+ * constante -sale de za_base(), que mide el chip- y un inicializador
+ * estatico no puede llamar a una funcion. Se ponen en i24_open(), que es
+ * quien llama a i24_limites() antes de leer nada. */
+static uint32_t s_zona_base;   /* donde empieza la seccion */
+static uint32_t s_zona_tope;   /* cuanto puede ocupar */
 
 /*
  * Pregunta al directorio de la zona alta donde vive la base y cuanto mide.
