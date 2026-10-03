@@ -1,0 +1,8 @@
+'icao24','timestamp','acars','adsb','built','categoryDescription','country','engines','firstFlightDate','firstSeen','icaoAircraftClass','lineNumber','manufacturerIcao','manufacturerName','model','modes','nextReg','notes','operator','operatorCallsign','operatorIata','operatorIcao','owner','prevReg','regUntil','registered','registration','selCal','serialNumber','status','typecode','vdl'
+'4ca7c6','2017-01-01 00:00:00',0,0,,'',,'',,,L2J,'','','',Boeing 737-800,0,'','','','','','','','',,,EI-DCL,'','','',B738,0
+'39d2b1','2017-01-01 00:00:00',0,0,,'',,'',,,L2J,'','','',Airbus A321neo,0,'','','','','','','','',,,F-HTYA,'','','',A21N,0
+'3c4b26','2017-01-01 00:00:00',0,0,,'',,'',,,L2J,'','','',Airbus A320-214,0,'','','','','','','','',,,D-AIZA,'','','',A320,0
+'71c735','2017-01-01 00:00:00',0,0,,'',,'',,,'','','','',Boeing 777-300ER,0,'','','','','','','','',,,HL8274,'','','',B77W,0
+'7c1234','2017-01-01 00:00:00',0,0,,'',,'',,,L2J,'','','',Boeing 777-300ER,0,'','','','','','','','',,,VH-ZZA,'','','',B77W,0
+'a1b2c3','2017-01-01 00:00:00',0,0,,'',,'',,,L1P,'','','',Cessna 172,0,'','','','','','','','',,,N123AB,'','','',C172,0
+'a7b8c9','2017-01-01 00:00:00',0,0,,'',,'',,,'','','','',Cessna 172,0,'','','','','','','','',,,N456CD,'','','',C172,0

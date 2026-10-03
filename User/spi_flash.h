@@ -259,6 +259,26 @@ int spi_flash_write_new_file(const spi_flash_fat_scan_t *scan,
 uint32_t spi_flash_read_file_by_name(const char name8[8], const char ext3[3],
                                       uint8_t *out_buf, uint32_t out_buf_size);
 
+/*
+ * LA GEOMETRIA DEL VOLUMEN, PARA QUIEN LA NECESITE. 25/09/2026.
+ *
+ * La pide spi_flash_ro.c, el lector de acceso aleatorio que se trajo del
+ * proyecto padre. SU version llevaba estos cuatro numeros escritos a mano
+ * (4, 16, 48, 2000) porque en su radio son esos; este firmware los LEE del
+ * sector de arranque desde que geo_lee() existe, asi que copiarlos habria
+ * sido meter una segunda verdad sobre el mismo volumen.
+ *
+ * Y no es una diferencia academica: el dueno de esta radio ha reformateado
+ * la tarjeta mas de una vez. Un volumen con otro reparto y unos numeros
+ * fijos leen sectores equivocados, y lo que sale de ahi no es un error, son
+ * DATOS PLAUSIBLES Y FALSOS - el modelo de otro avion.
+ *
+ * Devuelve 0 si el volumen todavia no se ha podido leer; en ese caso los
+ * cuatro valores quedan sin tocar.
+ */
+uint8_t spi_flash_geometria(uint32_t *fat1_lba, uint32_t *raiz_lba,
+                            uint32_t *datos_lba, uint32_t *clusters);
+
 /* Creates a NEW file (same as spi_flash_write_new_file()) OR, if a
  * file with this exact 8.3 name already exists in the root
  * directory's first sector, safely REPLACES it in place: frees its
@@ -318,6 +338,63 @@ typedef enum {
     SPI_FLASH_ASYNC_ERROR,     /* something failed - see the debug UART */
 } spi_flash_async_status_t;
 
+/*
+ * --- QUE HAY POR ENCIMA DEL SISTEMA DE FICHEROS - 24/09/2026 ----------
+ *
+ * SOLO LEE. No borra ni programa un solo byte, a proposito.
+ *
+ * El 17/08/2026 este chip contesto W25Q16 (JEDEC EF/40/15, 2 MB) y el
+ * FAT12 que lleva declaraba 2048 sectores, o sea 1 MB: la MITAD. Pero
+ * NINGUNA de esas dos cifras se da aqui por buena. La placa puede llevar
+ * otro chip -alguien pudo cambiarlo por uno mayor- y un clon contesta al
+ * identificador lo que le parece. Asi que las dos se miden, cada una por
+ * su lado, y se ven juntas: si no cuadran, se nota.
+ *
+ * Lo que haya por encima del sistema de ficheros no lo sabe nadie, y el
+ * comentario de spi_flash_probe_root_dir() apunta a lo peor posible -
+ * "posiblemente donde vive la imagen de update4.bin".
+ *
+ * Eso no es un detalle: update4.bin es el unico camino que hay para
+ * meter firmware en esta radio. Escribir ahi a ciegas y acertar en el
+ * sitio equivocado deja el aparato sin forma de recibir la siguiente
+ * version, y no hay marcha atras desde dentro.
+ *
+ * Asi que antes de guardar imagenes en ningun sitio, esto mira. Lo que
+ * devuelve contesta las tres preguntas que hacen falta:
+ *
+ *   mapa[]  la zona partida en ocho: 1 si en ese trozo hay ALGO distinto
+ *           de 0xFF (borrado). Va por muestreo -no se leen 1 MB por el
+ *           bus a mano, que serian segundos- pero lee el principio de
+ *           cada bloque de 4 kB, que es justo donde caeria el principio
+ *           de cualquier cosa guardada con un minimo de orden.
+ *   cab[]   los ocho primeros bytes de la zona. Si ahi estuviera una
+ *           imagen de firmware, los cuatro primeros son el puntero de
+ *           pila inicial y los cuatro siguientes el vector de arranque,
+ *           que se reconocen a simple vista - y ademas se pueden
+ *           comparar byte a byte con el firmware.bin que tenemos.
+ *   firma   donde aparece la firma de update4.bin (8f 25 c8 65 59 9c
+ *           55 31), que es el final de cada imagen. Si esta, ahi hay
+ *           una copia y esa zona es intocable.
+ */
+typedef struct {
+    uint8_t  jedec[3];      /* fabricante, tipo, codigo de capacidad */
+    uint32_t bytes_dice;    /* capacidad SEGUN el codigo JEDEC */
+    uint32_t bytes_mide;    /* capacidad MEDIDA por alias; 0 = no se pudo */
+    uint32_t fs_bytes;      /* lo que ocupa el sistema de ficheros, de su BPB */
+    uint32_t base, tope;    /* la zona mirada (solo valen si se midio todo) */
+    uint8_t  mapa[8];       /* 1 = ese octavo de la zona tiene datos */
+    uint8_t  cab[8];        /* los 8 primeros bytes de `base` */
+    uint8_t  firma_hay;
+    uint32_t firma_addr;    /* solo vale si firma_hay */
+    uint32_t bloques_con_datos;
+    uint32_t bloques_mirados;
+} spi_flash_alta_t;
+
+/* Tarda del orden de una decima de segundo por MB (lee unos 40 bytes de
+ * cada bloque de 4 kB por el bus a mano). Llamarla una vez y quedarse con
+ * el resultado, no por fotograma. Completamente de solo lectura. */
+void spi_flash_mira_alta(spi_flash_alta_t *out);
+
 /* `data` must stay valid and UNCHANGED until spi_flash_async_save_poll()
  * reports DONE or ERROR - it is not copied at start time, only
  * referenced. Returns 1 if the async save actually started (poll from
@@ -329,12 +406,241 @@ uint8_t spi_flash_async_save_start(const char name8[8], const char ext3[3],
 /* Call once per main loop iteration while a save is in progress. */
 spi_flash_async_status_t spi_flash_async_save_poll(void);
 
-/* Diagnostic bring-up probe #3 - walks CHANNEL.CSV's FAT12 cluster
- * chain and prints its content. See spi_flash_probe_channel_csv()'s
- * comment in spi_flash.c for why this specific file (found by
- * spi_flash_probe_root_dir() on real hardware, 17/08/2026) is worth
- * reading. Same DEBUG_UART_ENABLED requirement, same read-only
- * guarantee. */
-void spi_flash_probe_channel_csv(void);
+/*
+ * AQUI HABIA UN TERCER PROBE QUE NO EXISTE - quitado el 30/09/2026.
+ *
+ * La declaracion era esta:
+ *
+ *     void spi_flash_probe_channel_csv(void);
+ *
+ * y su comentario decia que recorre la cadena de agrupaciones de
+ * CHANNEL.CSV y la imprime, y remitia a "su comentario en spi_flash.c"
+ * para por que ese fichero merece leerse. Ese comentario no existe, y la
+ * funcion tampoco: nunca se escribio. Solo estaba la promesa.
+ *
+ * No rompia la compilacion porque nadie la llamaba, y eso es justo lo que
+ * la hace mala: una cabecera que anuncia una herramienta de diagnostico
+ * que no hay. Quien la lea buscando con que mirar la flash pierde el rato
+ * dos veces, primero buscandola y luego al enlazar.
+ *
+ * Los dos probes que SI existen son spi_flash_probe_root_dir() y el de la
+ * geometria; si algun dia hace falta leer un fichero concreto, se escribe
+ * y entonces se declara.
+ */
+
+
+/*
+ * --- ANADIR UN TROZO A UN FICHERO DEL PENDRIVE - 24/09/2026 -----------
+ *
+ * Anade 4096 bytes al final de un fichero del volumen FAT, creandolo si
+ * no existe. Pensado para probar el camino de escritura a pulsaciones
+ * antes de confiarle una imagen: ver el comentario gordo en spi_flash.c.
+ *
+ * Bloquea del orden de medio segundo. No llamar por fotograma.
+ */
+typedef enum {
+    SPI_ANADE_OK = 0,
+    SPI_ANADE_SIN_SITIO,   /* no queda un bloque de 4 kB entero libre */
+    SPI_ANADE_DIR_LLENO,   /* el directorio raiz no admite una entrada mas */
+    SPI_ANADE_CADENA,      /* la cadena del fichero y su tamano no cuadran */
+    SPI_ANADE_TOPE,        /* ya tiene el maximo de trozos */
+    SPI_ANADE_RARO,        /* existe pero no lo escribimos nosotros */
+    SPI_ANADE_GEOMETRIA,   /* el volumen no tiene una distribucion que sepamos manejar */
+} spi_anade_r_t;
+
+/* `trozo` tiene que apuntar a 4096 bytes. Devuelve 1 si se anadio. */
+uint8_t spi_flash_anade_trozo(const char name8[8], const char ext3[3],
+                              const uint8_t *trozo, spi_anade_r_t *porque);
+
+const char *spi_flash_anade_porque_txt(spi_anade_r_t r);
+
+/*
+ * Si la distribucion del volumen es una que este driver sabe manejar, y si
+ * no, cual de las comprobaciones falla. Se lee del sector de arranque en
+ * cada llamada, no se cachea: formatear el pendrive desde el PC no pasa por
+ * aqui, asi que un valor guardado describiria un volumen que ya no existe.
+ *
+ * TODO camino que escribe empieza preguntando esto. Ver geo_lee().
+ */
+uint8_t     spi_flash_puede_escribir(void);
+const char *spi_flash_geo_txt(void);
+
+/* Cuanto mide un fichero del volumen (0 si no existe). Mira la entrada de
+ * directorio, no la cadena: un fichero escrito a trozos no es contiguo. */
+uint8_t spi_flash_fichero_tam(const char name8[8], const char ext3[3], uint32_t *tam);
+
+/* Clusters de la cadena de un fichero y cuantas veces salta HACIA ATRAS
+ * (o sea, cuanto esta ocupando huecos que dejaron otros). Recorre la FAT
+ * entera: ~50 ms. Llamar al grabar y guardarse el resultado, nunca al
+ * pintar. Devuelve 0 si no esta o si la cadena no tiene sentido. */
+uint8_t spi_flash_fichero_cadena(const char name8[8], const char ext3[3],
+                                 uint32_t *clusters, uint32_t *saltos);
+
+/* El numero mas alto entre los <pre><NNN>.<ext> que haya en el directorio
+ * raiz (0 si ninguno). Una sola lectura, no mil busquedas. */
+uint32_t spi_flash_dir_max_indice(const char pre[4], const char ext3[3]);
+
+/* Donde empieza en el chip el primer cluster de un fichero. */
+uint8_t spi_flash_fichero_cabeza(const char name8[8], const char ext3[3],
+                                 uint32_t *addr);
+
+/*
+ * Reserva un fichero ENTERO de una vez: busca un hueco seguido de
+ * `bytes` (multiplo de 4096), escribe su cadena en las dos copias de la
+ * FAT y crea la entrada de directorio ya con el tamaño definitivo.
+ * Devuelve en *addr donde empiezan sus datos en el chip, para poder
+ * escribir cada bloque con spi_flash_write_block_4k() sin volver a tocar
+ * la FAT.
+ *
+ * Es lo que hace viable guardar fotos: un añadido a trozos cuesta 1205 ms
+ * por bloque y asi son unos 130. Ver el comentario gordo en spi_flash.c.
+ *
+ * Puede fallar por falta de hueco SEGUIDO aunque sobre sitio.
+ */
+uint8_t spi_flash_reserva(const char name8[8], const char ext3[3],
+                          uint32_t bytes, uint32_t *addr, spi_anade_r_t *porque);
+
+/* Recorta un fichero reservado a lo que de verdad se uso, devolviendo los
+ * bloques de sobra al volumen. Se redondea hacia arriba a bloque de 4 kB. */
+uint8_t spi_flash_recorta(const char name8[8], const char ext3[3], uint32_t bytes);
+
+/* Reescribe los primeros `len` bytes de un fichero (<= 4096). */
+uint8_t spi_flash_fichero_cabecera_pon(const char name8[8], const char ext3[3],
+                                       const uint8_t *datos, uint32_t len);
 
 #endif /* SPI_FLASH_H */
+
+/*
+ * --- VOLCAR LA ZONA ALTA A UN FICHERO QUE YA EXISTE - 24/09/2026 -------
+ *
+ * PARA QUE. Por encima del sistema de ficheros hay medio megabyte de algo
+ * que nadie sabe que es (ver spi_flash_mira_alta()). Para averiguarlo hay
+ * que sacarlo del chip, y el unico camino de salida que tiene esta radio
+ * es el modo USB, que enseña el sistema de ficheros de abajo.
+ *
+ * POR QUE NO SE CREA EL FICHERO AQUI. Porque un fichero de medio megabyte
+ * son mil clusters encadenados, y encadenar clusters a mano es justo lo
+ * que avisa de no hacer la cabecera de este fichero. No hace falta: el
+ * fichero lo crea WINDOWS, copiando a la unidad uno lleno de ceros del
+ * tamaño que sea. Windows lleva cuarenta años construyendo esa cadena.
+ *
+ * LO QUE HACE ESTO ES SOLO RELLENARLO. Misma longitud, misma cadena,
+ * misma entrada de directorio: no se toca ni la FAT ni el directorio, y
+ * lo unico que se programa son bloques que YA son de ese fichero. La
+ * clase de fallo que da miedo -romper el volumen del que arranca la
+ * actualizacion- desaparece entera, porque no se escribe una sola
+ * estructura del sistema de ficheros.
+ *
+ * VA POR PASOS. Medio megabyte por un bus a mano, con un borrado y una
+ * programacion por cada 4 kB, es cosa de medio minuto largo. Hacerlo de
+ * una sentada dejaria la radio muda y la pantalla congelada todo ese
+ * rato; cada paso mueve un bloque y vuelve, asi que el bucle principal
+ * sigue vivo y se puede pintar cuanto lleva.
+ */
+
+/* Prepara el volcado de `len` bytes desde `origen` (direccion del chip)
+ * al fichero name8/ext3. Devuelve 0 -y no escribe nada- si el fichero no
+ * existe, si es mas pequeño que `len`, si sus clusters no son seguidos
+ * (recopialo y Windows lo dejara seguido en un volumen casi vacio), o si
+ * el origen se solapa con el destino. */
+uint8_t spi_flash_volcado_abre(const char name8[8], const char ext3[3],
+                               uint32_t origen, uint32_t len);
+
+/* Un bloque de 4 kB por llamada. 1 = queda trabajo, 0 = terminado,
+ * -1 = no habia volcado abierto. */
+int8_t spi_flash_volcado_paso(void);
+
+uint32_t spi_flash_volcado_hechos(void);   /* bytes ya escritos */
+uint32_t spi_flash_volcado_total(void);    /* 0 = no hay volcado en curso */
+
+/* Por que no se pudo abrir el volcado. Ver el comentario de s_vol_porque
+ * en spi_flash.c: un "no" que no dice de que es un "no" manda a mirar al
+ * sitio equivocado. */
+#define SPI_VOL_NADA      0U
+#define SPI_VOL_OK        1U
+#define SPI_VOL_ZONA      2U   /* no hay nada por encima del sistema de ficheros */
+#define SPI_VOL_NO_ESTA   3U   /* el fichero no aparece en el directorio raiz */
+#define SPI_VOL_VACIO     4U   /* esta, pero mide 0 bytes */
+#define SPI_VOL_TROCEADO  5U   /* sus clusters no son seguidos */
+#define SPI_VOL_SOLAPA    6U   /* lo que se lee y lo que se escribe se pisan */
+#define SPI_VOL_DESTINO   7U   /* el destino cae fuera de lo permitido */
+/*
+ * 28/09/2026. "Troceado" y "a medias" eran el MISMO codigo, y desde que
+ * el camino de restaurar admite ficheros troceados ya no lo son: uno es
+ * ahora normal y el otro sigue siendo un fichero roto. Juntarlos haria
+ * que la pantalla dijera "esta troceado" -que es verdad y da igual-
+ * cuando lo que pasa es que la cadena se acaba antes que el fichero.
+ */
+#define SPI_VOL_CORTO     8U   /* la cadena se acaba antes que el tamaño */
+
+uint8_t     spi_flash_volcado_porque(void);
+const char *spi_flash_volcado_porque_txt(void);
+
+/*
+ * Igual, pero leyendo de MEMORIA. Para sacar la flash interna del micro
+ * (0x08000000): esta mapeada, asi que basta un puntero - y funciona
+ * aunque la proteccion de lectura cierre el paso por SWD, porque esa
+ * proteccion frena al depurador, no al codigo que ya corre dentro.
+ */
+uint8_t spi_flash_volcado_abre_mem(const char name8[8], const char ext3[3],
+                                   const uint8_t *origen, uint32_t len);
+
+/*
+ * --- EL CAMINO DE VUELTA: de un fichero del volumen al chip -----------
+ *
+ * El volcado saca datos del chip a un fichero. Esto los mete: lee un
+ * fichero QUE YA EXISTE en el volumen FAT y lo escribe en una direccion
+ * del chip.
+ *
+ * PARA QUE. Para deshacer. El dia que se use la zona de la fuente china
+ * para guardar imagenes, la unica forma de volver atras seria un
+ * programador y un destornillador. Con esto, es copiar el fichero de
+ * respaldo al disco USB y tocar un boton.
+ *
+ * DOS COSAS QUE NO PUEDE HACER, Y CONVIENE SABERLAS:
+ *
+ * 1. NO escribe por debajo del sistema de ficheros. Esa guardia es lo
+ *    que hace que esto sea una herramienta y no un arma. Y ademas es el
+ *    unico caso imposible de verdad: restaurar el volumen FAT desde un
+ *    fichero guardado EN ese mismo volumen no puede funcionar, porque se
+ *    estaria destruyendo el fichero del que se lee segun se lee.
+ *
+ * 2. NO escribe en la flash INTERNA del micro. Esto es la flash SPI. Meter
+ *    un gestor de arranque en 0x08000000 es otra cosa y mucho mas
+ *    peligrosa: habria que ejecutar el programador desde RAM mientras se
+ *    borra el sector desde el que se estaba ejecutando, y un fallo ahi no
+ *    tiene vuelta atras desde dentro.
+ *
+ * `suelo` y `tope` acotan lo permitido: normalmente, desde donde acaba el
+ * sistema de ficheros hasta donde acaba el chip, los dos MEDIDOS (ver
+ * spi_flash_mira_alta()). Si el fichero es mas pequeño que `len`, se
+ * escribe lo que haya.
+ *
+ * Avanza con el mismo spi_flash_volcado_paso() que el volcado - comparten
+ * el cuidado de no llevarse por delante lo que comparta bloque.
+ */
+uint8_t spi_flash_restaura_abre(const char name8[8], const char ext3[3],
+                                uint32_t destino, uint32_t len,
+                                uint32_t suelo, uint32_t tope);
+
+/*
+ * Borrar un tramo del chip, a pasos. Mismas guardias que restaurar: nunca
+ * por debajo del sistema de ficheros, nunca por encima del chip, y solo
+ * bloques enteros de 4 kB.
+ *
+ * Existe por una pregunta concreta que no se puede contestar de otra
+ * manera: ¿lee alguien la fuente china de la flash SPI? Demostrar que
+ * NADIE LEE algo es imposible desde dentro. Quitarla y mirar, no.
+ */
+uint8_t spi_flash_borra_abre(uint32_t desde, uint32_t len,
+                             uint32_t suelo, uint32_t tope);
+
+/* Si un fichero esta en el disco. */
+uint8_t spi_flash_fichero_hay(const char name8[8], const char ext3[3]);
+
+/* Borra un fichero del disco: marca su entrada del directorio y suelta
+ * sus clusters en las dos copias de la FAT. Devuelve 0 si no estaba, si
+ * el volumen no se entiende o si el borrador comun estaba cogido. La
+ * cadena se sigue por la FAT -no se supone que los clusters vayan
+ * seguidos-, porque estos ficheros los ha escrito un PC. */
+uint8_t spi_flash_fichero_borra(const char name8[8], const char ext3[3]);

@@ -46,15 +46,23 @@
  * right after that smoke test runs. */
 #define CONFIG_TUNE_START_HZ  7150000UL
 
-/* Startup tuning step. This is a raw INDEX into main.c's
- * k_tune_steps[]/BAND_STEP_* table, not a Hz value - deliberately not
- * a symbolic BAND_STEP_* reference here, to keep this file free of any
- * dependency on main.c's internals. 1 = BAND_STEP_1K (1kHz) as of
- * 07/08/2026 - sensible for HF voice tuning in the 40m/AM startup
- * band above. *** If you ever reorder/resize k_tune_steps[] in
- * main.c, re-check this index still points at what you think it does
- * - nothing enforces the two stay in sync. *** */
-#define CONFIG_TUNE_START_STEP_IDX  1U
+/* Paso de sintonia al arrancar. 1 kHz desde el 07/08/2026, que es lo
+ * sensato para buscar voz en HF en la banda de arranque de aqui arriba.
+ *
+ * 23/09/2026: esto era un INDICE CRUDO (un "1U" pelado) con un aviso al
+ * lado que decia, literalmente, que nada garantizaba que siguiera
+ * apuntando a 1 kHz si alguien tocaba la tabla de main.c. Al anadir los
+ * pasos de 10 Hz y 500 Hz habria pasado a valer 100 Hz sin un solo
+ * aviso del compilador. Ahora es el nombre, no el numero: main.c genera
+ * los BAND_STEP_* de su propia lista de pasos y aqui se nombra el que se
+ * quiere. Si ese paso desaparece de la lista, esto NO compila, que es
+ * exactamente lo que se buscaba.
+ *
+ * Si, esto hace que config.h nombre un simbolo de main.c, cosa que el
+ * comentario anterior evitaba a proposito. Se cambia de opinion a
+ * sabiendas: un nombre que falla al compilar vale mas que una
+ * independencia que solo servia para que el numero pudiera mentir. */
+#define CONFIG_TUNE_START_STEP_IDX  BAND_STEP_1K
 
 /* Startup demodulation mode - see demod_am.h's demod_mode_t. */
 #define CONFIG_START_MODE  DEMOD_MODE_AM
@@ -166,5 +174,50 @@
  * the mode picker turns it back off (see menu_mode_preset_callback()),
  * RTTY-L/RTTY-U turn it on - see rtty_get_enabled()'s callers. */
 #define CONFIG_RTTY_ENABLED_DEFAULT 0U
+
+/* ===================== DECODIFICADOR DE CW ============================
+ *
+ * Telegrafia Morse, 21/09/2026. Solo en USB/LSB, igual que el RTTY y por
+ * la misma razon: el CW se oye como UN tono dentro del paso de banda de
+ * una banda lateral. Ver demod_am.c, donde se engancha justo al lado del
+ * RTTY y sobre el mismo audio ya diezmado a 12 kHz.
+ *
+ * El tono es el que se quiere OIR: el operador sintoniza hasta que el
+ * pitido suena a esta frecuencia. 700 Hz es lo mas comun; a quien tenga
+ * el oido cansado en agudos le ira mejor 600, y a quien tenga ruido de
+ * red 800.
+ *
+ * La velocidad NO es un ajuste que mande: el decodificador la estima y
+ * la persigue solo. Esto es solo por donde empieza a buscar, y sirve
+ * para enganchar antes. Medido en el simulador: partiendo de 20 PPM
+ * decodifica bien de 10 a 45 PPM sin que nadie le diga nada.
+ */
+/* ===================== IDENTIDAD DEL FIRMWARE =========================
+ * Lo que sale en Ajustes -> Equipo -> Información. La fecha y la hora NO
+ * se ponen aqui: salen de __DATE__ y __TIME__, o sea del momento de
+ * compilar, y asi no hay forma de que digan una cosa y el binario sea
+ * otra. Esto es lo unico que hay que subir a mano al sacar version.
+ *
+ * NUMERACION. 24/09/2026. Hasta hoy ponia "Rediseño 11", que contaba las
+ * entregas del rediseño y no decia nada de la radio. Desde aqui se llama
+ * V<mayor>.<menor>, se sigue por donde iba -el 11 es el mismo 11- y sube
+ * de uno en uno: V1.11, V1.12 ... V1.99 y la siguiente es V2.00. O sea
+ * que el menor NO es un decimal: 1.9 no existe, existe 1.09, y despues
+ * del 1.99 no viene 1.100.
+ *
+ * Por eso las dos cifras van como TEXTO y no como numero: escritas como
+ * numero, el cero delante las convertiria en octal -y 08 y 09 ni siquiera
+ * son octal valido, o sea que dos de cada diez versiones no compilarian-.
+ * El _Static_assert de abajo es el que obliga a que el menor lleve
+ * siempre sus dos cifras: "5" no pasa, "05" si. */
+#define CONFIG_FW_MAYOR    "2"
+#define CONFIG_FW_MENOR    "44"   /* SIEMPRE dos cifras: 00..99 */
+#define CONFIG_FW_VERSION  "V" CONFIG_FW_MAYOR "." CONFIG_FW_MENOR
+
+_Static_assert(sizeof(CONFIG_FW_MENOR) == 3,
+               "CONFIG_FW_MENOR tiene que llevar dos cifras: \"05\", no \"5\"");
+
+#define CONFIG_CW_PITCH_HZ      700.0f
+#define CONFIG_CW_WPM_HINT       20.0f
 
 #endif /* CONFIG_H */

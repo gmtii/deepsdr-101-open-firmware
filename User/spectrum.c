@@ -1,5 +1,7 @@
 #include "spectrum.h"
+#include "idioma.h"
 #include "gfx.h"
+#include "gfx2.h"
 #include <string.h> /* memcpy() - see build_lut()'s comment for the six palettes copied straight from a 256-entry source table */
 
 /* --- palette LUT ---------------------------------------------------- */
@@ -261,6 +263,27 @@ static const uint8_t k_stops_electric[4][3] = {
     {255U, 255U, 255U},
 };
 
+/*
+ * Fosforo (6 paradas) - 23/09/2026, esta NO viene de SDR++ ni de ningun
+ * lado: se escribio para el tema "Fosforo", porque de las quince que habia
+ * ninguna es verde de verdad. "Clasica verde" se llama asi por su autor
+ * (Paul PD0SWL) y es azul casi entera; puesta debajo de una interfaz de
+ * fosforo el resultado era media pantalla verde y media azul.
+ *
+ * La rampa es la de un tubo de fosforo P1 mirado de reojo: negro, verde
+ * apagado, verde de trabajo, verde brillante y el blanco-verdoso del pico,
+ * que es lo que hace un CRT cuando se satura. Monotona en luminancia, que
+ * es lo unico que un waterfall necesita de verdad para que se lea el nivel.
+ */
+static const uint8_t k_stops_fosforo[6][3] = {
+    {0U, 0U, 0U},
+    {0U, 34U, 17U},
+    {0U, 102U, 51U},
+    {26U, 200U, 112U},
+    {140U, 255U, 190U},
+    {235U, 255U, 240U},
+};
+
 /* Smoke (8 stops) - exact stops from SDR++'s own
  * root/res/colormaps/smoke.json (author: Yaroslav Andrianov), uploaded
  * by the project owner 08/09/2026 - linearly interpolated via
@@ -423,50 +446,150 @@ static uint16_t palette_eval_classic(float t)       { return palette_lerp_stops(
 static uint16_t palette_eval_classic_green(float t) { return palette_lerp_stops(k_stops_classic_green, 13U, t); }
 static uint16_t palette_eval_electric(float t)      { return palette_lerp_stops(k_stops_electric, 4U, t); }
 static uint16_t palette_eval_smoke(float t)         { return palette_lerp_stops(k_stops_smoke, 8U, t); }
+static uint16_t palette_eval_fosforo(float t)       { return palette_lerp_stops(k_stops_fosforo, 6U, t); }
 static uint16_t palette_eval_temper_colors(float t) { return palette_lerp_stops(k_stops_temper_colors, 22U, t); }
 static uint16_t palette_eval_vivid(float t)         { return palette_lerp_stops(k_stops_vivid, 23U, t); }
 static uint16_t palette_eval_websdr(float t)        { return palette_lerp_stops(k_stops_websdr, 5U, t); }
 
+/* ===========================================================================
+ * LA TABLA DE PALETAS - 22/09/2026
+ * ===========================================================================
+ * Hasta hoy la misma lista de 15 paletas estaba escrita SIETE veces: las dos
+ * mitades de build_lut(), el rotulo del tile, el nombre en la pantalla de
+ * ajustes, el ciclo del boton, y el guardar y el leer de CONFIG.CSV. Siete
+ * sitios que hay que acordarse de tocar a la vez, y ninguno que avise si te
+ * olvidas de uno.
+ *
+ * No es una preocupacion teorica: tres paletas (Temper, Vivid y WebSDR) ya
+ * se estaban mostrando como "Clasica" en ajustes porque su rama faltaba en
+ * uno de los siete. Es el mismo fallo que dejo el modo CW invisible en la
+ * pantalla de modos.
+ *
+ * Asi que la lista vive AQUI y solo aqui. Todo lo demas -nombres, claves de
+ * fichero, el orden, el recuento, los colores de muestra- sale de esta tabla
+ * recorriendola. Anadir una paleta es anadir una fila.
+ *
+ * Los dos caminos de color siguen siendo los de siempre (ver la cabecera de
+ * este fichero): `tabla` para las seis que ya vienen con sus 256 entradas
+ * hechas, `eval` para las que se interpolan entre paradas. Una fila usa uno
+ * u otro, nunca los dos.
+ */
+typedef struct {
+    texto_t         nombre;            /* para la pantalla: "Clasica verde" */
+    const char     *clave;             /* para CONFIG.CSV: "CLASSIC_GREEN"  */
+    const uint16_t *tabla;             /* 256 colores ya hechos, o 0        */
+    uint16_t      (*eval)(float);      /* generador, o 0                    */
+} spectrum_paleta_t;
+
+/* El orden de las filas ES el orden de spectrum_palette_t: la fila i
+ * describe la paleta i. Lo comprueba spectrum_palette_tabla_ok(). */
+static const spectrum_paleta_t k_paletas[] = {
+    { T("Cl\xC3\xA1sica", "Classic"),       "CLASSIC",       0,           palette_eval_classic       },
+    { T("Fuego", "Fire"),                "FIRE",          0,           palette_eval_fire          },
+    { T("Viridis", "Viridis"),              "VIRIDIS",       k_lut_viridis, 0                        },
+    { T("Grises", "Greyscale"),               "GRAYSCALE",     0,           palette_eval_grayscale     },
+    { T("Turbo", "Turbo"),                "TURBO",         k_lut_turbo, 0                          },
+    { T("Inferno", "Inferno"),              "INFERNO",       k_lut_inferno, 0                        },
+    { T("Magma", "Magma"),                "MAGMA",         k_lut_magma, 0                          },
+    { T("Plasma", "Plasma"),               "PLASMA",        k_lut_plasma, 0                         },
+    { T("GQRX", "GQRX"),                 "GQRX",          k_lut_gqrx,  0                          },
+    { T("El\xC3\xA9" "ctrica", "Electric"),  "ELECTRIC",      0,           palette_eval_electric      },
+    { T("Cl\xC3\xA1sica verde", "Classic green"), "CLASSIC_GREEN", 0,           palette_eval_classic_green },
+    { T("Humo", "Smoke"),                 "SMOKE",         0,           palette_eval_smoke         },
+    { T("Templada", "Tempered"),             "TEMPER_COLORS", 0,           palette_eval_temper_colors },
+    { T("Viva", "Vivid"),                 "VIVID",         0,           palette_eval_vivid         },
+    { T("WebSDR", "WebSDR"),               "WEBSDR",        0,           palette_eval_websdr        },
+    { T("F\xC3\xB3sforo", "Phosphor"),         "PHOSPHOR",      0,           palette_eval_fosforo       },
+};
+
+#define PALETA_COUNT ((uint8_t)(sizeof k_paletas / sizeof k_paletas[0]))
+
+/* La tabla y el enum tienen que ir a la par. Si alguien anade un valor al
+ * enum y se olvida de la fila, esto no compila - que es justo lo que no
+ * pasaba antes. */
+typedef char paleta_tabla_completa[(PALETA_COUNT == (uint8_t)(SPECTRUM_PALETTE_PHOSPHOR + 1)) ? 1 : -1];
+
+uint8_t spectrum_palette_count(void)
+{
+    return PALETA_COUNT;
+}
+
+const char *spectrum_palette_nombre(uint8_t i)
+{
+    return (i < PALETA_COUNT) ? k_paletas[i].nombre[idioma()] : "";
+}
+
+const char *spectrum_palette_clave(uint8_t i)
+{
+    return (i < PALETA_COUNT) ? k_paletas[i].clave : "";
+}
+
 /*
- * Six of SDR++'s palettes ship as exactly 256 stops already - see
- * this file's own header comment above for why those get memcpy()d
- * straight in rather than going through palette_lerp_stops() (or an
- * eval-per-index callback) like everything else. Checked first;
- * falls through to the eval-callback path below for every other
- * palette.
+ * Un color de una paleta CUALQUIERA, sin tocar la que esta puesta.
+ *
+ * Para que: la pantalla de paletas ensena una muestra del degradado de cada
+ * una, doce a la vez. Con spectrum_set_palette() habria que cambiar la
+ * paleta viva doce veces por pintada y dejarla como estaba - y mientras
+ * tanto el espectro y la cascada estarian leyendo la LUT equivocada.
+ *
+ * Las de tabla es un indice; las de eval se calculan al vuelo. Sale a unas
+ * pocas decenas de ciclos por color, no por pixel ni por columna.
+ *
+ * QUIEN LA LLAMA, corregido el 28/09/2026: aqui ponia "solo se llama al
+ * pintar la pantalla de paletas". EN EL FIRMWARE NO LA LLAMA NADIE - el
+ * enlazador la tira, sale en la lista de descartadas del .map- y esa
+ * "pantalla de paletas" no existe en la radio: vive en el simulador
+ * (sim/paletas.c y sim/paletachk.c), que es quien la usa de verdad. Se
+ * queda por eso, no por la radio.
+ */
+uint16_t spectrum_palette_muestra(uint8_t i, uint8_t idx)
+{
+    if (i >= PALETA_COUNT) { return 0U; }
+    if (k_paletas[i].tabla != 0) { return k_paletas[i].tabla[idx]; }
+    return k_paletas[i].eval((float)idx * (1.0f / 255.0f));
+}
+
+/*
+ * Clave de CONFIG.CSV -> indice, o -1 si no es ninguna.
+ *
+ * Compara la clave ENTERA, no un prefijo: la version anterior de esto
+ * probaba "CLASSIC" antes que "CLASSIC_GREEN" ordenando las ramas por
+ * longitud a mano, y un dia que se anadiera una clave nueva que empezara
+ * igual que otra volveria a fallar en silencio. Aqui el largo tiene que
+ * coincidir, asi que el orden de la tabla da igual.
+ */
+int16_t spectrum_palette_de_clave(const char *s, uint32_t n)
+{
+    uint8_t i;
+    for (i = 0U; i < PALETA_COUNT; i++) {
+        const char *c = k_paletas[i].clave;
+        uint32_t    j = 0U;
+        while (c[j] != '\0' && j < n && c[j] == s[j]) { j++; }
+        if (c[j] == '\0' && j == n) { return (int16_t)i; }
+    }
+    return -1;
+}
+
+/*
+ * Rellena s_lut con la paleta activa. Las seis que ya vienen con 256
+ * entradas se copian tal cual -es mas barato y mas fiel que interpolar una
+ * tabla que ya tiene un color por indice-; el resto se evalua.
  */
 static void build_lut(void)
 {
+    const spectrum_paleta_t *p;
     uint16_t i;
-    uint16_t (*eval)(float);
 
-    switch (s_palette) {
-    case SPECTRUM_PALETTE_GQRX:    memcpy(s_lut, k_lut_gqrx,    sizeof(s_lut)); s_lut_ready = 1U; return;
-    case SPECTRUM_PALETTE_INFERNO: memcpy(s_lut, k_lut_inferno, sizeof(s_lut)); s_lut_ready = 1U; return;
-    case SPECTRUM_PALETTE_MAGMA:   memcpy(s_lut, k_lut_magma,   sizeof(s_lut)); s_lut_ready = 1U; return;
-    case SPECTRUM_PALETTE_PLASMA:  memcpy(s_lut, k_lut_plasma,  sizeof(s_lut)); s_lut_ready = 1U; return;
-    case SPECTRUM_PALETTE_TURBO:   memcpy(s_lut, k_lut_turbo,   sizeof(s_lut)); s_lut_ready = 1U; return;
-    case SPECTRUM_PALETTE_VIRIDIS: memcpy(s_lut, k_lut_viridis, sizeof(s_lut)); s_lut_ready = 1U; return;
-    default: break;
-    }
+    p = &k_paletas[((uint8_t)s_palette < PALETA_COUNT) ? (uint8_t)s_palette : 0U];
 
-    switch (s_palette) {
-    case SPECTRUM_PALETTE_FIRE:          eval = palette_eval_fire;          break;
-    case SPECTRUM_PALETTE_GRAYSCALE:     eval = palette_eval_grayscale;     break;
-    case SPECTRUM_PALETTE_ELECTRIC:      eval = palette_eval_electric;      break;
-    case SPECTRUM_PALETTE_CLASSIC_GREEN: eval = palette_eval_classic_green; break;
-    case SPECTRUM_PALETTE_SMOKE:         eval = palette_eval_smoke;         break;
-    case SPECTRUM_PALETTE_TEMPER_COLORS: eval = palette_eval_temper_colors; break;
-    case SPECTRUM_PALETTE_VIVID:         eval = palette_eval_vivid;         break;
-    case SPECTRUM_PALETTE_WEBSDR:        eval = palette_eval_websdr;        break;
-    case SPECTRUM_PALETTE_CLASSIC:
-    default:                             eval = palette_eval_classic;       break;
+    if (p->tabla != 0) {
+        memcpy(s_lut, p->tabla, sizeof(s_lut));
+    } else {
+        for (i = 0; i < 256U; i++) {
+            s_lut[i] = p->eval((float)i * (1.0f / 255.0f));
+        }
     }
-
-    for (i = 0; i < 256U; i++) {
-        s_lut[i] = eval((float)i * (1.0f / 255.0f));
-    }
-    s_lut_ready = 1;
+    s_lut_ready = 1U;
 }
 
 void spectrum_init(void)
@@ -509,6 +632,29 @@ void spectrum_set_heatmap_trace_white(uint8_t white)
 uint8_t spectrum_get_heatmap_trace_white(void)
 {
     return s_heatmap_trace_white;
+}
+
+uint8_t spectrum_colormap_index(float db, float db_min, float db_max)
+{
+    float t;
+    int32_t idx;
+
+    if (db_max <= db_min) {
+        return 0U;
+    }
+    t = (db - db_min) / (db_max - db_min);
+    idx = (int32_t)(t * 255.0f);
+    if (idx < 0)   { idx = 0; }
+    if (idx > 255) { idx = 255; }
+    return (uint8_t)idx;
+}
+
+const uint16_t *spectrum_colormap_lut(void)
+{
+    if (!s_lut_ready) {
+        spectrum_init();
+    }
+    return s_lut;
 }
 
 uint16_t spectrum_colormap(float db, float db_min, float db_max)
@@ -562,8 +708,23 @@ uint16_t spectrum_colormap(float db, float db_min, float db_max)
  * never accidentally read as "this is the tint", or vice versa.
  * HEATMAP: RGB (40,0,60). LINE: RGB (34,0,52), slightly dimmer since
  * SPEC_LINE_BG is already non-black. */
-#define SPEC_COLOR_BAND_TINT      0x632CU /* 08/09/2026: changed from a warm amber to a medium gray (~150,150,150), per the project owner - same "red/warm clashes with the new palettes" reasoning as SPEC_COLOR_CENTER just above (amber sits close to several of the new hot-end palette colors too, e.g. FIRE/INFERNO/TURBO/GQRX). Gray stays neutral against all of them. */
-#define SPEC_LINE_BAND_TINT       0x5ACBU /* same reasoning as SPEC_COLOR_BAND_TINT just above, dimmed further (~90,90,90) to match LINE style's own generally darker palette (see SPEC_LINE_BG/GRID/TRACE) */
+/* ETAPA 3b: bajado de ~(150,150,150) a ~(66,66,66). Era un bloque gris
+ * claro que dominaba el panel entero; ahora que los BORDES del filtro se
+ * dibujan por encima de la senal (SPEC_COLOR_BAND_EDGE) el relleno ya no
+ * tiene que cargar con la informacion, solo insinuar la zona. */
+#define SPEC_COLOR_BAND_TINT      0x18E3U /* era 0x632C */
+#define SPEC_COLOR_BAND_TINT_OLD  0x632CU /* 08/09/2026: changed from a warm amber to a medium gray (~150,150,150), per the project owner - same "red/warm clashes with the new palettes" reasoning as SPEC_COLOR_CENTER just above (amber sits close to several of the new hot-end palette colors too, e.g. FIRE/INFERNO/TURBO/GQRX). Gray stays neutral against all of them. */
+/* ETAPA 3b: los BORDES del filtro, no su relleno. El tinte de arriba va
+ * por debajo de todo, asi que en cuanto hay senal desaparece - justo
+ * cuando mas falta hace saber si la emisora vecina cae dentro o fuera.
+ * Estas dos columnas van casi arriba del todo en prioridad (solo la traza
+ * les gana), asi que se ven ATRAVESANDO la senal. Color propio, un cian
+ * frio: es el unico elemento de la traza que no es ni blanco ni gris ni
+ * parte de la paleta de calor, asi que no se confunde con nada. */
+#define SPEC_COLOR_BAND_EDGE      0x2DFFU /* ~(48,188,255) */
+#define SPEC_LINE_BAND_EDGE       0x1CDDU /* la misma idea, apagada para el estilo LINE */
+
+#define SPEC_LINE_BAND_TINT       0x18E3U /* era 0x5ACB, misma razon */ /* same reasoning as SPEC_COLOR_BAND_TINT just above, dimmed further (~90,90,90) to match LINE style's own generally darker palette (see SPEC_LINE_BG/GRID/TRACE) */
 
 /* *** 01/09/2026: moved to TCM RAM *** - pure spectrum-rendering
  * working buffers, never DMA targets (only this file's own drawing
@@ -572,21 +733,61 @@ uint16_t spectrum_colormap(float db, float db_min, float db_max)
  * panel - SPEC_MAX_W was already 800, comfortably covering the new
  * width, so no size change was needed here, just relocating where
  * these already-existing buffers live). */
+/* En el GD32 estos buffers van a TCM RAM, que es donde hay sitio. En el
+ * simulador de host no existe esa seccion: sin el #if, gcc del PC no puede
+ * compilar este fichero, y compilarlo TAL CUAL es lo que hace que el render
+ * del simulador sea la traza de verdad y no una imitacion. */
+#if defined(__arm__)
 #define TCMRAM_BSS __attribute__((section(".tcmram")))
+#else
+#define TCMRAM_BSS
+#endif
 
 static float    s_col_ema[SPEC_MAX_W] TCMRAM_BSS;   /* smoothed dB per column      */
+
+/* ---------------------------------------------------------------------
+ * LAS DOS PLANTILLAS DE FILA. 24/09/2026.
+ * ---------------------------------------------------------------------
+ * Una fila del espectro con TODO lo que no depende de la altura de las
+ * barras: fondo, rejilla de columnas, tinte de la banda de paso, marca de
+ * demodulacion y bordes del filtro. Dos, porque las filas de la rejilla
+ * horizontal tienen el fondo distinto y son las unicas que se diferencian.
+ *
+ * POR QUE. El paso 3 decidia el color de cada uno de los 157.248 pixeles
+ * del espectro con media docena de comparaciones sobre siete tablas. Medido
+ * en la radio: 65 ms de los 69 que dura el fotograma, cuando mover esos
+ * mismos pixeles al panel cuesta 11. El desensamblado enseña por que: al
+ * compilador no le caben tantas variables vivas en registros y recarga
+ * media docena de la pila EN CADA PIXEL.
+ *
+ * Con la plantilla, la mayoria de los pixeles se resuelven con un memcpy y
+ * solo se repasan los que de verdad dependen de la barra.
+ *
+ * NO van en el TCM, que es donde esta el resto de las tablas de este
+ * fichero. El TCM tiene 61 kB ocupados de 64 y lo que queda es LA PILA: son
+ * 4.456 bytes y ya estuvieron a punto de costar el disco entero (ver el
+ * comentario de los borradores en spi_flash.c). 3 kB de aqui dejarian la
+ * pila en 1,4 kB. En la SRAM principal quedan 9,5 kB y no son la pila de
+ * nadie.
+ */
+static uint16_t s_plant_lisa[SPEC_MAX_W];
+static uint16_t s_plant_rej[SPEC_MAX_W];
 #if SPECTRUM_PEAK_HOLD
 static float    s_col_peak[SPEC_MAX_W] TCMRAM_BSS;  /* peak-hold dB per column     */
 #endif
 static uint16_t s_bar_h[SPEC_MAX_W] TCMRAM_BSS;     /* bar height, px from bottom  */
 static uint16_t s_bar_h_smooth[SPEC_MAX_W] TCMRAM_BSS; /* scratch buf for spatial smoothing */
 static uint16_t s_peak_h[SPEC_MAX_W] TCMRAM_BSS;    /* peak marker height          */
+static uint8_t  s_bridge = 1U;   /* ver spectrum_set_bridge() */
 static uint16_t s_bar_lo[SPEC_MAX_W] TCMRAM_BSS;    /* vertical trace bridge to the left neighbor, low end - see Pass 1.6 */
 static uint16_t s_bar_hi[SPEC_MAX_W] TCMRAM_BSS;    /* vertical trace bridge to the left neighbor, high end - see Pass 1.6 */
 static uint16_t s_row_color[SPEC_MAX_H] TCMRAM_BSS; /* gradient fill color per row */
 static uint8_t  s_row_grid[SPEC_MAX_H] TCMRAM_BSS;  /* 1 = horizontal gridline on this row */
 static uint8_t  s_col_grid[SPEC_MAX_W] TCMRAM_BSS;  /* 1 = vertical gridline on this column - added 08/09/2026, see SPECTRUM_GRID_ROWS/COLS's comment in spectrum.h */
-static uint16_t s_row_buf[SPEC_MAX_W] TCMRAM_BSS;   /* stripe assembled in RAM     */
+/* Aqui vivia s_row_buf[SPEC_MAX_W]: la fila de trabajo de cuando el espectro
+ * se montaba y se volcaba fila a fila. Ya no hace falta - se monta por bandas
+ * sobre la banda de gfx2- y sus 1.600 bytes vuelven al TCM, que es donde vive
+ * la pila y donde cada byte cuenta (ver tools/pila.py). */
 static uint16_t s_prev_w = 0;            /* detect geometry change      */
 
 /* See spectrum_set_line_smooth()'s comment in spectrum.h. Defaults to
@@ -800,7 +1001,7 @@ void spectrum_draw(const float *db, uint32_t n_bins,
      * filled region.
      */
     for (col = 0; col < w; col++) {
-        uint16_t left = (col == 0U) ? s_bar_h[col] : s_bar_h[col - 1U];
+        uint16_t left = (col == 0U || !s_bridge) ? s_bar_h[col] : s_bar_h[col - 1U];
         uint16_t cur  = s_bar_h[col];
         if (left < cur) {
             s_bar_lo[col] = left;
@@ -890,72 +1091,201 @@ void spectrum_draw(const float *db, uint32_t n_bins,
         uint16_t bg_color    = (s_style == SPECTRUM_STYLE_HEATMAP) ? GFX_COLOR_BLACK : SPEC_LINE_BG;
         uint16_t grid_color  = (s_style == SPECTRUM_STYLE_HEATMAP) ? SPEC_COLOR_GRID : SPEC_LINE_GRID;
         uint16_t trace_color = (s_style == SPECTRUM_STYLE_HEATMAP) ? SPEC_COLOR_TRACE : SPEC_LINE_TRACE;
-        uint16_t band_color  = (s_style == SPECTRUM_STYLE_HEATMAP) ? SPEC_COLOR_BAND_TINT : SPEC_LINE_BAND_TINT;
+        /* 23/09/2026: sin ternario a proposito. SPEC_COLOR_BAND_TINT y
+         * SPEC_LINE_BAND_TINT valen HOY lo mismo (0x18E3): el 08/09/2026 los
+         * dos pasaron de ambar a gris y acabaron en el mismo valor, pero el
+         * ternario se quedo, y el comentario de SPEC_LINE_BAND_TINT sigue
+         * diciendo "dimmed further (~90,90,90)", que ya no es verdad. Lo
+         * caza -Wduplicated-branches. Si algun dia vuelven a separarse,
+         * vuelve el ternario. */
+        uint16_t band_color  = SPEC_COLOR_BAND_TINT;
+        uint16_t band_edge   = (s_style == SPECTRUM_STYLE_HEATMAP) ? SPEC_COLOR_BAND_EDGE : SPEC_LINE_BAND_EDGE;
 
-        for (row = 0; row < h; row++) {
-            uint16_t level_from_bottom = (uint16_t)(h - row);
-            uint16_t fill  = s_row_color[row];
-            uint8_t  row_has_grid = s_row_grid[row];
+        /*
+         * Las dos plantillas, una vez por dibujado. El orden de pintado es
+         * el orden de prioridad AL REVES, para que lo de mas prioridad
+         * quede encima:
+         *
+         *   7 fondo / rejilla   (lo de menos prioridad, va primero)
+         *   6 tinte de la banda de paso
+         *   5 marca de demodulacion
+         *   2 bordes del filtro (lo de mas prioridad de lo que no depende
+         *                        de la barra)
+         *
+         * Las prioridades 1, 3 y 4 -traza, relleno y pico- si dependen de
+         * la barra y se repasan luego, fila a fila.
+         */
+        for (col = 0; col < w; col++) {
+            uint16_t liso = s_col_grid[col] ? grid_color : bg_color;
+            uint16_t rej  = grid_color;
 
-            for (col = 0; col < w; col++) {
-                uint16_t bh = s_bar_h[col];
-                uint16_t px;
-                uint8_t  is_trace;
-
-                /* Bridge to the left neighbor (see Pass 1.6) - lit if
-                 * this row falls anywhere between this column's own
-                 * height and its left neighbor's, not just the exact
-                 * bh row - so the trace has no gaps on steep edges,
-                 * in every style now (used to be OUTLINE-only; the
-                 * fill below (bh > level_from_bottom, HEATMAP/LINE
-                 * only) still only covers each column's OWN bar, so
-                 * this is purely a connecting line on top, same as
-                 * OUTLINE's contour - see Pass 1.6's own comment). */
-                is_trace = (level_from_bottom >= s_bar_lo[col] &&
-                            level_from_bottom <= s_bar_hi[col]) ? 1U : 0U;
-
-                if (is_trace) {
-                    /* HEATMAP default: color-matched, not a separate
-                     * white highlight - see
-                     * spectrum_set_heatmap_trace_white()'s comment in
-                     * spectrum.h for why. `fill` is this ROW's own
-                     * palette color (same one the bar interior below
-                     * uses), so a color-matched trace/bridge pixel is
-                     * visually indistinguishable from the bar simply
-                     * extending up to meet its neighbor - which reads
-                     * as one continuous, correctly-graded bar chart
-                     * with no contour artifact. LINE/OUTLINE always
-                     * use their own fixed trace_color regardless - see
-                     * that setter's comment for why those two are
-                     * exempt. */
-                    if (s_style == SPECTRUM_STYLE_HEATMAP && !s_heatmap_trace_white) {
-                        px = fill;
-                    } else {
-                        px = trace_color;
-                    }
-                } else if (fill_enabled && bh > level_from_bottom) {
-                    px = fill;                        /* inside the bar (HEATMAP/LINE only) */
-#if SPECTRUM_PEAK_HOLD
-                } else if (s_peak_h[col] == level_from_bottom) {
-                    px = SPEC_COLOR_PEAK;             /* floating peak dot */
-#endif
-#if SPECTRUM_CENTER_MARK
-                } else if (col >= center_mark_col_lo && col <= center_mark_col_hi) {
-                    px = SPEC_COLOR_CENTER;           /* demod point marker, under signals */
-#endif
-                } else if (band_active && col >= band_col_lo && col <= band_col_hi) {
-                    px = band_color;                  /* demodulated-bandwidth tint, under everything else */
-                } else {
-                    /* Fixed reference grid (see SPECTRUM_GRID_ROWS/COLS's
-                     * comment in spectrum.h) - either axis lights this
-                     * pixel, same grid_color either way (a row/column
-                     * crossing doesn't need to look any different from
-                     * a plain row or column line). */
-                    px = (row_has_grid || s_col_grid[col]) ? grid_color : bg_color;
-                }
-                s_row_buf[col] = px;
+            if (band_active && (col >= band_col_lo) && (col <= band_col_hi)) {
+                liso = band_color; rej = band_color;
             }
-            gfx_blit(x, (uint16_t)(y + row), w, 1, s_row_buf);
+#if SPECTRUM_CENTER_MARK
+            if ((col >= center_mark_col_lo) && (col <= center_mark_col_hi)) {
+                liso = SPEC_COLOR_CENTER; rej = SPEC_COLOR_CENTER;
+            }
+#endif
+            if (band_active && ((col == band_col_lo) || (col == band_col_hi))) {
+                liso = band_edge; rej = band_edge;
+            }
+            s_plant_lisa[col] = liso;
+            s_plant_rej[col]  = rej;
         }
+
+        /*
+         * MONTAJE POR BANDAS Y TRAMOS. 25/09/2026.
+         *
+         * La version anterior recorria los 157.248 pixeles preguntandole a
+         * cada uno si era traza, borde, relleno o pico. Medido en la radio:
+         * 31 ms de los 45 que duraba el fotograma. Y el grueso no era el
+         * trabajo, eran los SALTOS: el Cortex-M4 no predice saltos, asi que
+         * cada uno que se toma cuesta dos o tres ciclos de recargar la
+         * tuberia, y ahi habia cuatro o cinco por pixel.
+         *
+         * La forma de quitarlos es no preguntar. En una columna, el relleno
+         * de la barra es un TRAMO SEGUIDO de filas, y la traza otro: se
+         * calculan una vez por columna y se rellenan de corrido, sin un solo
+         * salto por pixel.
+         *
+         * Eso obliga a montar por bandas de filas en vez de fila a fila,
+         * porque hay que poder escribir hacia abajo dentro de una columna. Y
+         * trae dos cosas de regalo: el volcado pasa de una ventana por fila
+         * (208) a una por banda (9 o 13), y la banda ya existe - es la de
+         * gfx2, que se pide con cerrojo (ver gfx2_banda_coge()).
+         *
+         * El orden de pintado sigue siendo el orden de prioridad al reves:
+         * plantilla (5,6,7) -> pico (4) -> relleno (3) -> traza (1). El
+         * borde del filtro (2) ya viene en la plantilla y se respeta sin mas
+         * que no dejar que el relleno ni el pico lo pisen.
+         */
+        /*
+         * DOS MEDIAS BANDAS. 25/09/2026.
+         *
+         * La banda se parte en dos para poder montar una mientras el DMA
+         * esta enviando la otra (ver gfx_blit_arranca()). El bus tarda lo
+         * mismo -eso no lo arregla nadie- pero la CPU deja de estar parada
+         * mirandolo: medido en la radio, empujar el espectro eran 10 ms de
+         * cada fotograma.
+         *
+         * Cuantas filas caben en cada mitad se CALCULA, no se escribe: la
+         * banda mide GFX2_W x GFX2_BAND_H y aqui solo se usan w de ancho,
+         * que es menos, asi que sobra sitio. Si algun dia w creciera o la
+         * banda encogiera, esto sale mas pequeno solo en vez de escribir
+         * fuera.
+         */
+        uint16_t *banda = gfx2_banda_coge();
+        uint16_t  nb    = gfx2_banda_filas();
+        uint16_t *buf[2];
+        uint8_t   cual = 0U, vuela = 0U;
+        /* Invariante de todo el dibujado; se decidia dentro del bucle. */
+        uint8_t   traza_de_fila = (uint8_t)((s_style == SPECTRUM_STYLE_HEATMAP) &&
+                                            !s_heatmap_trace_white);
+
+        {
+            uint32_t caben = gfx2_banda_pixeles() / (2UL * (uint32_t)w);
+
+            if (caben < (uint32_t)nb) { nb = (uint16_t)caben; }
+            if (nb == 0U) { nb = 1U; }          /* no deberia pasar nunca */
+        }
+        buf[0] = banda;
+        buf[1] = banda + ((uint32_t)nb * w);
+
+        if (banda == (uint16_t *)0) {
+            /* No puede pasar -quien mas la usa la suelta antes de volver- y
+             * si pasa, mejor un fotograma sin espectro que un espectro
+             * pintado encima de lo que otro estaba montando. El contador de
+             * gfx2 lo cuenta y sale en la ventana de informacion. */
+            return;
+        }
+
+        for (row = 0; row < h; row = (uint16_t)(row + nb)) {
+            uint16_t nf = (uint16_t)(h - row);
+            uint16_t k;
+
+            if (nf > nb) { nf = nb; }
+
+            /* 1. la plantilla de cada fila de la banda */
+            for (k = 0; k < nf; k++) {
+                memcpy(&buf[cual][(uint32_t)k * w],
+                       s_row_grid[row + k] ? s_plant_rej : s_plant_lisa,
+                       (size_t)w * sizeof banda[0]);
+            }
+
+            /* 2. lo que depende de la barra, columna a columna y en tramos */
+            for (col = 0; col < w; col++) {
+                uint8_t  borde = (uint8_t)(band_active &&
+                                           ((col == band_col_lo) || (col == band_col_hi)));
+                uint16_t lo = s_bar_lo[col];
+                uint16_t hi = s_bar_hi[col];
+                uint16_t ra, rb, r;
+
+                if (!borde) {
+#if SPECTRUM_PEAK_HOLD
+                    /* Prioridad 4: el punto del pico, una sola fila.
+                     * nivel = h - fila, asi que fila = h - nivel. */
+                    if ((s_peak_h[col] >= 1U) && (s_peak_h[col] <= h)) {
+                        r = (uint16_t)(h - s_peak_h[col]);
+                        if ((r >= row) && (r < (uint16_t)(row + nf))) {
+                            buf[cual][(uint32_t)(r - row) * w + col] = SPEC_COLOR_PEAK;
+                        }
+                    }
+#endif
+                    /* Prioridad 3: el relleno de la barra, de h-bh+1 hasta
+                     * abajo del todo. El color lo pone la FILA, asi que es un
+                     * bucle y no un relleno de un solo valor. */
+                    if (fill_enabled && (s_bar_h[col] > 0U)) {
+                        ra = (s_bar_h[col] >= h) ? 0U : (uint16_t)(h - s_bar_h[col] + 1U);
+                        if (ra < row) { ra = row; }
+                        rb = (uint16_t)(row + nf - 1U);
+                        if (ra <= rb) {
+                            /* Puntero que avanza w de fila en fila, en vez de
+                             * multiplicar (fila x ancho) en cada pixel: esa
+                             * multiplicacion era casi todo lo que quedaba del
+                             * coste del montaje. */
+                            uint16_t *pb = &buf[cual][(uint32_t)(ra - row) * w + col];
+                            const uint16_t *pc = &s_row_color[ra];
+                            for (r = ra; r <= rb; r++) {
+                                *pb = *pc++;
+                                pb += w;
+                            }
+                        }
+                    }
+                }
+
+                /* Prioridad 1: la traza y su puente con la vecina. */
+                if (hi >= lo) {
+                    ra = (hi >= h) ? 0U : (uint16_t)(h - hi);
+                    rb = (lo == 0U) ? (uint16_t)(h - 1U) : (uint16_t)(h - lo);
+                    if (rb > (uint16_t)(h - 1U)) { rb = (uint16_t)(h - 1U); }
+                    if (ra < row) { ra = row; }
+                    if (rb > (uint16_t)(row + nf - 1U)) { rb = (uint16_t)(row + nf - 1U); }
+                    if (ra <= rb) {
+                        uint16_t *pb = &buf[cual][(uint32_t)(ra - row) * w + col];
+
+                        if (traza_de_fila) {
+                            const uint16_t *pc = &s_row_color[ra];
+                            for (r = ra; r <= rb; r++) { *pb = *pc++; pb += w; }
+                        } else {
+                            for (r = ra; r <= rb; r++) { *pb = trace_color; pb += w; }
+                        }
+                    }
+                }
+            }
+
+            /* 3. un solo volcado por banda, y sin esperarlo: se espera al
+             * ANTERIOR justo antes de abrir la ventana del siguiente, que es
+             * lo ultimo posible. Entre medias ha cabido el montaje entero de
+             * esta banda. */
+            if (vuela) { (void)gfx_blit_espera(); vuela = 0U; }
+            vuela = gfx_blit_arranca(x, (uint16_t)(y + row), w, nf, buf[cual]);
+            cual = (uint8_t)(cual ^ 1U);
+        }
+        if (vuela) { (void)gfx_blit_espera(); }
+        gfx2_banda_suelta();
     }
 }
+
+void spectrum_set_bridge(uint8_t on) { s_bridge = on ? 1U : 0U; }
+uint8_t spectrum_get_bridge(void)    { return s_bridge; }

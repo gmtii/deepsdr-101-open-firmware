@@ -58,4 +58,17 @@ void backlight_set_percent(uint8_t percent);
  * see backlight_set_percent()'s comment) - for UI readouts. */
 uint8_t backlight_get_percent(void);
 
+/*
+ * Apagar y encender la retroiluminacion para el modo de pantalla dormida.
+ *
+ * ESTABAN SIN DECLARAR: main.c las llamaba (screen_sleep/screen_wake) y
+ * backlight.c las define, pero no aparecian en esta cabecera, asi que el
+ * compilador las daba por implicitas - suponiendo "int f()" y sin comprobar
+ * ni argumentos ni tipo de retorno. Funcionaba por casualidad, porque ambas
+ * son void f(void) y se llaman sin argumentos. El dia que una de las dos
+ * tomara un parametro o devolviera algo, habria roto en silencio.
+ */
+void backlight_sleep(void);
+void backlight_wake(void);
+
 #endif /* BACKLIGHT_H */

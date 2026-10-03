@@ -91,10 +91,31 @@ static const char k_baudot_figs[32] = {
     '9',  '?', '&', '\0'/*FIGS*/, '.', '/', ';', '\0'/*LTRS*/
 };
 
-/* --- output ring buffer (drained by rtty_get_char(), filled from
- * rtty_process() - both only ever called from the main loop/poll
- * context in this project's design, never the ISR, so no volatile/
- * critical-section dance is needed here unlike the RF-clip flag. --- */
+/*
+ * --- output ring buffer ---
+ *
+ * OJO CON EL CONTEXTO, que esto lo decia al reves hasta el 30/09/2026.
+ *
+ * Ponia "both only ever called from the main loop/poll context in this
+ * project's design, never the ISR". FALSO: rtty_process() se llama desde
+ * demod_am_process_raw(), que es el gancho de bloque que sdr_rx.c invoca
+ * DESDE DMA0_Channel3_IRQHandler(). O sea que ring_push() corre en la
+ * interrupcion del audio y rtty_get_char() en el bucle principal.
+ *
+ * Hoy funciona, pero por como esta escrito y no por el razonamiento de ese
+ * comentario: es un productor-consumidor con UN indice de cada lado, los dos
+ * uint16_t alineados, y cada lado escribe solo el suyo. Eso es seguro en este
+ * nucleo sin reordenar nada.
+ *
+ * Lo que NO se puede hacer es fiarse de la frase vieja y meter aqui estado
+ * compartido que no sea atomico -un contador que los dos incrementen, una
+ * longitud, un segundo indice- porque eso si se rompe. Y lo mismo vale para
+ * rtty_set_enabled()/rtty_set_baud()/rtty_recompute_coeffs(), que reescriben
+ * seis floats de coeficientes y la maquina de estados desde el bucle
+ * principal mientras la interrupcion los esta usando: hoy se tolera porque lo
+ * peor que sale es un caracter malo justo al cambiar el ajuste, no porque
+ * este protegido.
+ */
 #define RTTY_RINGBUF_SIZE 128U
 static char    s_ring[RTTY_RINGBUF_SIZE];
 static uint16_t s_ring_head; /* next write position */

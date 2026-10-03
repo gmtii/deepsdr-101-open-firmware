@@ -1,4 +1,9 @@
 #include "demod_am.h"
+#include "nco.h"
+#include "rds.h"
+#include "nb.h"
+#include "dcf77.h"
+#include "analizador.h"
 #include "sam.h" /* DEMOD_MODE_SAM - 21/08/2026 */
 #include "config.h"
 #include "sdr_rx.h"
@@ -7,10 +12,27 @@
 #include "debug_uart.h"
 #include "arm_math.h"
 #include "nr_ss.h" /* Spectral Subtraction NR, AM/USB/LSB only - see
-                     * this file's NR INTEGRATION comment above the
-                     * decimate/interpolate instances it reuses. */
+                    * this file's NR INTEGRATION comment above the
+                    * decimate/interpolate instances it reuses. */
+#include "hfdl_modo.h" /* HFDL se engancha a la I/Q diezmada - ver el
+                        * comentario en el paso 1 del proceso. */
+#include "anotch.h" /* notch automatico, etapa 35 - va justo detras de la
+                     * reduccion de ruido y a la misma tasa. */
+#include "audiofil.h" /* filtro de audio de dos cortes, etapa 34 */
 #include "rtty.h" /* RTTY decoder, USB/LSB only - see this file's
                     * RTTY INTEGRATION comment. */
+#include "cw.h"   /* decodificador de CW, USB/LSB, se engancha en el
+                     * mismo sitio y sobre el mismo audio que el RTTY */
+#include "navtex.h"
+#include "psk31.h"     /* decodificador de NAVTEX - ver donde se llama abajo */
+#include "wefax.h"      /* y el de WEFAX, en el mismo sitio */
+#include "sstv.h"       /* y el de SSTV */
+#include "ft8_modo.h"
+#include "wspr_modo.h"
+#include "ais_modo.h"
+#include "ale_modo.h"  /* y el de FT8 - etapa 30 */
+#include "jtty_modo.h" /* JTTY: banda lateral a 12 kHz, como FT8 y WSPR */
+#include "ax25.h"       /* y el de APRS, que se engancha en la rama de FM */
 #include "rtty_scope.h" /* dedicated audio-domain tuning scope for RTTY,
                            * see this file's RTTY INTEGRATION comment
                            * and rtty_scope.h's own "why a separate FFT"
@@ -395,6 +417,43 @@ static const float32_t NFM_CHF_48K_COEFFS[NFM_CHF_STAGES * 5U] = {
     0.0116848837f, 0.0233697674f, 0.0116848837f,  0.8165677084f, -0.1945244350f,
     1.0000000000f, 2.0000000000f, 1.0000000000f,  1.0686916613f, -0.5633465418f
 };
+
+/*
+ * EL FILTRO DE CANAL DE AIS: el mismo sitio que el de NFM, mas ancho.
+ * 27/09/2026.
+ *
+ * AIS es GMSK a 9.600 bits por segundo con +-2.400 Hz de desviacion. Por la
+ * regla de Carson ocupa 2*(2400+4800) = 14,4 kHz, o sea que el filtro
+ * complejo tiene que pasar +-7,2 kHz limpios. El de NFM corta a 6,25 y
+ * redondearia los flancos de la GMSK hasta cerrar el ojo: no filtraria el
+ * audio, destrozaria la informacion antes del discriminador. Es el mismo
+ * razonamiento por el que NFM no puede usar el de AM (ver su comentario
+ * arriba), un escalon mas arriba.
+ *
+ * Butterworth de cuarto orden a 9 kHz. Medido:
+ *
+ *      4,8 kHz   -0,02 dB    (donde vive el grueso de la senal)
+ *      7,2 kHz   -0,62 dB    (el borde de Carson: practicamente plano)
+ *      9,0 kHz   -3,01 dB
+ *     25,0 kHz  -43,72 dB    (el canal de al lado, a 25 kHz)
+ *
+ * COMPARTE INSTANCIA Y ESTADO CON EL DE NFM y no es dejadez: AIS va por
+ * debajo en NFM (como el APRS) y los dos no pueden estar a la vez, asi que
+ * dos juegos de biquads serian 80 bytes de estado para que uno de los dos
+ * este siempre parado. Lo que decide cual se carga es demod_am_ais_chf().
+ */
+static const float32_t AIS_CHF_96K_COEFFS[NFM_CHF_STAGES * 5U] = {
+    0.0038695f, 0.0077390f, 0.0038695f,  1.0988973f, -0.3216325f,
+    1.0000000f, 2.0000000f, 1.0000000f,  1.3713747f, -0.6493383f
+};
+static const float32_t AIS_CHF_48K_COEFFS[NFM_CHF_STAGES * 5U] = {
+    0.0379730f, 0.0759461f, 0.0379730f,  0.4129187f, -0.0790086f,
+    1.0000000f, 2.0000000f, 1.0000000f,  0.5654501f, -0.4775923f
+};
+
+/* 1 mientras el modo AIS esta puesto: manda sobre que coeficientes se
+ * cargan en el filtro de canal de NFM. */
+static uint8_t s_ais_chf;
 
 /*
  * NFM DISCRIMINATOR GAIN: same reasoning as WFM_DISC_GAIN, scaled for
@@ -878,6 +937,108 @@ static float32_t s_alpf_4k0_state[ALPF_4K0_STAGES * 4U];
 static float32_t s_alpf_2k3_state[ALPF_2K3_STAGES * 4U];
 static float32_t s_alpf_1k8_state[ALPF_1K8_STAGES * 4U];
 
+/*
+ * EL FILTRO DE DOS CORTES - etapa 34, 24/09/2026.
+ *
+ * Los tres de arriba (4K0/2K3/1K8) eran paso BAJO y estaban precalculados.
+ * Este se DISEÑA en marcha a partir de los dos cortes que pida el
+ * operador - ver audiofil.h-, asi que sus coeficientes cambian mientras
+ * la radio suena.
+ *
+ * Y AHI ESTA LO DELICADO: los coeficientes los lee la interrupcion de
+ * audio. Escribir quince floats encima de los que esta usando deja al
+ * filtro, durante unas muestras, con media cascada vieja y media nueva -
+ * que no es un filtro, es cualquier cosa, y con polos de cualquier cosa.
+ *
+ * Por eso hay DOS juegos completos y un indice. Se construye en el que NO
+ * se esta usando y luego se cambia el indice, que es una sola escritura
+ * de una palabra. La interrupcion lee el indice una vez por bloque y a
+ * partir de ahi todo lo que toca es coherente.
+ *
+ * Cambiar de juego tira el historial del biquad, o sea que se oye un
+ * chasquido al mover el filtro. Es honrado: mover un filtro chasquea
+ * siempre, y lo unico que se podria hacer para evitarlo -copiar el
+ * historial- seria darle al filtro nuevo una historia que no es la suya.
+ */
+/* Declarada aqui arriba porque el filtro la necesita y su definicion de
+ * verdad viene mas abajo: los cortes estan diseñados PARA una tasa. */
+static uint8_t s_active_rate_is_48k;
+static void fil_construye(uint8_t fam);
+
+#define FIL_JUEGOS 2U
+static float32_t s_fil_coef[FIL_JUEGOS][AUDIOFIL_COEFS];
+static float32_t s_fil_state[FIL_JUEGOS][AUDIOFIL_ETAPAS * 4U];
+static arm_biquad_casd_df1_inst_f32 s_fil_inst[FIL_JUEGOS];
+static volatile uint8_t s_fil_act;    /* cual usa la interrupcion */
+
+/*
+ * Los cortes, uno por familia de modo. Que cada familia recuerde el suyo
+ * es lo que hace util tener dos mandos: el filtro que quieres en banda
+ * lateral no es el que quieres en AM, y tener que reajustarlo cada vez
+ * que cambias de modo convierte un ajuste fino en una molestia.
+ *
+ * Los valores de fabrica son los de SIEMPRE -4 kHz por arriba y nada por
+ * abajo, que es exactamente lo que hacia AUDIO_BW_4K0- para que quien no
+ * toque esto no note ningun cambio. NFM se queda con sus 6 kHz de
+ * siempre, ahora ajustables.
+ */
+static uint16_t s_fil_lo[FIL_FAM_N] = {    0U,    0U,    0U,    0U };
+static uint16_t s_fil_hi[FIL_FAM_N] = { 4000U, 4000U, 4000U, 6000U };
+static uint8_t  s_fil_fam_puesta = 0xFFU;   /* la que hay construida */
+
+/*
+ * FILTRO DE CW - 22/09/2026, a peticion del dueno del proyecto.
+ *
+ * Paso banda de unos 500 Hz centrado en el tono de CW, que es lo que
+ * lleva cualquier radio de telegrafia y lo que le faltaba a esta: el
+ * filtro mas estrecho que habia eran 1800 Hz, o sea que en CW se oian
+ * todas las estaciones de un trozo de banda a la vez.
+ *
+ * ES PARA EL OIDO, NO PARA EL DECODIFICADOR, y conviene tenerlo claro:
+ * cw.c se alimenta de s_ssb_dec, que esta ANTES de este filtro en la
+ * cadena (ver el comentario de la integracion del CW), asi que esto no
+ * cambia ni para bien ni para mal lo que decodifica. Lo que cambia es
+ * poder encontrar la estacion de oido y no tener que hacerlo mirando el
+ * osciloscopio.
+ *
+ * Los coeficientes se calculan en marcha y no salen de una tabla, porque
+ * el centro sigue al tono ajustado y ese lo mueve el usuario. Formula de
+ * paso banda de Robert Bristow-Johnson con Q 0,9 en dos secciones, que
+ * medido da 499 Hz de anchura a -3 dB y ganancia 1,000 en el centro a
+ * las dos frecuencias de muestreo.
+ */
+/*
+ * CUATRO etapas, no dos - 22/09/2026, por el dueno del proyecto: "creo que
+ * hace falta un ancho mas estrecho para cw, porque escucho muchas senales a
+ * la vez".
+ *
+ * El ancho no era el unico problema, ni el principal. Medido con
+ * sim/cwbw.c, que evalua ESTOS coeficientes:
+ *
+ *   etapas   -3 dB     -20 dB    -40 dB
+ *      2     250 Hz    1167 Hz   3851 Hz
+ *      4     250 Hz     846 Hz   1725 Hz
+ *      6     250 Hz     769 Hz   1364 Hz
+ *
+ * O sea: con dos etapas, aunque estreches el filtro a 250 Hz, una senal a
+ * 1,9 kHz del tono sigue entrando a -40 dB, que se oye perfectamente de
+ * fondo. La falda es lo que decide cuantas senales escuchas a la vez, no el
+ * numero de -3 dB. Cuatro etapas la parten por la mitad; de seis en adelante
+ * ya casi no se gana.
+ *
+ * Cuesta dos biquads mas por muestra de audio. arm_biquad_cascade_df1_f32()
+ * son unos 10 ciclos por etapa y muestra: a 96 kHz, 2 Mciclos/s de 200, o
+ * sea un 1% del reloj, y solo en CW.
+ */
+#define ALPF_CW_STAGES 4U
+static arm_biquad_casd_df1_inst_f32 s_alpf_cw_inst;
+static float32_t s_alpf_cw_state[ALPF_CW_STAGES * 4U];
+static float32_t s_alpf_cw_coeffs[ALPF_CW_STAGES * 5U];
+static float     s_alpf_cw_hz = CONFIG_CW_PITCH_HZ;
+/* Ancho a -3 dB del filtro de CW. 500 Hz de partida, que es el ancho
+ * clasico de un filtro de CW de radio comercial. */
+static float     s_alpf_cw_bw = 500.0f;
+
 /* WFM audio LPF instance/state - separate from s_alpf_inst above
  * (NFM), see WFM_ALPF_COEFFS' comment for why. */
 static arm_biquad_casd_df1_inst_f32 s_wfm_ifbw_i_inst;
@@ -900,6 +1061,33 @@ static arm_biquad_casd_df1_inst_f32 s_nfm_chf_i_inst;
 static arm_biquad_casd_df1_inst_f32 s_nfm_chf_q_inst;
 static float32_t s_nfm_chf_i_state[NFM_CHF_STAGES * 4U];
 static float32_t s_nfm_chf_q_state[NFM_CHF_STAGES * 4U];
+
+/*
+ * Carga el filtro de canal de NFM con los coeficientes que tocan: los de
+ * NFM de siempre, o los anchos de AIS si el modo esta puesto.
+ *
+ * arm_biquad_cascade_df1_init_f32() pone a cero el estado que le das, asi
+ * que llamar a esto ademas deja el filtro sin transitorios - que es justo
+ * lo que hace falta al entrar y salir del modo.
+ */
+static void nfm_chf_carga(uint8_t es_48k)
+{
+    const float32_t *c;
+
+    if (s_ais_chf) { c = es_48k ? AIS_CHF_48K_COEFFS : AIS_CHF_96K_COEFFS; }
+    else           { c = es_48k ? NFM_CHF_48K_COEFFS : NFM_CHF_96K_COEFFS; }
+
+    arm_biquad_cascade_df1_init_f32(&s_nfm_chf_i_inst, NFM_CHF_STAGES, c,
+                                    s_nfm_chf_i_state);
+    arm_biquad_cascade_df1_init_f32(&s_nfm_chf_q_inst, NFM_CHF_STAGES, c,
+                                    s_nfm_chf_q_state);
+}
+
+void demod_am_ais_chf(uint8_t si)
+{
+    s_ais_chf = si ? 1U : 0U;
+    nfm_chf_carga(s_active_rate_is_48k);
+}
 
 /* FM discriminator state: previous block's last complex sample,
  * carried across blocks so the delay-and-conjugate-multiply (see
@@ -1260,6 +1448,23 @@ static void nr_ss_process_chunks(float32_t *buf, uint32_t n)
  * against a bounds check rather than requiring an exact n, genuinely
  * tolerant of either 32 or 64 as-is.)
  */
+/*
+ * Lo mismo que rtty_process_chunks() justo debajo, y por el mismo
+ * motivo: cw_process() tiene el mismo contrato estricto de bloque
+ * exacto, y si se le da otra cosa no hace nada en vez de decodificar
+ * medio bloque. Son dos funciones casi identicas a proposito: cada una
+ * respeta el contrato de SU modulo, y el dia que uno cambie de tamano de
+ * bloque no se lleva al otro por delante.
+ */
+static void cw_process_chunks(const float32_t *buf, uint32_t n)
+{
+    uint32_t off;
+
+    for (off = 0U; off + CW_BLOCK_SAMPLES <= n; off += CW_BLOCK_SAMPLES) {
+        cw_process(buf + off, CW_BLOCK_SAMPLES);
+    }
+}
+
 static void rtty_process_chunks(const float32_t *buf, uint32_t n)
 {
     uint32_t off;
@@ -1300,6 +1505,13 @@ static uint8_t s_mode = (uint8_t)CONFIG_START_MODE; /* see config.h - was DEMOD_
 void demod_am_set_mode(demod_mode_t mode)
 {
     s_mode = (uint8_t)mode;
+    /* Cada familia recuerda sus dos cortes, asi que cambiar de modo puede
+     * cambiar de filtro. Se reconstruye AQUI y no en la interrupcion: ahi
+     * costaria un diseño entero -senos, cosenos y divisiones- dentro del
+     * camino de audio, y ademas solo hace falta cuando algo cambia. */
+    if (demod_am_filtro_familia() != s_fil_fam_puesta) {
+        fil_construye(demod_am_filtro_familia());
+    }
 }
 
 demod_mode_t demod_am_get_mode(void)
@@ -1329,6 +1541,71 @@ static audio_bw_t s_audio_bw = AUDIO_BW_4K0;
 void demod_am_set_audio_bw(audio_bw_t bw)
 {
     s_audio_bw = bw;
+}
+
+/* La familia del modo que hay puesto. CW no es una familia: tiene su
+ * propio paso banda, que manda sobre esto (ver el paso 3 del proceso). */
+uint8_t demod_am_filtro_familia(void)
+{
+    switch ((demod_mode_t)s_mode) {
+    case DEMOD_MODE_AM:  return (uint8_t)FIL_FAM_AM;
+    case DEMOD_MODE_SAM: return (uint8_t)FIL_FAM_SAM;
+    case DEMOD_MODE_NFM: return (uint8_t)FIL_FAM_NFM;
+    default:             return (uint8_t)FIL_FAM_SSB;
+    }
+}
+
+/*
+ * Construye el filtro de la familia `fam` en el juego que NO se esta
+ * usando y lo pone en servicio. Ver el comentario de s_fil_coef.
+ */
+static void fil_construye(uint8_t fam)
+{
+    uint8_t otro = (uint8_t)(s_fil_act ^ 1U);
+    float fs = s_active_rate_is_48k ? 48000.0f : 96000.0f;
+    float lo, hi;
+
+    if (fam >= (uint8_t)FIL_FAM_N) { return; }
+
+    audiofil_disena((float)s_fil_lo[fam], (float)s_fil_hi[fam], fs,
+                    s_fil_coef[otro], &lo, &hi);
+    /* Los cortes que de verdad han salido se guardan de vuelta, para que
+     * la pantalla enseñe lo que HAY y no lo que se pidio. */
+    s_fil_lo[fam] = (uint16_t)(lo + 0.5f);
+    s_fil_hi[fam] = (uint16_t)(hi + 0.5f);
+
+    arm_biquad_cascade_df1_init_f32(&s_fil_inst[otro], AUDIOFIL_ETAPAS,
+                                    s_fil_coef[otro], s_fil_state[otro]);
+    s_fil_act = otro;
+    s_fil_fam_puesta = fam;
+}
+
+void demod_am_set_filtro(uint8_t fam, uint16_t lo, uint16_t hi)
+{
+    if (fam >= (uint8_t)FIL_FAM_N) { return; }
+    s_fil_lo[fam] = lo;
+    s_fil_hi[fam] = hi;
+    /* Solo se reconstruye si es la que esta sonando; las demas se
+     * construyen solas al cambiar de modo. */
+    if (fam == demod_am_filtro_familia()) { fil_construye(fam); }
+    else {
+        /* Aun asi hay que recortarlo ahora, no cuando se use: si no, la
+         * pantalla enseñaria un valor imposible hasta que alguien
+         * cambiase de modo. */
+        float l, h;
+        float fs = s_active_rate_is_48k ? 48000.0f : 96000.0f;
+        float tmp[AUDIOFIL_COEFS];
+        audiofil_disena((float)lo, (float)hi, fs, tmp, &l, &h);
+        s_fil_lo[fam] = (uint16_t)(l + 0.5f);
+        s_fil_hi[fam] = (uint16_t)(h + 0.5f);
+    }
+}
+
+void demod_am_get_filtro(uint8_t fam, uint16_t *lo, uint16_t *hi)
+{
+    if (fam >= (uint8_t)FIL_FAM_N) { return; }
+    if (lo) { *lo = s_fil_lo[fam]; }
+    if (hi) { *hi = s_fil_hi[fam]; }
 }
 
 audio_bw_t demod_am_get_audio_bw(void)
@@ -1379,7 +1656,89 @@ wfm_ifbw_t demod_am_get_wfm_ifbw(void)
  * rate-dependent too, independent of which CMSIS filter instances are
  * active).
  */
+/* Definicion (la declaracion esta arriba, junto al filtro de dos cortes). */
 static uint8_t s_active_rate_is_48k = 0U;
+
+/*
+ * Rediseña el filtro de CW centrado en `centre_hz`. Se llama al cambiar
+ * el tono, al cambiar de frecuencia de muestreo y al arrancar.
+ *
+ * Las dos secciones son identicas: en cascada dan un paso banda de
+ * cuarto orden. Ojo con el convenio de CMSIS, que espera a1 y a2 con el
+ * SIGNO CAMBIADO respecto a la formula habitual - es el mismo convenio
+ * que siguen las tablas de coeficientes de arriba.
+ */
+/*
+ * Monta el filtro de CW: un paso banda centrado en el tono, del ancho
+ * pedido, en ALPF_CW_STAGES etapas iguales.
+ *
+ * LA Q SALE DE UNA MEDIDA, NO DE UNA FORMULA DE LIBRO. La Q de UNA etapa no
+ * es f0/ancho cuando hay varias en serie: cada una estrecha a la siguiente.
+ * sim/cwbw.c calcula la respuesta exacta de la cascada y busca la Q que da
+ * el ancho pedido; el resultado es que
+ *
+ *     Q = 0,434 * f0 / ancho
+ *
+ * con cuatro etapas, y esa constante sale igual (0,4339 a 0,4347) para
+ * anchos de 150 a 1000 Hz y tonos de 400 a 1000 Hz. Por eso aqui hay una
+ * multiplicacion y no una tabla. Si algun dia se cambia ALPF_CW_STAGES hay
+ * que volver a medirla: para dos etapas valia 0,643.
+ */
+#define ALPF_CW_Q_K 0.434f
+
+static void alpf_cw_build(void)
+{
+    float fs = s_active_rate_is_48k ? 48000.0f : 96000.0f;
+    float Q  = ALPF_CW_Q_K * (s_alpf_cw_hz / s_alpf_cw_bw);
+    float w0, alpha, a0, b0n, a1n, a2n;
+    uint32_t k;
+
+    if (Q < 0.20f)  { Q = 0.20f; }
+    if (Q > 20.0f)  { Q = 20.0f; }
+
+    w0    = 2.0f * 3.14159265358979f * (s_alpf_cw_hz / fs);
+    alpha = sinf(w0) / (2.0f * Q);
+    a0    = 1.0f + alpha;
+    b0n   =  alpha / a0;
+    a1n   =  (2.0f * cosf(w0)) / a0;   /* signo ya cambiado, convenio CMSIS */
+    a2n   = -(1.0f - alpha) / a0;
+
+    for (k = 0U; k < ALPF_CW_STAGES; k++) {
+        s_alpf_cw_coeffs[k * 5U + 0U] =  b0n;
+        s_alpf_cw_coeffs[k * 5U + 1U] =  0.0f;
+        s_alpf_cw_coeffs[k * 5U + 2U] = -b0n;
+        s_alpf_cw_coeffs[k * 5U + 3U] =  a1n;
+        s_alpf_cw_coeffs[k * 5U + 4U] =  a2n;
+    }
+    arm_biquad_cascade_df1_init_f32(&s_alpf_cw_inst, ALPF_CW_STAGES,
+                                    s_alpf_cw_coeffs, s_alpf_cw_state);
+}
+
+void demod_am_set_cw_filter_hz(float centre_hz)
+{
+    if (centre_hz < 200.0f)  { centre_hz = 200.0f; }
+    if (centre_hz > 2000.0f) { centre_hz = 2000.0f; }
+    s_alpf_cw_hz = centre_hz;
+    alpf_cw_build();
+}
+
+/*
+ * Ancho a -3 dB. Los tres que ofrece la radio son 1000, 500 y 250 Hz; el
+ * limite de abajo no es un capricho: por debajo de unos 150 Hz el filtro
+ * empieza a alargar los puntos y el decodificador lo nota antes que el oido.
+ */
+void demod_am_set_cw_bw_hz(float bw_hz)
+{
+    if (bw_hz < 150.0f)  { bw_hz = 150.0f; }
+    if (bw_hz > 2000.0f) { bw_hz = 2000.0f; }
+    s_alpf_cw_bw = bw_hz;
+    alpf_cw_build();
+}
+
+float demod_am_get_cw_bw_hz(void) { return s_alpf_cw_bw; }
+
+float demod_am_get_cw_filter_hz(void) { return s_alpf_cw_hz; }
+
 
 static agc_profile_t s_agc_profile = AGC_PROFILE_MEDIUM;
 static float s_agc_release = AGC_RELEASE_MEDIUM_96K;
@@ -1541,7 +1900,13 @@ static float s_agc_peak;
  * demod_am_process_raw() (AM/USB/LSB/NFM) - WFM has its own separate
  * S-meter path (s_wfm_agc_peak) untouched by this. int16-ish full-
  * scale units, same as before; the UI converts to dB/S-units itself,
- * OUTSIDE the ISR. */
+ * OUTSIDE the ISR.
+ *
+ * *** 22/09/2026: WFM TAMBIEN lo escribe *** - demod_wfm_process_raw()
+ * rellena este mismo pico desde su propia I/Q filtrada de canal, en el mismo
+ * punto de la cadena y con las mismas unidades. Hasta entonces WFM no lo
+ * tocaba y el medidor marcaba S0 permanentemente. Ver el bloque S-METER EN
+ * WFM en esa funcion. */
 static float s_sig_peak;
 
 float demod_am_get_signal_peak(void)
@@ -1605,16 +1970,31 @@ uint8_t demod_am_get_and_clear_rf_clip_flag(void)
  * replay, no offset - see main.c) never mismatches the LO. Only
  * tune_encoder_poll() turns this on, once it has actually programmed
  * the LO with the offset. */
-static uint8_t s_if_offset_active = 0U;
+/*
+ * El desplazamiento digital, en hercios y con signo. Ver el bloque grande de
+ * demod_am.h: es UN dato, no un si/no mas unos hercios.
+ */
+static float s_mix_hz = 0.0f;
 
-void demod_am_set_if_offset_active(uint8_t active)
+/* Lo derivado, que se recalcula solo cuando cambia alguna de sus dos
+ * entradas (los hercios pedidos y la Fs que esta corriendo). La comprobacion
+ * va en el bucle de bloque, no en los setters: hay DOS entradas y dos
+ * setters, y recalcular en cada setter es la forma clasica de que un dia
+ * alguien anada un tercer camino y se olvide. Cuesta dos comparaciones por
+ * bloque de 256 muestras. */
+static nco_t   s_mix_nco;
+static float   s_mix_hz_puesto = 1e30f;   /* imposible: fuerza el primer calculo */
+static float   s_mix_fs_puesto = 0.0f;
+static uint8_t s_mix_rapido = 0U;         /* 1 = es Fs/4 exacto */
+
+void demod_am_set_mix_hz(float hz)
 {
-    s_if_offset_active = active ? 1U : 0U;
+    s_mix_hz = hz;
 }
 
-uint8_t demod_am_get_if_offset_active(void)
+float demod_am_get_mix_hz(void)
 {
-    return s_if_offset_active;
+    return s_mix_hz;
 }
 
 /*
@@ -1669,7 +2049,20 @@ void demod_am_init(void)
     demod_am_set_active_rate(0U);
 
     nr_ss_init();
+    anotch_init(12000.0f);   /* la tasa del camino decimado - ver anotch.h */
     rtty_init();
+    /* CW: aqui al lado del RTTY porque se alimenta del mismo sitio y en
+     * el mismo momento. El tono y la siembra de velocidad salen de
+     * config.h; nace apagado, como el RTTY, y lo enciende el modo CW del
+     * selector de modos. */
+    cw_init();
+    cw_set_pitch_hz(CONFIG_CW_PITCH_HZ);
+    cw_set_wpm_hint(CONFIG_CW_WPM_HINT);
+    demod_am_set_cw_filter_hz(CONFIG_CW_PITCH_HZ);
+    /* El filtro de dos cortes, construido por primera vez: sin esto, el
+     * primer bloque de audio iria por una cascada de ceros. */
+    s_fil_act = 0U;
+    fil_construye(demod_am_filtro_familia());
     rtty_scope_init();
     {
         uint32_t k;
@@ -1722,6 +2115,15 @@ static float demod_am_active_fs_hz(void)
     return s_active_rate_is_48k ? 48000.0f : 96000.0f;
 }
 
+/* La misma, expuesta. La necesita el APRS, que se engancha al discriminador
+ * de FM y por tanto trabaja a ESTA tasa y no a los 12 kHz del camino de banda
+ * lateral. Se pregunta en vez de copiar el numero: el ajuste de tasa lo puede
+ * cambiar en caliente. */
+float demod_am_get_active_fs_hz(void)
+{
+    return demod_am_active_fs_hz();
+}
+
 /*
  * demod_am_set_active_rate() - see its own declaration comment in
  * demod_am.h for the full "why" (48kHz option for better SNR + CPU
@@ -1761,6 +2163,9 @@ static float demod_am_active_fs_hz(void)
 void demod_am_set_active_rate(uint8_t is_48k)
 {
     s_active_rate_is_48k = is_48k ? 1U : 0U;
+    /* El filtro esta diseñado PARA una tasa: con otra, sus cortes caen en
+     * otro sitio. Se rehace. */
+    fil_construye(demod_am_filtro_familia());
 
     /* arm_biquad_cascade_df1_init_f32() zeroes the state buffer it's
      * given, so switching rates also gives every one of these a clean
@@ -1773,8 +2178,7 @@ void demod_am_set_active_rate(uint8_t is_48k)
         arm_biquad_cascade_df1_init_f32(&s_alpf_4k0_inst, ALPF_4K0_STAGES, ALPF_4K0_48K_COEFFS, s_alpf_4k0_state);
         arm_biquad_cascade_df1_init_f32(&s_alpf_2k3_inst, ALPF_2K3_STAGES, ALPF_2K3_48K_COEFFS, s_alpf_2k3_state);
         arm_biquad_cascade_df1_init_f32(&s_alpf_1k8_inst, ALPF_1K8_STAGES, ALPF_1K8_48K_COEFFS, s_alpf_1k8_state);
-        arm_biquad_cascade_df1_init_f32(&s_nfm_chf_i_inst, NFM_CHF_STAGES, NFM_CHF_48K_COEFFS, s_nfm_chf_i_state);
-        arm_biquad_cascade_df1_init_f32(&s_nfm_chf_q_inst, NFM_CHF_STAGES, NFM_CHF_48K_COEFFS, s_nfm_chf_q_state);
+        nfm_chf_carga(1U);
         s_dcb_r = DCB_R_48K;
         s_decim_factor = DECIM_FACTOR_48K;
         s_dec_block_samples = DEC_BLOCK_SAMPLES_48K;
@@ -1785,12 +2189,15 @@ void demod_am_set_active_rate(uint8_t is_48k)
         arm_biquad_cascade_df1_init_f32(&s_alpf_4k0_inst, ALPF_4K0_STAGES, ALPF_4K0_96K_COEFFS, s_alpf_4k0_state);
         arm_biquad_cascade_df1_init_f32(&s_alpf_2k3_inst, ALPF_2K3_STAGES, ALPF_2K3_96K_COEFFS, s_alpf_2k3_state);
         arm_biquad_cascade_df1_init_f32(&s_alpf_1k8_inst, ALPF_1K8_STAGES, ALPF_1K8_96K_COEFFS, s_alpf_1k8_state);
-        arm_biquad_cascade_df1_init_f32(&s_nfm_chf_i_inst, NFM_CHF_STAGES, NFM_CHF_96K_COEFFS, s_nfm_chf_i_state);
-        arm_biquad_cascade_df1_init_f32(&s_nfm_chf_q_inst, NFM_CHF_STAGES, NFM_CHF_96K_COEFFS, s_nfm_chf_q_state);
+        nfm_chf_carga(0U);
         s_dcb_r = DCB_R_96K;
         s_decim_factor = DECIM_FACTOR_96K;
         s_dec_block_samples = DEC_BLOCK_SAMPLES_96K;
     }
+    /* El de CW se calcula, no sale de tabla, asi que se rehace aqui con
+     * la tasa nueva - si no, al cambiar de 96 a 48 kHz el filtro se
+     * quedaria centrado al doble de frecuencia. */
+    demod_am_set_cw_filter_hz(s_alpf_cw_hz);
 
     /* SSB decimated chain. The decimate/interpolate inits VALIDATE
      * their arguments (blockSize%M, numTaps%L) and return a status -
@@ -1881,6 +2288,62 @@ uint8_t demod_am_get_active_rate_is_48k(void)
 {
     return s_active_rate_is_48k;
 }
+/*
+ * EL OSCILOSCOPIO DE TONO EN APRS - 30/09/2026.
+ *
+ * *** Por el dueño del proyecto: "en aprs se queda parado el espectro" · "y
+ * ahi ni espectro ni pollas". ***
+ *
+ * Y tenia razon: en APRS no habia NADA encima del panel de texto. No es que
+ * el espectro se parase, es que no lo pintaba nadie.
+ *
+ * POR QUE. APRS es un modo digital, asi que digi_panel_active() dice que si
+ * y el bucle principal pinta el osciloscopio de tono EN LUGAR del espectro
+ * de radiofrecuencia. Pero a ese osciloscopio solo le llegaba audio desde
+ * la rama de BANDA LATERAL (rtty_scope_feed() con s_ssb_dec), y APRS es el
+ * unico modo digital que va en FM: su audio sale del discriminador. O sea
+ * que el osciloscopio se quedaba sin una sola muestra y pintaba el hueco
+ * vacio. En NFM a secas el espectro se mueve porque ahi digi_panel_active()
+ * dice que no y no se cede el sitio - por eso el fallo solo salia en APRS.
+ *
+ * LA TASA. El osciloscopio tiene 12 kHz metidos en el hueso
+ * (rtty_scope_hz_per_bin() = 12000/512), y el discriminador entrega a la
+ * tasa de radiofrecuencia: 48 o 96 kHz segun el ajuste. Asi que aqui se
+ * diezma por 4 u 8 antes de dar de comer. Promediando los N, no cogiendo
+ * uno de cada N: el promedio es un filtro paso bajo de los pobres, y sin
+ * el, todo lo que hay por encima de 6 kHz se dobla hacia abajo y aparece
+ * como tonos que no existen justo en la zona que interesa mirar.
+ *
+ * Y lo que se ve al final son los dos tonos del AFSK -1.200 y 2.200 Hz-,
+ * que es exactamente lo que sirve para saber si estas sintonizado.
+ */
+static void aprs_scope_feed(const float *x, uint32_t n)
+{
+    static float    s_suma;
+    static uint16_t s_cuenta;
+    float    lote[64];
+    uint16_t m = 0U;
+    uint32_t k;
+    uint16_t dec = (uint16_t)(demod_am_active_fs_hz() / 12000.0f + 0.5f);
+
+    if (dec < 1U) { dec = 1U; }
+
+    for (k = 0U; k < n; k++) {
+        s_suma += x[k];
+        s_cuenta++;
+        if (s_cuenta < dec) { continue; }
+        lote[m] = s_suma / (float)dec;
+        m++;
+        s_suma = 0.0f;
+        s_cuenta = 0U;
+        if (m >= (uint16_t)(sizeof lote / sizeof lote[0])) {
+            rtty_scope_feed(lote, m);
+            m = 0U;
+        }
+    }
+    if (m > 0U) { rtty_scope_feed(lote, m); }
+}
+
 
 /*
  * Shared FM discriminator (delay-and-conjugate-multiply -> atan2f(),
@@ -2028,6 +2491,50 @@ void demod_wfm_process_raw(const int16_t *raw_interleaved)
         arm_biquad_cascade_df1_f32(&s_wfm_ifbw_q_inst, s_wfm_q_buf, s_wfm_q_buf, SDR_RX_BLOCK_SAMPLES_WFM);
     }
 
+    /*
+     * S-METER EN WFM (22/09/2026, por el dueno del proyecto: "en WFM por
+     * que es S0 todo el rato?").
+     *
+     * Porque no lo actualizaba NADIE. s_sig_peak solo se escribia en
+     * demod_am_process_raw(), que es el camino de AM/USB/LSB/NFM; WFM tiene
+     * su propio camino y nunca pasaba por ahi, asi que el medidor se quedaba
+     * en el 0 del arranque para siempre. El comentario de
+     * demod_am_get_signal_peak() ya lo decia ("WFM has its own separate
+     * S-meter path") - pero ese otro camino, s_wfm_agc_peak, sigue el
+     * AUDIO de salida del discriminador, que en FM no dice nada del nivel de
+     * RF: la FM es de envolvente constante, una emisora fuerte y una debil
+     * dan la misma amplitud de audio y lo que cambia es el ruido. Usar eso
+     * de S-metro habria sido peor que no tener ninguno, porque marcaria
+     * segun lo que se este emitiendo en ese momento.
+     *
+     * Asi que se mide donde toca y donde lo mide el resto de modos: el
+     * modulo |I+jQ| de la senal compleja ya filtrada de canal, ANTES del
+     * discriminador. Mismo punto de la cadena, mismas unidades (las dos
+     * ramas parten del entero de 16 bits del ADC convertido a float sin
+     * normalizar), asi que la calibracion del medidor vale igual en WFM que
+     * en los demas.
+     *
+     * Se guarda el pico al CUADRADO y se hace UNA raiz por bloque en vez de
+     * 512: el bloque de WFM es el doble de largo que el de AM y esto va
+     * dentro de la ISR. Para que la caida siga siendo la misma en dB por
+     * segundo, la constante de relajacion se eleva tambien al cuadrado
+     * (pico *= r por muestra equivale a pico2 *= r*r), y se usa la de WFM,
+     * que es la que esta ajustada a 192 kHz. Va antes del reparto por perfil
+     * de AGC para que tambien funcione en MANUAL.
+     */
+    {
+        float sp2 = s_sig_peak * s_sig_peak;
+        float r2  = s_wfm_agc_release * s_wfm_agc_release;
+
+        for (n = 0; n < SDR_RX_BLOCK_SAMPLES_WFM; n++) {
+            float m2 = s_wfm_i_buf[n] * s_wfm_i_buf[n]
+                     + s_wfm_q_buf[n] * s_wfm_q_buf[n];
+            sp2 *= r2;
+            if (m2 > sp2) { sp2 = m2; }
+        }
+        s_sig_peak = sqrtf(sp2);
+    }
+
     /* 1. Discriminate - delay-and-conjugate-multiply, straight on the
      * RAW (unfiltered unless IFBW NARROW just applied above, un-down-
      * mixed) I/Q, at the full 192kHz rate - see demod_am.h's WFM note
@@ -2065,6 +2572,21 @@ void demod_wfm_process_raw(const int16_t *raw_interleaved)
         dcb_x1 = s_wfm_env[n];
         dcb_y1 = y;
         s_wfm_env[n] = y;
+    }
+
+    /*
+     * 2b. EL RDS SE PINCHA AQUI, y el sitio es lo importante. Lo que hay en
+     * s_wfm_env[] en este punto es la señal MULTIPLEX entera, tal y como sale
+     * del discriminador: audio, piloto de 19 kHz, estereo y la subportadora
+     * de datos a 57 kHz. Dos lineas mas abajo entra la deenfasis, que es un
+     * paso bajo, y despues el filtro de audio de 15 kHz: cualquiera de los
+     * dos deja los 57 kHz en nada. O se coge aqui o no se coge.
+     *
+     * Solo cuesta algo si el RDS esta encendido; apagado, esto es una
+     * comparacion por bloque. Ver User/rds.h.
+     */
+    if (rds_activo()) {
+        rds_feed(s_wfm_env, SDR_RX_BLOCK_SAMPLES_WFM);
     }
 
     /* 3a. De-emphasis, single-pole LPF (see WFM_DEEMPH_ALPHA's
@@ -2252,6 +2774,15 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
         s_q_buf[n] = (float32_t)raw_interleaved[2U * n + 1U];
     }
 
+    /* 0a-bis. NOISE BLANKER (23/09/2026). Va EXACTAMENTE aqui y no una
+     * linea mas abajo: a estas alturas el bloque sigue teniendo los 96 kHz
+     * enteros, que es donde un pulso todavia dura las pocas muestras que
+     * dura. En cuanto pase por el filtro de canal de 0c, ese mismo pulso se
+     * convierte en el timbre del filtro -milisegundos, y ya sin destacar
+     * sobre nada-, y no habria forma de cazarlo. Ver nb.h. Con el nivel a 0
+     * sale por la puerta sin tocar el bloque. */
+    (void)nb_process(s_i_buf, s_q_buf, SDR_RX_BLOCK_SAMPLES);
+
     /* 0b/0c: LOW-IF DOWN-MIX + CHANNEL FILTER - unconditional now
      * (05/08/2026): WFM moved to its OWN separate processing path
      * (demod_wfm_process_raw(), see its comment) with its own hook,
@@ -2265,35 +2796,64 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
      * demod_am.h's NFM note. */
     {
         /* 0b. LOW-IF DOWN-MIX (SR/4 rotation, see the block comment
-         * above s_if_offset_active): brings the wanted signal back to DC
+         * above s_mix_hz): brings the wanted signal back to DC
          * so CHF_COEFFS (designed for a DC-centered signal) still applies
          * unchanged. Only runs while the LO is actually tuned with the
          * offset - see demod_am.h's LOW-IF TUNING note on why this must
          * stay in sync with the real LO instead of always-on. No
          * multiplications, just sign flips and swaps, in place. */
-        if (s_if_offset_active) {
-            for (n = 0; n < SDR_RX_BLOCK_SAMPLES; n += 4U) {
-                float32_t hh1, hh2;
+        if (s_mix_hz != 0.0f) {
+            float fs = demod_am_active_fs_hz();
 
-                /* n+0: identity, leave as-is. */
+            /* Lo derivado, recalculado solo si alguna de sus dos entradas ha
+             * cambiado - ver s_mix_nco. Dos comparaciones por bloque. */
+            if (s_mix_hz != s_mix_hz_puesto || fs != s_mix_fs_puesto) {
+                s_mix_hz_puesto = s_mix_hz;
+                s_mix_fs_puesto = fs;
+                s_mix_rapido = (s_mix_hz == fs * 0.25f) ? 1U : 0U;
+                nco_freq(&s_mix_nco, s_mix_hz, fs);
+            }
 
-                /* n+1: (I,Q) -> (Q, -I), i.e. x -j */
-                hh1 =  s_q_buf[n + 1U];
-                hh2 = -s_i_buf[n + 1U];
-                s_i_buf[n + 1U] = hh1;
-                s_q_buf[n + 1U] = hh2;
+            if (s_mix_rapido) {
+                /* El de toda la vida: a Fs/4 exactos la rotacion pasa por
+                 * 1, -j, -1, +j y no hay nada que multiplicar. Es el modo
+                 * normal del aparato, asi que sigue costando cero. */
+                for (n = 0; n < SDR_RX_BLOCK_SAMPLES; n += 4U) {
+                    float32_t hh1, hh2;
 
-                /* n+2: (I,Q) -> (-I, -Q), i.e. x -1 */
-                hh1 = -s_i_buf[n + 2U];
-                hh2 = -s_q_buf[n + 2U];
-                s_i_buf[n + 2U] = hh1;
-                s_q_buf[n + 2U] = hh2;
+                    /* n+0: identity, leave as-is. */
 
-                /* n+3: (I,Q) -> (-Q, I), i.e. x +j */
-                hh1 = -s_q_buf[n + 3U];
-                hh2 =  s_i_buf[n + 3U];
-                s_i_buf[n + 3U] = hh1;
-                s_q_buf[n + 3U] = hh2;
+                    /* n+1: (I,Q) -> (Q, -I), i.e. x -j */
+                    hh1 =  s_q_buf[n + 1U];
+                    hh2 = -s_i_buf[n + 1U];
+                    s_i_buf[n + 1U] = hh1;
+                    s_q_buf[n + 1U] = hh2;
+
+                    /* n+2: (I,Q) -> (-I, -Q), i.e. x -1 */
+                    hh1 = -s_i_buf[n + 2U];
+                    hh2 = -s_q_buf[n + 2U];
+                    s_i_buf[n + 2U] = hh1;
+                    s_q_buf[n + 2U] = hh2;
+
+                    /* n+3: (I,Q) -> (-Q, I), i.e. x +j */
+                    hh1 = -s_q_buf[n + 3U];
+                    hh2 =  s_i_buf[n + 3U];
+                    s_i_buf[n + 3U] = hh1;
+                    s_q_buf[n + 3U] = hh2;
+                }
+                /*
+                 * Y se avanza la fase del NCO como si la hubiera generado el,
+                 * aunque no se haya usado. Cuesta una multiplicacion por
+                 * BLOQUE y evita un chasquido: con el NCO de sintonia puesto,
+                 * la distancia pasa por Fs/4 exactos al aparcar, asi que se
+                 * salta de este camino al otro y vuelta. Sin esto, cada salto
+                 * seria un corte de fase.
+                 */
+                s_mix_nco.fase += s_mix_nco.inc * (uint32_t)SDR_RX_BLOCK_SAMPLES;
+            } else {
+                /* Cualquier otra distancia: NCO. Solo se llega aqui con el
+                 * NCO de sintonia puesto. */
+                nco_mezcla(&s_mix_nco, s_i_buf, s_q_buf, SDR_RX_BLOCK_SAMPLES);
             }
         }
 
@@ -2350,6 +2910,65 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
             s_iq_cplx[2U * n + 1U] = s_q_buf[n];
         }
         arm_cmplx_mag_f32(s_iq_cplx, s_env, SDR_RX_BLOCK_SAMPLES);
+
+        /* DCF77 (23/09/2026): una muestra de envolvente por bloque, que a
+         * 96 kHz son 375 al segundo - de sobra para distinguir marcas de
+         * 100 y 200 ms. Se toma la MEDIA del bloque y no una muestra suelta:
+         * promediar 256 muestras ya son 24 dB de ruido menos, gratis, antes
+         * incluso del filtro del propio decodificador.
+         *
+         * Se llama desde la interrupcion a proposito, no desde el bucle
+         * principal: las duraciones se miden CONTANDO muestras, asi que
+         * perder una porque el bucle principal estuviera ocupado pintando la
+         * cascada falsearia un bit. Lo que corre aqui es minimo -un polo, un
+         * seguidor de pico y una comparacion- y solo una vez por bloque. */
+        if (dcf77_activo()) {
+            /*
+             * Cuantas muestras por bloque y de que -envolvente o fase- lo
+             * dice la tabla de emisoras de dcf77.c, no este fichero. Aqui
+             * solo se parte el bloque en `sub` trozos iguales y se promedia
+             * cada uno.
+             *
+             * Se llama desde la interrupcion a proposito, no desde el bucle
+             * principal: las duraciones se miden CONTANDO muestras, asi que
+             * perder una porque el bucle principal estuviera ocupado
+             * pintando la cascada falsearia un bit.
+             *
+             * Promediar y no coger una muestra suelta: 256 muestras
+             * promediadas son 24 dB de ruido menos, gratis, antes incluso
+             * del filtro del propio decodificador. Y en las de fase se
+             * promedian I y Q POR SEPARADO y se saca el angulo del
+             * promedio - promediar angulos no vale, dan la vuelta -.
+             */
+            /* El `sub` de la tabla tiene que dividir al bloque: si no
+             * dividiera, el ultimo trozo se quedaria corto y las duraciones
+             * saldrian mal SIN que nada fallara al compilar. Los valores que
+             * usa la tabla son 1, 4 y 8, y 256 los divide a todos. */
+            _Static_assert((SDR_RX_BLOCK_SAMPLES % 8U) == 0U
+                           && (SDR_RX_BLOCK_SAMPLES % 4U) == 0U,
+                           "SDR_RX_BLOCK_SAMPLES no es divisible por los `sub` de k_emisoras[]");
+            uint32_t sub = dcf77_submuestras(dcf77_emisora());
+            uint32_t tam = SDR_RX_BLOCK_SAMPLES / sub;
+            uint32_t q, j;
+            float inv = 1.0f / (float)tam;
+
+            if (!dcf77_usa_fase(dcf77_emisora())) {
+                for (q = 0U; q < sub; q++) {
+                    float suma = 0.0f;
+                    for (j = 0U; j < tam; j++) { suma += s_env[q * tam + j]; }
+                    dcf77_feed(suma * inv);
+                }
+            } else {
+                for (q = 0U; q < sub; q++) {
+                    float si = 0.0f, sq = 0.0f;
+                    for (j = 0U; j < tam; j++) {
+                        si += s_i_buf[q * tam + j];
+                        sq += s_q_buf[q * tam + j];
+                    }
+                    dcf77_feed(atan2f(sq, si));
+                }
+            }
+        }
     } else if (s_mode == (uint8_t)DEMOD_MODE_SAM) {
         /* Synchronous AM (both sidebands) - see sam.h/sam.c. Same
          * s_i_buf/s_q_buf tap AM's own envelope detector uses (96kHz,
@@ -2375,6 +2994,38 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * demod_am.h's NFM note on why NFM keeps that narrowband
          * front-end instead of skipping it like WFM does. */
         fm_discriminate(s_i_buf, s_q_buf, s_env, NFM_DISC_GAIN, SDR_RX_BLOCK_SAMPLES);
+
+        /*
+         * APRS, 24/09/2026. Se engancha AQUI y no donde los otros cinco:
+         * el paquete de VHF va en FM, asi que sus dos tonos salen del
+         * discriminador, no del camino de banda lateral.
+         *
+         * Y se coge JUSTO al salir del discriminador, antes del filtro de
+         * audio y antes del silenciador. Lo del silenciador no es un detalle:
+         * en paquete no hay portadora continua, las tramas son rafagas de
+         * medio segundo con silencio en medio, y un silenciador que abre
+         * cuando ya ha empezado la trama se come las banderas del principio -
+         * que son precisamente con las que el lazo de reloj se engancha-.
+         */
+        if (ax25_activo()) {
+            ax25_process(s_env, SDR_RX_BLOCK_SAMPLES);
+            aprs_scope_feed(s_env, SDR_RX_BLOCK_SAMPLES);
+        }
+        /*
+         * Y AIS, del mismo sitio exacto y por las mismas razones: crudo, a
+         * la salida del discriminador, antes del filtro de audio y ANTES
+         * DEL SILENCIADOR.
+         *
+         * Lo del silenciador importa aqui todavia mas que en el APRS: una
+         * rafaga de AIS dura 26,7 milisegundos - la mitad que una de
+         * paquete - y empieza con 24 bits de preambulo que son justo con
+         * los que el lazo de reloj se engancha. Un silenciador que abra
+         * cuando la rafaga ya ha empezado se come el preambulo entero y no
+         * queda nada con lo que sincronizar.
+         */
+        if (ais_modo_activo()) {
+            ais_modo_mete(s_env, (uint16_t)SDR_RX_BLOCK_SAMPLES);
+        }
     } else {
         /* SSB (USB/LSB), phasing method at a DECIMATED rate - see the
          * PIPELINE comment above DECIM_COEFFS and demod_am.h's SSB
@@ -2389,6 +3040,30 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * inside the same call. */
         arm_fir_decimate_f32(&s_decim_i_inst, s_i_buf, s_i_dec, SDR_RX_BLOCK_SAMPLES);
         arm_fir_decimate_f32(&s_decim_q_inst, s_q_buf, s_q_dec, SDR_RX_BLOCK_SAMPLES);
+
+        /*
+         * HFDL SE ENGANCHA AQUI. 25/09/2026.
+         *
+         * Justo despues del diezmado y ANTES del Hilbert, porque HFDL quiere
+         * la I/Q a 12 kHz tal cual - su mezclador se lleva la subportadora de
+         * 1.440 Hz a banda base el solo (ver hfdl_iq_mixer.h). Lo que viene
+         * despues en esta funcion es la maquinaria de banda lateral, que a
+         * HFDL no le sirve de nada.
+         *
+         * Es el mismo punto de la cadena del que sale su version, y ademas
+         * el unico donde existe la pareja I/Q: dos pasos mas abajo ya solo
+         * hay audio real.
+         *
+         * ESTO CORRE EN LA INTERRUPCION DEL DMA. Lo que hace por bloque es
+         * la parte barata de HFDL -mezclar, remuestrear, filtrar,
+         * sincronizar-; el Viterbi NO esta aqui, se queda pendiente y lo
+         * corre hfdl_modo_poll() desde el bucle principal. Si algun dia
+         * alguien mueve el Viterbi aqui, el sintoma sera el audio cortado,
+         * no un error de compilacion - por eso queda dicho.
+         */
+        if (hfdl_modo_activo()) {
+            hfdl_modo_mete(s_i_dec, s_q_dec, s_dec_block_samples);
+        }
 
         /* 2a. Hilbert-shift the decimated Q (90 degrees across the
          * audio band, now with proper coverage down to ~300Hz - see
@@ -2464,13 +3139,149 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          */
         if (rtty_get_enabled()) {
             rtty_process_chunks(s_ssb_dec, s_dec_block_samples);
-            /* Same buffer, same reasoning as rtty_process() just above
-             * (raw pre-NR audio) - feeds the tuning scope's own
-             * accumulator. See rtty_scope.h for why this is a
-             * SEPARATE FFT from both fft.c's real-time one and
-             * rtty.c's own Goertzel detectors. Cheap: just an
-             * accumulate-into-a-ring, the actual FFT runs later from
-             * the main loop (rtty_scope_poll()), never here. */
+        }
+        /*
+         * CW, 21/09/2026. Mismo sitio, mismo buffer y mismas razones que
+         * el RTTY de justo arriba: audio SSB crudo antes de la reduccion
+         * de ruido, porque la reduccion esta pensada para que se entienda
+         * una voz y lo que hace con un tono estrecho no ayuda a un
+         * detector que vive de medir ese tono; y ya esta a 12 kHz, que es
+         * lo que este modulo quiere, asi que no se diezma dos veces.
+         * Tambien de solo lectura, tambien saltado del todo cuando esta
+         * apagado.
+         */
+        if (cw_get_enabled()) {
+            cw_process_chunks(s_ssb_dec, s_dec_block_samples);
+        }
+        /*
+         * NAVTEX, 24/09/2026. Mismo sitio, mismo buffer, mismas razones:
+         * audio de banda lateral crudo antes de la reduccion de ruido -que
+         * esta pensada para que se entienda una voz y lo que hace con dos
+         * tonos estrechos no ayuda a un detector que vive de medirlos- y ya
+         * a 12 kHz, que es lo que este modulo quiere. Tambien de solo
+         * lectura y tambien saltado del todo cuando esta apagado.
+         *
+         * A diferencia del RTTY y del CW, este NO se trocea: navtex_process()
+         * acepta cualquier n porque trabaja muestra a muestra, sin ventana de
+         * bloque. Su ventana es la media movil de un bit, que lleva por
+         * dentro.
+         */
+        if (navtex_activo()) {
+            navtex_process(s_ssb_dec, s_dec_block_samples);
+        }
+        /*
+         * PSK31, 28/09/2026. Mismo sitio, mismo buffer, mismas razones, y
+         * aqui la de la reduccion de ruido es la mas clara de todas: lo
+         * que este decodificador mide es la FASE de una portadora de
+         * 31 Hz de ancho, y la sustraccion espectral cambia amplitudes por
+         * bandas - o sea que le mueve la fase justo donde vive la señal.
+         * Cruda.
+         *
+         * Tampoco se trocea: psk31_process() acepta cualquier n porque
+         * trabaja muestra a muestra. Lo que hace por muestra es girar un
+         * fasor (cuatro multiplicaciones) y acumular; el filtro adaptado
+         * es una suma corrida, O(1), y corre una de cada doce muestras.
+         * No hay nada caro aqui dentro.
+         */
+        if (psk31_activo()) {
+            psk31_process(s_ssb_dec, s_dec_block_samples);
+        }
+        /*
+         * WEFAX, 24/09/2026. El cuarto oyente del mismo buffer. Aqui la
+         * reduccion de ruido importaria MAS que en los otros tres si se
+         * aplicara: lo que este decodificador mide es la FRECUENCIA
+         * instantanea de un tono, y la sustraccion espectral cambia
+         * amplitudes por bandas - o sea que le movería el brillo de la imagen
+         * en funcion de la frecuencia. Cruda, como los demas.
+         */
+        if (wefax_activo()) {
+            wefax_process(s_ssb_dec, s_dec_block_samples);
+        }
+        /* SSTV, 24/09/2026. El quinto oyente del mismo buffer, y por las
+         * mismas razones que el fax: mide la frecuencia instantanea de un
+         * tono, asi que la reduccion de ruido le movería el brillo de la foto
+         * segun la frecuencia. Cruda. */
+        if (sstv_activo()) {
+            sstv_process(s_ssb_dec, s_dec_block_samples);
+        }
+        /*
+         * FT8, 25/09/2026. El sexto oyente del mismo buffer, y el unico que
+         * NO decodifica aqui dentro.
+         *
+         * ft8_modo_come() solo convierte a entero y remuestrea de 12000 a
+         * 3200: coste acotado y proporcional al bloque, como los cinco de
+         * arriba. Lo caro del FT8 -la FFT de cada subbloque y, al cerrarse la
+         * ranura de 15 s, el decodificador entero, que se lleva sus buenos
+         * cientos de milisegundos- corre en ft8_modo_tick(), desde el bucle
+         * principal. Meterlo aqui seria colgar el audio cada 15 segundos.
+         *
+         * Cruda, como las otras cinco, y por el mismo motivo de siempre: lo
+         * que el FT8 mide son ocho tonos muy juntos y muy debiles, justo lo
+         * que la sustraccion espectral se lleva por delante.
+         */
+        if (ft8_modo_activo()) {
+            ft8_modo_come(s_ssb_dec, s_dec_block_samples);
+        }
+        /*
+         * Y WSPR, del mismo sitio y por las mismas razones que FT8: la
+         * banda lateral ya diezmada a 12 kHz, cruda -lo que WSPR busca son
+         * cuatro tonos separados 1,46 Hz y treinta dB por debajo del ruido,
+         * o sea exactamente lo que la sustraccion espectral se lleva-.
+         *
+         * Lo que hace aqui por bloque es mezclar a banda base y diezmar por
+         * 32 hasta 375 Hz: coste acotado y proporcional al bloque. La
+         * correlacion de sincronismo y el decodificador de Fano NO estan
+         * aqui: corren en wspr_modo_poll(), desde el bucle principal, una
+         * vez cada dos minutos. Meterlos aqui cortaria el audio durante
+         * cientos de milisegundos cada vez que acaba una emision.
+         *
+         * wspr_modo_mete() se va sin hacer nada mientras no hay captura
+         * abierta, que son dos de cada dos minutos y medio.
+         */
+        if (wspr_modo_activo()) {
+            wspr_modo_mete(s_ssb_dec, s_dec_block_samples);
+        }
+        /*
+         * Y ALE, del mismo sitio: banda lateral ya diezmada a 12 kHz. Lo que
+         * hace por bloque son ocho Goertzel de 96 muestras cuatro veces por
+         * simbolo; el Golay y la busqueda de palabra van detras, en el mismo
+         * sitio, porque tambien son baratos (299 vueltas de un XOR).
+         *
+         * Cruda como las demas: los ocho tonos de ALE estan separados 250 Hz
+         * y la sustraccion espectral, que se lleva bien lo que parece ruido,
+         * se llevaria por delante los que llegan justos.
+         */
+        if (ale_modo_activo()) {
+            ale_modo_mete(s_ssb_dec, (uint16_t)s_dec_block_samples);
+        }
+        /*
+         * Y JTTY, del mismo sitio y cruda como las demas: la banda lateral
+         * ya diezmada a 12 kHz. Lo que busca son cuatro tonos separados
+         * 31,25 Hz, o sea justo del tamaño que la sustraccion espectral se
+         * lleva por delante tomandolo por ruido.
+         *
+         * Lo que hace por bloque es mezclar, diezmar por 24 y una DFT de
+         * 16 puntos en 32 frecuencias cada media fila de simbolo -cada 16
+         * ms-, mas la correlacion de sincronismo. Todo acotado y
+         * proporcional al bloque. El Viterbi de 512 estados NO esta aqui:
+         * corre en jtty_modo_poll(), desde el bucle principal, porque ahi
+         * dentro cortaria el audio.
+         */
+        if (jtty_modo_activo()) {
+            jtty_modo_mete(s_ssb_dec, (uint16_t)s_dec_block_samples);
+        }
+        /* El osciloscopio de sintonia lo comparten los dos: al RTTY le
+         * ensena donde caen las dos frecuencias y al CW donde cae el
+         * tono, que es exactamente lo que hay que mirar para sintonizar
+         * en cada caso. Se alimenta UNA vez, aunque nunca puedan estar
+         * los dos encendidos a la vez: si algun dia lo estuvieran, dos
+         * llamadas meterian el audio dos veces en el mismo acumulador.
+         * Ver rtty_scope.h para por que esta FFT es aparte de la del
+         * espectro. Barato: aqui solo se acumula en un anillo, la FFT
+         * corre luego desde el bucle principal. */
+        if (rtty_get_enabled() || cw_get_enabled() || navtex_activo()
+            || wefax_activo() || sstv_activo() || ft8_modo_activo()
+            || psk31_activo()) {
             rtty_scope_feed(s_ssb_dec, s_dec_block_samples);
         }
 
@@ -2495,8 +3306,23 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
             nr_ssb_cycles = DWT->CYCCNT - nr_t0;
         }
 
+        /*
+         * Notch automatico, etapa 35. Va AQUI, en el mismo sitio y a la
+         * misma tasa de 12 kHz que la reduccion de ruido, y DESPUES de
+         * ella a proposito: la reduccion trabaja por sustraccion
+         * espectral y no le molesta una portadora, pero al notch si le
+         * molesta el ruido, asi que cuanto mas limpio le llegue el audio
+         * mejor predice. Apagado no cuesta ni un ciclo - ver
+         * anotch_process(). */
+        anotch_process(s_ssb_dec, s_dec_block_samples);
+
         /* 3. Interpolate the 12kHz SSB audio (NR'd above, if it was on)
-         * back up to 192kHz (32 samples -> 512), straight into s_env[] -
+         * back up to the ACTIVE RF rate - 96kHz or 48kHz, see
+         * demod_am_active_fs_hz(); s_env[] is 256 samples. The "192kHz
+         * (32 samples -> 512)" this used to say is from before the rate
+         * dropped (fixed 30/09/2026 - the x16 interpolation factor below
+         * is the one that is still right, and it is what matters here) -
+         * straight into s_env[] -
          * everything downstream (DC blocker, ALPF, AGC, output) is
          * shared with AM, unchanged. INTERP_COEFFS carries the x16
          * gain that compensates the zero-stuffing loss (see the
@@ -2604,18 +3430,23 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
      * AM/USB/LSB: whichever of the three s_audio_bw picked - see
      * demod_am_set_audio_bw()'s comment in demod_am.h. */
     {
-        if (s_mode == (uint8_t)DEMOD_MODE_NFM) {
-            arm_biquad_cascade_df1_f32(&s_alpf_inst, s_env, s_env, SDR_RX_BLOCK_SAMPLES);
+        if (cw_get_enabled()) {
+            /* En CW manda el filtro de CW y los dos cortes no pintan
+             * nada: pedir 4 kHz de audio en telegrafia no es una
+             * preferencia, es no tener filtro. Ver
+             * demod_am_set_cw_filter_hz(). */
+            arm_biquad_cascade_df1_f32(&s_alpf_cw_inst, s_env, s_env,
+                                       SDR_RX_BLOCK_SAMPLES);
         } else {
-            arm_biquad_casd_df1_inst_f32 *alpf;
-
-            switch (s_audio_bw) {
-            case AUDIO_BW_2K3: alpf = &s_alpf_2k3_inst; break;
-            case AUDIO_BW_1K8: alpf = &s_alpf_1k8_inst; break;
-            case AUDIO_BW_4K0:
-            default:            alpf = &s_alpf_4k0_inst; break;
-            }
-            arm_biquad_cascade_df1_f32(alpf, s_env, s_env, SDR_RX_BLOCK_SAMPLES);
+            /*
+             * El filtro de dos cortes de la familia que suena. El indice
+             * se lee UNA vez aqui y no dentro del bucle: si cambiara a
+             * mitad de bloque, la mitad del bloque iria por una cascada y
+             * la otra mitad por otra. Ver el comentario de s_fil_coef.
+             */
+            uint8_t j = s_fil_act;
+            arm_biquad_cascade_df1_f32(&s_fil_inst[j], s_env, s_env,
+                                       SDR_RX_BLOCK_SAMPLES);
         }
     }
 
@@ -2659,6 +3490,18 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * cost here (0 for every other case: AM with NR off, WFM,
          * NFM) - see this function's top comment on that variable. */
         s_last_cycles_nr = nr_ssb_cycles;
+    }
+
+    /*
+     * 3b. El analizador de audio se alimenta AQUI, y el sitio importa:
+     * despues del filtro -para que lo que se vea sea lo que se oye- pero
+     * ANTES del AGC. Con el AGC en medio, la altura de una raya dependeria
+     * de cuanto lleve amplificando el control automatico en ese momento, o
+     * sea que el analizador estaria midiendo su propio AGC. Un instrumento
+     * que se mide a si mismo no sirve de nada.
+     */
+    if (analiz_activo()) {
+        analiz_feed(s_env, SDR_RX_BLOCK_SAMPLES);
     }
 
     /* 4. AGC (instant attack, slow release) + 5. clamp/duplicate to

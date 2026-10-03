@@ -13,8 +13,21 @@
  * backwards with ENCODER_DIRECTION=1 (i.e. A leading B is actually
  * counter-clockwise on this knob, opposite of what was assumed when
  * this flag was first added - see encoder.h's encoder_take_delta()
- * comment). Flipped here rather than swapping the A/B wires. */
+ * comment). Flipped here rather than swapping the A/B wires.
+ *
+ * 30/09/2026: esto es el sentido de ESTA placa, no el de todas. El dueno
+ * estreno otra unidad y giraba al reves que la suya de siempre: "giraba en
+ * sentido horario y la frecuencia crecia, aqui la frecuencia decrece". O
+ * sea que el cableado del mando varia entre placas y una constante de
+ * compilacion no puede acertar en las dos.
+ *
+ * Asi que esto se queda como el sentido POR DEFECTO de la placa, y encima
+ * va s_invertido, que el usuario pone desde Ajustes -> Equipo -> Mando y se
+ * guarda en CONFIG.CSV. Uno es de fabrica y el otro es tuyo. */
 #define ENCODER_DIRECTION -1
+
+/* 0 = como venga la placa, 1 = al reves. Ver encoder_invertido_pon(). */
+static uint8_t s_invertido;
 
 /* Quarter-steps per detent of the mechanical encoder. The common
  * EC11-style part gives one full quadrature cycle (4 transitions) per
@@ -51,6 +64,20 @@ static uint8_t          s_ab_prev   = 0; /* last sampled (A<<1)|B     */
 static uint8_t          s_btn_integ = 0; /* debounce integrator, ms   */
 static uint8_t          s_btn_state = 0; /* debounced level, 0 = idle (button is active HIGH) */
 static uint16_t         s_btn_held_ms = 0; /* ms held since the current debounced press started; only meaningful while s_btn_state==1 */
+/*
+ * 1 = la pulsacion que hay en curso YA se ha usado para otra cosa (girar
+ * el mando con el boton apretado), asi que al soltar no se reporta ni
+ * pulsacion corta ni larga.
+ *
+ * Por que hace falta: el gesto "aprieta y gira" del firmware original
+ * termina siempre en una suelta, y esa suelta, sin esto, dispararia ademas
+ * lo que signifique la pulsacion corta - cambiar el paso de sintonia, que
+ * es justo lo que el gesto acaba de estar ajustando. Se marca desde el
+ * bucle principal (encoder_consume_press) en cuanto llega el primer detente
+ * con el boton apretado, y se limpia sola en el siguiente flanco de
+ * pulsacion.
+ */
+static volatile uint8_t s_btn_consumed = 0;
 
 static uint8_t ab_read(void)
 {
@@ -116,8 +143,12 @@ void encoder_tick(void)
             s_btn_integ = 0;
             if (s_btn_state == 1U) { /* active high: 0->1 = press started */
                 s_btn_held_ms = 0;
+                s_btn_consumed = 0U; /* pulsacion nueva, aun sin usar */
             } else { /* 1->0 = released - classify now that the hold time is known */
-                if (s_btn_held_ms >= BTN_LONG_PRESS_MS) {
+                if (s_btn_consumed) {
+                    /* se gasto girando: ni corta ni larga - ver
+                     * s_btn_consumed */
+                } else if (s_btn_held_ms >= BTN_LONG_PRESS_MS) {
                     s_long_presses++;
                 } else {
                     s_presses++;
@@ -125,6 +156,16 @@ void encoder_tick(void)
             }
         }
     }
+}
+
+uint8_t encoder_button_down(void)
+{
+    return s_btn_state;
+}
+
+void encoder_consume_press(void)
+{
+    s_btn_consumed = 1U;
 }
 
 int32_t encoder_take_delta(void)
@@ -143,7 +184,28 @@ int32_t encoder_take_delta(void)
     s_qsteps = q % QUARTER_STEPS_PER_DETENT;
     __set_PRIMASK(primask);
 
-    return detents * ENCODER_DIRECTION;
+    /* El ajuste del usuario se aplica AQUI, en el unico sitio por donde
+     * salen los pasos del mando de verdad. Los pasos INYECTADOS -los
+     * botones "-" y "+" de la pantalla de detalle, ver s_inject_detents en
+     * main.c- no pasan por aqui y no deben invertirse: esos ya vienen en
+     * "mas" y "menos", no en "horario" y "antihorario".
+     *
+     * Comprobado en la placa el 30/09/2026, que es lo unico que vale aqui:
+     * con "Mando" = "Invertido", girando en sentido horario la frecuencia
+     * sube, y los botones "-" y "+" de detalle siguen bajando y subiendo en
+     * las DOS posiciones del ajuste. El banco no puede ver esto: mide el
+     * signo que sale de esta funcion, no hacia donde gira un mando fisico. */
+    return detents * ENCODER_DIRECTION * (s_invertido ? -1 : 1);
+}
+
+void encoder_invertido_pon(uint8_t v)
+{
+    s_invertido = (uint8_t)(v ? 1U : 0U);
+}
+
+uint8_t encoder_invertido(void)
+{
+    return s_invertido;
 }
 
 uint8_t encoder_take_press(void)

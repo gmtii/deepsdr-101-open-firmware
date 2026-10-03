@@ -26,21 +26,35 @@
  * no risk of forgetting it somewhere. */
 #define BACKLIGHT_MIN_PERCENT 10U
 
-/* Boot-time default - LOWERED to 50% on 31/07/2026 after the project
- * owner found the panel went BLACK at the original 100% default and
- * came back at 50%. Likely explanation: CCR=ARR+1 at 100% duty (see
- * backlight_set_percent()'s comment) makes the PWM pin sit
- * permanently HIGH with no toggling at all - many backlight driver
- * ICs (boost converters, charge pumps) use the PWM edges themselves
- * to run their internal switching/dimming control, and can
- * misbehave or shut off entirely on a static DC input rather than
- * simply treating it as "always on". NOT confirmed against this
- * board's actual driver IC - just the most common failure mode for
- * this symptom. If true, the fix is to cap backlight_set_percent()
- * at something like 99% (CCR=ARR, still visually full brightness,
- * but the pin keeps toggling at 20kHz) instead of true 100% - worth
- * trying if 100% is ever needed again. */
-static uint8_t s_backlight_percent = 50U;
+/*
+ * BRILLO AL ARRANCAR. 50 -> 80 el 25/09/2026.
+ *
+ * *** Por el dueno del proyecto: "revisa el brillo, y mira si se puede
+ * aumentar mas". ***
+ *
+ * Este numero solo manda cuando el CONFIG.CSV no trae brillo guardado - o
+ * sea, la primera vez, o despues de borrarlo. Y el dueno acababa de
+ * borrarlo: "he borrado el config.csv y he dejao que lo cree el". Asi que
+ * la pantalla se quedo al 50% sin que nadie lo tocara, igual que el NR se
+ * quedo en 50 de 4.095. Dos mordiscos del mismo borrado.
+ *
+ * POR QUE ESTABA EN 50. El 31/07/2026 se bajo porque "al 100% la pantalla
+ * se quedaba NEGRA y volvia al 50%". Eso era verdad, pero la causa no era
+ * la que quedo escrita aqui. Ese mismo dia el driver estaba cableado como
+ * ACTIVO EN ALTO por una suposicion equivocada, y con esa polaridad el
+ * 100% deja el pin permanentemente ALTO... que en este panel, que es
+ * ACTIVO EN BAJO, es exactamente apagar la luz. El 100% no fallaba: hacia
+ * lo que se le pedia, al reves.
+ *
+ * La polaridad se arreglo el mismo dia. El 50 y la teoria de que el driver
+ * necesita flancos se quedaron aqui sin volver a probarse, y han tenido la
+ * pantalla a medio gas casi dos meses.
+ *
+ * SE DEJA EN 80 Y NO EN 100 a proposito: es de fabrica, no la preferencia
+ * de nadie. Bien clara sin ser un numero que nunca se ha probado como
+ * arranque. El 100 esta a mano con el encoder y se guarda solo.
+ */
+static uint8_t s_backlight_percent = 80U;
 
 void backlight_init(void)
 {
@@ -110,13 +124,61 @@ void backlight_set_percent(uint8_t percent)
     }
     s_backlight_percent = percent;
 
-    /* BACKLIGHT_PWM_PERIOD+1 = total counts (ARR is counts-1, same
-     * convention gd32_i2s_mclk_timer_start() uses) - so percent=100
-     * lands on CCR=4992, one count PAST the ARR of 4991. That's
-     * intentional: in PWM0 mode a CCR strictly greater than ARR pins
-     * the output permanently active for the whole period (true 100%
-     * duty), rather than the near-100%-but-not-quite you'd get by
-     * clamping CCR to ARR itself. */
+    /*
+     * EL 100% ES 100%, Y EL RECORTE QUE HABIA AQUI FUE UN ERROR MIO.
+     * 28/09/2026.
+     *
+     * *** Por el dueño del proyecto: "hay que revisar el tema del brillo de
+     * la pantalla comparandolo con el repo de esteban" ... "parece que
+     * nuestra version con el brillo 100% brilla menos". ***
+     *
+     * Tenia razon, y la unica diferencia funcional entre este fichero y el
+     * del proyecto padre era esta linea, que yo añadi el 25/09:
+     *
+     *     if (ccr > BACKLIGHT_PWM_PERIOD) { ccr = BACKLIGHT_PWM_PERIOD; }
+     *
+     * Con ella, el 100% daba CCR=4991 en vez de 4992, o sea que la salida
+     * dejaba de estar permanentemente activa y volvia a conmutar con un
+     * hueco de UN paso de 4.992.
+     *
+     * LO QUE ESCRIBI PARA JUSTIFICARLO. Que costaba "dos centesimas de por
+     * ciento de luz - invisible, y el ojo no distingue eso ni de lejos" y
+     * que era "la diferencia entre 'seguramente va bien' y 'no puede ir
+     * mal', por dos centesimas".
+     *
+     * LAS DOS CENTESIMAS ERAN DE CICLO DE TRABAJO, NO DE LUZ. 4991/4992 es
+     * el 99,98% del TIEMPO, y eso lo calcule bien; lo que hice mal fue
+     * darlo por bueno como porcentaje de BRILLO. En medio hay un driver de
+     * retroiluminacion cuya funcion de transferencia no he medido nunca, y
+     * el hueco que le estaba metiendo son 10 ns por periodo -mas corto que
+     * lo que tarda el propio pin en conmutar con GPIO_OSPEED_2MHZ- veinte
+     * mil veces por segundo. Eso no es una perturbacion pequeña para un
+     * convertidor conmutado: es un glitch en cada ciclo. Se nota, y se ve.
+     *
+     * Y DE DONDE SALIO LA IDEA. Del propio proyecto padre, que el 31/07
+     * apunto una hipotesis para una pantalla negra al 100%: "muchos
+     * drivers usan los propios flancos del PWM... NOT confirmed against
+     * this board's actual driver IC - just the most common failure mode
+     * for this symptom. If true, the fix is to cap at something like 99%".
+     * Ellos NO lo aplicaron -bajaron el arranque al 50%- y esa hipotesis
+     * se quedo escrita.
+     *
+     * La pantalla negra tenia otra causa, y esta escrita dos pantallas
+     * arriba en este mismo fichero: la POLARIDAD estaba al reves. Yo
+     * diagnostique eso bien el 25/09... y aplique aqui abajo el arreglo de
+     * la teoria que acababa de descartar. Las dos cosas en el mismo cambio.
+     *
+     * POR QUE QUITARLO NO ES CAMBIAR UNA SUPOSICION POR OTRA. Porque el
+     * experimento ya esta hecho y no lo hice yo: el firmware de Esteban
+     * lleva CCR=4992 y corre en ESTA radio, y lo que el dueño ve es que
+     * brilla MAS -no que se quede negra-. Con la polaridad correcta,
+     * permanentemente activo quiere decir pin permanentemente BAJO, que en
+     * este panel es la luz al maximo.
+     *
+     * Asi que la cuenta vuelve a ser la del padre: percent=100 da CCR=4992,
+     * un paso mas alla del ARR, y en modo PWM0 eso deja la salida activa
+     * todo el periodo. 100% de verdad.
+     */
     ccr = ((uint32_t)(BACKLIGHT_PWM_PERIOD + 1U) * percent) / 100U;
     timer_channel_output_pulse_value_config(TIMER1, TIMER_CH_3, ccr);
 }

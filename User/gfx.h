@@ -58,6 +58,16 @@ static inline uint16_t gfx_rgb565(uint8_t r, uint8_t g, uint8_t b)
 #define GFX_SCREEN_HEIGHT  480
 
 /* --- Primitivas de relleno / lineas rectas (rapidas, ventana unica) --- */
+/*
+ * Banda superior reservada. Con rows > 0, TODAS las primitivas de este
+ * fichero recortan lo que caiga en y < rows: la cabecera y la barra de
+ * estado las dibuja ui_top.c con gfx2, que no pasa por aqui, y asi ningun
+ * readout antiguo ni ningun widget de ui.c puede pintar encima. Ver el
+ * comentario largo en gfx.c. 0 = desactivado (valor de arranque).
+ */
+void gfx_guard_top_set(uint16_t rows);
+uint16_t gfx_guard_top(void);
+
 void gfx_pixel(uint16_t x, uint16_t y, uint16_t color);
 void gfx_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color);
 void gfx_hline(uint16_t x, uint16_t y, uint16_t w, uint16_t color);
@@ -74,6 +84,12 @@ void gfx_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color);
  * rectangular de la GRAM. w*h debe coincidir con el numero de elementos
  * de pixels. Es la funcion que usa waterfall.c para pintar su buffer. */
 void gfx_blit(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pixels);
+
+/* Volcado que no espera: ver el comentario en gfx.c. Devuelve 1 si hay un
+ * envio por DMA en marcha (y hay que llamar a gfx_blit_espera() antes de
+ * tocar `pixels` o el panel), 0 si ya esta todo hecho. */
+uint8_t gfx_blit_arranca(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pixels);
+uint8_t gfx_blit_espera(void);
 
 /* --- Texto (fuente 5x7 monoespaciada, ver gfx_font.h) --- */
 /* scale multiplica cada pixel de la fuente (scale=1 -> letras de 5x7 reales,

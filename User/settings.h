@@ -79,6 +79,115 @@
  * this module uses instead.
  */
 
+/*
+ * LOS AJUSTES "DE VALOR ENTERO" - 23/09/2026.
+ *
+ * Los de arriba llevan cada uno su parametro en tres firmas (build_csv,
+ * settings_poll, settings_save_now) y su rama en el parser. Con once ya
+ * escocia; con los diecisiete que faltaban por guardar habria sido
+ * inmantenible, y sobre todo habria sido LA MISMA LISTA ESCRITA EN CUATRO
+ * SITIOS, que es la clase de fallo que en este proyecto ya ha mordido cinco
+ * veces (los modos, las paletas, el formato del ancho, k_act_slots, la rama
+ * doble del boton Paso).
+ *
+ * Asi que estos van por indice contra UNA sola tabla:
+ *   - settings.c tiene la tabla de claves, y su escritor y su parser son dos
+ *     bucles sobre ella. Anadir un ajuste ahi es una linea.
+ *   - main.c los lee y los aplica en extras_leer()/extras_aplicar(), donde
+ *     vive todo lo que settings.c no tiene por que saber: rangos, setters,
+ *     y en que orden se pueden aplicar en el arranque.
+ *   - tools/persist_check.py comprueba que el enum, la tabla de claves y las
+ *     dos funciones de main.c cubren exactamente los mismos identificadores.
+ *     Es lo que sustituye al compilador, que aqui no puede ayudar.
+ *
+ * El valor es un int32_t con SIGNO a proposito: el suelo de la escala y el
+ * silenciador son negativos. Los que son de coma flotante (el silenciador en
+ * dB, el desplazamiento de RTTY, el tono de CW) se guardan redondeados a
+ * entero, que es justo la resolucion que enseña la pantalla.
+ */
+typedef enum {
+    SET_X_AGC = 0,      /* agc_profile_t: 0=manual, 1=lento, 2=medio, 3=rapido */
+    SET_X_SQL,          /* silenciador, dB enteros (negativo = abierto) */
+    SET_X_NR,           /* reduccion de ruido, 0..NR_STRENGTH_MAX */
+    SET_X_NB,           /* noise blanker: 0=apagado, 1/2/3 = suave/medio/fuerte */
+    SET_X_RFAGC,        /* AGC de RF, 0/1 */
+    SET_X_ESCALA_LO,    /* suelo de la escala del espectro, dB */
+    SET_X_ESCALA_HI,    /* techo de la escala del espectro, dB */
+    SET_X_AUTOESC,      /* autoescala, 0/1 */
+    SET_X_ZOOM,         /* 0=1x, 1=2x, 2=4x, 3=8x */
+    SET_X_CONTORNO,     /* pasadas de suavizado de la traza */
+    SET_X_TACTIL,       /* firmeza del tactil, 1..3 */
+    SET_X_IFBW,         /* filtro de FI en WFM, 0=estrecho 1=ancho */
+    SET_X_RTTY_SHIFT,   /* desplazamiento, Hz */
+    SET_X_RTTY_BAUD,    /* indice en la tabla de baudios */
+    SET_X_RTTY_INV,     /* estacion invertida, 0/1 */
+    SET_X_CW_TONO,      /* tono de CW, Hz */
+    SET_X_CW_WPM,       /* indice en k_cw_wpm[] */
+    SET_X_CW_AUTO,      /* autoenganche de CW, 0/1 */
+    SET_X_WFVEL,        /* velocidad de la cascada, 0..3 */
+    SET_X_ANALIZ,       /* analizador de audio: 0=apagado, 1..5 = zoom+1 */
+    SET_X_NCO,          /* NCO de sintonia: 0=apagado (el oscilador sigue a la sintonia), 1=puesto */
+    SET_X_RDS,          /* decodificador de RDS en FM ancha, 0/1 */
+    SET_X_PUENTE,       /* puente de la traza del espectro, 0/1 (por defecto 1) */
+    SET_X_WFX_LPM,      /* velocidad de linea del fax, indice 0..WEFAX_LPM_N-1 */
+    SET_X_NOTCH,        /* notch automatico: 0=apagado, 1..4=fuerza+1 */
+    /* Cortes del filtro de audio, lo*10000+hi (ver k_extra_claves[]). */
+    SET_X_FIL_SSB,
+    SET_X_FIL_AM,
+    SET_X_FIL_SAM,
+    SET_X_FIL_NFM,
+    SET_X_SSTV_GUARDA,  /* fotos de SSTV al pendrive: 0=no, 1=BMP 24, 2=BMP 16 */
+    SET_X_WFX_GUARDA,   /* cartas de fax al pendrive: 0=no, 1=BMP gris */
+    /* Idioma de la interfaz: 0=espanol, 1=ingles (ver User/idioma.h).
+     *
+     * Entro AL FINAL de la lista a proposito -le toco el bit 31 de
+     * `presentes`-, y el razonamiento vale para toda clave nueva: un
+     * CONFIG.CSV escrito por una version anterior simplemente no la trae
+     * -bit a 0- y arranca con el valor por defecto compilado. Ningun fichero
+     * guardado se queda sin leer por anadir claves al final.
+     *
+     * Ya no es la ultima: SET_X_ENC_INV entro detras el mismo dia. Lo que no
+     * se puede hacer nunca es meter una clave EN MEDIO, porque eso corre
+     * todos los bits de despues y un fichero viejo se lee entero al reves. */
+    SET_X_IDIOMA,
+    /* Sentido del mando: 0 = como venga la placa, 1 = al reves. El
+     * cableado del encoder varia entre unidades (ver encoder.h). */
+    SET_X_ENC_INV,
+    /*
+     * ENCENDIDO DE LA REDUCCION DE RUIDO - 01/10/2026.
+     *
+     * *** El dueno, viendo dos videos suyos con el mismo CONFIG.CSV y el
+     * boton de Ruido en estados distintos: "pero estas tonto? los dos cogen
+     * el mismo config". *** Y tenia razon: no era que el fichero fallara,
+     * es que **este dato no estaba en el fichero**. Se guardaba la
+     * intensidad (SET_X_NR, "nr_strength") pero no el interruptor, asi que
+     * la NR arrancaba apagada siempre por mucho que la dejaras puesta.
+     *
+     * Entra AL FINAL, como manda el comentario de SET_X_IDIOMA: un
+     * CONFIG.CSV escrito por una version anterior no trae esta clave, su
+     * bit queda a 0 y arranca con el valor compilado. Meterla en medio
+     * correria los bits de todas las de despues y un fichero viejo se
+     * leeria entero al reves.
+     */
+    SET_X_NR_ON,        /* reduccion de ruido encendida, 0/1 */
+    SET_X_N
+} settings_extra_id_t;
+
+typedef struct {
+    int32_t  v[SET_X_N];
+    /* Un bit por clave, en vez de diecisiete have_*: el que esta a 0 es una
+     * clave que no venia en el fichero (primer arranque, o un CONFIG.CSV de
+     * antes de que existiera), y ahi manda el valor por defecto de quien
+     * llama, igual que con los have_ de arriba. */
+    /* Pasa de 32 a 64 bits el 24/09/2026: con los cuatro cortes de filtro
+     * de la etapa 34 la cuenta llegaba a 31 de 32, y quedarse a una clave
+     * del tope es quedarse sin sitio la proxima vez. Ampliarlo cuesta
+     * cuatro bytes de RAM y quita el problema de en medio, que es mejor
+     * que empezar a empaquetar valores en bits y hacer CONFIG.CSV
+     * ilegible para quien lo abra en el ordenador. */
+    uint64_t presentes;
+} settings_extra_t;
+
 /* One flag+value pair per optional field - see settings_load()'s
  * comment. Grouped into a struct (rather than a growing list of
  * settings_load() out-parameters) so adding another persisted setting
@@ -107,6 +216,9 @@ typedef struct {
     uint8_t      backlight_pct;       /* 0-100, see backlight.h - backlight_set_percent() clamps up to its own floor */
     uint8_t      have_att_rin_level;
     uint8_t      att_rin_level;       /* 0=10k/1=20k/2=40k - aic3204_rin_t, see main.c's s_rf_agc_rin_level */
+    uint8_t      have_tema_idx;
+    uint8_t      tema_idx;            /* indice en k_temas[] de main.c: paleta de la interfaz + paleta del waterfall */
+    settings_extra_t extra;           /* los de tabla, ver settings_extra_id_t */
 } settings_loaded_t;
 
 /* Reads CONFIG.CSV (if present) and:
@@ -142,6 +254,11 @@ uint8_t settings_load(settings_loaded_t *out);
  * site. */
 void settings_mark_dirty(void);
 
+/* Cuantos guardados de CONFIG.CSV han terminado bien y cuantos han fallado
+ * desde que arranco, y cuando fue el ultimo bueno. Sale en la ventana de
+ * informacion: ver el comentario de los contadores en settings.c. */
+void settings_cuentas(uint16_t *ok, uint16_t *mal, uint32_t *ultimo_ms);
+
 /* Call once per main loop iteration (cheap - just a timestamp check
  * when nothing is dirty, or one small non-blocking step of an
  * in-progress save - see spi_flash.h's async-save comment). If
@@ -161,7 +278,8 @@ void settings_mark_dirty(void);
  * settings.c reads those two straight from backlight_get_percent()/
  * spectrum_get_style() itself (see this file's header comment). */
 void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k,
-                    int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled, uint8_t att_rin_level);
+                    int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled, uint8_t att_rin_level,
+                    uint8_t tema_idx, const settings_extra_t *extra);
 
 /* Saves immediately, no debounce - for events that are already
  * naturally rare/deliberate (the touch calibration wizard finishing
@@ -170,6 +288,7 @@ void settings_poll(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, au
  * before the thing the user just did for its own sake gets persisted.
  * Same four trailing parameters as settings_poll() above. */
 void settings_save_now(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz, audio_bw_t audio_bw, int16_t volume_db_x2, uint8_t nonwfm_use_48k,
-                        int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled, uint8_t att_rin_level);
+                        int16_t pga_gain_db_x2, uint8_t spectrum_smooth_pct, uint8_t speaker_enabled, uint8_t att_rin_level,
+                    uint8_t tema_idx, const settings_extra_t *extra);
 
 #endif /* SETTINGS_H */

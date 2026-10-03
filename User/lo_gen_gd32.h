@@ -10,7 +10,17 @@
  * see ms5351.h's comment on the >=4.8MHz phase-offset-register scheme
  * and the <4.8MHz fractional low-band trick - are either out of range
  * or explicitly flagged as "NOT bench-confirmed... PLL FEEDBACK
- * MULTIPLIER WARNING" for anything much below ~1MHz). This board's
+ * MULTIPLIER WARNING" for anything much below ~1MHz).
+ *
+ * 23/09/2026: esa segunda mitad ya no es cierta. El truco de banda
+ * baja del MS5351 SI aguanta la cuadratura a 955 kHz en esta placa,
+ * medido con una emisora de onda media y su imagen ausente del
+ * panadaptador - ver el parrafo "CONFIRMADO EN LA PLACA" de ms5351.h.
+ * O sea que la franja entre LO_GEN_CROSSOVER_HZ y 4,8 MHz, que este
+ * comentario daba por dudosa, funciona. Esto NO cambia nada de lo que
+ * hace este modulo (sigue cubriendo solo por debajo de 300 kHz, por la
+ * razon de resolucion que se explica justo debajo, que es
+ * independiente); cambia por que se creia que hacia falta. This board's
  * own designer anticipated exactly that limitation: PA6/PA7 route to
  * the SAME physical nets as the MS5351's CLK0/CLK1 outputs (through
  * 100-ohm series resistors - see main.c's boot-time Hi-Z comment),

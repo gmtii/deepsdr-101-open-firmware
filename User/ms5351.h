@@ -153,11 +153,29 @@ uint8_t ms5351_tune_captured(void);
  *   CLK1 a few Hz slow for a precisely-timed window, then snap it to
  *   the target frequency once it's accumulated exactly 90 degrees of
  *   lag behind CLK0). Extends the usable range down to 100kHz
- *   (LOWF_FLOOR_HZ in ms5351.c) - NOT bench-confirmed on this board
- *   yet at the low end, see that comment's PLL FEEDBACK MULTIPLIER
- *   WARNING before relying on frequencies much below ~1MHz. Crossing
- *   between the two techniques' zones (1.5MHz, 500kHz) costs a one-off
- *   ~62.5ms blocking delay - tuning within a zone is fully responsive.
+ *   (LOWF_FLOOR_HZ in ms5351.c).
+ *
+ *   23/09/2026, CONFIRMADO EN LA PLACA a 955 kHz: aqui ponia "NOT
+ *   bench-confirmed on this board yet at the low end... see that
+ *   comment's PLL FEEDBACK MULTIPLIER WARNING before relying on
+ *   frequencies much below ~1MHz", y esa cautela ha resultado ser
+ *   pesimista. Medida: una emisora de onda media fuerte (S9) en 955
+ *   kHz, o sea LO en 931 kHz, de lleno en la zona del truco
+ *   fraccional. Si la cuadratura fuera mala apareceria su imagen a
+ *   907 kHz (la misma distancia del LO, al otro lado), y en el
+ *   panadaptador NO HAY NADA ahi: el suelo de ruido a 907 es el mismo
+ *   que en el resto de la pantalla. Con la portadora unos 25 dB sobre
+ *   ese suelo, el rechazo de imagen es de al menos esos 25 dB y en
+ *   realidad no se puede medir cuanto mas, porque la imagen esta
+ *   enterrada bajo el ruido. Y el firmware NO tiene ninguna correccion
+ *   de balance de I/Q, asi que eso es cuadratura de hardware pura.
+ *
+ *   Lo que sigue sin comprobar es por debajo de ~500 kHz, que es la
+ *   otra zona de este mismo truco.
+ *
+ *   Crossing between the two techniques' zones (1.5MHz, 500kHz) costs
+ *   a one-off ~62.5ms blocking delay - tuning within a zone is fully
+ *   responsive.
  *
  * PLLB is soft-reset only when the divider (and therefore the phase
  * offset) changes with respect to the previous call - resetting the

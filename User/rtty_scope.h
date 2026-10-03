@@ -40,7 +40,7 @@
  * needs. Kept separate on purpose.
  *
  * *** REPLACES THE NORMAL RF SPECTRUM PANEL, DOESN'T COEXIST WITH IT
- * *** - see main.c's rtty_scope_active()/rtty_scope_draw(): whenever
+ * *** - see main.c's digi_panel_active()/rtty_scope_draw(): whenever
  * one of the RTTY-L/RTTY-U modes is selected (k_demod_modes[]/
  * menu_mode_preset_callback()), this panel takes over the same screen
  * area (SPEC_Y/SPEC_H/MAIN_W) the RF spectrum normally uses, and the

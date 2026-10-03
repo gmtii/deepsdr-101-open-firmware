@@ -18,12 +18,20 @@
  * PRESUPUESTO DE RAM (actualizado 01/09/2026 - ver el propio comentario
  * de WATERFALL_WIDTH sobre el traslado de buffers DSP/FFT/espectro a
  * TCM RAM, lo que hizo viable este ensanche):
- *   tamano_buffer = WATERFALL_WIDTH * WATERFALL_ROWS * 2 bytes
- *   Con los valores actuales (796 x 72): 114624 bytes (~112KB). Antes
- *   del ensanche a pantalla completa: 672x72 = 96768 bytes (~94.5KB).
- *   Sigue siendo la mitad larga de los 192KB
- *   disponibles - probablemente haya que BAJAR WATERFALL_ROWS en cuanto
- *   se sepa cuanta RAM piden los buffers de FFT/IQ.
+ *   tamano_buffer = WATERFALL_WIDTH * WATERFALL_ROWS * 1 byte
+ *   Con los valores de HOY (756 x 72 x 1): 54.432 bytes.
+ *
+ *   ESTE PARRAFO DECIA 114.624 (~112 KB) Y ERA FALSO POR PARTIDA DOBLE,
+ *   corregido el 28/09/2026: el ancho es 756 desde la etapa 3b -lo dice
+ *   WATERFALL_WIDTH veinte lineas mas abajo- y se guarda UN byte por
+ *   celda, no dos, porque el historial son indices de paleta -lo dice el
+ *   bloque "CAMBIO DE ALMACENAMIENTO" cincuenta lineas mas abajo-. O sea
+ *   que los dos datos que hacian falta para corregirlo ya estaban en este
+ *   mismo fichero; lo que faltaba era rehacer la multiplicacion.
+ *
+ *   El numero de verdad se puede leer del binario sin creerse a nadie:
+ *       arm-none-eabi-nm --print-size build/firmware.elf | grep shared_ram
+ *       -> 0000d4a0 = 54.432
  *
  * MODELO DE SCROLL: el buffer se trata como un anillo logico simple:
  *   - waterfall_push_line() desplaza todas las filas una posicion hacia
@@ -39,7 +47,11 @@
  * capa de SDR/DSP mas adelante.
  */
 
-#define WATERFALL_WIDTH  796  /* main display column width - full screen (800) minus a
+/* ETAPA 3b: 796 -> 756. Los 40 px de la izquierda son ahora la canaleta de
+ * los ejes (ver spec_chrome.h), que espectro y waterfall comparten para que
+ * las dos vistas sigan empezando en la misma columna. 756 es divisible por
+ * 4, requisito del marcador de +Fs/4. De paso libera 3 KB de RAM. */
+#define WATERFALL_WIDTH  756  /* main display column width - full screen (800) minus a
                                   4px panel border (2px each side), see main.c's
                                   radio layout constants. Was 672 (screen minus a
                                   124px right-hand status column) until 01/09/2026,
@@ -62,16 +74,48 @@ void waterfall_init(void);
  * y "desplaza" el resto. Desde el rediseño en anillo (30/07/2026) es
  * O(WATERFALL_WIDTH): solo mueve un indice y copia la fila nueva, sin
  * memmove del buffer completo. */
-void waterfall_push_line(const uint16_t *line);
+/*
+ * CAMBIO DE ALMACENAMIENTO: el historial guarda INDICES de colormap de 8
+ * bits, no RGB565 de 16. El color se aplica al volcar, atravesando la LUT
+ * que devuelve spectrum_colormap_lut().
+ *
+ * Por que: 796 x 72 x 2 = 112 KB era la mayor reserva de RAM del firmware
+ * con diferencia. A 1 byte por celda son 56 KB, y esos 56 KB son los que
+ * pagan la banda compositora de gfx2 y aun sobran.
+ *
+ * Y de regalo, cambiar de paleta ahora repinta TODO el historial en vez de
+ * solo las filas nuevas.
+ */
+void waterfall_push_line(const uint8_t *line);
+
+/*
+ * EL BUFFER ESTA PRESTADO. 25/09/2026.
+ *
+ * La cascada comparte sus bytes con el area de trabajo de FT8 (ver
+ * ft8_shared_ram.h y el comentario largo de waterfall.c). Mientras FT8
+ * decodifica, esos bytes son magnitudes, no pixeles: pintarlos saca basura
+ * en pantalla Y, lo que es peor, escribir una linea nueva le corrompe los
+ * datos al decodificador. Las dos cosas en silencio.
+ *
+ * Esto estuvo escrito como una REGLA -"cualquier modo que quiera pintar
+ * cascada tiene que mirar antes si FT8 esta en marcha"-, y una regla que hay
+ * que acordarse de cumplir en cada sitio nuevo es una regla que un dia no se
+ * cumple. Ahora lo comprueba el duenno del buffer: mientras este prestado,
+ * waterfall_push_line() y waterfall_blit() no hacen nada. El que lo pide
+ * -ft8_modo.c- es tambien el que lo devuelve, y devolverlo pasa por
+ * waterfall_init(), que es lo unico que deja el buffer con pixeles otra vez.
+ */
+void    waterfall_presta(uint8_t si);
+uint8_t waterfall_prestada(void);
 
 /* Vuelca el buffer completo a la GRAM en (x,y). No hace falta llamarlo en
  * cada push_line si se prefiere desacoplar tasa de actualizacion de datos
  * vs. tasa de refresco de pantalla. */
-void waterfall_blit(uint16_t x, uint16_t y);
+void waterfall_blit(uint16_t x, uint16_t y, const uint16_t *lut);
 
 /* Acceso directo a una fila del buffer (0 = mas reciente/arriba), por si
  * se necesita pintar encima (cursores, marcadores de frecuencia, etc.)
  * sin pasar por waterfall_push_line(). NULL si row fuera de rango. */
-uint16_t *waterfall_row(uint16_t row);
+uint8_t *waterfall_row(uint16_t row);
 
 #endif /* WATERFALL_H */

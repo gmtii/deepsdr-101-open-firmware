@@ -69,6 +69,42 @@ void encoder_tick(void);
  * over, not lost. */
 int32_t encoder_take_delta(void);
 
+/*
+ * SENTIDO DEL MANDO - 30/09/2026.
+ *
+ * El cableado del encoder no es igual en todas las placas: en una unidad
+ * girar en sentido horario sube la frecuencia y en otra la baja. La
+ * constante ENCODER_DIRECTION de encoder.c es el sentido POR DEFECTO de la
+ * placa con la que se desarrollo; esto es la vuelta que le puede dar el
+ * usuario, desde Ajustes -> Equipo -> Mando.
+ *
+ * Solo afecta a los pasos que salen de encoder_take_delta(), o sea al mando
+ * de verdad. Los botones "-" y "+" de la pantalla de detalle inyectan pasos
+ * ya con su signo y no se tocan: ahi "mas" es mas en las dos posiciones.
+ */
+void    encoder_invertido_pon(uint8_t v);
+uint8_t encoder_invertido(void);
+
+/*
+ * Nivel del boton ya antirrebotado: 1 mientras esta apretado.
+ *
+ * Para gestos de "apretar y girar a la vez". Las tres funciones
+ * encoder_take_*() reportan EVENTOS al soltar, que es lo correcto para un
+ * clic pero no sirve para saber si el boton esta apretado AHORA, que es lo
+ * que necesita un gesto combinado.
+ */
+uint8_t encoder_button_down(void);
+
+/*
+ * Marca la pulsacion en curso como ya usada: al soltar no se reportara ni
+ * corta ni larga.
+ *
+ * Se llama en cuanto un gesto combinado se da por iniciado. Sin esto, el
+ * gesto "apretar y girar" acabaria disparando ademas la accion de la
+ * pulsacion corta al levantar el dedo.
+ */
+void encoder_consume_press(void);
+
 /* Returns 1 exactly once per debounced SHORT button press (held less
  * than the long-press threshold - see encoder.c's BTN_LONG_PRESS_MS). */
 uint8_t encoder_take_press(void);

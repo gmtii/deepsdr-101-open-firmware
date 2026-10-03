@@ -50,6 +50,88 @@ void rm68120_exmc_gpio_init(void)
     }
 }
 
+/* ---------------------------------------------------------------------
+ * EL TIEMPO DE DATO DEL BUS, AJUSTABLE EN MARCHA. 24/09/2026.
+ * ---------------------------------------------------------------------
+ * Importa mucho mas de lo que parece: el volcado de la cascada son 54.432
+ * escrituras de 16 bits seguidas, y el espectro otras tantas. Cada ciclo de
+ * escritura dura (direccion + 1) + (dato + 1) ciclos de HCLK, y HCLK son
+ * 200 MHz, o sea 5 ns. El campo del dato manda: va de 1 a 255.
+ *
+ * Y AQUI HAY UNA SORPRESA. Este fichero configura el bus en
+ * rm68120_exmc_bus_init(), pero a esa funcion solo se llega desde
+ * rm68120_init()... y main.c NO llama a rm68120_init(): lo salta desde el
+ * 30/07/2026 porque reinicializar el panel rompia el reloj del audio (ver
+ * el comentario de main.c). O sea que **la configuracion del bus que hay
+ * escrita en este fichero no se ha aplicado nunca desde entonces**. Lo que
+ * manda es lo que dejo el gestor de arranque, y no sabemos que es.
+ *
+ * Por eso estas funciones LEEN EL REGISTRO en vez de devolver una copia en
+ * memoria: asi dicen lo que hay de verdad, lo haya puesto quien lo haya
+ * puesto. Medir en vez de suponer, otra vez.
+ *
+ * Y por eso rm68120_bus_dato_pon() toca SOLO el campo del dato y deja el
+ * resto del registro como esta: no vamos a reconfigurar a ciegas un bus que
+ * lleva dos meses funcionando, solo a bajarle el numero que domina el coste.
+ * No se guarda en ajustes: si te pasas y la pantalla se vuelve ilegible,
+ * apagas y vuelve lo del gestor de arranque.
+ */
+volatile uint32_t g_lcd_ciclos;   /* ver la cabecera */
+
+uint32_t rm68120_ciclo(void)
+{
+    return DWT->CYCCNT;
+}
+
+static uint16_t s_dato_arranque;   /* lo que habia antes de que tocaramos */
+static uint8_t  s_dato_leido;
+
+static uint16_t bus_dset(void)
+{
+    return (uint16_t)((EXMC_SNTCFG0 & EXMC_SNTCFG_DSET) >> 8);
+}
+
+uint16_t rm68120_bus_dato(void)
+{
+    if (!s_dato_leido) {
+        s_dato_arranque = bus_dset();
+        s_dato_leido    = 1U;
+    }
+    return bus_dset();
+}
+
+/* El de antes de tocar nada, para poder volver. */
+uint16_t rm68120_bus_dato_arranque(void)
+{
+    (void)rm68120_bus_dato();
+    return s_dato_arranque;
+}
+
+/* Nanosegundos aproximados de una escritura completa. */
+uint16_t rm68120_bus_ns(void)
+{
+    uint32_t aset   = (EXMC_SNTCFG0 & EXMC_SNTCFG_ASET);
+    uint32_t dset   = bus_dset();
+    uint32_t ciclos = (aset + 1U) + (dset + 1U);
+    uint32_t ns     = (ciclos * 1000U) / (SystemCoreClock / 1000000U);
+
+    return (uint16_t)((ns > 65535U) ? 65535U : ns);
+}
+
+void rm68120_bus_dato_pon(uint16_t dato)
+{
+    uint32_t r;
+
+    (void)rm68120_bus_dato();   /* que quede guardado el de arranque */
+    if (dato < 1U)   { dato = 1U;   }
+    if (dato > 255U) { dato = 255U; }
+
+    r  = EXMC_SNTCFG0;
+    r &= ~EXMC_SNTCFG_DSET;
+    r |= ((uint32_t)dato << 8) & EXMC_SNTCFG_DSET;
+    EXMC_SNTCFG0 = r;
+}
+
 void rm68120_exmc_bus_init(void)
 {
     exmc_norsram_parameter_struct exmc_init_struct;
@@ -78,14 +160,110 @@ void rm68120_exmc_bus_init(void)
     timing_init_struct.asyn_access_mode      = EXMC_ACCESS_MODE_A;
     timing_init_struct.syn_data_latency      = EXMC_DATALAT_2_CLK;
     timing_init_struct.syn_clk_division      = EXMC_SYN_CLOCK_RATIO_DISABLE;
+#ifdef CARGADOR_ARRANQUE
+    /*
+     * LA TEMPORIZACION DEL DE SERIE, TAL CUAL - 01/10/2026.
+     *
+     * *** El dueno: "estoy probando la radio y el espectro vuelve a
+     * ralentizarse". ***
+     *
+     * Y es culpa del cargador, aunque el espectro lo pinte la aplicacion:
+     * la aplicacion NO configura este bus, lo HEREDA (main.c linea 912,
+     * "the bootloader already brings the panel up correctly - EXMC bus
+     * config included"). Asi que el numero que deje el cargador es el que
+     * manda en cada escritura de pixel, y un fotograma son 384.000.
+     *
+     * Del boot.bin de serie, funcion de 0x08002D6C:
+     *
+     *   setup de direccion = 2    hold de direccion = 0
+     *   setup de dato      = 5    vuelta de bus     = 0
+     *
+     * Nosotros teniamos 3 / 3 / 15 / 3: el dato tres veces mas lento.
+     *
+     * Y AQUI ME EQUIVOQUE, Y LO CORRIJO - 01/10/2026.
+     *
+     * Dije que los ciclos del de serie se podian copiar tal cual "porque
+     * su reloj tiene que ser el mismo que el nuestro: su USB funciona,
+     * luego saca 48 MHz exactos, luego esta a 192". Era una deduccion, no
+     * un dato, y era falsa.
+     *
+     * Desensamblada su configuracion de reloj (0x08003E74 en adelante,
+     * la estructura que le pasa a su HAL):
+     *
+     *   PLLM = 8   PLLN = 188   PLLP = 2   PLLQ = 6
+     *
+     * 12,288 / 8 = 1,536 -> VCO 288,768 -> sistema **144,384 MHz**, y el
+     * USB a 48,128, que es un +0,27%: fuera de la norma por poco, pero le
+     * funciona. O sea que hay mas de una forma de sacar un USB que tira, y
+     * yo di por buena la unica que se me habia ocurrido.
+     *
+     * Y eso cambia los ciclos, porque un ciclo no dura lo mismo:
+     *
+     *   de serie:  5 ciclos a 144,384 MHz = 34,6 ns
+     *   nosotros:  5 ciclos a 192 MHz     = 26,0 ns
+     *
+     * Nuestras escrituras al panel iban un 33% MAS RAPIDAS que las suyas.
+     * Lo que hay que copiar es el TIEMPO, no el numero: 5 x 192/144,384 =
+     * 6,65, que redondeando hacia arriba son 7. Y la direccion, 2 x 1,33 =
+     * 2,66 -> 3.
+     */
+    timing_init_struct.bus_latency           = 0;
+#else
     timing_init_struct.bus_latency           = 3;
+#endif
+    /* Ya no es 15 fijo: ver rm68120_bus_dato_pon() justo encima. El aviso
+     * de arriba decia "si la imagen sale limpia se puede seguir bajando
+     * metodicamente" y llevaba desde julio sin que nadie lo hiciera, porque
+     * bajarlo obligaba a recompilar y reflashear por cada intento. Ahora se
+     * baja desde la ventana de informacion, mirando la pantalla.
+     *
+     * Y una correccion al comentario de arriba: dice HCLK ~98,3 MHz. Ya no.
+     * El reloj es de 200 MHz con el AHB sin dividir (ver system_gd32f4xx.c,
+     * __SYSTEM_CLOCK_200M_PLL_25M_HXTAL y RCU_AHB_CKSYS_DIV1), o sea 5 ns
+     * por ciclo. Con 15 el ciclo de escritura sale a unos 100 ns. */
+#ifdef CARGADOR_ARRANQUE
+    /* Los del de serie, sin traducir: el cargador corre a su mismo reloj
+     * (144,384 MHz), asi que 5 ciclos son sus 34,6 ns exactos. */
+    timing_init_struct.asyn_data_setuptime   = 5;
+    timing_init_struct.asyn_address_holdtime = 0;
+    timing_init_struct.asyn_address_setuptime= 2;
+#else
     timing_init_struct.asyn_data_setuptime   = 15;
     timing_init_struct.asyn_address_holdtime = 3;
     timing_init_struct.asyn_address_setuptime= 3;
+#endif
 
     exmc_init_struct.norsram_region    = EXMC_BANK0_NORSRAM_REGION0; /* NE0 = tu CS (PD7) */
     exmc_init_struct.address_data_mux  = DISABLE;
+#ifdef CARGADOR_ARRANQUE
+    /*
+     * NOR, NO SRAM - 01/10/2026.
+     *
+     * *** El dueno, con el reloj y los tiempos ya identicos a los del de
+     * serie: "color distinto al original". ***
+     *
+     * Descartada la temporizacion -mismo reloj, mismos ciclos- y
+     * comprobado que las tres secuencias del panel estan extraidas fielmente
+     * (el camino de la rama B son 1.469 instrucciones sin un solo salto
+     * condicional), quedaba sin mirar la estructura de configuracion del
+     * EXMC entera, mas alla de los tiempos. Decodificada la suya
+     * (0x08002D78, la que le pasa a su HAL) campo por campo, TODO coincide
+     * con lo nuestro -banco 0, sin multiplexar, bus de 16 bits, sin rafaga,
+     * escritura habilitada, sin NWAIT, sin modo extendido- menos UNO:
+     *
+     *   [+16] = 8   ->  MemoryType = NOR
+     *
+     * y nosotros poniamos SRAM. Es el campo MTYP del SNCTL, y cambia como
+     * el controlador conduce el bus. Es la unica diferencia que queda en
+     * pie entre su configuracion y la nuestra.
+     *
+     * Solo en el cargador: es el que arranca el panel, y es su estado el
+     * que hereda la aplicacion.
+     */
+    exmc_init_struct.memory_type       = EXMC_MEMORY_TYPE_NOR;
+#else
     exmc_init_struct.memory_type       = EXMC_MEMORY_TYPE_SRAM;
+#endif
     exmc_init_struct.databus_width     = EXMC_NOR_DATABUS_WIDTH_16B;
     exmc_init_struct.burst_mode        = DISABLE;
     exmc_init_struct.nwait_polarity    = EXMC_NWAIT_POLARITY_LOW;
@@ -142,6 +320,74 @@ uint16_t rm68120_read_data(void)
  * dos escrituras de 8 bits (byte alto / byte bajo) en subregistros
  * consecutivos de CASET/RASET.
  */
+/* ---------------------------------------------------------------------
+ * PRUEBA DEL DESPLAZAMIENTO POR HARDWARE. 25/09/2026.
+ * ---------------------------------------------------------------------
+ * LO QUE SE QUIERE SABER. Hoy, para meter UNA linea nueva en la cascada, se
+ * repintan las 72: como la imagen se desplaza, todos los pixeles cambian de
+ * sitio. Son 54.432 conversiones y 54.432 escrituras por linea.
+ *
+ * Los controladores de esta familia saben desplazar su propia memoria: se
+ * les dice "de aqui a aqui es zona movil" y luego "el origen esta en la
+ * fila N", y la imagen rueda sola. Si el RM68120 lo hace, escribir una
+ * linea nueva costaria 756 escrituras en vez de 54.432 -setenta y dos veces
+ * menos- y ademas el historial de 54.432 bytes dejaria de hacer falta.
+ *
+ * DOS PEGAS, Y POR ESO ESTO ES UNA PRUEBA Y NO UNA FUNCION:
+ *
+ *  1. El panel va GIRADO. La secuencia de arranque pone MADCTL = 0x60, que
+ *     lleva el bit de intercambiar filas y columnas: el panel es de 480x800
+ *     de pie y lo usamos como 800x480 tumbado. El desplazamiento mueve las
+ *     filas DEL PANEL, y despues del intercambio esas filas son las
+ *     columnas de la pantalla. Lo mas probable es que ruede DE LADO.
+ *  2. Coge el ancho entero del panel. No se puede limitar a los 756 px de
+ *     la cascada, asi que se llevaria por delante lo que haya al lado.
+ *
+ * Y una tercera: del RM68120 no hay documentacion fiable, asi que ni
+ * siquiera se sabe si implementa estos registros. Si no los implementa,
+ * escribirlos podria dejar el panel en un estado raro.
+ *
+ * ---------------------------------------------------------------------
+ * PROBADO EL 25/09/2026 EN LA RADIO: NO. No se mueve ni un pixel, con el
+ * origen puesto a 400 -media pantalla- y mirando el panel entero. El
+ * RM68120 no implementa estos registros, o no en esta forma.
+ *
+ * Se deja la funcion escrita, sin llamarla nadie, por dos razones: que
+ * conste que se probo y con que valores, para que nadie vuelva a perseguir
+ * la idea a ciegas; y porque si algun dia aparece documentacion de verdad
+ * del chip, el punto de partida ya esta aqui.
+ * ---------------------------------------------------------------------
+ *
+ * POR QUE ERA SEGURO PROBARLO: main.c no llama a rm68120_init(), o sea
+ * que quien inicializa el panel es el gestor de arranque, en cada encendido.
+ * Apagar y encender lo devuelve a su sitio pase lo que pase aqui.
+ *
+ * Las direcciones siguen la convencion de este panel, que es la misma que
+ * usa set_window aqui abajo: la orden va en el byte alto y el numero de
+ * parametro en el bajo (0x2A00..0x2A03 para CASET). Asi que 0x33 -definir
+ * la zona movil- son 0x3300..0x3305, y 0x37 -mover el origen- 0x3700 y
+ * 0x3701.
+ */
+void rm68120_scroll_prueba(uint16_t origen)
+{
+    /* Zona movil = el panel entero en su orientacion NATIVA: 800 filas de
+     * panel, que en pantalla son las 800 columnas. Arriba y abajo fijos a
+     * cero. La suma de las tres tiene que dar la altura nativa. */
+    const uint16_t fija_arriba = 0U;
+    const uint16_t movil       = 800U;
+    const uint16_t fija_abajo  = 0U;
+
+    rm68120_write_cmd_data(0x3300, (uint16_t)((fija_arriba >> 8) & 0xFFU));
+    rm68120_write_cmd_data(0x3301, (uint16_t)( fija_arriba       & 0xFFU));
+    rm68120_write_cmd_data(0x3302, (uint16_t)((movil       >> 8) & 0xFFU));
+    rm68120_write_cmd_data(0x3303, (uint16_t)( movil             & 0xFFU));
+    rm68120_write_cmd_data(0x3304, (uint16_t)((fija_abajo  >> 8) & 0xFFU));
+    rm68120_write_cmd_data(0x3305, (uint16_t)( fija_abajo        & 0xFFU));
+
+    rm68120_write_cmd_data(0x3700, (uint16_t)((origen >> 8) & 0xFFU));
+    rm68120_write_cmd_data(0x3701, (uint16_t)( origen       & 0xFFU));
+}
+
 void rm68120_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1)
 {
     rm68120_write_cmd_data(0x2A00, (x0 >> 8) & 0xFF);

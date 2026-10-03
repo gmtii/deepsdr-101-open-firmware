@@ -15,8 +15,41 @@ uint32_t ms5351_get_xtal_hz(void)
     return s_xtal_hz;
 }
 
+/*
+ * CON RANGO, Y AQUI - 30/09/2026.
+ *
+ * Esto se aplica desde settings_load() con lo que venga en CONFIG.CSV, y
+ * CONFIG.CSV lo puede editar cualquiera desde el PC. Era el UNICO numero del
+ * fichero que no pasaba ni por un recorte de quien lo llama.
+ *
+ * Lo que costaba: manual_atou32() para en el primer caracter que no es
+ * digito, asi que "26.000.000" o "26 000 000" dan 26, y un valor vacio da 0.
+ * Con 0, frac_divide() hace `fvco / s_xtal_hz` y `fvco % s_xtal_hz`: division
+ * entera por cero. Con 26, la PLL queda programada con basura y la radio no
+ * recibe en ninguna banda. Y NO SE SALE DESDE LA PANTALLA: la baldosa de
+ * CAL PPM calcula el valor nuevo como `viejo * (1 - ppm/1e6)`, que con 0
+ * sigue dando 0, y build_csv() vuelve a guardar el valor malo en cada
+ * guardado. O sea que un dedo torpe en el PC dejaba la radio sorda para
+ * siempre.
+ *
+ * La guarda va AQUI y no en settings.c: asi protege a todos los que llamen,
+ * no solo al que se conocia. Fuera de rango se deja lo que hubiera - en el
+ * arranque, MS5351_XTAL_HZ_DEFAULT-, que es lo mismo que hace el fichero
+ * cuando no trae la clave.
+ *
+ * El rango: de 24 a 28 MHz. El cristal de esta placa son 26 y el de la
+ * mayoria de los modulos Si5351/MS5351 son 25 o 27, asi que esto acepta
+ * cualquiera de los tres con margen de sobra para su calibracion (una
+ * correccion de 3 ppm son 78 Hz) y rechaza lo que no es un cristal.
+ */
+#define XTAL_MIN_HZ 24000000UL
+#define XTAL_MAX_HZ 28000000UL
+
 void ms5351_set_xtal_hz(uint32_t xtal_hz)
 {
+    if (xtal_hz < XTAL_MIN_HZ || xtal_hz > XTAL_MAX_HZ) {
+        return;
+    }
     s_xtal_hz = xtal_hz;
 }
 
@@ -295,16 +328,15 @@ uint8_t ms5351_tune_captured(void)
  * that zone's entire range, tiling LOWF_FLOOR_HZ..LOWF_HANDOFF_HZ
  * (100kHz-4.8MHz) with no gaps.
  *
- * BLOCKING DELAY: LOWF_PHASE_SHIFT_US (62.5ms) blocks the whole
- * system - main loop, touch, encoder polling, everything - since this
- * driver has no interrupt-driven timing. This ONLY happens when
- * crossing a zone boundary, not on every retune within a zone -
- * tuning around inside one zone is exactly as responsive as the
- * existing high-band path. With 10 zones now (up from 3), there are
- * proportionally more crossing points where a ~62ms stutter can be
- * noticed - still only right at those specific boundaries, never
- * mid-zone, but flagging that this happens more often now than it
- * used to.
+ * BLOCKING DELAY: LOWF_PHASE_SHIFT_US blocks the whole system - main
+ * loop, touch, encoder polling, everything - since this driver has no
+ * interrupt-driven timing. This ONLY happens when crossing a zone
+ * boundary, not on every retune within a zone - tuning around inside
+ * one zone is exactly as responsive as the existing high-band path.
+ *
+ * DESDE EL 27/09/2026 SON 6,25 ms Y NO 62,5: ver el comentario de
+ * LOWF_PHASE_DF_HZ. Un cuadro de pantalla son 69 ms, asi que el tiron
+ * pasa de "se ha colgado" a no verse.
  */
 #define LOWF_ZONE_01_HZ    100000UL /* floor - see LOWF_FLOOR_HZ below */
 #define LOWF_ZONE_02_HZ    115831UL
@@ -328,10 +360,52 @@ uint8_t ms5351_tune_captured(void)
 #define LOWF_ZONE_08_MULT      432UL
 #define LOWF_ZONE_09_MULT      286UL
 #define LOWF_ZONE_10_MULT      189UL
-#define LOWF_PHASE_DF_HZ         4UL /* Hz - matches the reference's df */
+/*
+ * DE 4 Hz A 40, Y DE 62,5 ms A 6,25 - 27/09/2026.
+ *
+ * *** El dueno: "ataca el de 62 ms". ***
+ *
+ * La espera no es un retardo de cortesia: es el tiempo EXACTO que tardan
+ * los dos relojes en separarse 90 grados, y sale de la propia df:
+ *
+ *     fase = 360 * df * t     ->     t(90 grados) = 1 / (4 * df)
+ *
+ * Con df = 4 Hz eso son 62,5 ms. Con df = 40 Hz son 6,25. Es la misma
+ * maniobra, el mismo angulo y la misma exactitud: lo unico que cambia es
+ * que los relojes se separan diez veces mas deprisa, asi que hay que
+ * esperar diez veces menos.
+ *
+ * POR QUE NO SE HIZO NO BLOQUEANTE, que era lo primero que probe. Habria
+ * que rematar la maniobra desde el bucle principal, y el bucle principal
+ * va a unos 69 ms por vuelta porque lo marca el repintado del espectro.
+ * Esperar "62,5 ms" con una granularidad de 69 no es esperar 62,5: es
+ * esperar entre 62 y 131, o sea entre 90 y 190 grados. La maniobra
+ * quedaria peor que ahora. Hacerlo bien pedia un temporizador por
+ * interrupcion escribiendo I2C a pelo desde la ISR, que es mucho mas
+ * aparato del que merece el problema.
+ *
+ * Esto en cambio es la misma cuenta con otro numero, y ademas el error
+ * RELATIVO del divisor fraccionario baja: con c = 0xFFFFF la df de 40 Hz
+ * se realiza con unos 1e-5 Hz de error, cuatro ordenes de magnitud por
+ * debajo de la propia df.
+ *
+ * NO ESTA PROBADO EN EL AIRE. La maniobra original decia "matches the
+ * reference's df", o sea que el 4 venia copiado de otro sitio, y este
+ * fichero ya ha cambiado de opinion tres veces en un dia sobre cual de
+ * los dos relojes adelanta. Hay que comprobar por debajo de 4,8 MHz que
+ * la imagen de banda lateral contraria no empeora; si empeora, se vuelve
+ * a poner 4 aqui y la espera se recalcula sola.
+ */
+#define LOWF_PHASE_DF_HZ        40UL /* era 4; ver el comentario de arriba */
 /* = 1e6 / (4*LOWF_PHASE_DF_HZ), see step 4 above for the derivation
  * (the pi cancels out - this is exact, not a trig approximation). */
-#define LOWF_PHASE_SHIFT_US  62500UL
+#define LOWF_PHASE_SHIFT_US  (1000000UL / (4UL * LOWF_PHASE_DF_HZ))
+
+/* Que las dos no se separen nunca: la espera se DERIVA de la df, y
+ * escribirla a mano es como se consigue que un dia digan cosas distintas
+ * y la maniobra pare en 47 grados sin que nada se queje. */
+_Static_assert(LOWF_PHASE_SHIFT_US * 4UL * LOWF_PHASE_DF_HZ == 1000000UL,
+               "la espera y la df ya no dicen lo mismo: t = 1/(4*df)");
 
 /* 0 = no low-band zone established yet (forces the phase-alignment
  * maneuver on the next low-band call); 1-10 = one of the 10 zones,

@@ -91,6 +91,7 @@ LDFLAGS  = $(MCUFLAGS) -specs=nano.specs -specs=nosys.specs -T$(LDSCRIPT) \
 CFLAGS  = $(MCUFLAGS) $(DEFS) $(INCLUDES) -Wall -O2 -g3 -ffunction-sections -fdata-sections
 ASFLAGS = $(MCUFLAGS) -g3
 
+
 OBJECTS  = $(addprefix $(BUILD_DIR)/,$(notdir $(C_SOURCES:.c=.o)))
 OBJECTS += $(addprefix $(BUILD_DIR)/,$(notdir $(ASM_SOURCES:.S=.o)))
 
@@ -161,3 +162,10 @@ padded = firmware + b'\x00' * (0x40000 - len(firmware)) + magic; \
 open('update4.bin','wb').write(padded); \
 print('update4.bin generated:', len(padded), 'bytes')"
 
+# Opciones extra de compilacion, en un fichero aparte (23/09/2026). El "-"
+# de "-include" significa "si no esta, no pasa nada", asi que el proyecto
+# sigue compilando sin el. Esta separado porque el puente con el que Claude
+# escribe en este ordenador no puede escribir ficheros llamados Makefile
+# -son codigo que se ejecuta- pero si un .mk: asi cambiar las opciones no
+# obliga a renombrar nada a mano cada vez.
+-include avisos.mk

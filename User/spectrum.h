@@ -136,6 +136,21 @@ void spectrum_set_heatmap_trace_white(uint8_t white);
 uint8_t spectrum_get_heatmap_trace_white(void);
 
 /*
+ * EL PUENTE DE LA TRAZA, ahora conmutable - etapa 30, 24/09/2026.
+ *
+ * Lo que hace el puente esta explicado en spectrum_draw(), paso 1.6: donde
+ * dos columnas vecinas tienen alturas muy distintas, sus pixeles de traza no
+ * comparten fila y el borde de arriba se lee como puntos sueltos en vez de
+ * como una linea. El puente los une con un escalon, igual que una grafica de
+ * linea.
+ *
+ * Por defecto va ENCENDIDO, que es como ha estado desde que se escribio.
+ * Apagarlo devuelve los puntos sueltos.
+ */
+void    spectrum_set_bridge(uint8_t on);
+uint8_t spectrum_get_bridge(void);
+
+/*
  * Color palette for the shared dB->RGB565 colormap (spectrum_colormap()
  * below) - added 08/09/2026, per the project owner ("un tile para
  * cambiar las paletas... irnos a otras combinaciones de colores").
@@ -168,7 +183,8 @@ typedef enum {
     SPECTRUM_PALETTE_SMOKE         = 11, /* white -> grays -> black, i.e. an INVERTED grayscale (exact, Yaroslav Andrianov) */
     SPECTRUM_PALETTE_TEMPER_COLORS = 12, /* black -> indigo -> violet -> slate blue -> dusty rose -> plum (exact, Yaroslav Andrianov) */
     SPECTRUM_PALETTE_VIVID         = 13, /* black -> purple -> viridis-like band -> yellow -> orange -> red (exact, Yaroslav Andrianov) */
-    SPECTRUM_PALETTE_WEBSDR        = 14  /* black -> navy -> magenta -> pale yellow -> white (exact, Ryzerth) */
+    SPECTRUM_PALETTE_WEBSDR        = 14, /* black -> navy -> magenta -> pale yellow -> white (exact, Ryzerth) */
+    SPECTRUM_PALETTE_PHOSPHOR      = 15  /* negro -> verde apagado -> verde brillante -> blanco verdoso (propia, para el tema Fósforo - ver spectrum.c) */
 } spectrum_palette_t;
 
 /*
@@ -185,6 +201,27 @@ typedef enum {
  * are new additions from that same upload (also exact). FIRE remains
  * this project's own invention - it isn't in SDR++'s set.
  */
+/*
+ * La lista de paletas, recorrible - 22/09/2026.
+ *
+ * Antes la misma lista estaba escrita siete veces por el firmware (los dos
+ * switch de build_lut(), el rotulo del tile, el nombre en ajustes, el ciclo
+ * del boton, y el guardar y el leer de CONFIG.CSV), y tres paletas ya se
+ * mostraban con el nombre de otra porque a una de las siete copias le
+ * faltaba su rama. Ahora la lista vive en una sola tabla dentro de
+ * spectrum.c y esto es la ventana a esa tabla: quien necesite nombres,
+ * claves, el recuento o un color de muestra la recorre, no la copia.
+ *
+ * spectrum_palette_muestra() da un color de CUALQUIER paleta sin cambiar la
+ * que esta puesta, que es lo que permite ensenar las quince a la vez en la
+ * pantalla de paletas sin que el espectro parpadee.
+ */
+uint8_t     spectrum_palette_count(void);
+const char *spectrum_palette_nombre(uint8_t i);   /* "Clasica verde" */
+const char *spectrum_palette_clave(uint8_t i);    /* "CLASSIC_GREEN" */
+uint16_t    spectrum_palette_muestra(uint8_t i, uint8_t idx); /* idx 0..255 */
+int16_t     spectrum_palette_de_clave(const char *s, uint32_t n); /* -1 si no es ninguna */
+
 void spectrum_set_palette(spectrum_palette_t palette);
 spectrum_palette_t spectrum_get_palette(void);
 
@@ -215,6 +252,19 @@ uint8_t spectrum_get_line_smooth(void);
  * is fine for per-COLUMN use, e.g. coloring a waterfall line - just
  * never call it per pixel). */
 uint16_t spectrum_colormap(float db, float db_min, float db_max);
+
+/*
+ * Las dos mitades de spectrum_colormap(), por separado.
+ *
+ * spectrum_colormap() ya era internamente "normaliza el dB a 0..255 y mira
+ * en una LUT". Partirlo permite que el waterfall guarde el INDICE (1 byte)
+ * en vez del color (2 bytes), lo que ahorra 56 KB de RAM en su historial.
+ *
+ * Efecto secundario util: al guardar el indice, cambiar de paleta repinta
+ * todo el historial y no solo las filas nuevas.
+ */
+uint8_t spectrum_colormap_index(float db, float db_min, float db_max);
+const uint16_t *spectrum_colormap_lut(void);
 
 /*
  * Draws `n_bins` dB values into the rectangle (x,y,w,h). Columns
