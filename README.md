@@ -139,7 +139,7 @@ already set up in `.vscode/launch.json`.
 
 ### 2.4 Update and flashing via bootloader.
 
-[HOWTO](DeepSDR_Reload_Install_HOWTOl_ES_EN.pdf)
+[HOWTO](INSTALL_HOWTO_EN-ES.pdf)
 
 ### 2.5 Which method to use
 
