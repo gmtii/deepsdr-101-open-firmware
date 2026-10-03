@@ -141,15 +141,17 @@ already set up in `.vscode/launch.json`.
 
 [HOWTO](INSTALL_HOWTO_EN-ES.pdf)
 
+[GD32 All-In-One Programmer](https://www.gd32mcu.com/en/download/7?kw=GD32F4)
+
 ### 2.5 Which method to use
 
 - **ST-Link/OpenOCD**: use during development, for any board with an
   accessible SWD header, or when something has gone wrong badly enough
   that the vendor bootloader itself might not be trustworthy (e.g.
   recovering from a bad flash).
-- **`update4.bin`**: use for a normal end-user-style update on a board
-  that's already running some firmware and boots into its vendor
-  bootloader normally — no debugger needed.
+- **`update.bin`**: use for a normal end-user-style update on a board
+  that's already running the reload's fw custom bootloader normally — no debugger 
+  needed.
 
 ### 3 Known RF quirks: internal-clock birdies
 
