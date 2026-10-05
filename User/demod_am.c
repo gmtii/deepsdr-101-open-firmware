@@ -5,6 +5,8 @@
 #include "dcf77.h"
 #include "analizador.h"
 #include "sam.h" /* DEMOD_MODE_SAM - 21/08/2026 */
+#include "rapido.h" /* rapido_atan2(): ver fm_discriminate() */
+#include "bip.h"    /* bip_mete(): el pitido de los avisos, al final del bloque */
 #include "config.h"
 #include "sdr_rx.h"
 #include "gd32_i2s.h"
@@ -31,7 +33,9 @@
 #include "wspr_modo.h"
 #include "ais_modo.h"
 #include "ale_modo.h"  /* y el de FT8 - etapa 30 */
-#include "jtty_modo.h" /* JTTY: banda lateral a 12 kHz, como FT8 y WSPR */
+#include "jtty_modo.h"
+#include "stanag_modo.h" /* JTTY: banda lateral a 12 kHz, como FT8 y WSPR */
+#include "ident.h"        /* y el IDENT, que come de ese mismo sitio */
 #include "ax25.h"       /* y el de APRS, que se engancha en la rama de FM */
 #include "rtty_scope.h" /* dedicated audio-domain tuning scope for RTTY,
                            * see this file's RTTY INTEGRATION comment
@@ -1532,6 +1536,31 @@ float32_t demod_am_get_sam_carrier_hz(void)
     return s_sam.carrier_hz;
 }
 
+/*
+ * SI ESE NUMERO SIGNIFICA ALGO - 05/10/2026.
+ *
+ * *** El dueño: "-269ppm", y despues "+23,7 PPM" y "+13ppm" en la MISMA
+ * emisora. ***
+ *
+ * El error de PLL se enseñaba siempre, hubiera portadora o no, y un numero
+ * en una pantalla se cree. 269 PPM son 7 kHz de error en un cristal de 26
+ * MHz: eso no es un cristal desviado, es un lazo que no esta cogido a nada.
+ * Esto es lo que permite decirlo en vez de enseñar el numero igual.
+ *
+ * Ver sam_enganche() para de donde sale. No es un invento de aqui: es la
+ * media de cuanto se mueve el detector de fase, que es exactamente la
+ * diferencia entre haber enganchado y no.
+ */
+uint8_t demod_am_sam_enganchado(void)
+{
+    return sam_enganchado(&s_sam);
+}
+
+float32_t demod_am_sam_enganche(void)
+{
+    return sam_enganche(&s_sam);
+}
+
 /* AM/SSB audio filter width - see demod_am_set_audio_bw()'s comment in
  * demod_am.h. Same "plain uint8_t-sized enum, no critical section"
  * reasoning as s_mode above. Default AUDIO_BW_4K0 (the widest of the
@@ -1848,6 +1877,25 @@ uint32_t demod_wfm_get_last_cycles(void)
     return s_wfm_last_cycles;
 }
 
+/*
+ * Resta que no da la vuelta - 02/10/2026.
+ *
+ * Las cuatro etapas del desglose se calculan restando: "lo que llevo menos
+ * lo que ya conte". Con la cuenta bien hecha eso nunca es negativo, pero
+ * son uint32_t, asi que SI la cuenta se tuerce el resultado no es un
+ * numero pequeño ni cero: son cuatro mil millones de ciclos, que en la
+ * pantalla salen como el tope. O sea que un error de un par de ciclos y un
+ * error de bulto se ven exactamente igual, y los dos se ven enormes.
+ *
+ * Saturando a cero, un descuadre sale como una etapa a cero y entonces las
+ * cinco NO suman el total de la fila de arriba. Esa suma es la
+ * comprobacion, y asi se puede hacer de un vistazo en la radio.
+ */
+static uint32_t resta0(uint32_t a, uint32_t b)
+{
+    return (a > b) ? (a - b) : 0U;
+}
+
 /* Per-stage breakdown (see demod_am.h's comment on
  * demod_am_get_last_cycles_breakdown()). Plain volatile uint32_t
  * words, same "not worth a critical section" reasoning as s_mode -
@@ -2003,7 +2051,9 @@ float demod_am_get_mix_hz(void)
  */
 static float32_t s_i_buf[SDR_RX_BLOCK_SAMPLES];      /* I rail, deinterleaved */
 static float32_t s_q_buf[SDR_RX_BLOCK_SAMPLES];      /* Q rail, deinterleaved */
-static float32_t s_iq_cplx[SDR_RX_BLOCK_SAMPLES * 2U] TCMRAM_BSS; /* re-interleaved for arm_cmplx_mag_f32 - TCM-safe, only arm_cmplx_mag_f32() (CPU) touches it */
+/* El buffer entrelazado para arm_cmplx_mag_f32() ya no existe: la magnitud
+ * se calcula leyendo s_i_buf/s_q_buf donde estan. Ver el paso 1 de AM.
+ * Eran 2 kB de TCM y 192.000 accesos a memoria por segundo. */
 static float32_t s_env[SDR_RX_BLOCK_SAMPLES];        /* |I+jQ|, then DC-blocked, then audio-LPF'd */
 
 /* Output assembly buffer: one TX half (stereo interleaved). Static -
@@ -2372,7 +2422,23 @@ static void fm_discriminate(const float32_t *i_buf, const float32_t *q_buf,
         float32_t re = i_now * i_prev + q_now * q_prev;
         float32_t im = q_now * i_prev - i_now * q_prev;
 
-        env[n] = atan2f(im, re) * gain;
+        /*
+         * rapido_atan2() y no atan2f() - 04/10/2026.
+         *
+         * *** El dueño: "revisa todos los posibles puntos". ***
+         *
+         * Esta era la segunda de las dos llamadas por muestra que habia en
+         * la interrupcion (la otra estaba en sam.c). Aqui cuesta 96.000
+         * llamadas por segundo en NFM y 192.000 en WFM -512 muestras por
+         * bloque a 192 kHz-, o sea un 10% y un 19% del presupuesto del
+         * bloque en una sola linea.
+         *
+         * El error de la aproximacion son seis decimas de grado sobre un
+         * angulo que luego se multiplica por la ganancia del discriminador y
+         * se va al altavoz: queda muy por debajo del ruido del canal, y por
+         * debajo tambien del rizado del propio filtro de audio.
+         */
+        env[n] = rapido_atan2(im, re) * gain;
 
         i_prev = i_now;
         q_prev = q_now;
@@ -2699,6 +2765,10 @@ void demod_wfm_process_raw(const int16_t *raw_interleaved)
         }
     }
 
+    /* Y el pitido de los avisos, LO ULTIMO: tapa el audio en vez de
+     * mezclarse con el. Ver bip.h. Apagado no cuesta nada. */
+    bip_mete(s_wfm_audio_out, (uint32_t)SDR_RX_BLOCK_SAMPLES_WFM,
+             192000.0f);   /* la tasa de WFM, ver SDR_RX_BLOCK_SAMPLES_WFM */
     gd32_i2s_stream_write_half(s_wfm_audio_out);
 
     s_wfm_last_cycles = DWT->CYCCNT - cyc_start;
@@ -2888,28 +2958,64 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
      * squelch metric right below it does for AM/NFM - unlike squelch,
      * this isn't restricted to those two modes, since a signal-strength
      * reading is just as meaningful for SSB. */
+    /*
+     * AL CUADRADO, Y UNA SOLA RAIZ POR BLOQUE - 05/10/2026.
+     *
+     * *** El dueño: "busca razones que hagan que se ralentice tanto la radio
+     * completa como el espectro". ***
+     *
+     * Aqui habia una raiz cuadrada POR MUESTRA: 256 por bloque, 96.000 por
+     * segundo, en AM, SAM, NFM, USB y LSB -o sea todos los modos que pasan
+     * por aqui, sin interruptor que lo apague-. La VSQRT del coprocesador
+     * son ~14 ciclos, asi que son 1,5 millones de ciclos por segundo, el
+     * 0,8% del chip, para un numero que solo mueve una barra en la pantalla.
+     *
+     * Y el arreglo ya estaba escrito EN ESTE MISMO FICHERO, veinte lineas
+     * mas arriba, en el camino de WFM: seguir el pico AL CUADRADO y sacar
+     * una sola raiz al final del bloque. Comparar cuadrados ordena igual que
+     * comparar raices -las dos cantidades son positivas-, asi que el pico
+     * que sale es EXACTAMENTE el mismo; y para que la caida siga siendo la
+     * misma en dB por segundo, la constante de relajacion se eleva tambien
+     * al cuadrado, porque pico *= r por muestra equivale a pico2 *= r*r.
+     *
+     * El camino de AM nunca recibio ese arreglo. Ahora si.
+     */
     {
-        float sp = s_sig_peak;
+        float sp2 = s_sig_peak * s_sig_peak;
+        float r2  = s_agc_release * s_agc_release;
+
         for (n = 0; n < SDR_RX_BLOCK_SAMPLES; n++) {
-            float mag = sqrtf(s_i_buf[n] * s_i_buf[n] + s_q_buf[n] * s_q_buf[n]);
-            sp *= s_agc_release;
-            if (mag > sp) { sp = mag; }
+            float m2 = s_i_buf[n] * s_i_buf[n] + s_q_buf[n] * s_q_buf[n];
+            sp2 *= r2;
+            if (m2 > sp2) { sp2 = m2; }
         }
-        s_sig_peak = sp;
+        s_sig_peak = sqrtf(sp2);
     }
 
     /* 1. Audio extraction - branches by mode. All paths write into
      * s_env[], which steps 2-5 below (DC blocker, audio LPF, AGC,
      * output) consume - WFM's LPF sub-step differs, see step 3. */
     if (s_mode == (uint8_t)DEMOD_MODE_AM) {
-        /* |z| = |I + jQ| via arm_cmplx_mag_f32 (hardware VSQRT.F32).
-         * Needs the filtered I/Q re-interleaved into CMSIS's complex
-         * format first. */
+        /*
+         * |z| = |I + jQ|, SIN COPIARLOS ANTES - 05/10/2026.
+         *
+         * *** El dueño: "busca razones que hagan que se ralentice tanto la
+         * radio completa como el espectro". ***
+         *
+         * Aqui se entrelazaban I y Q en un tercer buffer SOLO para poder
+         * llamar a arm_cmplx_mag_f32(), que es lo que pide CMSIS. Son 512
+         * lecturas y 512 escrituras por bloque -192.000 accesos a memoria
+         * por segundo- que no calculan nada: solo mueven los mismos numeros
+         * de un sitio a otro.
+         *
+         * La raiz cuadrada la hace el coprocesador en hardware (VSQRT.F32),
+         * asi que el bucle de aqui hace exactamente lo mismo que la rutina
+         * de CMSIS, leyendo los dos buffers donde ya estan. El resultado es
+         * bit a bit el mismo: es la misma operacion.
+         */
         for (n = 0; n < SDR_RX_BLOCK_SAMPLES; n++) {
-            s_iq_cplx[2U * n]      = s_i_buf[n];
-            s_iq_cplx[2U * n + 1U] = s_q_buf[n];
+            s_env[n] = sqrtf(s_i_buf[n] * s_i_buf[n] + s_q_buf[n] * s_q_buf[n]);
         }
-        arm_cmplx_mag_f32(s_iq_cplx, s_env, SDR_RX_BLOCK_SAMPLES);
 
         /* DCF77 (23/09/2026): una muestra de envolvente por bloque, que a
          * 96 kHz son 375 al segundo - de sobra para distinguir marcas de
@@ -2965,7 +3071,13 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
                         si += s_i_buf[q * tam + j];
                         sq += s_q_buf[q * tam + j];
                     }
-                    dcf77_feed(atan2f(sq, si));
+                    /* rapido.c y no la biblioteca: esto corre hasta ocho
+                     * veces por bloque dentro de la interrupcion, y lo que
+                     * se mide despues son duraciones de 100 y 200 ms. Seis
+                     * decimas de grado no cambian ni un bit de eso, y
+                     * ademas ya vienen promediadas 32 muestras de I y de Q
+                     * antes de llegar aqui. 05/10/2026. */
+                    dcf77_feed(rapido_atan2(sq, si));
                 }
             }
         }
@@ -2978,14 +3090,24 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * near DC here regardless of mode, no special tuning handling
          * needed for SAM specifically. */
         {
-        uint32_t k;
         if (!s_sam_init_done) {
             sam_init(&s_sam, demod_am_active_fs_hz(), 4000.0f, 200.0f, 65.0f / 75.0f);
             s_sam_init_done = 1u;
         }
-        for (k = 0; k < SDR_RX_BLOCK_SAMPLES; k++) {
-            s_env[k] = sam_step(&s_sam, s_i_buf[k], s_q_buf[k], demod_am_active_fs_hz());
-        }
+        /*
+         * EL BLOQUE ENTERO DE UNA LLAMADA - 05/10/2026.
+         *
+         * *** El dueño, por tercera vez: "sam se sigue ralentizando". ***
+         *
+         * Aqui habia un bucle llamando a sam_step() 256 veces. Lo que cuesta
+         * eso de mas no es el bucle: es que entre llamada y llamada el
+         * compilador tiene que dar por perdido todo lo que tenia en
+         * registros, asi que el estado del PLL -doce variables- iba y venia
+         * a memoria en CADA muestra. Con el bucle dentro de sam.c va una
+         * vez, al final. Ver sam_bloque().
+         */
+        sam_bloque(&s_sam, s_i_buf, s_q_buf, s_env,
+                   (uint32_t)SDR_RX_BLOCK_SAMPLES, demod_am_active_fs_hz());
         }
     } else if (s_mode == (uint8_t)DEMOD_MODE_NFM) {
         /* NFM: same discriminator as WFM (see fm_discriminate()'s
@@ -3270,6 +3392,31 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
         if (jtty_modo_activo()) {
             jtty_modo_mete(s_ssb_dec, (uint16_t)s_dec_block_samples);
         }
+        /*
+         * Y el identificador de tramas, del mismo sitio y por la misma
+         * razon que los cuatro de arriba: la banda lateral ya diezmada a
+         * 12 kHz. CRUDA, ademas, y aqui importa mas que nunca -lo que mide
+         * es cuanto se parece la señal a si misma, y la sustraccion
+         * espectral cambia justo eso-.
+         *
+         * Lo que hace por bloque es un oscilador de ocho valores y una
+         * suma: acotado y proporcional al bloque. Las dos transformadas de
+         * 2048 puntos NO estan aqui, van en stanag_modo_poll() desde el
+         * bucle principal.
+         */
+        if (stanag_modo_activo()) {
+            stanag_modo_mete(s_ssb_dec, (uint16_t)s_dec_block_samples);
+        }
+        /*
+         * Y el modo IDENT, que come del MISMO sitio: la banda lateral ya
+         * diezmada a 12 kHz. Comparte el motor con STANAG -stanag_det.c- y
+         * la misma RAM prestada, asi que los dos no pueden estar encendidos
+         * a la vez; de eso se encarga la tabla de modos, que son dos filas
+         * distintas. Ver ident.h.
+         */
+        if (ident_modo_activo()) {
+            ident_modo_mete(s_ssb_dec, (uint16_t)s_dec_block_samples);
+        }
         /* El osciloscopio de sintonia lo comparten los dos: al RTTY le
          * ensena donde caen las dos frecuencias y al CW donde cae el
          * tono, que es exactamente lo que hay que mirar para sintonizar
@@ -3355,8 +3502,26 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
         float mag_db;
         float half_hyst = SQUELCH_HYSTERESIS_DB * 0.5f;
 
-        for (n = 0; n < SDR_RX_BLOCK_SAMPLES; n++) {
-            sum += sqrtf(s_i_buf[n] * s_i_buf[n] + s_q_buf[n] * s_q_buf[n]);
+        /*
+         * EN AM ESTAS RAICES YA ESTAN HECHAS - 05/10/2026.
+         *
+         * Otras 256 raices cuadradas por bloque, 96.000 por segundo, y en
+         * modo AM son EXACTAMENTE las mismas que arm_cmplx_mag_f32() acaba
+         * de escribir en s_env[] en el paso 1. Entre aquel bucle y este no
+         * hay nadie que toque s_env -el DCF77 lo lee, no lo escribe-, asi
+         * que la magnitud sigue ahi entera.
+         *
+         * En NFM no se puede reutilizar: alli s_env lleva la salida del
+         * discriminador, que es otra cosa. De ahi el reparto por modo.
+         */
+        if (s_mode == (uint8_t)DEMOD_MODE_AM) {
+            for (n = 0; n < SDR_RX_BLOCK_SAMPLES; n++) {
+                sum += s_env[n];
+            }
+        } else {
+            for (n = 0; n < SDR_RX_BLOCK_SAMPLES; n++) {
+                sum += sqrtf(s_i_buf[n] * s_i_buf[n] + s_q_buf[n] * s_q_buf[n]);
+            }
         }
         /* +1.0f before the log so true silence (sum=0) gives
          * 20*log10(1)=0dB instead of log10(0)=-inf - a harmless
@@ -3398,7 +3563,8 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * comment on it, and the 2d. NR block above - otherwise SSB's
          * NR cost would silently hide inside "extract" instead of
          * showing up in its own "nr" bucket the way AM's does. */
-        s_last_cycles_extract = cyc_now - cyc_start - s_last_cycles_frontend - nr_ssb_cycles;
+        s_last_cycles_extract = resta0(cyc_now - cyc_start,
+                                       s_last_cycles_frontend + nr_ssb_cycles);
     }
 
     /* 2. DC blocker (removes the carrier level in AM; a harmless
@@ -3452,7 +3618,37 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
 
     {
         uint32_t cyc_now = DWT->CYCCNT;
-        s_last_cycles_audio = cyc_now - cyc_start - s_last_cycles_frontend - s_last_cycles_extract;
+        /*
+         * nr_ssb_cycles TAMBIEN se resta aqui - 02/10/2026, y faltaba
+         * desde el 04/08, que es cuando el NR de banda lateral se metio
+         * dentro del paso 2d.
+         *
+         * *** El dueño, en la primera lectura de la fila "Reparto del
+         * audio" recien puesta: "rf8 ex22 au 13 ag99". ***
+         *
+         * Ese 99 es el tope de la celda, o sea un numero disparado. Y la
+         * cuenta de por que es corta: "extract" ya lleva restado el NR
+         * -justo arriba, para que el NR salga en su propio cajon y no
+         * escondido ahi dentro-, asi que al calcular "audio" restandole
+         * "extract" se le devuelve el NR SIN QUERER. El audio salia
+         * inflado en lo que cuesta el NR, y el AGC, que se calcula por
+         * diferencia al final, salia rebajado en lo mismo. Como el AGC
+         * cuesta menos que el NR, la resta se iba por debajo de cero, y en
+         * un unsigned eso son cuatro mil millones de ciclos: el 99 % de la
+         * celda.
+         *
+         * Llevaba mintiendo desde agosto. No se habia visto porque el
+         * desglose solo salia por el puerto serie -apagado en la
+         * compilacion de verdad- y a la pantalla solo llegaba el cajon del
+         * NR, que si estaba bien medido. Sacar los otros cuatro a la
+         * pantalla lo destapo en la PRIMERA lectura.
+         *
+         * Con esto, las cinco etapas vuelven a sumar el total de la fila
+         * de arriba, y esa suma es la comprobacion: si algun dia no suman,
+         * es que una de estas restas ha vuelto a descuadrarse.
+         */
+        s_last_cycles_audio = resta0(cyc_now - cyc_start, s_last_cycles_frontend
+                                     + s_last_cycles_extract + nr_ssb_cycles);
     }
 
     /* 3b. NR (Spectral Subtraction), AM ONLY here - USB/LSB already got
@@ -3525,19 +3721,52 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * switch back to SLW/MED/FST later, rather than resuming from
          * a stale or zeroed peak. */
     } else {
+        /*
+         * LA DIVISION DEL AGC, UNA VEZ POR ATAQUE Y NO POR MUESTRA.
+         * 05/10/2026.
+         *
+         * Aqui habia `AGC_TARGET / pk` POR MUESTRA: 96.000 divisiones de
+         * coma flotante por segundo, 14 ciclos cada una en este M4, el 0,7%
+         * del chip. Y el divisor casi nunca cambia de verdad.
+         *
+         * El pico solo hace dos cosas: o baja multiplicandose por una
+         * constante -la relajacion- o salta al valor de la muestra. Bajar
+         * por una constante es, en el inverso, multiplicar por otra
+         * constante: 1/pico *= 1/relajacion. Saltar si obliga a dividir,
+         * pero eso pasa solo cuando la señal supera su propio maximo, que
+         * con la relajacion puesta son unos pocos cientos de veces por
+         * segundo, no noventa y seis mil.
+         *
+         * Y SE RESINCRONIZA EXACTO EN CADA BLOQUE, a proposito: arrastrar
+         * un inverso multiplicando millones de veces acumularia error de
+         * redondeo sin que nadie se entere. Empezando cada bloque con la
+         * division de verdad, lo mas que puede separarse son 256
+         * multiplicaciones, o sea una parte en cien mil. El suelo de
+         * AGC_PEAK_MIN y el techo de AGC_GAIN_MAX siguen siendo los mismos
+         * dos `if` de antes.
+         */
+        float inv_rel = 1.0f / s_agc_release;
+        float pk0 = (peak < AGC_PEAK_MIN) ? AGC_PEAK_MIN : peak;
+        float inv = 1.0f / pk0;
+
         for (n = 0; n < SDR_RX_BLOCK_SAMPLES; n++) {
             float mag = (s_env[n] < 0.0f) ? -s_env[n] : s_env[n];
+            float gain;
             float y;
             int32_t out;
 
             peak *= s_agc_release;
-            if (mag > peak) { peak = mag; }
-            {
-                float pk = (peak < AGC_PEAK_MIN) ? AGC_PEAK_MIN : peak;
-                float gain = AGC_TARGET / pk;
-                if (gain > AGC_GAIN_MAX) { gain = AGC_GAIN_MAX; }
-                y = s_env[n] * gain * DEMOD_AM_GAIN;
+            inv  *= inv_rel;
+            if (mag > peak) {
+                peak = mag;
+                inv  = 1.0f / ((peak < AGC_PEAK_MIN) ? AGC_PEAK_MIN : peak);
+            } else if (peak < AGC_PEAK_MIN) {
+                inv = 1.0f / AGC_PEAK_MIN;
             }
+
+            gain = AGC_TARGET * inv;
+            if (gain > AGC_GAIN_MAX) { gain = AGC_GAIN_MAX; }
+            y = s_env[n] * gain * DEMOD_AM_GAIN;
 
             out = (int32_t)y;
             if (out > 32767)  { out = 32767; }
@@ -3576,10 +3805,13 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
         }
     }
 
+    /* Y el pitido de los avisos, LO ULTIMO: tapa el audio en vez de
+     * mezclarse con el. Ver bip.h. Apagado no cuesta nada. */
+    bip_mete(s_audio_out, (uint32_t)SDR_RX_BLOCK_SAMPLES, demod_am_active_fs_hz());
     gd32_i2s_stream_write_half(s_audio_out);
 
     s_last_cycles = DWT->CYCCNT - cyc_start;
-    s_last_cycles_agc_out = s_last_cycles - s_last_cycles_frontend
-                             - s_last_cycles_extract - s_last_cycles_audio
-                             - s_last_cycles_nr;
+    s_last_cycles_agc_out = resta0(s_last_cycles,
+                                   s_last_cycles_frontend + s_last_cycles_extract
+                                   + s_last_cycles_audio + s_last_cycles_nr);
 }

@@ -650,6 +650,22 @@ uint8_t settings_load(settings_loaded_t *out)
     return got_any;
 }
 
+/*
+ * ¿HAY ALGO QUE HACER AQUI? - 05/10/2026.
+ *
+ * Existe para que el bucle principal no tenga que montar la estructura de
+ * ajustes "de tabla" -treinta y cinco campos, cada uno preguntandole a su
+ * modulo- en CADA VUELTA para que settings_poll() la tire en la segunda
+ * linea. Ver la llamada en main.c.
+ *
+ * Devuelve 1 si hay un guardado en vuelo o algo marcado como sucio, o sea
+ * exactamente los dos casos en los que settings_poll() hace algo.
+ */
+uint8_t settings_hay_faena(void)
+{
+    return (uint8_t)(s_async_save_in_progress || s_dirty);
+}
+
 void settings_mark_dirty(void)
 {
     s_dirty = 1U;

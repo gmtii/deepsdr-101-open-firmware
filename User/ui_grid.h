@@ -1,6 +1,7 @@
 #ifndef UI_GRID_H_INCLUDED
 #define UI_GRID_H_INCLUDED
 
+#include "gfx2.h"
 #include <stdint.h>
 
 /*
@@ -68,6 +69,10 @@ typedef struct {
 } ui_grid_state_t;
 
 void ui_grid_draw(const ui_grid_state_t *st);
+/* La misma capa en una banda que le dan: la captura de pantalla.
+ * Ver ui_grid.c. */
+void   ui_grid_pinta_en(gfx2_surf_t *s, const ui_grid_state_t *st);
+
 void ui_grid_draw_one(const ui_grid_state_t *st, int8_t i);
 int8_t ui_grid_hit(uint16_t x, uint16_t y);
 

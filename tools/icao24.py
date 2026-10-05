@@ -95,12 +95,27 @@ NAME_LEN   = 24          # lo que espera icao24_db.c: no se toca
 REC_LEN    = 5
 HDR_LEN    = 16
 
-# LA ZONA ALTA ENTERA, que es el techo absoluto de lo que se puede pedir.
-# 0x101000 .. 0x200000 desde el 02/10/2026 (antes acababa en 0x180000, ver
-# ZA_TOPE en User/zona_alta.h). Esto NO es lo que le toca a los aviones
-# -eso lo reparte datos_pack.py mirando lo que miden las dos bases-, es
-# solo el "mas que esto no existe".
-ZA_BYTES   = 0x200000 - 0x101000
+# EL TECHO ABSOLUTO: UN MEGA, Y NO DEPENDE DEL CHIP - 05/10/2026.
+#
+# Esto se escribia como 0x200000 - 0x101000, o sea el final menos el
+# principio de la zona alta EN EL CHIP DE 2 MB DE FABRICA. Daba el numero
+# bueno, pero por el camino equivocado: invita a "actualizar" el 0x200000
+# el dia que se ponga un chip de 16 MB, y entonces este guion dejaria
+# pedir quince megas de aviones para un BD.BIN que la radio rechaza.
+#
+# La regla esta en User/zona_alta.h: ZA_BYTES_REGION, la region de datos,
+# es SIEMPRE el ultimo mega del chip. Una flash mas grande agranda el
+# disco del usuario, no las bases. Menos ZA_HUECO, el bloque de borrado
+# de margen, quedan 1.044.480 bytes y ahi tienen que caber el directorio
+# de DATOS.BIN, los aviones y las emisoras.
+#
+# Esto NO es lo que le toca a los aviones -eso lo reparte datos_pack.py
+# mirando lo que miden las dos bases-, es solo el "mas que esto no
+# existe".
+ZA_BYTES_REGION = 0x100000
+ZA_HUECO        = 0x1000
+ZA_CAB          = 4096          # el directorio de DATOS.BIN
+ZA_BYTES   = ZA_BYTES_REGION - ZA_HUECO - ZA_CAB
 # Lo que le queda a los aviones despues del directorio de DATOS.BIN y de
 # la base de emisoras de hoy. Ver la cabecera: el numero bueno lo dice
 # datos_pack.py, y se pasa como tercer argumento.
@@ -427,6 +442,13 @@ def main():
         if TOPE < HDR_LEN + NAME_LEN or TOPE > ZA_BYTES:
             print('el tope tiene que estar entre %d y %d bytes'
                   % (HDR_LEN + NAME_LEN, ZA_BYTES), file=sys.stderr)
+            if TOPE > ZA_BYTES:
+                print('BD.BIN no puede pasar de 1 MB en ningun chip, y de'
+                      ' ese mega hay que', file=sys.stderr)
+                print('descontar el directorio y las emisoras. El numero'
+                      ' bueno lo dice', file=sys.stderr)
+                print('datos_pack.py cuando no le caben las dos bases.',
+                      file=sys.stderr)
             return 1
 
     # Y ademas se comprueba que la entrada NO es ya un ICAO24.BIN. Pasarle

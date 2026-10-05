@@ -136,11 +136,14 @@ static uint32_t s_grabados;
 
 static uint32_t s_fat1, s_raiz, s_datos, s_nclus;
 static uint8_t  s_geo_ok;
+static uint8_t  s_spc;      /* sectores por cluster; 0 = sin leer */
 
 static uint8_t geo(void)
 {
     if (!s_geo_ok) {
         s_geo_ok = spi_flash_geometria(&s_fat1, &s_raiz, &s_datos, &s_nclus);
+        s_spc    = spi_flash_spc();
+        if (s_spc == 0U) { s_geo_ok = 0U; }   /* sin esto no se puede andar la cadena */
     }
     return s_geo_ok;
 }
@@ -225,17 +228,41 @@ static carga_r_t copia(const carga_fmc_t *fmc, uint32_t tam, uint32_t cluster)
         if (!fmc->borra(k_sectores[s])) { return CARGA_ERROR_BORRAR; }
     }
 
+    /*
+     * UN CLUSTER NO ES UN SECTOR - 02/10/2026.
+     *
+     * Esto leia 512 bytes por eslabon de la cadena porque el volumen de
+     * fabrica tiene un sector por cluster. En cuanto Windows formatea con
+     * clusters de 4 kB, cada eslabon son OCHO sectores, y leyendo uno solo
+     * se copiaba 1/8 del fichero mezclado con basura. Peor todavia: la
+     * cadena se acababa antes de tiempo y salia "la cadena del fichero no
+     * cuadra" sobre un fichero perfecto.
+     *
+     * El bucle de dentro vacia el cluster entero antes de pedir el
+     * siguiente. s_buf sigue siendo de 512 porque no hace falta mas: se
+     * copia de sector en sector, solo que ahora sabiendo cuantos van por
+     * cluster.
+     */
     while (quedan > 0U) {
-        uint32_t n = (quedan > SECTOR_BYTES) ? SECTOR_BYTES : quedan;
+        uint32_t base, hecho;
 
         if (cluster < 2U || cluster >= (s_nclus + 2U)) { return CARGA_FICHERO_ROTO; }
-        spi_flash_read((s_datos + (cluster - 2U)) * SECTOR_BYTES, s_buf, SECTOR_BYTES);
-        if (!fmc->escribe(addr, s_buf, n)) { return CARGA_ERROR_GRABAR; }
 
-        addr    += n;
-        quedan  -= n;
-        s_grabados += n;
-        cluster  = fat_siguiente(cluster);
+        base  = (s_datos + ((cluster - 2U) * s_spc)) * SECTOR_BYTES;
+        hecho = 0U;
+        while (hecho < ((uint32_t)s_spc * SECTOR_BYTES) && quedan > 0U) {
+            uint32_t n = (quedan > SECTOR_BYTES) ? SECTOR_BYTES : quedan;
+
+            spi_flash_read(base + hecho, s_buf, SECTOR_BYTES);
+            if (!fmc->escribe(addr, s_buf, n)) { return CARGA_ERROR_GRABAR; }
+
+            addr       += n;
+            quedan     -= n;
+            s_grabados += n;
+            hecho      += SECTOR_BYTES;
+        }
+
+        cluster = fat_siguiente(cluster);
         if (quedan > 0U && (cluster < 2U || cluster >= 0x0FF8U)) {
             return CARGA_FICHERO_ROTO;   /* la cadena se acaba antes que el fichero */
         }

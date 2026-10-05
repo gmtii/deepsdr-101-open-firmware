@@ -105,13 +105,42 @@ static void draw_all(gfx2_surf_t *s, void *ctx)
     barra(s, BARRA1_Y, tr("Nivel", "Level"), st->nivel, 1U);
     barra(s, BARRA2_Y, tr("Marca", "Mark"), st->marca, st->latido);
 
-    /* La hora, en grande, en cuanto haya algo que ensenar. Ocupa el hueco
-     * entre la segunda barra y los botones. */
+    /*
+     * La hora en grande y la fecha debajo, CENTRADAS en el hueco que queda
+     * entre la segunda barra y los botones.
+     *
+     * *** Por el dueño, con una foto: "la fecha se superpone un poco con
+     * el boton, subir un poco para arriba el conjunto hora fecha lo
+     * arreglaria". *** Y se superponia, por cuatro pixeles:
+     *
+     *     hueco           278 .. 354   (76 px)
+     *     hora  en +14    292 .. 346   (54 de alto)
+     *     fecha en +62    340 .. 358   <- se metia 4 px en los botones
+     *                                     y 6 px dentro de la propia hora
+     *
+     * Los dos desplazamientos eran numeros escritos a mano que cuadraban
+     * con las fuentes de entonces. Ahora se calcula: el bloque mide lo que
+     * midan las dos fuentes, y se centra en el hueco que haya. Si mañana
+     * cambia una fuente, el tamaño de la pantalla o la altura de los
+     * botones, esto sigue cuadrando solo en vez de volver a pisarse.
+     *
+     * El -2 de la fecha la junta un poco a la hora: font_num_44 lleva once
+     * pixeles de descenso que los digitos no usan, y sin eso el hueco
+     * entre las dos lineas se ve como un despiste.
+     */
     if (st->hora) {
-        gfx2_text_in(s, 0, (int16_t)(BARRA2_Y + BARRA_H + 14), 800, st->hora,
+        int16_t y0 = (int16_t)(BARRA2_Y + BARRA_H);
+        int16_t hueco = (int16_t)(UIH_BTN_Y - y0);
+        int16_t alto  = (int16_t)(font_num_44.line_h
+                                  + (st->fecha ? (font_ui_14.line_h - 2) : 0));
+
+        if (hueco > alto) { y0 = (int16_t)(y0 + ((hueco - alto) / 2)); }
+
+        gfx2_text_in(s, 0, y0, 800, st->hora,
                      &font_num_44, gfx2_rgb(PAL_INK), GFX2_ALIGN_C);
         if (st->fecha) {
-            gfx2_text_in(s, 0, (int16_t)(BARRA2_Y + BARRA_H + 62), 800, st->fecha,
+            gfx2_text_in(s, 0, (int16_t)(y0 + font_num_44.line_h - 2), 800,
+                         st->fecha,
                          &font_ui_14, gfx2_rgb(PAL_INK_MUTE), GFX2_ALIGN_C);
         }
     }
@@ -122,6 +151,28 @@ static void draw_all(gfx2_surf_t *s, void *ctx)
           (uint8_t)(st->pressed == UIH_HIT_APLICAR));
     boton(s, btn_x(2), tr("Salir", "Exit"), 1U,
           (uint8_t)(st->pressed == UIH_HIT_SALIR));
+}
+
+/*
+ * LA MISMA CAPA, EN UNA BANDA QUE LE DAN - 05/10/2026.
+ *
+ * *** El dueño: "quiero que las capturas funcionen tambien en los modos
+ * digitales y en las pantallas de opciones". ***
+ *
+ * Es la MISMA funcion de dibujo que pinta en la pantalla, no una copia: lo
+ * unico que cambia es de donde sale la banda. En la pantalla la pide
+ * gfx2_render(); aqui la trae la captura, que va montando la pantalla
+ * entera franja por franja porque no hay sitio en RAM para una copia.
+ *
+ * El recorte lo pone gfx2_sub_y(): la funcion de dibujo pinta su ventana
+ * entera dando por hecho que quien le llama la ha recortado -eso es lo que
+ * hace gfx2_render()-, asi que aqui hay que darselo igual. Sin esto se
+ * sale por arriba y por abajo de su sitio.
+ */
+void ui_hora_pinta_en(gfx2_surf_t *s, const ui_hora_state_t *st)
+{
+    gfx2_surf_t sub = gfx2_sub_y(s, UIH_Y, UIH_H);
+    if (sub.h > 0) { draw_all(&sub, (void *)st); }
 }
 
 void ui_hora_draw(const ui_hora_state_t *st)

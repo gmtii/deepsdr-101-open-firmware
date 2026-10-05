@@ -1,6 +1,7 @@
 #ifndef UI_HORA_H_INCLUDED
 #define UI_HORA_H_INCLUDED
 
+#include "gfx2.h"
 #include <stdint.h>
 
 /*
@@ -62,6 +63,9 @@ typedef struct {
 } ui_hora_state_t;
 
 void   ui_hora_draw(const ui_hora_state_t *st);
+/* La misma capa en una banda que le dan: la captura de pantalla.
+ * Ver ui_hora.c. */
+void   ui_hora_pinta_en(gfx2_surf_t *s, const ui_hora_state_t *st);
 int8_t ui_hora_hit(uint16_t x, uint16_t y);
 
 #endif /* UI_HORA_H_INCLUDED */

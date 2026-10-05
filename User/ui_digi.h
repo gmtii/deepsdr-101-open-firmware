@@ -2,6 +2,7 @@
 #define UI_DIGI_H_INCLUDED
 
 #include <stdint.h>
+#include "gfx2.h"   /* gfx2_surf_t: ver ui_digi_pinta_en() */
 
 /*
  * PANEL DE MODOS DIGITALES - etapa 20, 22/09/2026.
@@ -248,6 +249,9 @@ typedef struct {
 } ui_digi_state_t;
 
 void    ui_digi_draw_texto(const ui_digi_state_t *st);  /* el panel de renglones */
+
+/* El panel entero en una banda que trae otro, para la captura de pantalla. */
+void    ui_digi_pinta_en(gfx2_surf_t *s, const ui_digi_state_t *st);
 /* Solo la franja de la cabecera (botones, barra y chapa), sin tocar el
  * cuerpo. Para quien pinta el cuerpo el mismo - el mapa- y no quiere que se
  * pinte dos veces. Ver su comentario en ui_digi.c. */
@@ -271,6 +275,21 @@ extern const int16_t ui_digi_cols_ais[6];
 extern const int16_t ui_digi_cols_ale[5];
 #define UI_DIGI_COLS_JTTY_N 5U
 extern const int16_t ui_digi_cols_jtty[5];
+
+/*
+ * EL IDENTIFICADOR DE TRAMAS - 02/10/2026. Tres columnas y de sobra:
+ * cada cuanto se repite, que creemos que es, y con cuanta confianza.
+ *
+ *     "106,67 ms"    unos 80 px  /  "Periodo"  60  ->  Periodo   96
+ *     "sin identificar"  ~150 px /  "Señal"    42  ->  Señal    560
+ *     "98%"              ~34 px  /  "Calidad"  60
+ *
+ * A la del medio se le da casi toda la pantalla a proposito: ahi van los
+ * nombres largos -"INMARSAT Std C", "TETRAPOL (VHF/UHF)"- y el dia que la
+ * tabla crezca no quiero volver a medir columnas.
+ */
+#define UI_DIGI_COLS_IDENT_N 3U
+extern const int16_t ui_digi_cols_ident[3];
 #define UI_DIGI_COLS_FT8_N 7
 void    ui_digi_draw_boton(const ui_digi_state_t *st);
 uint8_t ui_digi_boton_hit(const ui_digi_state_t *st, uint16_t x, uint16_t y);

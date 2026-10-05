@@ -2,6 +2,7 @@
 #define SPECTRUM_H
 
 #include <stdint.h>
+#include "gfx2.h"   /* gfx2_surf_t: ver spectrum_pinta_en() */
 
 /*
  * Spectrum trace rendering + shared dB->RGB565 colormap (the same
@@ -147,6 +148,11 @@ uint8_t spectrum_get_heatmap_trace_white(void);
  * Por defecto va ENCENDIDO, que es como ha estado desde que se escribio.
  * Apagarlo devuelve los puntos sueltos.
  */
+/* El espectro montado en una banda que trae otro, para la captura de
+ * pantalla. Usa el mismo montador que el dibujado normal. Ver
+ * spectrum_pinta_en() en spectrum.c. */
+void    spectrum_pinta_en(gfx2_surf_t *sf, int16_t px, int16_t py);
+
 void    spectrum_set_bridge(uint8_t on);
 uint8_t spectrum_get_bridge(void);
 

@@ -18,7 +18,12 @@
  * y dificil de ver, que es la peor clase.
  */
 static uint32_t s_lut[256];
-static uint32_t s_lut_firma;      /* resumen de la paleta ya cargada */
+static uint32_t s_lut_firma;
+/* El puntero de la ultima paleta cargada y cuantas llamadas seguidas se
+ * puede saltar la firma. Ver lut_pon(). */
+#define LUT_SALTOS 8U
+static const uint16_t *s_lut_ptr;
+static uint8_t  s_lut_salta;      /* resumen de la paleta ya cargada */
 static uint8_t  s_lut_cargada;
 static uint8_t  s_on;             /* encendido por el usuario */
 static uint8_t  s_vale;           /* el IPA responde */
@@ -56,6 +61,7 @@ static uint32_t firma(const uint16_t *cmap)
 void ipa_blit_init(void)
 {
     s_on = 0U; s_vale = 0U; s_lut_cargada = 0U; s_fallos = 0U;
+    s_lut_ptr = 0; s_lut_salta = 0U;
 
     rcu_periph_clock_enable(RCU_IPA);
     ipa_deinit();
@@ -88,11 +94,46 @@ uint16_t ipa_blit_fallos(void)
 /* Carga la paleta en el IPA si ha cambiado. Devuelve 0 si no se pudo. */
 static uint8_t lut_pon(const uint16_t *cmap)
 {
-    uint32_t f = firma(cmap);
+    uint32_t f;
     uint32_t vueltas;
     uint16_t i;
 
-    if (s_lut_cargada && (f == s_lut_firma)) {
+    /*
+     * EL PUNTERO PRIMERO, LA FIRMA DESPUES - 05/10/2026.
+     *
+     * *** El dueño: "busca razones que hagan que se ralentice tanto la radio
+     * completa como el espectro". ***
+     *
+     * La firma es un FNV-1a sobre las 256 entradas de la paleta, y se
+     * calculaba ANTES de mirar si hacia falta. Esto se llama una o dos veces
+     * por cada tira de la cascada -nueve tiras por fotograma-, asi que eran
+     * entre 2.300 y 4.600 vueltas con una multiplicacion de 32 bits cada
+     * una, por fotograma, para confirmar que la paleta sigue siendo la de
+     * siempre.
+     *
+     * Y la paleta vive en flash, en una tabla constante: mientras el puntero
+     * sea el mismo, el contenido es el mismo. Comparar el puntero es gratis.
+     * La firma se queda para el caso que de verdad importa - que alguien
+     * cambie el CONTENIDO sin cambiar el puntero, que es lo que hace
+     * spectrum.c al construir su tabla de color en RAM-, pero solo se
+     * calcula cuando el puntero no coincide... y ademas cada vez que la
+     * tabla se reconstruye, porque entonces el puntero si es el mismo.
+     *
+     * De ahi el contador: la firma se recalcula una de cada N llamadas, lo
+     * justo para que un cambio de contenido en el mismo sitio se note en el
+     * fotograma siguiente, sin pagarlo nueve veces por fotograma.
+     */
+    if (s_lut_cargada && (cmap == s_lut_ptr)) {
+        if (s_lut_salta < LUT_SALTOS) {
+            s_lut_salta++;
+            return 1U;
+        }
+        s_lut_salta = 0U;
+    }
+
+    f = firma(cmap);
+
+    if (s_lut_cargada && (f == s_lut_firma) && (cmap == s_lut_ptr)) {
         return 1U;
     }
 
@@ -118,6 +159,8 @@ static uint8_t lut_pon(const uint16_t *cmap)
         if (ipa_flag_get(IPA_FLAG_LLF) != RESET) {
             ipa_flag_clear(IPA_FLAG_LLF);
             s_lut_firma   = f;
+            s_lut_ptr     = cmap;
+            s_lut_salta   = 0U;
             s_lut_cargada = 1U;
             return 1U;
         }

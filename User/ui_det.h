@@ -1,6 +1,7 @@
 #ifndef UI_DET_H_INCLUDED
 #define UI_DET_H_INCLUDED
 
+#include "gfx2.h"
 #include <stdint.h>
 #include "ui_grid.h"   /* comparte la zona del menu: UIG_Y / UIG_H */
 
@@ -69,6 +70,9 @@ typedef struct {
 } ui_det_state_t;
 
 void   ui_det_draw(const ui_det_state_t *st);
+/* La misma capa en una banda que le dan: la captura de pantalla.
+ * Ver ui_det.c. */
+void   ui_det_pinta_en(gfx2_surf_t *s, const ui_det_state_t *st);
 void   ui_det_draw_valor(const ui_det_state_t *st);   /* solo el numero */
 void   ui_det_draw_one(const ui_det_state_t *st, int8_t i);
 int8_t ui_det_hit(uint16_t x, uint16_t y);

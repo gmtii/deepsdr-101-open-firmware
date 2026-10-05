@@ -1,0 +1,22 @@
+Otras listas que paso el dueño el 02/10/2026 (William Hepburn, DX Info Centre).
+Aqui resumidas a lo que esta radio puede usar. No son del firmware: son
+material para los modos y para el escaneo que esta pendiente.
+
+VOLMET - meteorologia aeronautica, VOZ en USB, 3 kHz (edicion 2025-07-25)
+  Lo oye cualquiera en modo USB, no hace falta decodificador.
+  Las que mejor se oyen desde España:
+    3413 / 5505 / 8957 / 13264 kHz   EIP SHANNON (Irlanda), CONTINUO
+    5450 / 11253 kHz                 MKL MILITARY ONE (Reino Unido), CONTINUO
+    6617 / 8939 kHz                  UHD/UTD SAN PETERSBURGO (ruso), H+XX y H+35
+    6693 / 8888 / 11318 kHz          RQCI SAMARA / UNNN NOVOSIBIRSK (ruso)
+  Shannon y Military One son continuas: valen para comprobar la antena a
+  cualquier hora.
+
+SEÑALES HORARIAS - portadora y pitidos, modo CW o AM (edicion 2026-09-14)
+    4996 / 9996 / 14996 kHz   RWM MOSCU, continuo, identificacion en morse
+    4998 / 15006 kHz          EBC CADIZ (ESPAÑA), 1000-1055 Z lunes a viernes,
+                              identificacion en morse
+    2500 / 5000 / 10000 / 15000 / 20000 / 25000 kHz   WWV FORT COLLINS (EEUU)
+    5000 / 10000 / 15000 kHz  WWVH KEKAHA (Hawai)
+  EBC de Cadiz es la de casa, pero solo emite 55 minutos al dia entre semana.
+  RWM es continua y se oye bien de noche: sirve para calibrar el oscilador.

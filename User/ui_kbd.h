@@ -1,6 +1,7 @@
 #ifndef UI_KBD_H_INCLUDED
 #define UI_KBD_H_INCLUDED
 
+#include "gfx2.h"
 #include <stdint.h>
 
 /*
@@ -78,6 +79,9 @@ typedef struct {
 } ui_kbd_state_t;
 
 void   ui_kbd_draw(const ui_kbd_state_t *st);
+/* La misma capa en una banda que le dan: la captura de pantalla.
+ * Ver ui_kbd.c. */
+void   ui_kbd_pinta_en(gfx2_surf_t *s, const ui_kbd_state_t *st);
 void   ui_kbd_draw_one(const ui_kbd_state_t *st, int8_t i);
 void   ui_kbd_draw_lectura(const ui_kbd_state_t *st);  /* solo la franja de arriba */
 int8_t ui_kbd_hit(uint16_t x, uint16_t y);

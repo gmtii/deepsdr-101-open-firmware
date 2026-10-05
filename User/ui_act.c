@@ -121,6 +121,16 @@ static void draw_one(gfx2_surf_t *s, void *ctx)
     draw_btn(s, o->st, o->i);
 }
 
+/* La barra de abajo en una banda que trae otro, para la captura. */
+/* Recortada a su hueco, igual que la recorta su ventana en ui_act_draw().
+ * Ver spec_chrome_pinta_en() para por que hace falta. */
+void ui_act_pinta_en(gfx2_surf_t *s, const ui_act_state_t *st)
+{
+    gfx2_surf_t sub = gfx2_sub_y(s, (int16_t)(UI_ACT_Y - 5),
+                                 (int16_t)(GFX2_H - UI_ACT_Y + 5));
+    if (sub.h > 0) { draw_bar(&sub, (void *)st); }
+}
+
 void ui_act_draw(const ui_act_state_t *st)
 {
     gfx2_render(0, (int16_t)(UI_ACT_Y - 5), GFX2_W,

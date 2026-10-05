@@ -1,0 +1,64 @@
+SEÑALES QUE PODRIAN ENTRAR EN LA TABLA DE ident.c
+Fuente: Signal Identification Wiki, categoria HF (268 entradas),
+pegada por el dueño el 03/10/2026.
+
+PARA QUE SIRVE ESTE FICHERO. No es la tabla: es la lista de la COMPRA.
+ident.c mide cuatro cosas -ancho de banda, par de tonos y su separacion,
+baudios y periodo de trama- y con eso NO se distinguen 268 señales. Muchas
+de esas entradas comparten las cuatro medidas y son indistinguibles sin
+demodular. Aqui quedan apuntadas las que SI se podrian separar, para irlas
+metiendo con cabeza y no de golpe.
+
+REGLA 1: una fila nueva solo entra con su numero comprobado. O contra una
+grabacion, o contra una norma que se pueda citar. Una fila puesta "de
+memoria" es peor que no tenerla, porque la pantalla la dira igual de
+segura que las demas.
+
+REGLA 2, del dueño: *** "y de esa lista hay muchas que no estan
+operativas". *** Cierto, y el propio catalogo las marca. ARQ6-90, ARQ6-98,
+AUTOSPEC, POL-ARQ, SWED-ARQ, HNG-FEC, SI-ARQ, SI-FEC, DUP-ARQ, RUM-FEC,
+VISEL, Piccolo, Coquelet, SP-14, CHU, TWINPLEX, MIL-STD-110-342 y bastantes
+mas dicen "no longer used today" o "phased out". Esas NO entran: una tabla
+llena de modos muertos tarda igual en recorrerse y no acierta nunca. Si
+alguna resucita, se mete entonces.
+
+--- FSK, separables por (separacion, baudios) ---
+  170 Hz / 100 Bd   SITOR-A, SITOR-B, NAVTEX, DSC  <- las cuatro IGUALES.
+                    Solo las separa el ciclo de trabajo: B continuo,
+                    A y DSC a rafagas.    [PROBADA: sitorb_tfc, navtex8424]
+  850 Hz /  75 Bd   STANAG 4481 FSK (KG-84)        [PROBADA: stanag4481_fsk]
+  170 Hz / 45,45 Bd RTTY de aficionado
+  450 Hz /  50 Bd   RTTY comercial
+   85 Hz / 50-150Bd MD-674 (militar EEUU, de los 60)
+  500 Hz / 200 Bd   F01, inteligencia rusa
+ 1000 Hz / 200 Bd   F06, inteligencia rusa
+  625 Hz / 100 Bd   F11, inteligencia polaca
+  650 Hz /  96 Bd   CIS-14 / AMOR (rusa, activa)
+  300-630 Hz        CIS-36-50 y CIS-50-50 (armada rusa)
+ 7000 Hz /  20 Bd   FSK militar rusa de 7 kHz
+
+--- PSK, separables por el periodo de trama ---
+  106,67 ms  STANAG 4285 y 4481 PSK   [PROBADA: stanag4285_tfc, 4481_psk]
+  211,69 ms  STANAG 4529              [PROBADA: stanag4529]
+   66,81 ms  STANAG 4415              [PROBADA: stanag4415]
+  119,61 ms  STANAG 4539 / MIL-188-110B Apendice C  [PROBADA: 4539_110b]
+   13,33 ms  STANAG 4538 / MIL-188-141B, a rafagas  [PROBADA: stanag4538]
+
+--- Por ancho de banda, y solo como "compatible con" ---
+  ~6 Hz      WSPR
+  ~50 Hz     FT8 (y ranuras de 15 s)
+  ~60 Hz     PSK31
+  ~2,4 kHz   HFDL
+  ~3 kHz     WEFAX, SSTV, 2G ALE
+  >10 kHz    radares transhorizonte, CODAR, ionosondas
+  Estas NO identifican por si solas: hay decenas de cosas en cada tramo.
+
+--- LO QUE NO SE PUEDE CON ESTAS MEDIDAS ---
+Todo lo OFDM y multitono (CIS-12, CIS-45/60/93, MIL-110 Apendice A y B,
+los 16 y 20 tonos yugoslavos, CLOVER, MT63, DRM...) necesita contar
+cuantas portadoras hay y a que distancia, que es otra medida distinta.
+Se podria añadir: el espectro ya esta calculado y contar rayas
+equiespaciadas es barato. Queda apuntado.
+
+Lo mismo los MFSK (Olivia, Contestia, THOR, DominoEX, Piccolo, los XPA
+rusos): hacen falta mas de dos tonos y ahora solo se buscan dos.

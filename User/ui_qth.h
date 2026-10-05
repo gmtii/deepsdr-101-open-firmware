@@ -1,6 +1,7 @@
 #ifndef UI_QTH_H_INCLUDED
 #define UI_QTH_H_INCLUDED
 
+#include "gfx2.h"
 #include <stdint.h>
 
 /*
@@ -82,6 +83,9 @@ typedef struct {
 } ui_qth_state_t;
 
 void   ui_qth_draw(const ui_qth_state_t *st);
+/* La misma capa en una banda que le dan: la captura de pantalla.
+ * Ver ui_qth.c. */
+void   ui_qth_pinta_en(gfx2_surf_t *s, const ui_qth_state_t *st);
 int8_t ui_qth_hit(uint16_t x, uint16_t y);
 
 #endif /* UI_QTH_H_INCLUDED */

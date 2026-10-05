@@ -1,45 +1,94 @@
 #include "nco.h"
+#include "nco_tabla.h"
 #include <math.h>
 
-#define NCO_BITS   10U
-#define NCO_N      (1UL << NCO_BITS)          /* 1024 puntos */
-#define NCO_FRAC   (32U - NCO_BITS)           /* bits que quedan de fraccion */
-#define NCO_FRAC_1 (1.0f / 4194304.0f)        /* 1 / 2^22 */
+/*
+ * Los numeros de la rejilla ya NO estan aqui: viven en nco.h, con la cuenta
+ * que los usa (NCO_FASE_BITS y companeros). Estaban duplicados -una copia
+ * aqui y la medida de la tabla en nco_tabla.h- y de esa pareja no se entera
+ * nadie hasta que alguien cambia una: la tabla se leeria con el indice
+ * equivocado y el oscilador saldria distorsionado sin que fallara nada al
+ * compilar. Esto ata las dos.
+ */
+_Static_assert((1UL << NCO_FASE_BITS) == NCO_TABLA_N,
+               "la rejilla de fase de nco.h no cuadra con el tamano de la tabla");
 
 /* Una vuelta entera MAS el punto de cierre, para que la interpolacion del
  * ultimo tramo no tenga que dar la vuelta al indice con un modulo. Cuesta
  * cuatro bytes y quita una rama del bucle mas caliente que hay. */
-static float s_sen[NCO_N + 1U];
-static uint8_t s_listo = 0U;
-
+/*
+ * LA TABLA VIVE EN FLASH, NO EN RAM - 04/10/2026.
+ *
+ * Hasta hoy era `static float s_sen[1025]` y se rellenaba en nco_init(). Son
+ * 4.100 bytes de los 196.608 que tiene esta radio, gastados en unos numeros
+ * que no cambian nunca. Mientras sobro sitio no se noto; el 04/10/2026 el
+ * enlazador se planto por DIECISEIS bytes al añadir cuatro medidas al
+ * identificador de señales:
+ *
+ *     region `RAM' overflowed by 16 bytes
+ *
+ * La tabla esta ahora en User/nco_tabla.c, generada por
+ * tools/gen_nco_tabla.py y comprobada en cada `make comprueba`. Se ganan
+ * 4.100 bytes de RAM a cambio de 4.100 de flash, de la que sobran 140 kB.
+ *
+ * nco_init() se queda porque la llaman seis ficheros y porque manda la
+ * regla de este proyecto: una funcion que existe no se quita de debajo de
+ * quien la usa. Ahora no hace nada, y eso esta escrito aqui para que nadie
+ * la busque pensando que se le ha olvidado algo.
+ */
 void nco_init(void)
 {
-    uint32_t k;
-
-    if (s_listo) {
-        return;
-    }
-    for (k = 0U; k <= NCO_N; k++) {
-        s_sen[k] = sinf(2.0f * 3.14159265358979f * (float)k / (float)NCO_N);
-    }
-    s_listo = 1U;
 }
 
-/* Seno y coseno de una fase de 32 bits, interpolados. El coseno es el mismo
- * seno un cuarto de vuelta por delante: 2^30 en el acumulador. */
+/*
+ * Seno y coseno de una fase de 32 bits, interpolados. El coseno es el mismo
+ * seno un cuarto de vuelta por delante: 2^30 en el acumulador.
+ *
+ * 05/10/2026: la cuenta se mudo A LA CABECERA, en linea, porque sam.c la
+ * llama una vez por muestra dentro de la interrupcion de audio y alli el
+ * coste de la llamada pesa tanto como la cuenta. Esto se queda como el
+ * nombre de siempre para el resto del fichero, llamando a la de alli: UNA
+ * cuenta, dos nombres, cero copias. Ver nco_sen_cos_fase() en nco.h.
+ */
 static void sen_cos(uint32_t fase, float *sen, float *cos_)
 {
-    uint32_t i;
-    float f;
+    nco_sen_cos_fase(fase, sen, cos_);
+}
 
-    i = fase >> NCO_FRAC;
-    f = (float)(fase & 0x003FFFFFUL) * NCO_FRAC_1;
-    *sen = s_sen[i] + f * (s_sen[i + 1U] - s_sen[i]);
+/*
+ * SENO Y COSENO DE UNA FASE EN RADIANES - 04/10/2026.
+ *
+ * *** El dueño: "al elegir modo sam la radio se ralentiza un monton". ***
+ *
+ * Y era esto. sam.c llamaba a sinf() y a cosf() de la biblioteca UNA VEZ POR
+ * MUESTRA, dentro de la interrupcion de audio y a 96 kHz. En este Cortex-M4
+ * esas dos no son instrucciones: son rutinas de software de un par de
+ * cientos de ciclos cada una. Doscientas cincuenta y seis muestras por
+ * bloque por dos rutinas se comen una parte larga de los 533.333 ciclos que
+ * dura un bloque, y lo que sobra no llega para el resto de la radio.
+ *
+ * La tabla de 1024 puntos con interpolacion que este fichero ya tenia da lo
+ * mismo en unos pocos ciclos, y su error esta MEDIDO en sim/ncotest.c. Lo
+ * unico que faltaba era poder pedirsela con una fase en radianes en vez de
+ * con un acumulador que avanza solo: el oscilador de un PLL no avanza a
+ * paso fijo, lo mueve el filtro de lazo.
+ *
+ * La conversion a la rejilla de 32 bits es una multiplicacion y un truncado,
+ * y el redondeo que mete es mas pequeño que el error de la propia tabla.
+ */
+void nco_sen_cos_rad(float rad, float *sen, float *cos_)
+{
+    /* 2^32 / (2*pi): de radianes a la rejilla del acumulador. */
+    const float k = 683565275.0f;
+    float r = rad;
 
-    fase += 0x40000000UL;                  /* +90 grados */
-    i = fase >> NCO_FRAC;
-    f = (float)(fase & 0x003FFFFFUL) * NCO_FRAC_1;
-    *cos_ = s_sen[i] + f * (s_sen[i + 1U] - s_sen[i]);
+    /* Fuera de una vuelta el truncado a uint32 no esta definido, asi que se
+     * trae dentro. sam.c ya la mantiene en [0, 2pi), pero esto no se fia:
+     * una fase que se escape no puede convertirse en basura silenciosa. */
+    while (r >= 6.28318530718f) { r -= 6.28318530718f; }
+    while (r < 0.0f)            { r += 6.28318530718f; }
+
+    sen_cos((uint32_t)(r * k), sen, cos_);
 }
 
 void nco_freq(nco_t *o, float hz, float fs_hz)

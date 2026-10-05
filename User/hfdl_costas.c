@@ -1,5 +1,38 @@
 #include <math.h>
 #include "hfdl_costas.h"
+#include "nco.h"   /* nco_sen_cos_rad(): ver el comentario de abajo */
+
+/*
+ * EL SENO Y EL COSENO SALEN DE LA TABLA, NO DE LA BIBLIOTECA - 05/10/2026.
+ *
+ * *** El dueño: "busca razones que hagan que se ralentice tanto la radio
+ * completa como el espectro". ***
+ *
+ * Este lazo se llama DOS veces por simbolo -la toma de T/2 y la principal-
+ * a 1800 baudios, o sea 7.200 llamadas por segundo a cosf() y sinf() de la
+ * biblioteca, que en este Cortex-M4 son rutinas de software de un par de
+ * cientos de ciclos cada una, dentro de la interrupcion de audio. Es el
+ * mismo fallo que se persiguio tres veces en sam.c.
+ *
+ * Y DE PASO SE ARREGLA ALGO QUE ESTABA MAL AUNQUE NO SE NOTARA: la fase de
+ * este lazo NO se acotaba nunca. Se le sumaba el filtro de lazo y punto, asi
+ * que crecia sin limite mientras durara una rafaga. cosf() de un numero
+ * grande todavia contesta, pero va perdiendo cifras significativas segun
+ * crece -el argumento se reduce modulo 2pi en coma flotante, y lo que sobra
+ * de los 24 bits de mantisa es lo que queda de angulo-. Acotarla no cambia
+ * el resultado del lazo (seno y coseno son periodicos) y es imprescindible
+ * para poder usar la tabla.
+ */
+#define HC_TPI  6.28318530718f
+
+static void hc_sen_cos(float fase, float *sen, float *cos_)
+{
+    /* La fase ya viene acotada de hfdl_costas_step_bpsk(); esto es por si
+     * alguien construye un lazo a mano y no pasa por ahi. */
+    while (fase >= HC_TPI) { fase -= HC_TPI; }
+    while (fase < 0.0f)    { fase += HC_TPI; }
+    nco_sen_cos_rad(fase, sen, cos_);
+}
 
 void hfdl_costas_init(hfdl_costas_t *c, float32_t alpha, float32_t beta)
 {
@@ -49,8 +82,9 @@ void hfdl_costas_reset(hfdl_costas_t *c)
 void hfdl_costas_derotate_only(const hfdl_costas_t *c, float32_t i_in, float32_t q_in,
 		float32_t *i_out, float32_t *q_out)
 {
-	float32_t cos_p = cosf(c->phase);
-	float32_t sin_p = sinf(c->phase);
+	float32_t cos_p, sin_p;
+
+	hc_sen_cos(c->phase, &sin_p, &cos_p);
 	*i_out = i_in * cos_p + q_in * sin_p;
 	*q_out = q_in * cos_p - i_in * sin_p;
 }
@@ -72,8 +106,9 @@ void hfdl_costas_step_bpsk(hfdl_costas_t *c, float32_t i_in, float32_t q_in,
 	c->coarse_prev_sq_i = sq_i;
 	c->coarse_prev_sq_q = sq_q;
 
-	float32_t cos_p = cosf(c->phase);
-	float32_t sin_p = sinf(c->phase);
+	float32_t cos_p, sin_p;
+
+	hc_sen_cos(c->phase, &sin_p, &cos_p);
 
 	/* Derotate by e^{-j*phase}: (I+jQ)(cos_p - j sin_p) */
 	float32_t i_der = i_in * cos_p + q_in * sin_p;
@@ -87,6 +122,11 @@ void hfdl_costas_step_bpsk(hfdl_costas_t *c, float32_t i_in, float32_t q_in,
 
 	c->freq += c->beta * err;
 	c->phase += c->freq + c->alpha * err;
+	/* Acotada: ver hc_sen_cos(). No cambia el lazo -seno y coseno son
+	 * periodicos- y evita que la fase crezca sin limite durante una
+	 * rafaga. */
+	while (c->phase >= HC_TPI) { c->phase -= HC_TPI; }
+	while (c->phase < 0.0f)    { c->phase += HC_TPI; }
 }
 
 float32_t hfdl_costas_get_coarse_freq_estimate(const hfdl_costas_t *c)

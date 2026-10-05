@@ -1,3 +1,4 @@
+#include "spectrum.h"   /* SPECTRUM_GRID_ROWS: las lineas que dibuja de verdad el espectro */
 #include "spec_chrome.h"
 #include "gfx2.h"
 #include "palette.h"
@@ -67,7 +68,56 @@ static void fmt_eje(char *buf, uint32_t hz, uint8_t en_hz)
  * que el numero cae EXACTAMENTE sobre su linea. Si esas dos cuentas se
  * separan, el eje miente, que es peor que no tenerlo.
  */
-#define SPC_GRID_ROWS 3
+/*
+ * EL NUMERO DE DIVISIONES SALE DE spectrum.h, NO DE AQUI - 05/10/2026.
+ *
+ * Aqui ponia 3 escrito a mano, y spectrum.c dibuja SPECTRUM_GRID_ROWS = 4.
+ * El comentario de aqui arriba decia que si las dos cuentas se separaban el
+ * eje mentiria. Se habian separado: spectrum.c pone sus lineas en h*gi/5
+ * -0,20, 0,40, 0,60 y 0,80 de la altura- y esta canaleta ponia sus numeros
+ * en h*gi/4 -0,25, 0,50 y 0,75-. Ni uno solo de los tres numeros caia sobre
+ * una linea, y las cuatro lineas de verdad no tenian numero.
+ *
+ * No se arregla poniendo un 4: se arregla quitando el numero de aqui, que es
+ * lo unico que impide que vuelvan a separarse.
+ */
+#define SPC_GRID_ROWS SPECTRUM_GRID_ROWS
+
+/*
+ * EL REDONDEO, EN UN SOLO SITIO, Y NO ES COSMETICA - 05/10/2026.
+ *
+ * Esta canaleta se repintaba EN CADA FOTOGRAMA, y la culpa era de dos lineas
+ * que parecian no tener nada que ver:
+ *
+ *   - la autoescala del espectro (spec_agc_step) mueve db_min y db_max con
+ *     una media exponencial de coma flotante, o sea que cambian en el ultimo
+ *     bit SIEMPRE, para siempre;
+ *   - spec_chrome_axis_changed() los comparaba con !=, igualdad exacta de
+ *     floats, asi que contestaba "ha cambiado" en todos los fotogramas.
+ *
+ * Y repintar este eje no es gratis: son 11.843 accesos al bus medidos
+ * (sim/chromecost.c: 32.677 el cromo entero, 20.834 solo la regla), y
+ * ademas por el camino de la CPU, que no se solapa con nada.
+ *
+ * Lo que se dibuja aqui no son los floats: son sus REDONDEOS a dB enteros.
+ * Asi que comparar los redondeos no es "una tolerancia a ojo", es comparar
+ * exactamente lo que se ve. Y por eso el redondeo vive aqui, en una funcion
+ * que usan el dibujo Y la comparacion: si algun dia cambia la precision de
+ * lo que se imprime, la comparacion se entera sola.
+ */
+static int32_t redondea(float v)
+{
+    return (int32_t)((v < 0.0f) ? (v - 0.5f) : (v + 0.5f));
+}
+
+/* El dB que le toca a la division `gi`, ya redondeado. Misma formula que
+ * spectrum.c usa para colocar la linea. */
+static int32_t fila_db(const spec_chrome_t *st, uint8_t gi)
+{
+    float db = st->db_max - (st->db_max - st->db_min)
+                            * (float)gi / (float)(SPC_GRID_ROWS + 1);
+    return redondea(db);
+}
 
 static void draw_db_gutter(gfx2_surf_t *s, void *ctx)
 {
@@ -90,12 +140,8 @@ static void draw_db_gutter(gfx2_surf_t *s, void *ctx)
          * desde ARRIBA de la traza */
         int16_t row = (int16_t)(((int32_t)SPC_TRACE_H * gi) / (SPC_GRID_ROWS + 1));
         int16_t gy  = (int16_t)(SPC_TRACE_Y + row);
-        /* el nivel que representa esa fila: arriba = db_max */
-        float   db  = st->db_max - (st->db_max - st->db_min)
-                                    * (float)gi / (float)(SPC_GRID_ROWS + 1);
-        int32_t dbi = (int32_t)((db < 0.0f) ? (db - 0.5f) : (db + 0.5f));
 
-        (void)fmt_dec(buf, dbi, 0, 0);
+        (void)fmt_dec(buf, fila_db(st, gi), 0, 0);
         /* La linea de guia entra 4 px en la canaleta para que el numero no
          * quede flotando lejos de su division. */
         gfx2_hline(s, (int16_t)(SPC_GUT_W - 4), gy, 4, gfx2_rgb(PAL_GRID));
@@ -218,13 +264,11 @@ static void draw_wf_legend(gfx2_surf_t *s, void *ctx)
     /* Sin contorno. Lo llevaba, y en la placa se veia a trozos: la rampa de
      * color ya es una forma cerrada y no necesita que nadie la enmarque. */
 
-    (void)fmt_dec(buf, (int32_t)((st->db_max < 0.0f) ? (st->db_max - 0.5f)
-                                                     : (st->db_max + 0.5f)), 0, 0);
+    (void)fmt_dec(buf, redondea(st->db_max), 0, 0);
     gfx2_text_in(s, 0, (int16_t)(by - 15), (int16_t)(SPC_GUT_W - 2), buf,
                  &font_ui_14, gfx2_rgb(PAL_INK_DIM), GFX2_ALIGN_C);
 
-    (void)fmt_dec(buf, (int32_t)((st->db_min < 0.0f) ? (st->db_min - 0.5f)
-                                                     : (st->db_min + 0.5f)), 0, 0);
+    (void)fmt_dec(buf, redondea(st->db_min), 0, 0);
     gfx2_text_in(s, 0, (int16_t)(by + bh + 1), (int16_t)(SPC_GUT_W - 2), buf,
                  &font_ui_14, gfx2_rgb(PAL_INK_DIM), GFX2_ALIGN_C);
 }
@@ -243,6 +287,33 @@ void spec_chrome_draw_axis(const spec_chrome_t *st)
                 draw_wf_legend, (void *)st);
 }
 
+/* El cromo entero en una banda que trae otro - para la captura de pantalla.
+ * Las mismas tres funciones de dibujo que usa spec_chrome_draw(). */
+/*
+ * Cada capa RECORTADA A SU HUECO, igual que se recorta sola cuando se pinta
+ * por gfx2_render(): ahi la ventana que se pide es el recorte. Montando la
+ * pantalla entera en una banda no hay ventana, asi que hay que darsela.
+ *
+ * No es teorico: el numero de abajo de la leyenda del color se sale UNA FILA
+ * por debajo de su hueco y en la pantalla se corta. Sin este recorte, la
+ * captura lo enseñaba entero y no coincidia con lo que se ve. Lo encontro
+ * sim/captura.c comparando pixel a pixel - dos pixeles de 384.000.
+ */
+void spec_chrome_pinta_en(gfx2_surf_t *s, const spec_chrome_t *st)
+{
+    gfx2_surf_t sub;
+
+    sub = gfx2_sub_y(s, SPC_Y, (int16_t)(SPC_RULER_Y - SPC_Y));
+    if (sub.h > 0) { draw_db_gutter(&sub, (void *)st); }
+
+    sub = gfx2_sub_y(s, SPC_WF_PANEL_Y,
+                     (int16_t)(SPC_WF_Y + SPC_WF_ROWS - SPC_WF_PANEL_Y));
+    if (sub.h > 0) { draw_wf_legend(&sub, (void *)st); }
+
+    sub = gfx2_sub_y(s, SPC_RULER_Y, SPC_RULER_H);
+    if (sub.h > 0) { draw_ruler(&sub, (void *)st); }
+}
+
 void spec_chrome_draw(const spec_chrome_t *st)
 {
     spec_chrome_draw_axis(st);
@@ -253,6 +324,14 @@ void spec_chrome_draw(const spec_chrome_t *st)
  * relleno entre campos de distinto tamano y su contenido es indefinido, asi
  * que un memcmp daria "ha cambiado" al azar y repintaria 30 veces por
  * segundo algo que no se ha movido. */
+/* Para el banco: cuantas divisiones usa esta canaleta de verdad. Existe
+ * para que sim/cromorepinta.c pueda comprobar que es el mismo numero que
+ * dibuja spectrum.c, en vez de fiarse de que alguien se acuerde. */
+int spec_chrome_divisiones(void)
+{
+    return (int)SPC_GRID_ROWS;
+}
+
 uint8_t spec_chrome_ruler_changed(const spec_chrome_t *a, const spec_chrome_t *b)
 {
     return (uint8_t)(a->center_hz != b->center_hz ||
@@ -260,9 +339,27 @@ uint8_t spec_chrome_ruler_changed(const spec_chrome_t *a, const spec_chrome_t *b
                      a->demod_px  != b->demod_px);
 }
 
+/*
+ * SE COMPARA LO QUE SE DIBUJA, NO LOS FLOATS DE DONDE SALE - 05/10/2026.
+ *
+ * Ver el comentario de redondea(): con != de floats y una autoescala que
+ * mueve db_min/db_max con una media exponencial, esto contestaba "si" en
+ * TODOS los fotogramas y repintaba 11.843 accesos al bus para dejar la
+ * pantalla exactamente igual.
+ *
+ * Ahora se comparan los numeros que se imprimen -ya redondeados a dB
+ * enteros- y el mapa de color. Sigue siendo exacto: si algo de lo que se ve
+ * cambia, esto lo dice; si no cambia nada de lo que se ve, no se repinta.
+ */
 uint8_t spec_chrome_axis_changed(const spec_chrome_t *a, const spec_chrome_t *b)
 {
-    return (uint8_t)(a->db_min != b->db_min ||
-                     a->db_max != b->db_max ||
-                     a->cmap   != b->cmap);
+    uint8_t gi;
+
+    if (a->cmap != b->cmap) { return 1U; }
+    if (redondea(a->db_max) != redondea(b->db_max)) { return 1U; }
+    if (redondea(a->db_min) != redondea(b->db_min)) { return 1U; }
+    for (gi = 1U; gi <= SPC_GRID_ROWS; gi++) {
+        if (fila_db(a, gi) != fila_db(b, gi)) { return 1U; }
+    }
+    return 0U;
 }

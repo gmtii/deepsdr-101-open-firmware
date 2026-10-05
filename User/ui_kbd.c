@@ -162,6 +162,28 @@ static void draw_all(gfx2_surf_t *s, void *ctx)
     for (i = 0U; i < UIK_KEYS; i++) { tecla(s, st, i); }
 }
 
+/*
+ * LA MISMA CAPA, EN UNA BANDA QUE LE DAN - 05/10/2026.
+ *
+ * *** El dueño: "quiero que las capturas funcionen tambien en los modos
+ * digitales y en las pantallas de opciones". ***
+ *
+ * Es la MISMA funcion de dibujo que pinta en la pantalla, no una copia: lo
+ * unico que cambia es de donde sale la banda. En la pantalla la pide
+ * gfx2_render(); aqui la trae la captura, que va montando la pantalla
+ * entera franja por franja porque no hay sitio en RAM para una copia.
+ *
+ * El recorte lo pone gfx2_sub_y(): la funcion de dibujo pinta su ventana
+ * entera dando por hecho que quien le llama la ha recortado -eso es lo que
+ * hace gfx2_render()-, asi que aqui hay que darselo igual. Sin esto se
+ * sale por arriba y por abajo de su sitio.
+ */
+void ui_kbd_pinta_en(gfx2_surf_t *s, const ui_kbd_state_t *st)
+{
+    gfx2_surf_t sub = gfx2_sub_y(s, UIK_Y, UIK_H);
+    if (sub.h > 0) { draw_all(&sub, (void *)st); }
+}
+
 void ui_kbd_draw(const ui_kbd_state_t *st)
 {
     gfx2_render(0, UIK_Y, GFX2_W, UIK_H, draw_all, (void *)st);

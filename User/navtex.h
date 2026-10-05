@@ -80,6 +80,7 @@ typedef struct {
     uint32_t car_mal;       /* caracteres que no lo eran ni en su copia */
     uint32_t rescatados;    /* los que salvo la segunda copia */
     uint32_t mensajes;      /* cuantos ZCZC completos han llegado */
+    int16_t  desvio_hz;     /* cuanto se ha movido el centro al buscarlo */
     uint8_t  tiene_cab;     /* 1 = la cabecera de abajo vale */
     char     cab[5];        /* B1B2B3B4 del ultimo ZCZC */
 } navtex_info_t;

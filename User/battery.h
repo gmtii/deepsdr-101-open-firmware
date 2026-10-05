@@ -57,6 +57,10 @@ uint16_t battery_get_millivolts(void);
  */
 uint8_t battery_get_percent(void);
 
+/* El mismo porcentaje a partir de unos milivoltios que ya se tienen, sin
+ * volver a medir. Ver battery_pct_de_mv() en battery.c. */
+uint8_t battery_pct_de_mv(uint16_t mv);
+
 /*
  * Temperatura del SENSOR INTERNO DEL MICRO, en grados enteros.
  *

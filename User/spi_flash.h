@@ -70,6 +70,11 @@ void spi_flash_init(void);
  * confirmed yet. Use this FIRST. */
 void spi_flash_read_jedec_id(spi_flash_jedec_id_t *out);
 
+/* El numero de serie de 64 bits que trae el chip de fabrica (comando
+ * 0x4B). Devuelve 0 -y entonces `out` no vale para nada- si el chip no
+ * conoce el comando. Ver la funcion. */
+uint8_t spi_flash_unique_id(uint8_t out[8]);
+
 /*
  * La capacidad USABLE del chip, en bytes. Se mide una vez y se recuerda.
  *
@@ -143,6 +148,62 @@ void spi_flash_page_program(uint32_t addr, const uint8_t *data, uint32_t len);
  * anything currently there. See spi_flash_block_read_modify_write()
  * for the version that does. */
 void spi_flash_write_block_4k(uint32_t block_addr, const uint8_t *data4k);
+
+/*
+ * PREPARAR UNA ZONA ENTERA ANTES DE ESCRIBIRLA - 05/10/2026.
+ *
+ * Borrar cuesta por operacion, no por byte: un sector de 4 kB tarda 45 ms
+ * tipicos y un bloque de 64 kB, 150. Dieciseis sectores sueltos son 720 ms
+ * para la misma superficie que el bloque hace en 150.
+ *
+ * spi_flash_borrado_paso() hace UN borrado por llamada -el trozo mas grande
+ * que quepa entero entre *cursor y fin, empezando en su propio limite- y
+ * adelanta *cursor. Devuelve 1 mientras quede algo y 0 cuando ya esta toda
+ * la zona a 0xFF. Un borrado son 150 ms de chip parado, asi que esto se
+ * llama una vez por vuelta del bucle principal, no en un bucle cerrado.
+ *
+ * NO REDONDEA HACIA FUERA A PROPOSITO: un trozo grande solo se usa cuando
+ * cabe entero dentro de [*cursor, fin), porque un borrado de 64 kB se lleva
+ * los 64 kB enteros y lo que haya al otro lado del borde es de otro.
+ *
+ * Y despues, spi_flash_write_block_4k_borrado() programa un bloque dando
+ * por hecho que ya esta borrado: ni lo comprueba ni lo borra. Usar esto
+ * SOLO sobre una zona que se acaba de preparar con lo de arriba; sobre un
+ * bloque escrito, programar sin borrar deja los bits viejos a cero y sale
+ * basura. Para todo lo demas, spi_flash_write_block_4k().
+ */
+/*
+ * CUANTO SITIO HAY PARA UNA FOTO - 05/10/2026.
+ *
+ * *** El dueño: "pero como va a estar lleno si las he borrado desde
+ * windows". ***
+ *
+ * Una foto no cabe por TRES razones distintas y "el disco esta lleno" solo
+ * nombra una:
+ *
+ *   libre_kb    kilobytes libres en total
+ *   seguido_kb  el hueco SEGUIDO mas grande. Una foto se reserva de una
+ *               pieza -se escribe por direccion de chip, sin tocar la tabla
+ *               de asignacion-, asi que puede haber 4 MB libres y no caber
+ *               una foto de 756 kB si estan partidos.
+ *   dir_huecos  entradas libres en el directorio raiz, y dir_ranuras
+ *               cuantas hay en total (lo dice el sector de arranque: 224 o
+ *               512 es lo que pone Windows). Con todas ocupadas no cabe un
+ *               fichero mas aunque sobre medio disco. Una entrada borrada
+ *               cuenta como hueco, porque se reutiliza.
+ *
+ * Contesta por el mismo recorrido que decide si cabe o no (sitio_mira() en
+ * el .c), no por uno propio: dos recorridos acaban discrepando y entonces
+ * la fila dice que hay sitio mientras la radio dice que no.
+ *
+ * Cuesta leer la FAT entera por el bus bit a bit, asi que esto va detras de
+ * un toque, nunca en un repintado.
+ */
+uint8_t spi_flash_sitio(uint32_t *libre_kb, uint32_t *seguido_kb,
+                        uint16_t *dir_huecos, uint16_t *dir_ranuras);
+
+uint8_t spi_flash_borrado_paso(uint32_t *cursor, uint32_t fin);
+void spi_flash_write_block_4k_borrado(uint32_t block_addr, const uint8_t *data4k);
 
 /* Safely changes `new_len` bytes at byte offset `modify_offset_in_block`
  * (relative to the START of the 4KB block, NOT to `any_addr_in_block`)
@@ -292,6 +353,11 @@ uint32_t spi_flash_read_file_by_name(const char name8[8], const char ext3[3],
  * Devuelve 0 si el volumen todavia no se ha podido leer; en ese caso los
  * cuatro valores quedan sin tocar.
  */
+/* Sectores por cluster del volumen (1, 2, 4 u 8 con sectores de 512).
+ * 0 si el volumen no se puede leer. Lo necesita quien recorra la cadena
+ * de clusters a mano, como User/cargador.c. */
+uint8_t spi_flash_spc(void);
+
 uint8_t spi_flash_geometria(uint32_t *fat1_lba, uint32_t *raiz_lba,
                             uint32_t *datos_lba, uint32_t *clusters);
 
@@ -479,6 +545,14 @@ const char *spi_flash_anade_porque_txt(spi_anade_r_t r);
  * TODO camino que escribe empieza preguntando esto. Ver geo_lee().
  */
 uint8_t     spi_flash_puede_escribir(void);
+
+/*
+ * Si el bus de la flash va deprisa (1) o se quedo en el ritmo de siempre (0)
+ * porque la comprobacion del arranque no cuadro. Ver spi_xfer_byte() en
+ * spi_flash.c: el retardo que habia era el que pide el TACTIL, que comparte
+ * estos tres pines, y al W25Q le sobra ochenta veces.
+ */
+uint8_t     spi_flash_bus_rapido(void);
 const char *spi_flash_geo_txt(void);
 
 /* Cuanto mide un fichero del volumen (0 si no existe). Mira la entrada de

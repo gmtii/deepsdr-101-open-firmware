@@ -7,7 +7,30 @@
 #define LINEA (ANOTCH_TOMAS_MAX + ANOTCH_RETARDO_MAX + 1U)
 
 static float    s_w[ANOTCH_TOMAS_MAX];
-static float    s_x[LINEA];
+/*
+ * LA LINEA DE RETARDO, POR DUPLICADO - 05/10/2026.
+ *
+ * *** El dueño: "busca razones que hagan que se ralentice tanto la radio
+ * completa como el espectro". ***
+ *
+ * Este predictor recorre la linea DOS VECES por muestra -una para predecir
+ * y otra para corregir los pesos-, con 48 tomas cada una, y cada paso
+ * llevaba un `% LINEA`. LINEA son 129, que no es potencia de dos: cada uno
+ * de esos modulos es una division entera de verdad. Casi cien por muestra,
+ * a 12 kHz.
+ *
+ * Guardando cada muestra en s_x[cab] Y en s_x[cab+LINEA], el recorrido hacia
+ * atras no se sale nunca por abajo y no hace falta dar la vuelta:
+ *
+ *   el punto de partida es  cab + LINEA - retardo >= LINEA - RETARDO_MAX
+ *   y se retrocede como mucho TOMAS_MAX - 1
+ *   LINEA = TOMAS_MAX + RETARDO_MAX + 1, asi que lo mas bajo que se llega
+ *   es TOMAS_MAX + 1 - (TOMAS_MAX - 1) = 2. Nunca negativo.
+ *
+ * Cuesta 516 bytes mas. El mismo truco que ya usa rds.c y, desde hoy,
+ * analizador.c.
+ */
+static float    s_x[2U * LINEA];
 static uint16_t s_cab;
 static uint16_t s_tomas = 48U;
 static uint16_t s_retardo = ANOTCH_RETARDO;
@@ -45,7 +68,7 @@ static void limpia(void)
 {
     uint16_t i;
     for (i = 0U; i < ANOTCH_TOMAS_MAX; i++) { s_w[i] = 0.0f; }
-    for (i = 0U; i < LINEA; i++) { s_x[i] = 0.0f; }
+    for (i = 0U; i < 2U * LINEA; i++) { s_x[i] = 0.0f; }
     s_cab = 0U;
 }
 
@@ -146,37 +169,31 @@ void anotch_process(float *audio, uint32_t n)
         uint16_t i, p;
 
         /* La muestra de ahora entra en la linea; las que usa el predictor
-         * son las de hace `retardo` y anteriores. */
+         * son las de hace `retardo` y anteriores. Por duplicado: ver s_x[]. */
         s_x[s_cab] = x;
+        s_x[s_cab + LINEA] = x;
 
-        p = s_cab;
-        /* Retroceder `retardo` posiciones. */
-        p = (uint16_t)((p + LINEA - s_retardo) % LINEA);
+        /* Retroceder `retardo` posiciones, en la copia de arriba: asi el
+         * recorrido hacia atras de las tomas no se sale por abajo. */
+        p = (uint16_t)(s_cab + LINEA - s_retardo);
 
-        {
-            uint16_t q = p;
-            for (i = 0U; i < s_tomas; i++) {
-                float v = s_x[q];
-                y += s_w[i] * v;
-                pot += v * v;          /* la energia, en el mismo recorrido */
-                q = (uint16_t)((q + LINEA - 1U) % LINEA);
-            }
+        for (i = 0U; i < s_tomas; i++) {
+            float v = s_x[p - i];
+            y += s_w[i] * v;
+            pot += v * v;              /* la energia, en el mismo recorrido */
         }
 
         e = x - y;
 
         g = s_mu * e / (pot + 1.0e-12f);
 
-        {
-            uint16_t q = p;
-            for (i = 0U; i < s_tomas; i++) {
-                s_w[i] += g * s_x[q];
-                q = (uint16_t)((q + LINEA - 1U) % LINEA);
-            }
+        for (i = 0U; i < s_tomas; i++) {
+            s_w[i] += g * s_x[p - i];
         }
 
         audio[k] = e;
-        s_cab = (uint16_t)((s_cab + 1U) % LINEA);
+        s_cab++;
+        if (s_cab >= (uint16_t)LINEA) { s_cab = 0U; }
     }
     (void)s_fs;
 }

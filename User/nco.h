@@ -2,6 +2,7 @@
 #define NCO_H_INCLUDED
 
 #include <stdint.h>
+#include "nco_tabla.h"   /* k_nco_sen[]: la usa nco_sen_cos_fase(), aqui abajo */
 
 /*
  * ============================================================================
@@ -106,6 +107,57 @@ void nco_mezcla(nco_t *o, float *i_buf, float *q_buf, uint32_t n);
 /* Solo el seno y el coseno de la fase actual, avanzando. Para quien
  * necesita el oscilador pero no tiene un par I/Q que multiplicar. */
 void nco_paso(nco_t *o, float *sen, float *cos_);
+
+/*
+ * El seno y el coseno de UNA FASE CUALQUIERA en radianes, de la misma tabla.
+ * Para los lazos cuya fase no avanza a paso fijo -un PLL la mueve su filtro
+ * de lazo- y que si no tendrian que llamar a sinf() y cosf() por muestra.
+ * Ver el comentario en nco.c: de ahi salio el modo SAM yendo a trompicones.
+ */
+void nco_sen_cos_rad(float rad, float *sen, float *cos_);
+
+/*
+ * LA MISMA TABLA, PERO CON LA FASE YA EN LA REJILLA DE 32 BITS - 05/10/2026.
+ *
+ * nco_sen_cos_rad() de aqui arriba cobra un peaje por recibir radianes: dos
+ * bucles de vuelta a [0, 2pi), una multiplicacion y un truncado, y sobre todo
+ * dos comparaciones en coma flotante, que en este Cortex-M4 se pagan pasando
+ * por el registro de estado del coprocesador. Quien ya lleva la fase en un
+ * acumulador entero -que es lo natural para un oscilador, porque no acumula
+ * error- no necesita nada de eso.
+ *
+ * Va EN LA CABECERA y en linea a proposito: el que la usa la llama una vez
+ * por muestra dentro de la interrupcion de audio, y a ese ritmo el prologo y
+ * el epilogo de una llamada, mas los cuatro accesos a memoria para devolver
+ * dos floats por puntero, cuestan tanto como la cuenta. En linea, el
+ * compilador se queda los dos resultados en registros del coprocesador y no
+ * los escribe en ninguna parte.
+ *
+ * Es la MISMA cuenta que hace nco.c: alli sen_cos() llama a esta, no hay dos
+ * copias. El error esta medido en sim/ncotest.c -4,7e-6 de pico, que es
+ * exactamente lo que la teoria da para interpolar un seno con paso
+ * 2pi/1024-, y vale para esta igual porque es la misma linea de codigo.
+ */
+#define NCO_FASE_BITS   10U
+#define NCO_FASE_FRAC   (32U - NCO_FASE_BITS)   /* bits de fraccion: 22 */
+#define NCO_FASE_MASC   0x003FFFFFUL
+#define NCO_FASE_FRAC_1 (1.0f / 4194304.0f)     /* 1 / 2^22 */
+#define NCO_FASE_90     0x40000000UL            /* un cuarto de vuelta */
+
+static inline void nco_sen_cos_fase(uint32_t fase, float *sen, float *cos_)
+{
+    uint32_t i;
+    float f;
+
+    i = fase >> NCO_FASE_FRAC;
+    f = (float)(fase & NCO_FASE_MASC) * NCO_FASE_FRAC_1;
+    *sen = k_nco_sen[i] + f * (k_nco_sen[i + 1U] - k_nco_sen[i]);
+
+    fase += NCO_FASE_90;
+    i = fase >> NCO_FASE_FRAC;
+    f = (float)(fase & NCO_FASE_MASC) * NCO_FASE_FRAC_1;
+    *cos_ = k_nco_sen[i] + f * (k_nco_sen[i + 1U] - k_nco_sen[i]);
+}
 
 /*
  * DONDE APARCAR EL OSCILADOR.

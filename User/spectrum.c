@@ -809,6 +809,131 @@ uint8_t spectrum_get_line_smooth(void)
     return s_line_smooth_passes;
 }
 
+/*
+ * LO QUE HACIA FALTA GUARDAR DE LA ULTIMA PASADA, para que la captura de
+ * pantalla pueda volver a montar el espectro igual que se pinto. El resto
+ * -plantillas, alturas, picos, color por fila- ya vive en sus tablas.
+ */
+static struct {
+    uint16_t w, h;
+    uint16_t band_col_lo, band_col_hi;
+    uint16_t trace_color;
+    uint8_t  band_active;
+    uint8_t  fill_enabled;
+    uint8_t  traza_de_fila;
+    uint8_t  hay;            /* 0 = todavia no se ha dibujado nada */
+} s_ult;
+
+/*
+ * ===========================================================================
+ * EL MONTAJE DE UNA BANDA, EN UN DESTINO CUALQUIERA - 05/10/2026.
+ * ===========================================================================
+ *
+ * *** El dueño: "me gustaria implementar el poder hacer capturas de pantalla
+ * y que se graben en el usb". ***
+ *
+ * Esto estaba dentro de spectrum_draw(), escribiendo siempre en la banda de
+ * gfx2. Sale aqui con el destino y su paso de fila como parametros, y con eso
+ * sirve para las dos cosas: para pintar en la pantalla -lo de siempre- y para
+ * montar el espectro dentro de la captura, que es una banda que trae otro.
+ *
+ * NO es una copia: spectrum_draw() llama a ESTA, asi que lo que sale en la
+ * captura es lo mismo que salio en la pantalla, por construccion. Si fueran
+ * dos cuerpos, el dia que alguien tocara uno la captura empezaria a mentir y
+ * no habria forma de verlo.
+ *
+ * Lee las tablas que spectrum_draw() ya dejo calculadas -las plantillas, las
+ * alturas de barra, los picos, el color por fila- y los cuatro datos de la
+ * ultima pasada que se guardan en s_ult. Por eso la captura tiene que ir
+ * DESPUES de al menos un dibujado: antes no hay nada que copiar.
+ *
+ *   dst     esquina de arriba a la izquierda de la banda en el destino
+ *   stride  cuantos uint16 hay de una fila a la siguiente en el destino
+ *   row     primera fila del panel que entra en esta banda (0 = arriba)
+ *   nf      cuantas filas
+ */
+static void compon(uint16_t *dst, uint32_t stride, uint16_t row, uint16_t nf)
+{
+    const uint16_t w = s_ult.w;
+    const uint16_t h = s_ult.h;
+    const uint8_t  band_active = s_ult.band_active;
+    const uint16_t band_col_lo = s_ult.band_col_lo;
+    const uint16_t band_col_hi = s_ult.band_col_hi;
+    const uint8_t  fill_enabled = s_ult.fill_enabled;
+    const uint16_t trace_color = s_ult.trace_color;
+    const uint8_t  traza_de_fila = s_ult.traza_de_fila;
+    uint16_t col, k;
+
+    /* 1. la plantilla de cada fila de la banda */
+        for (k = 0; k < nf; k++) {
+            memcpy(&dst[(uint32_t)k * stride],
+                   s_row_grid[row + k] ? s_plant_rej : s_plant_lisa,
+                   (size_t)w * sizeof dst[0]);
+        }
+
+        /* 2. lo que depende de la barra, columna a columna y en tramos */
+        for (col = 0; col < w; col++) {
+            uint8_t  borde = (uint8_t)(band_active &&
+                                       ((col == band_col_lo) || (col == band_col_hi)));
+            uint16_t lo = s_bar_lo[col];
+            uint16_t hi = s_bar_hi[col];
+            uint16_t ra, rb, r;
+
+            if (!borde) {
+#if SPECTRUM_PEAK_HOLD
+                /* Prioridad 4: el punto del pico, una sola fila.
+                 * nivel = h - fila, asi que fila = h - nivel. */
+                if ((s_peak_h[col] >= 1U) && (s_peak_h[col] <= h)) {
+                    r = (uint16_t)(h - s_peak_h[col]);
+                    if ((r >= row) && (r < (uint16_t)(row + nf))) {
+                        dst[(uint32_t)(r - row) * stride + col] = SPEC_COLOR_PEAK;
+                    }
+                }
+#endif
+                /* Prioridad 3: el relleno de la barra, de h-bh+1 hasta
+                 * abajo del todo. El color lo pone la FILA, asi que es un
+                 * bucle y no un relleno de un solo valor. */
+                if (fill_enabled && (s_bar_h[col] > 0U)) {
+                    ra = (s_bar_h[col] >= h) ? 0U : (uint16_t)(h - s_bar_h[col] + 1U);
+                    if (ra < row) { ra = row; }
+                    rb = (uint16_t)(row + nf - 1U);
+                    if (ra <= rb) {
+                        /* Puntero que avanza w de fila en fila, en vez de
+                         * multiplicar (fila x ancho) en cada pixel: esa
+                         * multiplicacion era casi todo lo que quedaba del
+                         * coste del montaje. */
+                        uint16_t *pb = &dst[(uint32_t)(ra - row) * stride + col];
+                        const uint16_t *pc = &s_row_color[ra];
+                        for (r = ra; r <= rb; r++) {
+                            *pb = *pc++;
+                            pb += stride;
+                        }
+                    }
+                }
+            }
+
+            /* Prioridad 1: la traza y su puente con la vecina. */
+            if (hi >= lo) {
+                ra = (hi >= h) ? 0U : (uint16_t)(h - hi);
+                rb = (lo == 0U) ? (uint16_t)(h - 1U) : (uint16_t)(h - lo);
+                if (rb > (uint16_t)(h - 1U)) { rb = (uint16_t)(h - 1U); }
+                if (ra < row) { ra = row; }
+                if (rb > (uint16_t)(row + nf - 1U)) { rb = (uint16_t)(row + nf - 1U); }
+                if (ra <= rb) {
+                    uint16_t *pb = &dst[(uint32_t)(ra - row) * stride + col];
+
+                    if (traza_de_fila) {
+                        const uint16_t *pc = &s_row_color[ra];
+                        for (r = ra; r <= rb; r++) { *pb = *pc++; pb += stride; }
+                    } else {
+                        for (r = ra; r <= rb; r++) { *pb = trace_color; pb += stride; }
+                    }
+                }
+            }
+        }
+
+}
+
 void spectrum_draw(const float *db, uint32_t n_bins,
                     uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                     float db_min, float db_max,
@@ -1200,79 +1325,21 @@ void spectrum_draw(const float *db, uint32_t n_bins,
             return;
         }
 
+        /* Lo que la captura necesita saber de esta pasada. Ver compon(). */
+        s_ult.w = w; s_ult.h = h;
+        s_ult.band_active = band_active;
+        s_ult.band_col_lo = band_col_lo; s_ult.band_col_hi = band_col_hi;
+        s_ult.fill_enabled = fill_enabled;
+        s_ult.trace_color = trace_color;
+        s_ult.traza_de_fila = traza_de_fila;
+        s_ult.hay = 1U;
+
         for (row = 0; row < h; row = (uint16_t)(row + nb)) {
             uint16_t nf = (uint16_t)(h - row);
-            uint16_t k;
 
             if (nf > nb) { nf = nb; }
 
-            /* 1. la plantilla de cada fila de la banda */
-            for (k = 0; k < nf; k++) {
-                memcpy(&buf[cual][(uint32_t)k * w],
-                       s_row_grid[row + k] ? s_plant_rej : s_plant_lisa,
-                       (size_t)w * sizeof banda[0]);
-            }
-
-            /* 2. lo que depende de la barra, columna a columna y en tramos */
-            for (col = 0; col < w; col++) {
-                uint8_t  borde = (uint8_t)(band_active &&
-                                           ((col == band_col_lo) || (col == band_col_hi)));
-                uint16_t lo = s_bar_lo[col];
-                uint16_t hi = s_bar_hi[col];
-                uint16_t ra, rb, r;
-
-                if (!borde) {
-#if SPECTRUM_PEAK_HOLD
-                    /* Prioridad 4: el punto del pico, una sola fila.
-                     * nivel = h - fila, asi que fila = h - nivel. */
-                    if ((s_peak_h[col] >= 1U) && (s_peak_h[col] <= h)) {
-                        r = (uint16_t)(h - s_peak_h[col]);
-                        if ((r >= row) && (r < (uint16_t)(row + nf))) {
-                            buf[cual][(uint32_t)(r - row) * w + col] = SPEC_COLOR_PEAK;
-                        }
-                    }
-#endif
-                    /* Prioridad 3: el relleno de la barra, de h-bh+1 hasta
-                     * abajo del todo. El color lo pone la FILA, asi que es un
-                     * bucle y no un relleno de un solo valor. */
-                    if (fill_enabled && (s_bar_h[col] > 0U)) {
-                        ra = (s_bar_h[col] >= h) ? 0U : (uint16_t)(h - s_bar_h[col] + 1U);
-                        if (ra < row) { ra = row; }
-                        rb = (uint16_t)(row + nf - 1U);
-                        if (ra <= rb) {
-                            /* Puntero que avanza w de fila en fila, en vez de
-                             * multiplicar (fila x ancho) en cada pixel: esa
-                             * multiplicacion era casi todo lo que quedaba del
-                             * coste del montaje. */
-                            uint16_t *pb = &buf[cual][(uint32_t)(ra - row) * w + col];
-                            const uint16_t *pc = &s_row_color[ra];
-                            for (r = ra; r <= rb; r++) {
-                                *pb = *pc++;
-                                pb += w;
-                            }
-                        }
-                    }
-                }
-
-                /* Prioridad 1: la traza y su puente con la vecina. */
-                if (hi >= lo) {
-                    ra = (hi >= h) ? 0U : (uint16_t)(h - hi);
-                    rb = (lo == 0U) ? (uint16_t)(h - 1U) : (uint16_t)(h - lo);
-                    if (rb > (uint16_t)(h - 1U)) { rb = (uint16_t)(h - 1U); }
-                    if (ra < row) { ra = row; }
-                    if (rb > (uint16_t)(row + nf - 1U)) { rb = (uint16_t)(row + nf - 1U); }
-                    if (ra <= rb) {
-                        uint16_t *pb = &buf[cual][(uint32_t)(ra - row) * w + col];
-
-                        if (traza_de_fila) {
-                            const uint16_t *pc = &s_row_color[ra];
-                            for (r = ra; r <= rb; r++) { *pb = *pc++; pb += w; }
-                        } else {
-                            for (r = ra; r <= rb; r++) { *pb = trace_color; pb += w; }
-                        }
-                    }
-                }
-            }
+            compon(buf[cual], w, row, nf);
 
             /* 3. un solo volcado por banda, y sin esperarlo: se espera al
              * ANTERIOR justo antes de abrir la ventana del siguiente, que es
@@ -1285,6 +1352,43 @@ void spectrum_draw(const float *db, uint32_t n_bins,
         if (vuela) { (void)gfx_blit_espera(); }
         gfx2_banda_suelta();
     }
+}
+
+/*
+ * EL ESPECTRO DENTRO DE UNA BANDA QUE TRAE OTRO - 05/10/2026.
+ *
+ * Para la captura de pantalla. Monta con compon(), que es exactamente la
+ * misma funcion con la que se pinto en el panel, leyendo las mismas tablas:
+ * por construccion sale lo mismo.
+ *
+ * Si todavia no se ha dibujado nunca -s_ult.hay == 0- no hace nada: no hay
+ * nada que copiar y es mejor un hueco que inventarse un espectro.
+ *
+ *   px, py   donde va la esquina de arriba a la izquierda del panel, en
+ *            coordenadas de pantalla (las mismas que spectrum_draw()).
+ */
+void spectrum_pinta_en(gfx2_surf_t *sf, int16_t px, int16_t py)
+{
+    int16_t y0, y1, dx, dy;
+
+    if (sf == 0 || !s_ult.hay) { return; }
+
+    /* Que filas del panel caen dentro de esta banda. */
+    y0 = (int16_t)(sf->y - py);
+    if (y0 < 0) { y0 = 0; }
+    y1 = (int16_t)((int32_t)sf->y + sf->h - py);
+    if (y1 > (int16_t)s_ult.h) { y1 = (int16_t)s_ult.h; }
+    if (y1 <= y0) { return; }
+
+    dx = (int16_t)(px - sf->x);
+    dy = (int16_t)((int32_t)py + y0 - sf->y);
+    /* Si no cabe entero no se pinta: medio espectro recortado por un lado
+     * seria peor que ninguno, y en la captura la banda es de 800 px. */
+    if (dx < 0 || (int32_t)dx + s_ult.w > sf->w) { return; }
+    if (dy < 0 || (int32_t)dy + (y1 - y0) > sf->h) { return; }
+
+    compon(&sf->px[(int32_t)dy * sf->w + dx], (uint32_t)sf->w,
+           (uint16_t)y0, (uint16_t)(y1 - y0));
 }
 
 void spectrum_set_bridge(uint8_t on) { s_bridge = on ? 1U : 0U; }

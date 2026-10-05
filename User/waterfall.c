@@ -180,6 +180,48 @@ static uint8_t wf_blit_ipa(uint16_t x, uint16_t y, const uint16_t *lut)
     return 1U;
 }
 
+/*
+ * LA CASCADA DENTRO DE UNA BANDA QUE TRAE OTRO - 05/10/2026.
+ *
+ * Para la captura de pantalla. Aqui no hay IPA ni DMA que valgan -el destino
+ * es un trozo de memoria, no el panel-, asi que la conversion de indice de
+ * paleta a RGB565 la hace la CPU, que es exactamente lo que hace el camino
+ * de siempre cuando el IPA no esta. Son 54.432 busquedas en una tabla, una
+ * vez por captura: no corre prisa.
+ *
+ * Prestada a FT8 no se pinta: lo que hay ahi dentro no son indices.
+ */
+void waterfall_pinta_en(gfx2_surf_t *sf, int16_t px, int16_t py,
+                        const uint16_t *lut)
+{
+    int16_t y0, y1, r, dx;
+
+    if (sf == 0 || lut == 0 || s_prestada) { return; }
+
+    y0 = (int16_t)(sf->y - py);
+    if (y0 < 0) { y0 = 0; }
+    y1 = (int16_t)((int32_t)sf->y + sf->h - py);
+    if (y1 > (int16_t)WATERFALL_ROWS) { y1 = (int16_t)WATERFALL_ROWS; }
+    if (y1 <= y0) { return; }
+
+    dx = (int16_t)(px - sf->x);
+    if (dx < 0 || (int32_t)dx + WATERFALL_WIDTH > sf->w) { return; }
+
+    for (r = y0; r < y1; r++) {
+        uint16_t fila = (uint16_t)((s_head + (uint16_t)r) % WATERFALL_ROWS);
+        const uint8_t *src = &s_buf[fila][0];
+        int16_t dy = (int16_t)((int32_t)py + r - sf->y);
+        uint16_t *dst;
+        uint16_t c;
+
+        if (dy < 0 || dy >= sf->h) { continue; }
+        dst = &sf->px[(int32_t)dy * sf->w + dx];
+        for (c = 0U; c < (uint16_t)WATERFALL_WIDTH; c++) {
+            dst[c] = lut[src[c]];
+        }
+    }
+}
+
 void waterfall_blit(uint16_t x, uint16_t y, const uint16_t *lut)
 {
     /* Prestado a FT8: lo que hay ahi no son indices de paleta. */

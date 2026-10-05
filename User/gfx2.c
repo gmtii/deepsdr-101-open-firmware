@@ -40,6 +40,59 @@ uint16_t gfx2_banda_choques(void)
     return s_band_choques;
 }
 
+/*
+ * La banda, para quien YA la tiene cogida - 05/10/2026.
+ *
+ * La necesita la captura de pantalla, que se queda la banda durante los
+ * veinticinco segundos que dura y la va rellenando a lo largo de muchas
+ * vueltas del bucle principal: volver a pedirla con gfx2_banda_coge()
+ * contaria un choque y devolveria cero, que es lo correcto para cualquier
+ * otro y lo contrario de lo que hace falta aqui.
+ *
+ * Devuelve cero si NO esta cogida, a proposito: asi un fallo de secuencia
+ * -usarla sin haberla pedido- se nota en vez de escribir donde no toca.
+ */
+/*
+ * UNA SUBBANDA RECORTADA EN VERTICAL - 05/10/2026.
+ *
+ * La necesita la captura de pantalla. Cuando una capa se pinta por
+ * gfx2_render(), la ventana que se pide LA RECORTA por construccion: la
+ * marquesina de la cabecera, por ejemplo, pinta su degradado de y=0 a y=63
+ * y se queda en y=10..53 porque su ventana es esa. Montando la pantalla
+ * entera en una banda de 16 filas no hay ventana que recorte, asi que esa
+ * capa se saldria y taparia la raya de abajo de la cabecera.
+ *
+ * Esto devuelve la MISMA banda vista solo entre dos filas. Solo recorta en
+ * vertical a proposito: el paso de fila sigue siendo el de la banda de
+ * verdad, asi que no hay que tocar ni una primitiva. En horizontal no hace
+ * falta - las capas que lo necesitan ya se limitan solas.
+ *
+ * Con h <= 0 la subbanda sale vacia y todo lo que se pinte en ella se
+ * descarta, que es justo lo que tiene que pasar cuando la capa no cae en
+ * esta franja.
+ */
+gfx2_surf_t gfx2_sub_y(const gfx2_surf_t *s, int16_t y, int16_t h)
+{
+    gfx2_surf_t sub = *s;
+    int16_t y0 = (s->y > y) ? s->y : y;
+    int16_t y1 = ((int32_t)s->y + s->h < (int32_t)y + h)
+                 ? (int16_t)((int32_t)s->y + s->h) : (int16_t)((int32_t)y + h);
+
+    if (y1 <= y0) {
+        sub.h = 0;
+        return sub;
+    }
+    sub.px = s->px + (int32_t)(y0 - s->y) * s->w;
+    sub.y  = y0;
+    sub.h  = (int16_t)(y1 - y0);
+    return sub;
+}
+
+uint16_t *gfx2_banda_mia(void)
+{
+    return s_band_cogida ? s_band : (uint16_t *)0;
+}
+
 uint16_t gfx2_banda_filas(void) { return (uint16_t)GFX2_BAND_H; }
 uint32_t gfx2_banda_pixeles(void) { return (uint32_t)GFX2_W * (uint32_t)GFX2_BAND_H; }
 
@@ -129,18 +182,40 @@ void gfx2_render(int16_t x, int16_t y, int16_t w, int16_t h,
         s.x = x; s.y = by; s.w = w; s.h = bh;
 
         /* la banda arranca opaca en negro; el codigo de dibujo pinta el
-         * fondo que corresponda como primera capa */
+         * fondo que corresponda como primera capa.
+         *
+         * memset y no un bucle de uint16 - 05/10/2026. Eran hasta 83.200
+         * escrituras de 16 bits por repintado de cabecera, de una en una,
+         * para dejar en negro algo que el dibujo va a tapar entero. memset
+         * de la biblioteca escribe de palabra en palabra y aqui el buffer
+         * esta alineado, asi que es la misma cuenta cuatro veces mas
+         * barata. El valor es cero, que es el mismo en los dos bytes de
+         * cada pixel, que es lo unico que hace valido cambiar uno por otro. */
         n = (int32_t)w * bh;
-        for (i = 0; i < n; i++) s_band[i] = 0;
+        memset(s_band, 0, (size_t)n * sizeof s_band[0]);
+        (void)i;
 
         PROF_DRAW();
         draw(&s, ctx);
 
-        /* una ventana, un volcado */
-        rm68120_set_window((uint16_t)x, (uint16_t)by,
-                           (uint16_t)(x + w - 1), (uint16_t)(by + bh - 1));
-        for (i = 0; i < n; i++) {
-            rm68120_dato(s_band[i]);
+        /* una ventana, un volcado.
+         *
+         * Y SE CRONOMETRA - 05/10/2026. Esto empuja al bus con la CPU
+         * parada, sin DMA, y hasta hoy no lo contaba nadie: g_lcd_ciclos
+         * solo se sumaba dentro de gfx_blit(), que es de gfx.c y por aqui
+         * no pasa. O sea que todo lo que pinta gfx2 -la cabecera, la franja
+         * de estado, la marquesina, el eje de dB, el panel digital- era
+         * tiempo de bus invisible para la fila "empuje". Ver espera_fin()
+         * en lcd_dma.c, que tenia el mismo agujero por el otro lado. */
+        {
+            uint32_t t0 = rm68120_ciclo();
+
+            rm68120_set_window((uint16_t)x, (uint16_t)by,
+                               (uint16_t)(x + w - 1), (uint16_t)(by + bh - 1));
+            for (i = 0; i < n; i++) {
+                rm68120_dato(s_band[i]);
+            }
+            g_lcd_ciclos += rm68120_ciclo() - t0;
         }
 
         if (s_pump) { s_pump(); }
@@ -507,6 +582,36 @@ int16_t gfx2_text_w(const char *str, const gfx2_font_t *f)
     return wsum;
 }
 
+/* UN glifo. Sale del bucle de gfx2_text() para que gfx2_text_in(), cuando
+ * tiene que cortar, no lleve una copia del mismo dibujado. Devuelve lo que
+ * avanza el cursor. */
+static int16_t gfx2_text_uno(gfx2_surf_t *s, int16_t cx, int16_t y,
+                             uint16_t cp, const gfx2_font_t *f, gfx2_rgba_t c)
+{
+    const gfx2_glyph_t *g = glyph_for(f, cp);
+    int16_t gy, gx;
+
+    if (g->w && g->h) {
+        const uint8_t *bm = &f->bitmap[g->off];
+        int16_t row_bytes = (int16_t)((g->w + 1) / 2);
+
+        for (gy = 0; gy < g->h; gy++) {
+            int16_t sy = (int16_t)(y + g->by + gy);
+            if (sy < s->y || sy >= (int16_t)(s->y + s->h)) continue;
+            for (gx = 0; gx < g->w; gx++) {
+                uint8_t byte = bm[gy * row_bytes + (gx >> 1)];
+                uint8_t nib = (gx & 1) ? (uint8_t)(byte & 0x0F)
+                                       : (uint8_t)(byte >> 4);
+                if (nib) {
+                    uint16_t cov = (uint16_t)((nib * 255u) / 15u);
+                    px_blend(s, (int16_t)(cx + g->bx + gx), sy, c, cov);
+                }
+            }
+        }
+    }
+    return g->adv;
+}
+
 int16_t gfx2_text(gfx2_surf_t *s, int16_t x, int16_t y, const char *str,
                   const gfx2_font_t *f, gfx2_rgba_t c)
 {
@@ -547,12 +652,48 @@ int16_t gfx2_text(gfx2_surf_t *s, int16_t x, int16_t y, const char *str,
     return (int16_t)(cx - x);
 }
 
+/*
+ * EL "_IN" ERA MENTIRA - 05/10/2026.
+ *
+ * *** El dueño, con una foto de la fila "Sitio para fotos": el valor sale
+ * por los dos lados de la celda. ***
+ *
+ * Esta funcion colocaba el texto dentro de un ancho y SE OLVIDABA DEL
+ * ANCHO: si no cabia, centrado lo sacaba por los dos lados y a la derecha
+ * por la izquierda. El recorte de gfx2 es a la BANDA, no a la caja que te
+ * han dado, asi que lo que se salia se pintaba encima del vecino.
+ *
+ * Y no es un fallo que avise: sale texto, se lee a medias, y quien lo mira
+ * cree que el valor es "28 kB, 6824 seguidos, dir 5" cuando era otro.
+ *
+ * Cuando no cabe se alinea a la IZQUIERDA y se corta por la derecha, que es
+ * lo unico legible: centrado se pierde texto por los dos lados y no se sabe
+ * ni por donde empezaba. Se corta por caracteres enteros -un glifo a medias
+ * se lee como otra letra- y la caja sigue siendo el limite duro.
+ */
 void gfx2_text_in(gfx2_surf_t *s, int16_t x, int16_t y, int16_t w,
                   const char *str, const gfx2_font_t *f, gfx2_rgba_t c,
                   gfx2_align_t al)
 {
     int16_t tw = gfx2_text_w(str, f);
     int16_t tx = x;
+
+    if (tw > w) {
+        int16_t cx = x;
+        uint16_t cp;
+
+        while (*str) {
+            const char *sig = next_cp(str, &cp);
+            const gfx2_glyph_t *g = glyph_for(f, cp);
+
+            if ((int16_t)(cx + g->adv) > (int16_t)(x + w)) { break; }
+            (void)gfx2_text_uno(s, cx, y, cp, f, c);
+            cx = (int16_t)(cx + g->adv);
+            str = sig;
+        }
+        return;
+    }
+
     if (al == GFX2_ALIGN_C) tx = (int16_t)(x + (w - tw) / 2);
     else if (al == GFX2_ALIGN_R) tx = (int16_t)(x + w - tw);
     gfx2_text(s, tx, y, str, f, c);
@@ -570,6 +711,35 @@ void gfx2_wf_blit(int16_t x, int16_t y, int16_t w, int16_t rows,
      * forma que solo hace falta UNA ventana por trozo y el buffer de
      * historial puede seguir siendo de 8 bits. */
     int16_t done = 0;
+
+    /*
+     * Y SE PIDE LA BANDA, QUE ERA LA UNICA QUE NO LA PEDIA - 05/10/2026.
+     *
+     * *** El dueño, con la primera captura de pantalla de la radio en la
+     * mano: "y encima se ve mal". ***
+     *
+     * Y se veia fatal: fondo morado, rayas negras y el texto fantasma. La
+     * causa es esta funcion, que escribia en s_band SIN pedirla.
+     *
+     * Todos los demas la piden: gfx2_render() y los dos montadores por
+     * bandas -el del espectro y el de la cascada por IPA- la cogen con
+     * gfx2_banda_coge() y, si esta ocupada, se saltan ese fotograma. Este
+     * camino -el de respaldo de la cascada, el que corre cuando el IPA no
+     * puede- se la quedaba sin preguntar.
+     *
+     * Mientras no hubo nadie que tuviera la banda cogida mucho rato, no se
+     * noto. La captura de pantalla la tiene cogida VEINTICINCO SEGUNDOS, y
+     * en ese rato la cascada le escribia encima sus filas una y otra vez:
+     * el morado era el suelo de la paleta del agua, y las rayas negras los
+     * trozos de cada banda que se salvaban.
+     *
+     * O sea que no era un fallo de la captura: era un fallo viejo que la
+     * captura destapo por ser la primera en tener la banda mas de un
+     * instante.
+     */
+    if (gfx2_banda_coge() == (uint16_t *)0) {
+        return;
+    }
 
     while (done < rows) {
         int16_t chunk = (int16_t)(rows - done);
@@ -592,4 +762,5 @@ void gfx2_wf_blit(int16_t x, int16_t y, int16_t w, int16_t rows,
 
         done = (int16_t)(done + chunk);
     }
+    gfx2_banda_suelta();
 }

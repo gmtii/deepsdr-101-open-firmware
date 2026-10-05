@@ -38,8 +38,30 @@ static const float k_fir[FIR_N] = {
  * etapa. Ver el comentario del filtro. */
 #define BANDA_UTIL 0.80f
 
+/*
+ * LA HISTORIA, POR DUPLICADO - 05/10/2026.
+ *
+ * *** El dueño: "quiero que repases absolutamente todo de la radio y busques
+ * razones que hagan que se ralentice tanto la radio completa como el
+ * espectro". ***
+ *
+ * Y el analizador de audio, con el zoom de 300 Hz, era la cosa mas cara de
+ * toda la interrupcion de audio: ocho etapas en cascada, veintitres tomas
+ * cada una... y un MODULO POR 23 en el bucle interno, una vez por toma. 23
+ * no es potencia de dos, asi que eso no es un AND: es una division entera de
+ * verdad, y van unas seis mil por bloque.
+ *
+ * El truco de siempre, y en este mismo proyecto ya esta usado en rds.c:
+ * guardar cada muestra DOS VECES, en z[pos] y en z[pos+FIR_N]. Con eso la
+ * convolucion recorre FIR_N posiciones seguidas desde `pos` sin salirse
+ * nunca del array -pos < FIR_N, asi que pos+FIR_N-1 < 2*FIR_N- y lee
+ * exactamente los mismos valores en el mismo orden que la vuelta con modulo.
+ *
+ * Cuesta 92 bytes mas por etapa. El bucle se queda en multiplicar y sumar,
+ * que es lo unico que de verdad hay que hacer.
+ */
 typedef struct {
-    float   z[FIR_N];   /* historia */
+    float   z[2U * FIR_N];  /* historia, escrita por duplicado */
     uint8_t n;          /* cuantas muestras han entrado desde la ultima salida */
     uint8_t pos;        /* donde escribir en z[] */
 } etapa_t;
@@ -65,7 +87,7 @@ void analiz_start(float fs_hz)
 
     s_fs = (fs_hz > 1.0f) ? fs_hz : 1.0f;
     for (e = 0U; e < ETAPAS; e++) {
-        for (k = 0U; k < FIR_N; k++) { s_et[e].z[k] = 0.0f; }
+        for (k = 0U; k < 2U * FIR_N; k++) { s_et[e].z[k] = 0.0f; }
         s_et[e].n = 0U;
         s_et[e].pos = 0U;
     }
@@ -118,18 +140,20 @@ static uint8_t etapa_mete(etapa_t *e, float x, float *out)
     float acc = 0.0f;
 
     e->z[e->pos] = x;
-    e->pos = (uint8_t)((e->pos + 1U) % FIR_N);
+    e->z[e->pos + FIR_N] = x;          /* la copia: ver etapa_t */
+    e->pos++;
+    if (e->pos >= (uint8_t)FIR_N) { e->pos = 0U; }
 
     e->n++;
     if (e->n < 2U) { return 0U; }
     e->n = 0U;
 
     /* Convolucion. Se recorre la historia desde la mas antigua, que es la
-     * que esta justo donde se va a escribir la siguiente. */
+     * que esta justo donde se va a escribir la siguiente. Seguida y sin dar
+     * la vuelta, porque la copia de arriba la deja entera a partir de pos. */
     p = e->pos;
     for (k = 0U; k < FIR_N; k++) {
-        acc += e->z[p] * k_fir[k];
-        p = (uint16_t)((p + 1U) % FIR_N);
+        acc += e->z[p + k] * k_fir[k];
     }
     *out = acc;
     return 1U;

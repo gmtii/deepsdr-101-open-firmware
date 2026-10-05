@@ -1,6 +1,7 @@
 #ifndef UI_CFG_H_INCLUDED
 #define UI_CFG_H_INCLUDED
 
+#include "gfx2.h"
 #include <stdint.h>
 #include "ui_grid.h"   /* comparte la zona del menu: UIG_Y / UIG_H */
 
@@ -113,6 +114,9 @@ typedef struct {
 } ui_cfg_state_t;
 
 void   ui_cfg_draw(const ui_cfg_state_t *st);
+/* La misma capa en una banda que le dan: la captura de pantalla.
+ * Ver ui_cfg.c. */
+void   ui_cfg_pinta_en(gfx2_surf_t *s, const ui_cfg_state_t *st);
 void   ui_cfg_draw_one(const ui_cfg_state_t *st, int8_t i);
 int8_t ui_cfg_hit(uint16_t x, uint16_t y);
 

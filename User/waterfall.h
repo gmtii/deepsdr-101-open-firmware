@@ -2,6 +2,7 @@
 #define WATERFALL_H
 
 #include <stdint.h>
+#include "gfx2.h"   /* gfx2_surf_t: ver waterfall_pinta_en() */
 
 /*
  * Framebuffer parcial en RAM para la zona de waterfall (y, mas adelante,
@@ -111,6 +112,11 @@ uint8_t waterfall_prestada(void);
 /* Vuelca el buffer completo a la GRAM en (x,y). No hace falta llamarlo en
  * cada push_line si se prefiere desacoplar tasa de actualizacion de datos
  * vs. tasa de refresco de pantalla. */
+/* La cascada montada en una banda que trae otro, para la captura de
+ * pantalla. Ver waterfall_pinta_en() en waterfall.c. */
+void waterfall_pinta_en(gfx2_surf_t *sf, int16_t px, int16_t py,
+                        const uint16_t *lut);
+
 void waterfall_blit(uint16_t x, uint16_t y, const uint16_t *lut);
 
 /* Acceso directo a una fila del buffer (0 = mas reciente/arriba), por si

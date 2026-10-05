@@ -223,7 +223,31 @@ static void borra_linea(uint16_t y)
  * SUBIRLA al tocar cualquier cosa del cargador. Si no se sube, miente, y
  * un numero de version que miente es peor que no tenerlo.
  */
-#define CARGADOR_VERSION  "v2.0"
+#define CARGADOR_VERSION  "v2.1"
+
+/*
+ * Y EL CRC DEL CARGADOR DETRAS DE LA VERSION - 02/10/2026.
+ *
+ * *** El dueño, por segunda vez el mismo dia: "en el custom boot tampoco
+ * estas cambiando la version mamon". *** Y por segunda vez tenia razon.
+ * Esto ya se arreglo para el firmware cuando salieron seis update.bin
+ * distintos llamados todos V3.00 -ver la entrada de V3.01 en CAMBIOS.md-,
+ * y no se aplico aqui. Hoy han salido dos customboot.bin distintos y los
+ * dos ponen "v2.0" en la esquina.
+ *
+ * Subir el numero a mano sigue haciendo falta, pero DEPENDE DE QUE YO ME
+ * ACUERDE, y ya esta demostrado dos veces que eso no basta. Asi que al
+ * lado va un numero que no depende de nadie: el CRC-32/MPEG-2 de los bytes
+ * que hay grabados, calculado al arrancar sobre la flash de verdad.
+ *
+ * Es el mismo cargador_crc32() que valida el update.bin, sobre el mismo
+ * tramo que objcopy mete en el .bin: de 0x08000000 a _eflash. Asi que el
+ * numero de la esquina y el que imprime el make al compilar son el mismo,
+ * y comparar uno con otro dice sin ninguna duda que hay grabado.
+ *
+ * Si algun dia no cuadran, lo que miente es la radio: el .bin se mide
+ * sobre el fichero y esto sobre lo que de verdad quedo escrito.
+ */
 
 /*
  * *** El dueno, viendo el tuneo: "Numero de s54486357 04333833". *** La
@@ -291,6 +315,19 @@ static char *x2s(char *p, uint32_t v, int cifras)
 }
 
 static char *pega(char *p, const char *s) { while (*s) { *p++ = *s++; } *p = '\0'; return p; }
+
+extern uint32_t _eflash;
+
+static const char *cargador_sello(char *buf)
+{
+    const uint8_t *base = (const uint8_t *)0x08000000UL;
+    uint32_t n = (uint32_t)((const uint8_t *)&_eflash - base);
+    char *p = pega(buf, CARGADOR_VERSION);
+
+    p = pega(p, " / ");
+    (void)x2s(p, cargador_crc32(0xFFFFFFFFU, base, n), 8);
+    return buf;
+}
 
 /* --- la flash interna de verdad ------------------------------------- */
 
@@ -429,7 +466,10 @@ static void cabecera(const char *titulo, const char *pie)
     rect(0U, 0U, 800U, 46U, BARRA);
     rect(0U, 46U, 800U, 2U, ACENTO);
     texto_sobre(24U, 12U, titulo, ACENTO, BARRA);
-    texto_derecha(776U, 12U, CARGADOR_VERSION, ETIQUETA, BARRA);
+    {
+        char sello[24];
+        texto_derecha(776U, 12U, cargador_sello(sello), ETIQUETA, BARRA);
+    }
     if (pie != (const char *)0) { texto(24U, 58U, pie, ETIQUETA); }
 }
 

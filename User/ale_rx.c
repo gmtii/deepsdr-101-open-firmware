@@ -360,16 +360,39 @@ static void mide(void)
     float    pmax = -1.0f;
     uint8_t  fase = (uint8_t)(s_cuenta / ALE_PASO);
 
+    /*
+     * EN DOS TRAMOS SEGUIDOS, SIN MODULO - 05/10/2026.
+     *
+     * *** El dueño: "busca razones que hagan que se ralentice tanto la radio
+     * completa como el espectro". ***
+     *
+     * Esto recorria la ventana con `(s_hi + k) % ALE_SPS`, y ALE_SPS son 96:
+     * no es potencia de dos, asi que cada uno de esos modulos es una
+     * division entera de verdad. Ocho tonos por noventa y seis muestras son
+     * 768 divisiones por llamada, y esto se llama cuatro veces por simbolo,
+     * o sea quinientas veces por segundo: 384.000 divisiones al segundo
+     * dentro de la interrupcion de audio.
+     *
+     * Un anillo recorrido entero desde un punto cualquiera son DOS TRAMOS
+     * seguidos: del punto al final, y del principio al punto. Misma
+     * secuencia exacta, mismas muestras en el mismo orden, cero divisiones.
+     */
     for (t = 0U; t < ALE_TONOS; t++) {
         float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f, p;
+        const float c = s_coef[t];
         uint16_t k;
 
-        for (k = 0U; k < ALE_SPS; k++) {
-            s0 = s_hist[(s_hi + k) % ALE_SPS] + s_coef[t] * s1 - s2;
+        for (k = s_hi; k < ALE_SPS; k++) {
+            s0 = s_hist[k] + c * s1 - s2;
             s2 = s1;
             s1 = s0;
         }
-        p = (s1 * s1) + (s2 * s2) - (s_coef[t] * s1 * s2);
+        for (k = 0U; k < s_hi; k++) {
+            s0 = s_hist[k] + c * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        p = (s1 * s1) + (s2 * s2) - (c * s1 * s2);
         if (p > pmax) { pmax = p; mejor = t; }
     }
 

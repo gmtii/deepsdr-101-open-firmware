@@ -254,6 +254,10 @@ uint8_t settings_load(settings_loaded_t *out);
  * site. */
 void settings_mark_dirty(void);
 
+/* Si settings_poll() va a hacer algo o se va a ir por donde ha venido. Ver
+ * settings_hay_faena() en settings.c. */
+uint8_t settings_hay_faena(void);
+
 /* Cuantos guardados de CONFIG.CSV han terminado bien y cuantos han fallado
  * desde que arranco, y cuando fue el ultimo bueno. Sale en la ventana de
  * informacion: ver el comentario de los contadores en settings.c. */

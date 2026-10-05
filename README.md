@@ -1,199 +1,278 @@
-In memory of Carlos EB4DYL
+# DEEPSDR 101 — rama `reload`
 
-# DEEPSDR 101 / HTOOL/ BAJEI SDR V5 GD32F450 Open Source Firmware
+Firmware del DEEPSDR 101 (GD32F450VET6) con la interfaz rehecha, modos nuevos,
+cargador de arranque propio y un simulador que compila **el código de verdad**
+del firmware en el PC.
 
-This project is a collaboration between EA8DGL Esteban, Oscar EA4HEW, UA6YKK Alexandr 
-and EA7GIB Blas, aiming to create open firmware for the DEEPSDR 101 and BAJEI SDR V5 
-clone with the GD32F450 MCU. 
+Esto es la lista corta. Lo que trae **cada versión**, en dos idiomas y en
+pocas líneas, está en **`NOVEDADES.md`**. El porqué de cada cosa, con las
+medidas y los fallos que hubo por el camino, está en **`CAMBIOS.md`**
+(ordenado por fecha).
+Versión actual **V3.00**; cargador **v2.0**. Los tres ficheros del sistema son
+`update.bin` (firmware), `customboot.bin` (cargador) y `BD.BIN` (bases de
+datos): el cargador mira al arrancar si hay un `update.bin` en el disco USB, y
+el firmware mira si hay un `BD.BIN`.
 
-It is currently in the development phase, and programming is being carried 
-out primarily using AI. The current version is functional and supports most 
-DEEPSDR radio features.
+> **Esta rama no es compatible con la anterior.** La aplicación empieza en
+> `0x0800C000` y la valida una cabecera con CRC32, así que hace falta grabar
+> **primero** el cargador `v2.0` y **después** el `update.bin`. La rama de
+> antes, con la aplicación en `0x08020000` y los nombres viejos, sigue en
+> `..\deepsdr`.
 
-We would welcome any collaboration or assistance with its development. 
-Regards.
+---
 
-![deepsdrp reloaded](images/photo_2026-09-28_08-25-59.jpg)
-![deepsdrp reloaded](images/photo_2026-09-28_08-26-48.jpg)
-![deepsdrp reloaded](images/photo_2026-09-28_08-27-41.jpg)
-![deepsdrp reloaded](images/photo_2026-09-28_08-35-39.jpg)
-![deepsdrp reloaded](images/photo_2026-09-28_09-39-19.jpg)
-![deepsdrp reloaded](images/photo_2026-09-28_18-25-19.jpg)
-![deepsdrp reloaded](images/photo_2026-09-28_19-42-58.jpg)
-![deepsdrp reloaded](images/photo_2026-09-28_19-54-17.jpg)
-![deepsdrp reloaded](images/photo_2026-09-28_19-59-06.jpg)
-![deepsdrp reloaded](images/photo_2026-09-29_22-08-24.jpg)
+## Interfaz
 
-## Disclaimer
+- Se cambió el motor de dibujo entero: `gfx.c` abría una ventana del panel por
+  píxel; `gfx2` compone una banda en RAM y la vuelca de una vez (**una ventana,
+  un volcado**).
+- Se añadieron tipografías proporcionales con antialias, esquinas redondeadas y
+  degradados, que con el camino anterior no eran viables.
+- Se partió la interfaz en módulos que no dependen del firmware salvo de
+  `gfx2`: `ui_top`, `ui_grid`, `ui_cfg`, `ui_det`, `ui_act`, `ui_kbd`,
+  `ui_digi`, `spec_chrome`, `splash`. Por eso el simulador puede compilar
+  **los mismos ficheros** y sacar un PNG.
+- Se borró el sistema de interfaz viejo: de `ui.c` queda **una** función,
+  `ui_panel_draw()`. Comprobado con `--print-gc-sections`, no a ojo.
+- Se añadieron temas de interfaz y **15 paletas** de espectro/cascada.
+- Se añadió pantalla de Información: versión, fecha de compilación, flash y RAM
+  usadas, calculadas desde los símbolos del enlazador.
+- Se añadieron reloj ajustable y teclado numérico de frecuencia.
+- Se reordenó el menú (Equipo el último, Brillo a Pantalla) y se arreglaron
+  textos que se salían de su celda, tres rayas negras invisibles en tema
+  oscuro y el renglón vivo, que estaba en dos sitios.
+- Se añadió marquesina al campo de texto de los modos digitales, que se cortaba.
+- Se quitaron **26,7 kB de fuentes** que no usaba nadie.
+- Se arregló que el mapa mandaba el **47,5 % de los píxeles dos veces**.
+- Se arregló el bucle de renglones, que no miraba dónde acaba el panel.
+- Se arregló que el **100 % de brillo no era el 100 %**: las dos centésimas que
+  faltaban eran de ciclo de trabajo, no de luz.
 
-This firmware is provided **"as is"**, without warranty of any kind,
-express or implied, including but not limited to warranties of
-merchantability, fitness for a particular purpose, and
-non-infringement.
+## Espectro y cascada
 
-This is a hobbyist, experimental project. Flashing this firmware onto
-your hardware, and any hardware modifications you make in order to
-use it (wiring, GPIO changes, RF front-end changes, etc.), are done
-**entirely at your own risk**. The author assumes no responsibility
-and accepts no liability for any damage, malfunction, data loss, or
-other harm to your equipment - or to any other equipment, property,
-or person - resulting from downloading, building, flashing, modifying,
-or otherwise using this firmware, whether used as-is or altered by you
-or any third party.
+- Se cambió la autoescala: antes mínimo y máximo absolutos (el pico de continua
+  se los comía, 121 dB de escala); ahora **percentiles 5 % y 99,5 %** sobre un
+  histograma de 128 cubos (50 dB útiles).
+- Se añadió **tocar el espectro para caer en la señal** (`spec_snap.c`), con
+  interpolación parabólica sobre tres bins: error medio 21–34 Hz, peor 64 Hz,
+  contra los 187 Hz que deja caer al bin entero.
+- Se cambió dónde cae según el modo: encima de la portadora en AM/SAM/NFM/WFM,
+  un pitch por debajo en CW, en el borde en USB/LSB. Si no hay nada 8 dB sobre
+  el ruido, no inventa señal.
+- Se bajó el espectro de ser el **94 % del fotograma** a lo que ocupa ahora.
+- Se arregló que el suavizado le rompía el eje del tiempo a la cascada.
+- Se arregló la basura que aparecía en la cascada al salir de cinco modos.
+- Se documentó por qué el panadaptador está descentrado (75 % del ancho): es la
+  arquitectura, no un fallo.
 
-You are solely responsible for:
-- Verifying that this firmware is suitable for and compatible with
-  your specific hardware before flashing it (check that your mcu is
-  the GD32F450VET6/VGT6!!!).
-- Complying with all applicable radio spectrum, transmission, and
-  equipment regulations in your country/region. (This firmware
-  targets a *receiver* - it is not designed or intended to transmit -
-  but it is still your responsibility to ensure your use of it, and
-  of the underlying RF hardware, is fully compliant with local law.)
-- Any consequences of modifying, adapting, or redistributing this
-  firmware, including modifications made by you or by anyone else who
-  obtains it from you.
+## Modos y decodificadores nuevos
 
-No support, maintenance, or fitness for any particular use case is
-guaranteed. Use of this project constitutes acceptance of this
-disclaimer.
+- **CW** (`cw.c`, ~1.500 líneas): Goertzel solapado, banco de 9 sondas para
+  engancharse ±250 Hz desafinado, clasificador de dos medias y reproducción
+  retrospectiva del historial. Filtro de audio paso banda de **4 etapas**
+  (1k0 / 500 / 250 Hz) elegidas midiendo faldas, no a ojo.
+- **FT8**: portado, enganchado y metido en la unión de RAM de la cascada.
+  Ventana ensanchada de 400 a **1.600 Hz** (256 bins, toda la banda tras el
+  diezmado). Panel en columnas, botón Borrar, botón de frecuencias.
+- **WSPR**: receptor completo del audio al indicativo, con mapa.
+- **HFDL**: datos de aviones en onda corta, con tabla de estaciones, portero de
+  ráfaga, base de modelos de avión y mapa.
+- **AIS**: barcos, con tabla y filtro por MMSI.
+- **ALE**: con Golay demostrado en banco, no muestreado.
+- **PSK31**: varicode, recuperación de reloj por histograma, sintonía
+  automática y umbral medido.
+- **JTTY**: receptor propio, frecuencias, mapa, FEC y unión de trozos.
+- **NAVTEX, WEFAX, SSTV, APRS, RTTY, RDS, DCF77, ALS162**: en el firmware, con
+  sus bancos.
+- Se añadió **mapa del mundo** (costa en 7,1 kB y **cero** bytes de SRAM), con
+  botón, zoom y de borde a borde, y puntos de FT8, WSPR, JTTY, HFDL y AIS.
+- Se añadió **"quién emite en esta frecuencia"**: lista de emisoras cargada de
+  fichero, con el desfase horario en el fichero y no en el firmware.
+- Se añadió botón para recorrer las frecuencias conocidas de cada modo.
+- Se añadió **atenuador manual** que el AGC de RF ya no pisa: lo elegido es un
+  suelo, el automático puede atenuar más pero nunca menos.
+- Se puso **WFM** sola al tope de ganancia de entrada (la pérdida del mezclador
+  en VHF se come ~20 dB).
 
-## Overview
+## Ficheros, USB y ajustes
 
-This document covers three things deliberately kept separate from the
-hardware/clock-tree description: what the project is, how to build
-and flash it (both the ST-Link/OpenOCD workflow and the vendor
-bootloader's `update4.bin` workflow), and exactly how the current menu
-system and general UI behave. It reflects the UI/menu state as of
-01/09/2026 — several tiles referenced here were added or moved during
-that session; if the hardware doc still shows an older 3-page menu
-with only a handful of tiles, this file supersedes it for anything
-UI-related.
+- Se añadió **guardado de imágenes** de SSTV y WEFAX como BMP en el volumen FAT
+  que la radio enseña por USB, escribiendo en el FAT sin romperlo.
+- Se unificaron los datos en **un solo fichero** (`BD.BIN`) con directorio, en
+  vez de cinco repartos escritos a mano.
+- Se añadió soporte de `BD.BIN` **troceado** por el FAT: se sigue la cadena,
+  sin tabla.
+- Se arregló que guardar los ajustes **borraba los ficheros vecinos**.
+- Se arregló que si `CONFIG.CSV` no empezaba en frontera de bloque, los ajustes
+  se perdían.
+- Se arregló que el borrado del `ICAO24.BIN` sólo miraba 16 entradas del
+  directorio, y que un fichero demasiado grande se truncaba, se daba por bueno
+  y se borraba.
+- Se pasó el **QTH** y las bandas de VHF a los ajustes: ningún QTH en el código.
+- Se añadió **idioma** (español/inglés) en los ajustes.
+- Se añadió persistencia del interruptor de **reducción de ruido** (`nr_on`),
+  que tenía `nr_strength` guardado pero no el on/off.
+- Se validan los valores que vienen del fichero antes de aplicarlos.
+- Se añadió **volcado de la ROM de fábrica a `VOLCADO.BIN` sin abrir la radio**.
+- Se añadió botón de **DFU** en Información, y se dejó funcionando tras once
+  intentos documentados (V2.31 a V2.44): el testigo en `.noinit`, el reset de
+  periféricos, el `BOOT_MODE`, los vectores a cero y el DP abajo 300 ms.
 
-## 1. Project
+## Cargador de arranque propio (`boot/`, v1.1)
 
-This is a collaborative, hobbyist, bare-metal firmware project
-targeting the GD32F450VET6 MCU used in the DEEPSDR 101 / BAJEI SDR V5
-receiver boards — a direct-sampling QSD (Quadrature Sampling Detector)
-SDR receiver with an 800x480 touchscreen. No RTOS; direct register
-access via GigaDevice's standard peripheral library where it matters
-(clocks, DMA, I2S, timers).
+- Se escribió un **cargador de arranque nuestro** que reemplaza al de fábrica,
+  en 0x08000000, sin tocar la aplicación ni abrir la radio.
+- Se sacaron del binario original, desensamblando y **sin adivinar**: los siete
+  pines de placa, las tres secuencias de arranque del panel RM68120 (A/B/C,
+  forzada la B), el PWM de retroiluminación (TIMER4, PA3 en AF2) y la
+  temporización del EXMC.
+- Se corrigió el reloj: el original va a **144,384 MHz** con USB a 48,128, no a
+  192 como yo había afirmado. Con el PLL mal, el USB no enumeraba.
+- Se arregló que el disco USB no montaba: las llamadas del MSC reciben el
+  desplazamiento **en bytes**, no en bloques (`usbd_msc_scsi.c:509`).
+- Se añadió una **salida de emergencia a DFU**: encender con el mando pulsado y
+  girándolo. Ha rescatado la radio dos veces.
+- Se añadió pantalla de actualización con fuente propia, versión del cargador a
+  la derecha, dos columnas y **barra de progreso** mientras graba.
+- Se hizo el **arranque normal totalmente silencioso**: no se ve nada si no hay
+  `UPDATE4.BIN` y no se pulsa nada.
+- Se pasó la flash SPI del cargador a **SPI0 por hardware** (12 MHz); la
+  aplicación conserva el bit-bang porque comparte el bus con el táctil.
+- Se dejaron la pila del cargador por debajo del testigo de DFU y el salto a la
+  aplicación limpiando SysTick y las 240 líneas del NVIC.
 
-The project is in active development, programmed primarily with AI
-assistance under the project owner's direction, with real-hardware
-verification (oscilloscope, real reception tests) driving essentially
-every design decision — nothing in the clock tree, RF chain, or DSP
-path is trusted on paper alone; the commit/comment history throughout
-the source consistently documents what was actually confirmed on the
-bench versus what's still an assumption.
+## El mapa de flash (rama `reload`, V3.00)
 
-It currently supports AM, USB, LSB, NFM, and WFM reception, a
-touch-driven panadapter/waterfall display with drag- and tap-to-tune
-gestures, a paged settings menu covering RF/audio/display/digital-mode
-options, RTTY decoding, a selectable AM/USB/LSB/NFM sample rate
-(96kHz/48kHz — see 3.9), and a growing set of diagnostic and
-quality-of-life tools (manual/auto AGC, selectable audio and channel
-filter widths, spectrum auto-scaling, a calibrated S-meter dBm readout
-(see 3.8), and a GD32-generated quadrature LO path for the lowest
-tuning range where the board's MS5351 clock generator can't reliably
-hold quadrature).
+- Se cambió el mapa entero: **una sola región** de `0x0800C000` a `0x08080000`
+  en vez de 256 kB abajo + 8 bytes de firma + un desván de 64 kB.
+- Se pasó de **3.272 bytes libres para código** a **156.612**. El desván tenía
+  5.940 libres y no servían para una línea de código: el enlazador no derrama
+  de una región a otra.
+- Se le reservan al cargador **48 kB** (sectores 0 a 2); usa 34.172.
+- Se cambiaron los 8 bytes de firma por una **cabecera de 16 bytes** en
+  `base+0x200` con magia, longitud y **CRC32**, comprobada en cada arranque.
+  Con la firma vieja, una imagen grabada a medias arrancaba; ahora no.
+- Se cambió el borrado a **tabla explícita de sectores**: el bucle `+= 0x20000`
+  de antes se habría saltado el sector 4 en silencio.
+- Se añadió `tools/mapa.py`, que comprueba en cada compilación que los **tres**
+  sitios donde está escrita la dirección base dicen lo mismo (enlazador,
+  `cargador.h` y el `SCB->VTOR` de `system_gd32f4xx.c`, que no puede incluir a
+  los otros dos).
+- Se quitaron `.arriba`, `FLASH2`, `FIRMA`, `_sarriba`, `_earriba`,
+  `User/firma_app.c`, `tools/firma.py` y la fila "Flash alta" de Información.
 
-## 2. Building and Flashing
+## Rendimiento y memoria
 
-### 2.1 Prerequisites
+- Se descubrió que el **muro de los 256 kB no era un muro**: el gestor de
+  arranque original no comprueba lo que yo creía, y eso abrió **64 kB** más.
+  Con ese sitio entró WSPR esa misma noche.
+- Se arregló que la **pila se salía por 6,3 kB**, y se puso `tools/pila.py` a
+  vigilarlo en cada compilación, ahora contando el anidamiento de interrupciones
+  (peor caso 5.464 bytes, margen 592).
+- Se bajó la banda de dibujo (`GFX2_BAND_H`) de 24 a **16 filas**: 25 kB en vez
+  de 38.
+- Se pasó el historial de la cascada a un byte por píxel (índice de paleta):
+  **56 kB ahorrados**.
+- Se comparte esa RAM entre cascada, FT8, HFDL, WSPR, AIS y ALE mediante una
+  unión, con cerrojo de préstamo.
+- Se quitaron 4 ms de trabajo **dentro de la interrupción de audio** en WSPR, y
+  24.000 llamadas a trigonometría por segundo.
+- Se arregló el periodo de 62,5 ms que debía ser 6,25.
+- Se resolvió, midiendo en la propia radio, que **el cargador nuestro no
+  ralentiza el espectro**: 19 ms contra 20 ms, idénticos. Lo que cambiaba eran
+  las condiciones de banda.
+
+## Herramientas y comprobaciones
+
+- Se montó un **simulador** (`deepsdr-ui/`) que compila los ficheros reales del
+  firmware en el PC y saca PNG.
+- Hay **111 bancos**, de los que más de 80 corren en `make comprueba` sin placa.
+- La regla del proyecto: **los bancos escriben la regla aparte**. Si el banco
+  llamara a la función del firmware comprobaría que hace lo que hace, no lo que
+  debe.
+- Se añadieron `tools/pila.py` (pila), `tools/cabecera.py` (cabecera y CRC del
+  update), `tools/gordos.py` (quién ocupa), `tools/mapa.py` (que los tres
+  mapas de flash dicen lo mismo), `tools/panel_check.py` y el utillaje de
+  datos que tiene su apartado aquí abajo.
+- Se añadió `avisos.mk`: el firmware compila con **cero avisos**.
+- Se arreglaron, en distintas tandas, bancos que llevaban días o semanas en
+  verde sin comprobar nada.
+
+## Cómo se hace el `BD.BIN` (`tools/`)
+
+`BD.BIN` son las dos bases de datos en un solo fichero: los modelos de avión
+para HFDL y las emisoras de onda corta y media. Se copia al disco USB de la
+radio y se carga desde Información; después se puede borrar del disco.
 
 ```sh
-sudo apt install gcc-arm-none-eabi openocd
+cd tools/datos
+
+# 1. las emisoras. --qth ordena cada frecuencia por cercanía al oyente
+python3 ../emisoras_pack.py eibi.txt aoki.txt EMISORAS.BIN 2 --qth IN80
+
+# 2. los modelos de avión, del CSV de OpenSky
+python3 ../icao24.py aircraft-database-complete-2025-08.csv ICAO24.BIN 827392
+
+# 3. y se juntan
+python3 ../datos_pack.py BD.BIN ICAO24.BIN EMISORAS.BIN
 ```
 
-### 2.2 Build
+- `tools/datos/` trae las dos listas de origen y un `LEEME.md` con de dónde se
+  bajan, las temporadas y por qué el `2` del final (es cuánto hay que restarle
+  al reloj de la radio para tener UTC: **2 en A26, 1 en B26**).
+- `--qth` admite cuadrícula Maidenhead o `lat,lon`. Sin él, el fichero sale
+  byte a byte como siempre. También hay `--radio 3000` y `--pais HNG,D,I`
+  para hacerse una base pequeña y de la zona.
+- El sitio de cada emisora sale de `tools/paises_xy.csv` (129 códigos ITU) y
+  `tools/sitios_xy.csv` (centros emisores, que mandan sobre el país). Son CSV
+  normales y están para editarlos.
+- **`BD.BIN` no puede pasar de 1 MB**, ponga el chip de flash que se ponga: la
+  zona de datos es siempre el último mega, y una flash más grande sólo agranda
+  el disco del usuario. `datos_pack.py` se niega y dice qué tope pedirle a
+  `icao24.py`.
+- Lo comprueba `tools/emisoras_check.py`, en `make comprueba` como `emispack`.
 
-```sh
-make            # build build/firmware.elf / .hex / .bin
-make clean      # remove build artifacts
+## Cómo se entrega
+
+- `C:\Users\PC\source\deepsdr-reload\update.bin` ← el firmware (raíz, donde
+  lo escribe el `make`).
+- `C:\Users\PC\source\deepsdr-reload\rescate\customboot.bin` ← el cargador.
+- **El orden importa**: primero el cargador por DFU, después el `update.bin`.
+  Entre los dos pasos la radio se queda en la pantalla de actualización
+  esperando el fichero, y eso es lo normal.
+- **Nunca por el chat**: Windows renombra a `update-1.bin` y el cargador busca
+  exactamente `UPDATE.BIN`. Un guión y un fallo silencioso.
+- Después de escribir, **releer y comparar el sha256** con el de la compilación.
+
+## Estado
+
+```
+  VERSION V3.42          CARGADOR v2.1
+  update.bin             customboot.bin          BD.BIN
+  ZONA ALTA  733.184 de 1.040.384   libre 311.296  (101.432 aviones)
+  DISCO USB  capacidad del chip - 1 MB  (hoy 7 MB con el W25Q64 soldado)
+  FLASH   359.228 de 475.136   libre 115.908   <- UNA region, sin desvan
+  CARGADOR 34.172 de  49.152   libre  14.980
+  RAM     194.648 de 196.608   libre   1.960
+  TCM      59.476 de  65.536   libre   6.060   <- y eso ES la pila
+  PILA      5.456 peor caso    margen    600 (10%)  <- CON anidamiento
+  avisos del compilador  0     comprobaciones  97 en verde
 ```
 
-### 2.3 Flashing via ST-Link (OpenOCD)
+## Lo que queda pendiente
 
-This is the direct, debugger-based flashing path — used for
-development, and for any board with an accessible SWD header.
-
-```sh
-make flash      # flash + verify + reset via OpenOCD
-make erase      # mass-erase the chip via OpenOCD
-```
-
-Both targets use `openocd/gd32f450.cfg` — a **custom** target config,
-not the stock `target/stm32f4x.cfg` that ships with OpenOCD. This
-matters: the GD32F450's silicon ID makes OpenOCD misdetect it as a
-dual-bank 2048KB STM32F42x/43x part, when the real part is a 512KB
-single-bank device. Flashing with the wrong target config produces
-`Error: checksum mismatch` after programming — if that happens, check
-that the custom `.cfg` is actually the one being used, not a stock
-STM32F4 profile.
-
-Debugging in VS Code: with the Cortex-Debug extension installed
-(suggested automatically via `.vscode/extensions.json`), pressing F5
-launches the "Debug GD32F450 (OpenOCD + ST-Link)" configuration
-already set up in `.vscode/launch.json`.
-
-### 2.4 Update and flashing via bootloader.
-
-[HOWTO](INSTALL_HOWTO_EN-ES.pdf)
-
-[GD32 All-In-One Programmer](https://www.gd32mcu.com/en/download/7?kw=GD32F4)
-
-### 2.5 Which method to use
-
-- **ST-Link/OpenOCD**: use during development, for any board with an
-  accessible SWD header, or when something has gone wrong badly enough
-  that the vendor bootloader itself might not be trustworthy (e.g.
-  recovering from a bad flash).
-- **`update.bin`**: use for a normal end-user-style update on a board
-  that's already running the reload's fw custom bootloader normally — no debugger 
-  needed.
-
-### 3 Known RF quirks: internal-clock birdies
-
-This board's own internal clock sources can and do produce birdies
-(spurious tones from digital clock harmonics leaking into the RF
-front end) — worth knowing about before chasing what looks like an
-external interference source that's actually coming from inside the
-receiver itself. Three separate clock domains are involved, each a
-potential source of its own family of harmonics:
-
-- **The MS5351/Si5351 LO generator's 26MHz reference crystal**
-  (`ms5351.c`) — this drives the receiver's own local oscillator via
-  PLLA/PLLB, so any of its own harmonics or PLL artifacts land
-  wherever the current tuning happens to put them, moving with the
-  VFO rather than sitting at one fixed spot.
-- **The audio codec's 12.288MHz crystal** (`gd32_i2s.c`/`aic3204.c`) —
-  the reference for MCLK and, downstream, the codec's own internal
-  PLL (CODEC_CLKIN, currently 86.016MHz — see `aic3204.c`'s clock-
-  chain comment) that ultimately produces the I2S bit clock and
-  sample rate.
-- **The I2S/sample-rate clock itself** — and this is the one with a
-  **confirmed, on-the-bench** birdie: at 96kHz (AM/USB/LSB/NFM's
-  previous fixed rate), the 287th harmonic of the sample rate
-  (287 × 96kHz = 27.552MHz) lands squarely in the 11m/CB band,
-  reproduced on both a modified and an unmodified board (ruling out a
-  power-rail coupling issue specific to one unit). Since this harmonic
-  number scales with whatever the sample rate actually is, switching
-  rate moves the whole comb of harmonics to different frequencies —
-  which is exactly why the **RATE tile** (HW page, 96K/48K) exists:
-  moving Fs relocates this class of birdie to a different, hopefully
-  less troublesome, spot rather than eliminating it outright. The
-  same reasoning applies to WFM's own fixed 192kHz rate, which has its
-  own comb of N×192kHz harmonics somewhere — not separately confirmed
-  on the bench the way the 96kHz case was, but expected by the same
-  mechanism, and not user-selectable the way AM/USB/LSB/NFM's rate is
-  (WFM is always 192kHz).
-
-None of these birdies are a firmware bug in the sense of something
-this project can filter or calibrate away — they're consequence of
-real clock energy on the same board as a sensitive front end. The
-practical mitigations available today are: retuning slightly (the LO
-harmonics move with the VFO), or trying the other sample rate via the
-RATE tile (the I2S-clock harmonics move with Fs). If a stronger fix
-(shielding, decoupling, a cleaner reference clock) is ever pursued,
-it belongs in the hardware document rather than here.
+- El suelo de negro del cargador nuestro sale ~4 puntos por encima del
+  original. Descartados con datos: reloj, temporización, las tres secuencias,
+  pines de placa, PMU y EXMC.
+- Medir la carga de audio con el botón de Ruido apagado y encendido, que es lo
+  que decide si hay que reescribir las dos transformadas de `nr_ss.c`.
+- FT8 **no ha decodificado nunca en antena**. Cabe, está enganchado y el banco
+  está en verde, pero eso no es lo mismo.
+- Nada de NAVTEX, WEFAX, SSTV, APRS ni el notch se ha probado en antena.
+- El filtro adaptado de PSK31 va 3 dB por detrás de fldigi: es la mejora con
+  mejor relación entre lo que cuesta y lo que da.
+- Mensajes de tipo 2 y 3 de WSPR, texto ACARS de HFDL en crudo, giros 6 y 7 de
+  HFDL (no caben en este chip), y el `ICAO24.BIN` montado pero vacío.
+- RTTY y CW no guardan velocidad ni tono en `CONFIG.CSV`.
+- La paleta `DEEPSDR` sigue fuera: rompía el audio de WFM por un mecanismo que
+  nunca llegué a entender, y preferí no meter código cuyo fallo no entiendo.

@@ -1,0 +1,71 @@
+# DONDE ESTA CADA CENTRO EMISOR - 05/10/2026.
+#
+# Manda sobre paises_xy.csv. Formato: prefijo,lat,lon,nombre
+#
+# POR QUE. El pais vale para Hungria y no vale para China: entre Kashi y
+# Dongfang hay 3.400 km, y los dos son "CHN". Un centroide de China los
+# pone a los dos en el mismo sitio y entonces el orden por distancia miente
+# justo donde mas falta hace.
+#
+# COMO CASA. Aoki recorta el nombre del sitio a DOCE caracteres
+# ("Al-Dhabbiya", "Dongfang Ha", "Okeechobee1"), asi que aqui no se busca
+# una cadena igual sino un PREFIJO, sin mirar mayusculas. "Okeechobee"
+# cubre Okeechobee1, 2, 3, 6 y 9 de una vez. Si dos prefijos valen, gana el
+# mas largo: "Urumqi Hutu" le gana a "Urumqi", que es Urumqi ciudad.
+#
+# ESTA A MEDIAS A PROPOSITO. En las listas hay 824 nombres de sitio
+# distintos y aqui estan los cuarenta y tantos que mas se repiten, que son
+# la mayoria de las emisiones. Lo que no este aqui cae en su pais y sigue
+# funcionando. Añadir uno es una linea, y es justo lo que se espera de
+# quien quiera afinar su zona.
+#
+# EiBi no trae el sitio, solo el area de destino; esta columna sale de
+# Aoki.
+#
+prefijo,lat,lon,nombre
+Agat,13.38,144.66,Agat (Guam, KSDA)
+Al Seela,21.93,59.48,A'Seela (Oman)
+Al-Dhabbiya,24.18,54.28,Al Dhabbaya (EAU)
+Baoji,34.37,107.15,Baoji-Sifangshan (China)
+Beijing,39.90,116.40,Pekin (China)
+Bishkek,42.87,74.60,Biskek (Kirguistan)
+Bocaue,14.80,120.93,Bocaue (Filipinas)
+Dongfang,19.10,108.65,Dongfang (Hainan, China)
+Emirler,39.47,32.90,Emirler (Turquia)
+Galbeni,46.48,26.90,Galbeni-Bacau (Rumania)
+Grigoriopol,47.15,29.30,Grigoriopol (Moldavia)
+Hanoi,21.14,105.50,Hanoi-Son Tay (Vietnam)
+Hohhot,40.84,111.75,Hohhot (China)
+Ibaragi,36.18,139.72,Yamata-Koga (Japon)
+Issoudun,46.84,2.00,Issoudun (Francia)
+Jagdaqi,50.42,124.12,Jagdaqi (Heilongjiang, China)
+Kashi,39.47,75.99,Kashgar (Xinjiang, China)
+Kimjae,35.83,126.87,Kimjae (Corea del Sur)
+Kuanyin,25.03,121.09,Kuanyin (Taiwan)
+Kujang,39.87,126.03,Kujang (Corea del Norte)
+Kununurra,-15.78,128.74,Kununurra (Australia)
+Kunming,24.92,102.48,Kunming-Anning (China)
+Lhasa,29.65,91.10,Lhasa (Tibet)
+Miaoli,24.57,120.82,Miaoli (Taiwan)
+Monticello,46.32,-67.84,Monticello, Maine (EE.UU., WBCQ)
+Nanning,22.82,108.37,Nanning (China)
+Nauen,52.65,12.91,Nauen (Alemania)
+Noblejas,39.95,-3.45,Noblejas (España)
+Okeechobee,27.45,-80.95,Okeechobee, Florida (EE.UU., WRMI)
+Palau Medor,7.45,134.50,Medorm (Palaos)
+Paochung,23.58,120.30,Paochung (Taiwan)
+Santa Maria,42.05,12.30,Santa Maria di Galeria (Vaticano)
+Shijiazhuan,38.04,114.51,Shijiazhuang (China)
+Sirjan,29.45,55.68,Sirjan (Iran)
+Solt,46.80,19.00,Solt (Hungria)
+Sulaibiyah,29.13,47.85,Sulaibiyah (Kuwait)
+Talata,-18.77,47.75,Talata-Volonondry (Madagascar)
+Tashkent,41.30,69.25,Tashkent (Uzbekistan)
+Tiganesti,44.75,26.00,Tiganesti (Rumania)
+Tinang,15.35,120.60,Tinang (Filipinas)
+Tinian,15.00,145.63,Tinian (Marianas)
+Trincomalee,8.58,81.18,Trincomalee (Sri Lanka)
+Urumqi,43.83,87.62,Urumqi ciudad (China)
+Urumqi Hutu,44.19,86.87,Urumqi-Hutubi (China)
+Woofferton,52.32,-2.72,Woofferton (Reino Unido)
+Xianyang,34.33,108.70,Xianyang (China)

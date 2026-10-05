@@ -373,6 +373,12 @@ demod_mode_t demod_am_get_mode(void);
  * for this to settle, then ppm = 1e6 * this_value / tuned_freq_hz. */
 float demod_am_get_sam_carrier_hz(void);
 
+/* Si el PLL de SAM esta cogido a una portadora de verdad (1) o el numero de
+ * arriba no significa nada (0), y la medida continua 0..1 de la que sale.
+ * Ver demod_am_sam_enganchado() en demod_am.c. */
+uint8_t demod_am_sam_enganchado(void);
+float demod_am_sam_enganche(void);
+
 /*
  * AM/SSB AUDIO FILTER WIDTH - added 02/08/2026, extended to a 3-way
  * selector 02/08/2026 (per the project owner: the main-screen BW

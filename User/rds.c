@@ -715,9 +715,29 @@ static void banda_base(float i_in, float q_in)
         q_in *= g;
     }
 
-    /* --- lazo de Costas: girar por la fase estimada --- */
-    c = cosf(s_cos_fase);
-    s = sinf(s_cos_fase);
+    /*
+     * --- lazo de Costas: girar por la fase estimada ---
+     *
+     * DE LA TABLA DEL NCO, NO DE LA BIBLIOTECA - 05/10/2026.
+     *
+     * *** El dueño: "busca razones que hagan que se ralentice tanto la radio
+     * completa como el espectro". ***
+     *
+     * Aqui habia cosf() y sinf() de la biblioteca, UNA VEZ POR MUESTRA de
+     * banda base. Este lazo corre a 12 kHz -192 kHz divididos por 16-, o sea
+     * 24.000 llamadas por segundo a dos rutinas de software de un par de
+     * cientos de ciclos cada una, dentro de la interrupcion de audio.
+     *
+     * Es EXACTAMENTE el mismo fallo que se persiguio tres veces en sam.c
+     * entre el 4 y el 5 de octubre, y la solucion ya estaba escrita en este
+     * proyecto desde entonces. La tabla tiene 1024 puntos con interpolacion
+     * y su error esta medido en sim/ncotest.c: 4,7e-6 de pico, que en un
+     * detector de fase que recorta su error a +-1 no se nota.
+     *
+     * La fase ya se mantiene en [-pi, pi] veinte lineas mas abajo, que es
+     * justo lo que nco_sen_cos_rad() espera.
+     */
+    nco_sen_cos_rad(s_cos_fase, &s, &c);
     ir =  i_in * c + q_in * s;
     qr = -i_in * s + q_in * c;
 

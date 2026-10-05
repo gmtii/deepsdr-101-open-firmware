@@ -74,6 +74,18 @@ SECTIONS
   _sitcmram = LOADADDR(.tcmram);
   .tcmram : { . = ALIGN(4); _stcmram = .; *(.tcmram) *(.tcmram*) . = ALIGN(4); _etcmram = .; } >TCMRAM AT> FLASH
 
+  /*
+   * DONDE ACABA LO QUE SE GRABA - 02/10/2026.
+   *
+   * No es _etext: detras van .rodata, los arrays de constructores y las
+   * copias iniciales de .data y .tcmram, y todo eso esta en el .bin. Esto
+   * es el final de verdad, y es lo que necesita boot_main.c para sacar el
+   * CRC de SI MISMO -ver CARGADOR_VERSION-.
+   *
+   * Tiene que ir despues de .tcmram, que es la ultima que carga en FLASH.
+   */
+  _eflash = LOADADDR(.tcmram) + SIZEOF(.tcmram);
+
   . = ALIGN(4);
   .bss : { _sbss = .; __bss_start__ = _sbss; *(.bss) *(.bss*) *(COMMON) . = ALIGN(4); _ebss = .; __bss_end__ = _ebss; } >RAM
 

@@ -131,9 +131,21 @@ int16_t battery_get_chip_temp_c(void)
     return (int16_t)(t_x10 / 10);
 }
 
-uint8_t battery_get_percent(void)
+/*
+ * EL PORCENTAJE, SIN VOLVER A MEDIR - 05/10/2026.
+ *
+ * Existe porque quien ya tiene los milivoltios no debe pagar una segunda
+ * conversion para sacar el porcentaje de la MISMA tension. Eso es lo que
+ * hacia top_sync() en main.c: battery_get_percent() y battery_get_millivolts()
+ * seguidas, dos esperas activas del convertidor de ~20 us cada una, en cada
+ * repintado de la cabecera.
+ *
+ * La cuenta vive aqui y no alli a proposito: el mapeo tension->porcentaje es
+ * de este fichero, con sus constantes, y copiarlo a main.c seria la clase de
+ * duplicado que luego se separa.
+ */
+uint8_t battery_pct_de_mv(uint16_t mv)
 {
-    uint16_t mv = battery_get_millivolts();
     uint32_t pct;
 
     if (mv <= BATTERY_EMPTY_MV) {
@@ -145,4 +157,9 @@ uint8_t battery_get_percent(void)
 
     pct = ((uint32_t)(mv - BATTERY_EMPTY_MV) * 100UL) / (uint32_t)(BATTERY_FULL_MV - BATTERY_EMPTY_MV);
     return (uint8_t)pct;
+}
+
+uint8_t battery_get_percent(void)
+{
+    return battery_pct_de_mv(battery_get_millivolts());
 }

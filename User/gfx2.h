@@ -143,6 +143,10 @@
  * coge() devuelve NULL si ya estaba cogida. Quien la pide TIENE que mirarlo. */
 uint16_t *gfx2_banda_coge(void);
 void      gfx2_banda_suelta(void);
+/* La banda para quien ya la tiene cogida; 0 si no la tiene. Ver
+ * gfx2_banda_mia() en gfx2.c. */
+uint16_t *gfx2_banda_mia(void);
+
 uint16_t  gfx2_banda_filas(void);
 /* Cuantos pixeles caben en la banda en total. Lo necesita quien la use para
  * algo que no sea "una tira de GFX2_W de ancho" - por ejemplo el espectro,
@@ -166,6 +170,10 @@ typedef struct {
     int16_t   x, y;  /* esquina superior izquierda en coordenadas de pantalla */
     int16_t   w, h;
 } gfx2_surf_t;
+/* La misma banda vista solo entre dos filas, para que una capa que se
+ * recorta sola con su ventana siga recortandose al montar la pantalla
+ * entera. Ver gfx2_sub_y() en gfx2.c. */
+gfx2_surf_t gfx2_sub_y(const gfx2_surf_t *s, int16_t y, int16_t h);
 
 /* Color en formato de trabajo: RGB888 + alpha, para poder mezclar bien.
  * Se convierte a RGB565 solo al escribir en la banda. */

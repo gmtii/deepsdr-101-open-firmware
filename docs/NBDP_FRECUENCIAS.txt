@@ -1,0 +1,84 @@
+Lista de emisiones HF de radiotelex (NBDP / SITOR-B / NAVTEX)
+Mantenida por William Hepburn, edicion 2026-09-26.
+La paso el dueño del proyecto el 02/10/2026 para el escaneo.
+
+Modo: FSK SITOR-B 100 baudios / 170 Hz de separacion.
+Las frecuencias son el CENTRO para un receptor en FSK.
+Para escuchar en USB hay que RESTAR 1,7 kHz y abrir el filtro.
+
+Idiomas: EE ingles, CC chino, RR ruso, GR griego, SS español,
+PP portugues, TT turco, VV vietnamita.
+
+NBDP MSI internacional (alta mar):
+  4210, 6314, 8416.5, 12579, 16806.5, 19680.5, 22376, 26100.5 kHz
+NAVTEX HF nacional:
+  4209.5 kHz, franjas de 10 minutos cada 4 horas
+
+Confirmada en el aire por el dueño el 02/10/2026:
+  8424 kHz  SVO-4  OLYMPIA (Grecia)  0930 / 2130 Z
+            -> grabada a las 21:24 UTC, texto griego en claro.
+               Es sim/muestras/navtex8424.mp3 del banco.
+
+4 MHz
+  4209.5  NAVTEX HF nacional (multiples, franjas de 10 min)
+  4210    L2C Buenos Aires (SS/EE), L2X Comodoro Rivadavia, XSG Shanghai,
+          SUZ Serapeum, EQI Abbas, LGI Hammerfest, OBC-3 Callao
+  4212.5  XSV Tianjin (CC/EE)
+  4255    UFH Petropavlovsk (RR)
+  4268    PWZ-33 Rio de Janeiro (PP/EE)
+  4283    XSV Tianjin
+  4323    UFH Petropavlovsk
+  4345    UFM-3 Nevelsk (RR)
+6 MHz
+  6314    XSG Shanghai, SUZ Serapeum, NMF Boston
+  6322.5  UDK-2 Murmansk (RR)
+  6323    UFM-3 Nevelsk
+  6326    XSG Shanghai (CC/EE)
+  6333.5  XSZ Dalian (CC/EE)
+  6334.5  UFM-3 Nevelsk (RR)
+  6360.5  UFH Petropavlovsk
+  6405    UFH Petropavlovsk (RR)
+  6425    LGI Hammerfest
+  6450    PWZ-33 Rio de Janeiro (PP/EE)
+8 MHz
+  8416.5  L2C Buenos Aires (SS/EE), L2X Comodoro Rivadavia, VFF-21 Iqaluit,
+          XSG Shanghai, SUZ Serapeum, NMO Honolulu, EQI Abbas,
+          LGI Hammerfest, OBC-3 Callao, NMC Point Reyes, NMF Boston
+  8416.75 UAT Moscu
+  8417.5  XSV Tianjin (CC/EE)
+  8424    SVO-4 OLYMPIA (Grecia), UDK-2 Murmansk (RR)   <- la del dueño
+  8425.5  XSG Shanghai (CC/EE)
+  8446    UFM-3 Nevelsk (RR)
+  8451    UFH Petropavlovsk
+  8515    UFL Vladivostok (RR)
+  8542    PKX Yakarta
+  8582    PWZ-33 Rio de Janeiro (PP/EE)
+  8600    XSV Tianjin
+  8694    XSZ Dalian (CC/EE)
+12 MHz
+  12578.25 UAT Moscu
+  12579    L2C Buenos Aires (SS/EE), L2X Comodoro Rivadavia, XSG Shanghai,
+           NRV Guam, NMO Honolulu, EQI Abbas, NMF Boston
+  12581.5  XSV Tianjin (CC/EE)
+  12586    UDK-2 Murmansk (RR)
+  12603    UFH Petropavlovsk
+  12637.5  XSG Shanghai (CC/EE)
+  12684.5  UFM-3 Nevelsk (RR)
+  12711    PWZ-33 Rio de Janeiro (PP/EE)
+  12955    UFL Vladivostok (RR)
+  12969    XSV Tianjin
+  12970.5  PKX Yakarta
+16 MHz y arriba
+  16806.5  L2C Buenos Aires (SS/EE), XSG Shanghai, NRV Guam,
+           NMC Point Reyes, NMF Boston
+  16861.7  PKX Yakarta
+  16898.5  XSG Shanghai (CC/EE)
+  16976    PWZ-33 Rio de Janeiro (PP/EE)
+  17045    UFH Petropavlovsk
+  17239.7  PKX Yakarta
+  19680.5  L2X Comodoro Rivadavia
+  22376    NRV Guam, NMO Honolulu
+  22575.5  PKX Yakarta
+
+(Se han dejado fuera las marcadas OUT OF SERVICE, PLANNED, VACANT SLOT
+ y SAT ONLY: no sirven para apuntar la antena.)

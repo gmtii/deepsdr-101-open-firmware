@@ -20,21 +20,44 @@
  * GigaDevice/Macronix/ISSI/... (which is exactly why probing with
  * these is safe before the exact chip is even identified). */
 #define CMD_JEDEC_ID      0x9FU
+#define CMD_UNIQUE_ID     0x4BU
 #define CMD_READ          0x03U
 #define CMD_WRITE_ENABLE  0x06U
 #define CMD_READ_STATUS1  0x05U
 #define CMD_PAGE_PROGRAM  0x02U
 #define CMD_SECTOR_ERASE_4K 0x20U
+/* Borrado de 64 kB. Esta en TODAS las hojas de datos de flash SPI NOR
+ * -Winbond, GigaDevice, Macronix, ISSI...- con este mismo numero, igual
+ * que 0x20 y 0x03. El de 32 kB (0x52) no es tan universal, y por eso no
+ * esta aqui: ver borrado_paso(). */
+#define CMD_BLOCK_ERASE_64K 0xD8U
 
 #define FLASH_PAGE_SIZE    256U
 #define FLASH_SECTOR_SIZE  4096U /* erase granularity - see spi_flash.h's WRITE support comment */
 
-/* Tope de FAT que sabemos cargar de una vez. Una FAT12 de 4096 bytes
- * describe hasta 2730 clusters, de sobra para un volumen de 1 MB con
- * sectores de 512. Si algun dia hace falta mas, esto salta en geo_lee().
- * Vivia mas abajo, junto al resto de la geometria; subio aqui el 24/09/2026
- * porque el borrador s_fat[] se declara antes y lo necesita. */
-#define FAT_BYTES_MAX       4096U
+/*
+ * Tope de FAT que sabemos cargar de una vez. Vivia mas abajo, junto al
+ * resto de la geometria; subio aqui el 24/09/2026 porque el borrador
+ * s_fat[] se declara antes y lo necesita.
+ *
+ * 02/10/2026: ERA 4096 Y SE QUEDABA CORTO, y el dueño lo noto de la peor
+ * manera posible: soldo un W25Q64, formateo los 7 MB con lo que propone
+ * Windows por su cuenta -clusters de 2048- y la radio dijo que no.
+ * Con 3569 clusters la FAT mide 6144 bytes y no cabia en el borrador.
+ *
+ * El numero nuevo no se ha elegido "por si acaso", sale del formato:
+ * una FAT12 no puede tener mas de 4084 clusters -a partir de ahi ES una
+ * FAT16, por definicion-, o sea 4086 entradas contando las dos
+ * reservadas, o sea 6129 bytes. 6144 son 4096 entradas justas: MAS QUE
+ * CUALQUIER FAT12 QUE PUEDA EXISTIR. Asi que esto ya no es un tope que
+ * algun dia haya que volver a subir; es el techo del formato.
+ *
+ * Cuesta 2 kB de .bss. La alternativa era leer la FAT a trozos en los
+ * siete sitios que la recorren, y siete sitios con aritmetica de
+ * ventanas es exactamente donde se cuela el fallo que corrompe el
+ * volumen por donde entra el firmware.
+ */
+#define FAT_BYTES_MAX       6144U
 
 /*
  * FORCED -O0, same uncalibrated-NOP-loop reasoning as i2c_bitbang.c's
@@ -119,10 +142,58 @@ static uint8_t spi_xfer_byte(uint8_t out)
     return (uint8_t)spi_i2s_data_receive(SPI0);
 }
 #else
+/*
+ * ============================================================================
+ * EL BUS DE LA FLASH IBA A 600 kHz PORQUE EL RETARDO ERA PARA OTRO CHIP
+ * ============================================================================
+ * 05/10/2026.
+ *
+ * *** El dueño, con la primera captura de pantalla: "ostia es lentisimo
+ * guardando captura" ... "podrias hacer las capturas mas rapidas bajandoles
+ * resolucion o algo asi?". ***
+ *
+ * Antes de bajar la resolucion conviene mirar por que tarda. Una captura son
+ * 768.000 bytes, y a este bus le costaban unos 16 microsegundos por BYTE: la
+ * mitad de los veinticinco segundos se iban solo en mover bits.
+ *
+ * Y ese retardo no es del W25Q: es heredado. Estos tres pines los comparten
+ * la flash y el tactil (ver la cabecera de este fichero), el tactil es un
+ * XPT2046 que no admite mas de 2 MHz, y de ahi salio el microsegundo por
+ * flanco. Pero el XPT2046 lo clavan los retardos de touch.c, que son suyos.
+ * Al W25Q le sobran: admite 50 MHz leyendo con el comando 0x03 y 104 con el
+ * rapido. Dicho de otra forma, la flash llevaba toda la vida yendo ochenta
+ * veces mas despacio de lo que puede por una limitacion de su vecino.
+ *
+ * Lo que manda ahora es s_rapido. Sin retardo ninguno, lo que tarda un bit es
+ * lo que tardan cuatro escrituras a un registro de GPIO: del orden de 100 ns,
+ * o sea unos 10 MHz. Los pines pasan a 50 MHz de pendiente (estaban a 2, que
+ * es lo que pedia el tactil) porque a esa velocidad un flanco lento ya no es
+ * un flanco.
+ *
+ * Y NO SE DA POR BUENO: se comprueba. spi_flash_init() lee el identificador
+ * del chip y un sector entero despacio, lo vuelve a leer deprisa, y compara.
+ * Si no cuadra -cableado, otro chip, otra placa- se queda despacio para
+ * siempre y lo dice en la ventana de informacion. Un bus que se equivoca en
+ * un bit corrompe el volumen entero, asi que esto no es un adorno: es la
+ * condicion para poder tocarlo.
+ */
+static uint8_t s_rapido;          /* 0 = el de siempre, 1 = sin retardo */
+
 static uint8_t spi_xfer_byte(uint8_t out)
 {
     uint8_t i;
     uint8_t in = 0U;
+
+    if (s_rapido) {
+        for (i = 0; i < 8U; i++) {
+            f_mosi((out & 0x80U) ? 1U : 0U);
+            out = (uint8_t)(out << 1);
+            f_clk(1);
+            in = (uint8_t)((in << 1) | f_miso());
+            f_clk(0);
+        }
+        return in;
+    }
 
     for (i = 0; i < 8U; i++) {
         f_mosi((out & 0x80U) ? 1U : 0U);
@@ -134,6 +205,11 @@ static uint8_t spi_xfer_byte(uint8_t out)
         f_clk(0);
     }
     return in;
+}
+
+uint8_t spi_flash_bus_rapido(void)
+{
+    return s_rapido;
 }
 #endif
 
@@ -171,10 +247,15 @@ void spi_flash_init(void)
         spi_enable(SPI0);
     }
 #else
+    /* 50 MHz de pendiente y no 2: a 2 MHz un flanco de reloj de 100 ns sale
+     * redondeado y el chip no ve un flanco, ve una rampa. Es un ajuste de
+     * VELOCIDAD DE SUBIDA, no de tension ni de corriente, asi que al tactil
+     * -que comparte estos pines y los clava a su propio ritmo- no le cambia
+     * nada. Ver spi_xfer_byte(). */
     gpio_mode_set(F_SCLK_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, F_SCLK_PIN);
-    gpio_output_options_set(F_SCLK_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_2MHZ, F_SCLK_PIN);
+    gpio_output_options_set(F_SCLK_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, F_SCLK_PIN);
     gpio_mode_set(F_MOSI_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, F_MOSI_PIN);
-    gpio_output_options_set(F_MOSI_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_2MHZ, F_MOSI_PIN);
+    gpio_output_options_set(F_MOSI_PORT, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, F_MOSI_PIN);
     gpio_mode_set(F_MISO_PORT, GPIO_MODE_INPUT, GPIO_PUPD_NONE, F_MISO_PIN);
 #endif
 
@@ -189,6 +270,57 @@ void spi_flash_init(void)
     f_mosi(0);
 #endif
 
+#ifndef CARGADOR_ARRANQUE
+    /*
+     * Y AHORA SE INTENTA IR DEPRISA, COMPROBANDOLO. Ver spi_xfer_byte().
+     *
+     * La prueba es la que de verdad importa: leer DATOS, no solo el
+     * identificador. Un bus al limite falla primero en los bytes largos
+     * -donde el reloj va seguido- y no en los tres bytes del JEDEC, que
+     * llevan un hueco de seleccion delante.
+     *
+     * Se lee el sector cero despacio, se hace su suma, se lee deprisa y se
+     * compara. El sector cero es el de arranque del volumen FAT: existe
+     * siempre y no se escribe aqui, asi que leerlo dos veces no cuesta nada
+     * y no puede estropear nada.
+     */
+    {
+        spi_flash_jedec_id_t id_lento, id_rapido;
+        uint32_t suma_lenta = 0U, suma_rapida = 0U;
+        uint16_t i;
+        uint8_t  trozo[64];
+        uint16_t p;
+
+        s_rapido = 0U;
+        spi_flash_read_jedec_id(&id_lento);
+        for (p = 0U; p < 4096U; p += (uint16_t)sizeof trozo) {
+            spi_flash_read(p, trozo, sizeof trozo);
+            for (i = 0U; i < (uint16_t)sizeof trozo; i++) {
+                suma_lenta = (suma_lenta * 31U) + trozo[i];
+            }
+        }
+
+        s_rapido = 1U;
+        spi_flash_read_jedec_id(&id_rapido);
+        for (p = 0U; p < 4096U; p += (uint16_t)sizeof trozo) {
+            spi_flash_read(p, trozo, sizeof trozo);
+            for (i = 0U; i < (uint16_t)sizeof trozo; i++) {
+                suma_rapida = (suma_rapida * 31U) + trozo[i];
+            }
+        }
+
+        if (suma_lenta != suma_rapida
+            || id_lento.manufacturer_id != id_rapido.manufacturer_id
+            || id_lento.memory_type     != id_rapido.memory_type
+            || id_lento.capacity_code   != id_rapido.capacity_code) {
+            s_rapido = 0U;
+            debug_print("spi_flash: el bus rapido no cuadra - se queda despacio\n");
+        } else {
+            debug_print("spi_flash: bus rapido comprobado y puesto\n");
+        }
+    }
+#endif
+
     debug_print("spi_flash_init: done (bus shared with touch - see header comment)\n");
 }
 
@@ -201,6 +333,41 @@ void spi_flash_read_jedec_id(spi_flash_jedec_id_t *out)
     out->memory_type     = spi_xfer_byte(0x00U);
     out->capacity_code   = spi_xfer_byte(0x00U);
     f_cs(1);
+}
+
+/*
+ * EL NUMERO DE SERIE DEL CHIP - 02/10/2026.
+ *
+ * *** Por el dueño: "no se si la flash externa tiene numero de serie o
+ * algo". *** Lo tiene: los W25Q llevan un identificador de 64 bits grabado
+ * en fabrica, distinto en cada unidad, y se pide con el comando 0x4B. No
+ * es el JEDEC -ese dice el MODELO, y dos chips iguales contestan lo mismo-.
+ *
+ * El protocolo es 0x4B, CUATRO bytes de relleno y luego los ocho del
+ * numero. Los cuatro de relleno no son opcionales ni son "por si acaso":
+ * el chip no empieza a sacar el identificador hasta el pulso 32.
+ *
+ * Devuelve 0 si lo que contesta son ocho bytes todos iguales (0x00 o
+ * 0xFF), que es lo que sale de un chip que no conoce el comando: el bus
+ * se queda flotando o a cero y la respuesta no significa nada. Mejor
+ * decir que no lo dice que enseñar dieciseis efes como si fueran un
+ * numero de serie.
+ */
+uint8_t spi_flash_unique_id(uint8_t out[8])
+{
+    uint8_t i, iguales = 1U;
+
+    f_cs(0);
+    delay_us_approx(1);
+    (void)spi_xfer_byte(CMD_UNIQUE_ID);
+    for (i = 0U; i < 4U; i++) { (void)spi_xfer_byte(0x00U); }
+    for (i = 0U; i < 8U; i++) { out[i] = spi_xfer_byte(0x00U); }
+    f_cs(1);
+
+    for (i = 1U; i < 8U; i++) {
+        if (out[i] != out[0]) { iguales = 0U; break; }
+    }
+    return (iguales && (out[0] == 0x00U || out[0] == 0xFFU)) ? 0U : 1U;
 }
 
 void spi_flash_read(uint32_t addr, uint8_t *buf, uint32_t len)
@@ -317,12 +484,158 @@ static void spi_page_program_send(uint32_t addr, const uint8_t *data)
     f_cs(1);
 }
 
+/*
+ * ¿ESTE BLOQUE YA ESTA BORRADO? - 05/10/2026.
+ *
+ * *** El dueño: "ostia es lentisimo guardando captura". ***
+ *
+ * Un borrado de sector son unos 45 ms de los 130 que cuesta escribir un
+ * bloque, y una captura de pantalla son 189 bloques: ocho segundos y medio
+ * solo borrando. Pero un bloque que ya esta a 0xFF no hace falta borrarlo -
+ * programar solo puede bajar bits, y eso es exactamente lo que garantiza un
+ * borrado-. Y en un pendrive con sitio libre, los bloques que se reservan
+ * estan a 0xFF casi siempre.
+ *
+ * Se sale en el PRIMER byte que no sea 0xFF, asi que en un bloque usado
+ * esto cuesta una lectura de 64 bytes y ya. Solo paga la lectura entera
+ * cuando de verdad se va a ahorrar el borrado.
+ *
+ * Es seguro por construccion: si contesta que si y se equivocara, lo que
+ * saldria es un bloque con bits de mas a cero, y eso lo caza el CRC de
+ * quien lo lea. Pero no puede equivocarse: 0xFF en los 4.096 bytes ES
+ * estar borrado.
+ */
+static uint8_t bloque_ya_borrado(uint32_t addr)
+{
+    uint8_t  t[64];
+    uint32_t off;
+    uint16_t i;
+
+    for (off = 0U; off < FLASH_SECTOR_SIZE; off += (uint32_t)sizeof t) {
+        spi_flash_read(addr + off, t, (uint32_t)sizeof t);
+        for (i = 0U; i < (uint16_t)sizeof t; i++) {
+            if (t[i] != 0xFFU) { return 0U; }
+        }
+    }
+    return 1U;
+}
+
+/*
+ * BORRAR DE 64 kB EN 64 kB - 05/10/2026.
+ *
+ * *** El dueño, de la captura de pantalla: "10 segundos tarda aprox". ***
+ *
+ * Los 10 s eran 189 bloques a 53 ms, y 45 de esos 53 son el borrado del
+ * sector: OCHO SEGUNDOS Y MEDIO borrando y uno y medio escribiendo. Y no
+ * es el bus -ese ya va rapido- sino el chip: un sector de 4 kB tarda 45 ms
+ * TIPICOS en borrarse, por dentro, y durante ese rato no se puede hacer
+ * otra cosa con el.
+ *
+ * Pero el borrado no cuesta por byte, cuesta por operacion: el MISMO chip
+ * borra 64 kB de golpe en 150 ms. Dieciseis sectores sueltos son 720 ms;
+ * el bloque entero, 150. Casi cinco veces menos por la misma superficie.
+ *
+ * Asi que la captura ya no borra bloque a bloque segun escribe: borra TODA
+ * la zona reservada antes de empezar, en trozos lo mas grandes que quepan,
+ * y luego solo programa. 768 kB son once o doce borrados de 64 kB mas los
+ * sectores sueltos de los dos bordes, porque la zona no tiene por que
+ * empezar ni acabar en un limite de 64 kB.
+ *
+ * EL BORDE ES LO QUE IMPORTA Y POR ESO NO SE REDONDEA: un borrado de 64 kB
+ * se lleva por delante los 64 kB enteros, y si la zona reservada empieza a
+ * la mitad de uno, la otra mitad es de otro fichero. Por eso un trozo
+ * grande solo se usa cuando CABE ENTERO dentro de lo nuestro, y los bordes
+ * van sector a sector.
+ */
+static const struct {
+    uint32_t tam;
+    uint8_t  cmd;
+} k_borra[] = {
+    { 65536U, CMD_BLOCK_ERASE_64K },
+    {  4096U, CMD_SECTOR_ERASE_4K },
+};
+
+static void borrado_manda(uint8_t cmd, uint32_t addr)
+{
+    spi_write_enable();
+    f_cs(0);
+    delay_us_approx(1);
+    (void)spi_xfer_byte(cmd);
+    (void)spi_xfer_byte((uint8_t)(addr >> 16));
+    (void)spi_xfer_byte((uint8_t)(addr >> 8));
+    (void)spi_xfer_byte((uint8_t)(addr));
+    f_cs(1);
+    spi_wait_busy();
+}
+
+/* ¿Esta ya a 0xFF toda esta zona? Se sale en el primer byte que no lo
+ * este, asi que en una zona usada cuesta una lectura de 64 bytes. Solo
+ * paga la lectura entera cuando de verdad se va a ahorrar el borrado -y
+ * leer 64 kB rapido son unos 26 ms contra los 150 del borrado-. */
+static uint8_t zona_ya_borrada(uint32_t addr, uint32_t tam)
+{
+    uint8_t  t[64];
+    uint32_t off;
+    uint16_t i;
+
+    for (off = 0U; off < tam; off += (uint32_t)sizeof t) {
+        spi_flash_read(addr + off, t, (uint32_t)sizeof t);
+        for (i = 0U; i < (uint16_t)sizeof t; i++) {
+            if (t[i] != 0xFFU) { return 0U; }
+        }
+    }
+    return 1U;
+}
+
+uint8_t spi_flash_borrado_paso(uint32_t *cursor, uint32_t fin)
+{
+    uint32_t a;
+    uint8_t  k;
+
+    if (cursor == 0 || *cursor >= fin) { return 0U; }
+
+    a = *cursor & ~(uint32_t)(FLASH_SECTOR_SIZE - 1U);
+    for (k = 0U; k < (uint8_t)(sizeof k_borra / sizeof k_borra[0]); k++) {
+        uint32_t tam = k_borra[k].tam;
+
+        if ((a % tam) != 0U)   { continue; }   /* no empieza en su limite */
+        if ((a + tam) > fin)   { continue; }   /* se saldria de lo nuestro */
+        if (!zona_ya_borrada(a, tam)) {
+            borrado_manda(k_borra[k].cmd, a);
+        }
+        *cursor = a + tam;
+        return 1U;
+    }
+
+    /* No cabe ni un sector entero: lo que queda es menos de 4 kB, que no
+     * se puede borrar por separado. No deberia pasar -las reservas van por
+     * bloques de 4 kB- pero si pasara, se da por hecho. */
+    *cursor = fin;
+    return 0U;
+}
+
+/* Programa un bloque DANDO POR HECHO que esta borrado, sin comprobarlo ni
+ * borrarlo. Es para quien ya ha preparado la zona entera con
+ * spi_flash_borrado_paso(): comprobar los 4.096 bytes de cada bloque otra
+ * vez serian 4 ms por bloque, casi un segundo en una captura. */
+void spi_flash_write_block_4k_borrado(uint32_t block_addr, const uint8_t *data4k)
+{
+    uint32_t off;
+    uint32_t aligned = block_addr & ~(uint32_t)(FLASH_SECTOR_SIZE - 1U);
+
+    for (off = 0U; off < FLASH_SECTOR_SIZE; off += FLASH_PAGE_SIZE) {
+        spi_flash_page_program(aligned + off, data4k + off, FLASH_PAGE_SIZE);
+    }
+}
+
 void spi_flash_write_block_4k(uint32_t block_addr, const uint8_t *data4k)
 {
     uint32_t off;
     uint32_t aligned = block_addr & ~(uint32_t)(FLASH_SECTOR_SIZE - 1U);
 
-    spi_flash_sector_erase_4k(aligned);
+    if (!bloque_ya_borrado(aligned)) {
+        spi_flash_sector_erase_4k(aligned);
+    }
     for (off = 0U; off < FLASH_SECTOR_SIZE; off += FLASH_PAGE_SIZE) {
         spi_flash_page_program(aligned + off, data4k + off, FLASH_PAGE_SIZE);
     }
@@ -470,6 +783,23 @@ void spi_flash_block_read_modify_write(uint32_t any_addr_in_block,
      * la pila y por eso la pila se salia. Ahora es el borrador comun. */
     uint32_t block_addr = any_addr_in_block & ~(uint32_t)(FLASH_SECTOR_SIZE - 1U);
     uint32_t i;
+
+    /*
+     * QUE NO SE SALGA DEL BORRADOR - 02/10/2026. Esto escribe en
+     * s_sector[modify_offset_in_block + i] sin mirar, y el que llama pone
+     * los dos numeros a mano. Mientras el area de datos empezaba siempre
+     * en frontera de 4 kB nadie se pasaba; al admitir volumenes donde no
+     * es asi, un trozo a caballo de dos bloques si se pasaria, y se
+     * llevaria por delante lo que haya detras del borrador en .bss.
+     * Los que pueden cruzar frontera pasan ahora por
+     * escribe_datos_fichero(), que parte el trabajo; esto es la red por
+     * si queda alguno sin convertir, y se queja en vez de callarse.
+     */
+    if ((modify_offset_in_block + new_len) > (uint32_t)FLASH_SECTOR_SIZE) {
+        debug_print("spi_flash_block_read_modify_write: el trozo se sale del bloque - recortado\n");
+        if (modify_offset_in_block >= (uint32_t)FLASH_SECTOR_SIZE) { return; }
+        new_len = (uint32_t)FLASH_SECTOR_SIZE - modify_offset_in_block;
+    }
 
     if (!borrador_coge(BORRADOR_SECTOR)) {
         return;
@@ -640,10 +970,15 @@ void spi_flash_probe_dump(void)
  * haciendolo bien desde siempre: lee el sector de arranque.
  *
  * ASI QUE AHORA SE LEE. Y sobre todo: SE COMPRUEBA. Este driver no sabe
- * manejar cualquier FAT12 -da por hecho sectores de 512 bytes, un sector
- * por cluster (de ahi que un bloque de borrado sean 8 clusters justos) y
- * dos copias de la FAT- asi que lo que hace es mirar si la que hay es una
- * de las que sabe. Si lo es, escribe. Si no, NO ESCRIBE y lo dice.
+ * manejar cualquier FAT12 -da por hecho sectores de 512 bytes y dos
+ * copias de la FAT- asi que lo que hace es mirar si la que hay es una de
+ * las que sabe. Si lo es, escribe. Si no, NO ESCRIBE y lo dice.
+ *
+ * El cluster SI puede ser de 512, 1024, 2048 o 4096 bytes desde el
+ * 02/10/2026, que es cuando el dueño soldo un chip de 8 MB y Windows
+ * eligio 2048 por su cuenta. Lo unico que se le pide es que divida al
+ * bloque de borrado y que el area de datos empiece en un numero entero
+ * de clusters -ver CLUSTER_ALI-.
  *
  * Un driver que se niega es reparable. Uno que corrompe en silencio, no.
  */
@@ -664,6 +999,7 @@ typedef struct {
     uint32_t raiz_lba;
     uint32_t datos_lba;
     uint32_t clusters;
+    uint32_t c_ali;       /* primer cluster que cae en frontera de 4 kB */
     uint8_t  porque;      /* si no vale, cual de las comprobaciones fallo */
 } fat_geo_t;
 
@@ -721,8 +1057,9 @@ enum {
     GEO_SECTOR,       /* sectores que no son de 512 bytes */
     GEO_CLUSTER,      /* mas de un sector por cluster */
     GEO_COPIAS,       /* no son dos copias de la FAT */
-    GEO_FAT_GRANDE,   /* la FAT no cabe en el buffer de pila */
-    GEO_DESALINEADO   /* los datos no empiezan en frontera de bloque de borrado */
+    GEO_FAT_GRANDE,   /* mas clusters de los que cabe una FAT12 */
+    GEO_FAT_CORTA,    /* la FAT declarada no da para los clusters que hay */
+    GEO_DESALINEADO   /* ningun cluster cae en frontera de bloque de borrado */
 };
 
 /* Las constantes de antes, ahora mirando a lo que se leyo. Se mantienen los
@@ -731,15 +1068,111 @@ enum {
 #define FAT1_LBA            (geo()->res)
 #define FAT_SECTORS         (geo()->fat_sec)
 #define FAT_BYTES           ((uint32_t)geo()->fat_sec * geo()->bps)
+/*
+ * LO QUE DE VERDAD SE USA DE LA FAT, QUE NO ES LO MISMO - 02/10/2026.
+ *
+ * *** Encontrado probando que chip mas grande se le puede poner a la
+ * radio: con 15 MB y clusters de 4 kB, un volumen FAT12 perfectamente
+ * legal, el driver contestaba "FAT demasiado grande" y se negaba. ***
+ *
+ * El fallo era mio, de esta misma mañana. Dimensione el borrador por el
+ * maximo que una FAT12 NECESITA -4084 clusters, 6.129 bytes- y luego
+ * comprobe contra el tamaño que el volumen DECLARA. Y no son lo mismo: el
+ * que formatea puede reservar mas sectores de FAT de los que hacen falta,
+ * y es legal. mkfs.fat, en ese volumen, reserva 8.192 bytes para una tabla
+ * que solo usa 5.750. El resto son ceros que no describen ningun cluster
+ * porque no hay tantos clusters.
+ *
+ * Asi que lo que se mide es esto: los bytes que ocupan las entradas que
+ * EXISTEN -los clusters del volumen mas las dos reservadas, a dos entradas
+ * por cada tres bytes-. Eso es lo que se lee al borrador y lo que se
+ * vuelca; de lo que haya detras no depende nada, y sobre todo no se toca.
+ *
+ * Con el tope de 4084 clusters que se comprueba en geo_lee(), esto no
+ * puede pasar de 6.129 bytes NUNCA, mida lo que mida la tabla declarada.
+ */
+#define FAT_UTIL            ((((uint32_t)geo()->clusters + 2UL) * 3UL + 1UL) / 2UL)
 #define DATA_START_SECTOR   (geo()->datos_lba)
 #define DATA_CLUSTER_COUNT  (geo()->clusters)
-#define CLUSTERS_PER_BLOCK  (FLASH_SECTOR_SIZE / SECTOR_BYTES) /* 8 - exige 1 sector/cluster, comprobado en geo_lee() */
+/* Cuantos clusters entran en un bloque de borrado de 4 kB. Con clusters de
+ * 512 son 8, con los de 4096 es 1. geo_lee() ya ha comprobado que la
+ * division es exacta, asi que esto nunca vale cero. */
+#define CLUSTER_BYTES       ((uint32_t)geo()->spc * geo()->bps)
+#define CLUSTERS_PER_BLOCK  (FLASH_SECTOR_SIZE / CLUSTER_BYTES)
+/* El sector donde empieza el cluster `c`. Un solo sitio, porque antes esta
+ * cuenta estaba escrita a mano en ocho y todas daban por hecho spc = 1. */
+#define SECTOR_DE_CLUSTER(c)  (DATA_START_SECTOR + (((uint32_t)(c) - 2UL) * geo()->spc))
+/*
+ * EL PRIMER CLUSTER QUE CAE EN FRONTERA DE BLOQUE DE BORRADO - 02/10/2026.
+ *
+ * Esto reserva de bloque en bloque: un grupo de CLUSTERS_PER_BLOCK
+ * clusters seguidos que ademas ocupe un bloque de 4 kB JUSTO, porque el
+ * borrado va por bloques y porque spi_flash_write_block_4k() hace
+ * `& ~4095` -o sea que si el grupo no empieza en frontera, los bytes se
+ * van al bloque de al lado-.
+ *
+ * Hasta ahora el primer cluster era SIEMPRE el 2, porque se exigia que el
+ * area de datos empezara en frontera. Formateando 7 MB con lo que Windows
+ * elige por su cuenta no empieza: los datos arrancan en el byte 30.720,
+ * que es frontera de 2 kB y no de 4. Pero eso NO quiere decir que no haya
+ * grupos alineados; quiere decir que el primero no es el cluster 2, es el
+ * 3. A partir de ahi, uno de cada CLUSTERS_PER_BLOCK.
+ *
+ * O sea que el arreglo no es relajar la regla del borrado -eso si
+ * corrompe-: es dejar de dar por hecho DONDE empieza el primer grupo. El
+ * bucle de reserva es el mismo, cambiando el 2 por esto.
+ */
+#define CLUSTER_ALI           (geo()->c_ali)
 
 /* El directorio raiz tambien sale del sector de arranque - ver geo_lee(). */
 #define ROOT_DIR_LBA           (geo()->raiz_lba)
 /* Se queda FIJO en 512: dimensiona buffers de pila y geo_lee() se niega a
  * trabajar con cualquier otro tamaño de sector. */
 #define ROOT_DIR_SECTOR_BYTES  SECTOR_BYTES
+
+/*
+ * EL DIRECTORIO RAIZ ENTERO, NO SU PRIMER SECTOR - 05/10/2026.
+ *
+ * *** El dueño: "ahora mismo me pone: no cabe directorio lleno" ... "y es
+ * mentira" ... "en el usb solo tengo un config.csv de 2kb". ***
+ *
+ * Y era mentira. Todos los recorridos del directorio raiz de este fichero
+ * leian UN sector -dieciseis entradas- y daban por hecho que ahi se acababa
+ * la raiz. Pero el sector de arranque dice cuantas entradas tiene, y lo que
+ * pone Windows al formatear son 224 o 512: catorce o treinta y dos
+ * sectores. Estabamos mirando una treintaidosava parte del directorio y
+ * diciendo "lleno" cuando se acababa ESA.
+ *
+ * Con un volumen recien formateado no se notaba -los huecos caen en el
+ * primer sector-, y con un volumen con historia se nota de la peor manera:
+ * "directorio lleno" con un fichero dentro.
+ *
+ * raiz_ent sale del sector de arranque y geo_lee() ya lo lee. El minimo de
+ * uno es por si un volumen raro dijera cero: mejor mirar un sector que
+ * ninguno.
+ */
+static uint32_t raiz_sectores(void);
+#define ROOT_DIR_SECTORS       raiz_sectores()
+#define ROOT_DIR_BYTES         (raiz_sectores() * ROOT_DIR_SECTOR_BYTES)
+/* Donde empieza la raiz en el chip. RAIZ_OFF, mas abajo, es lo mismo; vive
+ * alli por historia y se deja para no tocar sus usos. */
+#define RAIZ_ABS               (ROOT_DIR_LBA * ROOT_DIR_SECTOR_BYTES)
+
+/*
+ * Sectores por cluster del volumen. 0 si no se ha podido leer.
+ *
+ * Va aparte y no dentro de spi_flash_geometria() para no cambiarle la
+ * firma a una funcion que llaman el cargador, la pantalla del arranque y
+ * dos bancos. Lo necesita User/cargador.c, que recorre la cadena de
+ * clusters por su cuenta.
+ */
+uint8_t spi_flash_spc(void)
+{
+    const fat_geo_t *g = geo();
+
+    if (g == (const fat_geo_t *)0 || !g->vale) { return 0U; }
+    return g->spc;
+}
 
 uint8_t spi_flash_geometria(uint32_t *fat1_lba, uint32_t *raiz_lba,
                             uint32_t *datos_lba, uint32_t *clusters)
@@ -754,6 +1187,14 @@ uint8_t spi_flash_geometria(uint32_t *fat1_lba, uint32_t *raiz_lba,
     return 1U;
 }
 
+
+static uint32_t raiz_sectores(void)
+{
+    uint32_t ent = (uint32_t)geo()->raiz_ent;
+    uint32_t n = (ent * 32UL + (ROOT_DIR_SECTOR_BYTES - 1UL)) / ROOT_DIR_SECTOR_BYTES;
+
+    return (n == 0UL) ? 1UL : n;
+}
 
 void spi_flash_probe_root_dir(void)
 {
@@ -822,9 +1263,26 @@ void spi_flash_probe_root_dir(void)
  * Las cuatro exigencias no son capricho, cada una sujeta codigo concreto:
  *
  *   sectores de 512      dimensiona todos los buffers de pila del fichero
- *   1 sector por cluster CLUSTERS_PER_BLOCK vale 8 por eso; con 2 o 4, un
- *                        bloque de borrado dejaria de ser un numero entero
- *                        de clusters y todo el reparto se cae
+ *   cluster de 512 a     *** 02/10/2026: antes aqui se exigia 1 sector por
+ *   4096, potencia de    cluster y Windows no siempre formatea asi. El
+ *   dos y divisor de     dueño, con razon: "no quiero ñapas de tener que
+ *   4096                 formatear". ***
+ *
+ *                        Lo que de verdad sujeta esto es que un bloque de
+ *                        borrado de 4 kB sea un numero ENTERO de clusters,
+ *                        para que reservar un bloque sea reservar clusters
+ *                        completos y borrarlo no se lleve al vecino. Eso lo
+ *                        cumplen 512, 1024, 2048 y 4096 - no solo 512-.
+ *
+ *                        Y 4096 es ademas el caso bonito: un cluster = un
+ *                        bloque de borrado, o sea que dos ficheros no
+ *                        pueden compartir bloque nunca. Es el que elige
+ *                        Windows para los volumenes grandes.
+ *
+ *                        De paso sube el techo: con clusters de 4 kB, una
+ *                        FAT12 llega a 16 MB. Con los de 512 se quedaba en
+ *                        1,3 MB, que es lo que hizo falta descubrir a base
+ *                        de que no cupiera un disco de 7.
  *   2 copias de la FAT   fat_vuelca() escribe exactamente dos
  *   datos alineados a    spi_flash_reserva() entrega direcciones de bloque
  *   4 kB                 de borrado; si el area de datos no empieza en una
@@ -867,11 +1325,23 @@ static uint8_t geo_lee(void)
 
     /* Y ahora, si es una de las que sabemos. */
     if (s_geo.bps != SECTOR_BYTES)          { s_geo.porque = GEO_SECTOR;   return 0U; }
-    if (s_geo.spc != 1U)                    { s_geo.porque = GEO_CLUSTER;  return 0U; }
-    if (s_geo.nfat != 2U)                   { s_geo.porque = GEO_COPIAS;   return 0U; }
-    if (((uint32_t)s_geo.fat_sec * s_geo.bps) > FAT_BYTES_MAX) {
-        s_geo.porque = GEO_FAT_GRANDE;      return 0U;
+    /*
+     * El cluster tiene que ser potencia de dos, no pasar del bloque de
+     * borrado y dividirlo exacto. Se comprueba sobre el TAMAÑO en bytes y
+     * no sobre spc, que es lo que de verdad importa: con sectores de 512
+     * son spc de 1, 2, 4 u 8.
+     */
+    {
+        uint32_t cl = (uint32_t)s_geo.spc * s_geo.bps;
+
+        if (cl == 0UL || cl > FLASH_SECTOR_SIZE
+            || (cl & (cl - 1UL)) != 0UL
+            || (FLASH_SECTOR_SIZE % cl) != 0UL) {
+            s_geo.porque = GEO_CLUSTER;
+            return 0U;
+        }
     }
+    if (s_geo.nfat != 2U)                   { s_geo.porque = GEO_COPIAS;   return 0U; }
 
     s_geo.raiz_lba  = (uint32_t)s_geo.res + ((uint32_t)s_geo.nfat * s_geo.fat_sec);
     datos_ent       = ((uint32_t)s_geo.raiz_ent * 32UL + s_geo.bps - 1UL) / s_geo.bps;
@@ -879,8 +1349,65 @@ static uint8_t geo_lee(void)
     if (s_geo.datos_lba >= s_geo.sectores) { return 0U; }
     s_geo.clusters  = (s_geo.sectores - s_geo.datos_lba) / s_geo.spc;
 
-    if (((s_geo.datos_lba * s_geo.bps) & (FLASH_SECTOR_SIZE - 1U)) != 0U) {
+    /*
+     * Y QUE SEA FAT12 DE VERDAD - 02/10/2026. Hasta ahora esto no se
+     * miraba: lo tapaba sin querer el tope del borrador, que con clusters
+     * de 512 saltaba antes. Con clusters grandes ya no, asi que se dice
+     * explicitamente. Por encima de 4084 clusters el formato ES OTRO
+     * -FAT16, entradas de 16 bits- y leer una FAT16 como si fuera FAT12
+     * no da error: da clusters equivocados. Mejor negarse.
+     */
+    if (s_geo.clusters > 4084UL) {
+        s_geo.porque = GEO_FAT_GRANDE;      return 0U;
+    }
+    /*
+     * Y AHORA SI, EL TAMAÑO: sobre lo que las entradas OCUPAN, no sobre lo
+     * que el volumen declara. Ver FAT_UTIL - esta distincion es la que me
+     * faltaba esta mañana y por la que un volumen de 15 MB legal se
+     * rechazaba.
+     *
+     * Con el tope de 4084 clusters de arriba esto no puede saltar. Se deja
+     * porque las dos cuentas son independientes: si alguien toca una, la
+     * otra lo caza en vez de desbordar el borrador en silencio.
+     */
+    {
+        uint32_t util = ((s_geo.clusters + 2UL) * 3UL + 1UL) / 2UL;
+
+        if (util > FAT_BYTES_MAX) {
+            s_geo.porque = GEO_FAT_GRANDE;  return 0U;
+        }
+        /* Y al reves: una FAT declarada MAS CORTA de lo que hacen falta
+         * para sus propios clusters es un volumen que no cuadra consigo
+         * mismo. Reservar de mas es legal; reservar de menos, no. */
+        if (((uint32_t)s_geo.fat_sec * s_geo.bps) < util) {
+            s_geo.porque = GEO_FAT_CORTA;   return 0U;
+        }
+    }
+
+    /*
+     * Que ALGUN cluster caiga en frontera de bloque de borrado. Antes se
+     * exigia que cayera el primero -o sea que el area de datos empezara
+     * en frontera-, y eso dejaba fuera el formato que Windows propone
+     * solo para 7 MB. Lo que de verdad hace falta es mas flojo: como el
+     * cluster divide al bloque, hay alineados si y solo si el area de
+     * datos empieza en un numero entero de clusters. Ver CLUSTER_ALI.
+     */
+    if ((s_geo.datos_lba % s_geo.spc) != 0U) {
         s_geo.porque = GEO_DESALINEADO;     return 0U;
+    }
+    {
+        uint32_t c;
+        uint32_t cpb = (uint32_t)FLASH_SECTOR_SIZE / ((uint32_t)s_geo.spc * s_geo.bps);
+
+        s_geo.c_ali = 0UL;
+        for (c = 2UL; c < (2UL + cpb); c++) {
+            uint32_t by = (s_geo.datos_lba + ((c - 2UL) * s_geo.spc)) * s_geo.bps;
+            if ((by & (uint32_t)(FLASH_SECTOR_SIZE - 1U)) == 0U) { s_geo.c_ali = c; break; }
+        }
+        /* La comprobacion de arriba dice que tiene que haberlo; si no lo
+         * hay es que me he equivocado en la cuenta, y entonces no se
+         * escribe. */
+        if (s_geo.c_ali == 0UL) { s_geo.porque = GEO_DESALINEADO; return 0U; }
     }
 
     s_geo.porque = GEO_OK;
@@ -895,9 +1422,10 @@ const char *spi_flash_geo_txt(void)
     case GEO_OK:          return tr("se puede escribir", "writable");
     case GEO_NO_ES_FAT:   return tr("no es un FAT12", "not a FAT12");
     case GEO_SECTOR:      return tr("sector no es de 512", "sector is not 512");
-    case GEO_CLUSTER:     return tr("cluster de varios sec", "multi-sector cluster");
+    case GEO_CLUSTER:     return tr("cluster que no vale", "bad cluster size");
     case GEO_COPIAS:      return tr("no hay 2 copias FAT", "no 2 FAT copies");
     case GEO_FAT_GRANDE:  return tr("FAT demasiado grande", "FAT too large");
+    case GEO_FAT_CORTA:   return tr("la FAT se queda corta", "FAT too short");
     case GEO_DESALINEADO: return tr("datos sin alinear", "data not aligned");
     default:              return tr("sin mirar", "not checked");
     }
@@ -957,7 +1485,7 @@ static void probe_fat_scan_interno(spi_flash_fat_scan_t *out)
     out->free_block_first_cluster = 0U;
     out->free_block_byte_addr = 0U;
 
-    spi_flash_read(FAT1_LBA * ROOT_DIR_SECTOR_BYTES, fat, sizeof(fat));
+    spi_flash_read(FAT1_LBA * ROOT_DIR_SECTOR_BYTES, fat, FAT_UTIL);
 
     /*
      * *** 01/09/2026, added alongside dir_find_end_marker_offset()'s
@@ -978,7 +1506,7 @@ static void probe_fat_scan_interno(spi_flash_fat_scan_t *out)
      * redefining what 0xFFF means in general.
      */
     fat_is_blank = 1U;
-    for (cluster = 0U; cluster < sizeof(fat); cluster++) {
+    for (cluster = 0U; cluster < FAT_UTIL; cluster++) {
         if (fat[cluster] != 0xFFU) {
             fat_is_blank = 0U;
             break;
@@ -999,12 +1527,19 @@ static void probe_fat_scan_interno(spi_flash_fat_scan_t *out)
                      "every cluster counted free\n");
     }
 
-    /* Data sector 48 is itself 4KB-block-aligned (48/8=6), so cluster
-     * 2 starts exactly on a block boundary and every CLUSTERS_PER_BLOCK
-     * clusters after that is one more whole block - see spi_flash.h's
-     * comment. */
-    for (block_idx = 0U; block_idx < (DATA_CLUSTER_COUNT / CLUSTERS_PER_BLOCK); block_idx++) {
-        uint32_t first_cluster = 2U + (block_idx * CLUSTERS_PER_BLOCK);
+    /*
+     * Grupos de CLUSTERS_PER_BLOCK clusters seguidos que ocupan un bloque
+     * de borrado JUSTO. Aqui ponia 2U, porque el area de datos empezaba
+     * siempre en frontera de 4 kB y entonces el primer grupo es el que
+     * empieza en el cluster 2. Con el formato que Windows propone para
+     * 7 MB no empieza ahi, pero haber hay: el primero es el que dice
+     * CLUSTER_ALI, y a partir de el uno de cada CLUSTERS_PER_BLOCK, igual
+     * que siempre. Ver el comentario de CLUSTER_ALI.
+     */
+    for (block_idx = 0U;
+         block_idx < ((DATA_CLUSTER_COUNT + 2U - CLUSTER_ALI) / CLUSTERS_PER_BLOCK);
+         block_idx++) {
+        uint32_t first_cluster = CLUSTER_ALI + (block_idx * CLUSTERS_PER_BLOCK);
         uint8_t all_free = 1U;
         uint32_t c;
 
@@ -1015,7 +1550,7 @@ static void probe_fat_scan_interno(spi_flash_fat_scan_t *out)
             }
         }
         if (all_free) {
-            uint32_t first_data_sector = DATA_START_SECTOR + (first_cluster - 2U);
+            uint32_t first_data_sector = SECTOR_DE_CLUSTER(first_cluster);
             out->found_free_block = 1U;
             out->free_block_first_cluster = first_cluster;
             out->free_block_byte_addr = first_data_sector * ROOT_DIR_SECTOR_BYTES;
@@ -1098,18 +1633,17 @@ static void fat12_pack_entry(uint8_t *existing, uint32_t byte_off, uint32_t clus
  * consistent - see this function's caller). All entries for one
  * allocation are guaranteed to land in a SINGLE 4KB FAT block here
  * (num_clusters <= CLUSTERS_PER_BLOCK, and first_cluster always comes
- * from a spi_flash_probe_fat_scan() block boundary), so one
- * read-modify-write is enough regardless of chain length. */
+ * from a spi_flash_probe_fat_scan() block boundary), but the FAT itself
+ * does not have to start on one, so the write goes through
+ * escribe_datos_fichero() in case those few bytes straddle two. */
 static void fat_write_chain(uint32_t fat_start_lba, uint32_t first_cluster, uint32_t num_clusters)
 {
-    uint8_t buf[32]; /* generous upper bound for CLUSTERS_PER_BLOCK=8 worth of packed 12-bit entries */
+    uint8_t buf[32]; /* de sobra: CLUSTERS_PER_BLOCK son 8 como mucho (clusters de 512), o sea 13 bytes */
     uint32_t first_entry_off = first_cluster + (first_cluster / 2U);
     uint32_t last_cluster = first_cluster + num_clusters - 1U;
     uint32_t last_entry_off = last_cluster + (last_cluster / 2U) + 1U; /* +1: include the 2nd byte of the last entry's packed pair */
     uint32_t span_bytes = last_entry_off - first_entry_off + 1U;
     uint32_t abs_addr = (fat_start_lba * ROOT_DIR_SECTOR_BYTES) + first_entry_off;
-    uint32_t block_addr = abs_addr & ~(uint32_t)(FLASH_SECTOR_SIZE - 1U);
-    uint32_t off_in_block = abs_addr - block_addr;
     uint32_t i;
 
     spi_flash_read(abs_addr, buf, span_bytes);
@@ -1118,7 +1652,11 @@ static void fat_write_chain(uint32_t fat_start_lba, uint32_t first_cluster, uint
         uint16_t value = ((i + 1U) < num_clusters) ? (uint16_t)(cluster + 1U) : 0x0FFFU; /* EOC on the last cluster of the chain */
         fat12_pack_entry(buf, (cluster + cluster / 2U) - first_entry_off, cluster, value);
     }
-    spi_flash_block_read_modify_write(abs_addr, off_in_block, buf, span_bytes);
+    /* Por escribe_datos_fichero() y no por block_read_modify_write() a
+     * secas: trece bytes son pocos, pero pueden caer a caballo de dos
+     * bloques de borrado -la FAT no empieza en frontera-, y entonces el
+     * read-modify-write escribiria fuera del borrador. Esto lo parte. */
+    escribe_datos_fichero(abs_addr, buf, span_bytes);
 }
 
 /* Finds the first end-of-directory marker in the root directory's
@@ -1171,11 +1709,16 @@ static void fat_write_chain(uint32_t fat_start_lba, uint32_t first_cluster, uint
 static int dir_find_end_marker_offset(uint32_t *out_offset, uint8_t *out_needs_terminator)
 {
     uint8_t sector[ROOT_DIR_SECTOR_BYTES];
-    uint32_t i;
+    uint32_t i, sec;
     uint32_t deleted_offset = 0U;
     uint8_t have_deleted = 0U;
+    uint32_t nsec = ROOT_DIR_SECTORS;
 
-    spi_flash_read(ROOT_DIR_LBA * ROOT_DIR_SECTOR_BYTES, sector, sizeof(sector));
+    /* La raiz ENTERA, sector a sector. Ver ROOT_DIR_SECTORS. Los offsets que
+     * salen de aqui son desde el principio de la raiz, no desde el principio
+     * del sector, que es lo que esperan los que escriben en RAIZ_OFF + off. */
+    for (sec = 0U; sec < nsec; sec++) {
+    spi_flash_read((ROOT_DIR_LBA + sec) * ROOT_DIR_SECTOR_BYTES, sector, sizeof(sector));
     for (i = 0U; i < (sizeof(sector) / 32U); i++) {
         if ((sector[i * 32U] == 0x00U) || (sector[i * 32U] == 0xFFU)) {
             /*
@@ -1199,22 +1742,34 @@ static int dir_find_end_marker_offset(uint32_t *out_offset, uint8_t *out_needs_t
              * del usuario -o el update4.bin, que es el unico camino que hay
              * para meter firmware en esta radio-. A ese precio no se apuesta.
              */
+            uint32_t aqui = (sec * ROOT_DIR_SECTOR_BYTES) + (i * 32U);
             uint32_t sig = (i + 1U) * 32U;
-            uint8_t  libre_detras =
-                (sig >= sizeof(sector)) ||
-                (sector[sig] == 0x00U) || (sector[sig] == 0xFFU) ||
-                (sector[sig] == 0xE5U);
+            uint8_t  b;
+            uint8_t  libre_detras;
 
-            *out_offset = i * 32U;
+            if (sig < sizeof(sector)) {
+                b = sector[sig];
+            } else if ((aqui + 32U) >= ROOT_DIR_BYTES) {
+                b = 0x00U;                 /* no hay "detras": es el final */
+            } else {
+                /* La entrada siguiente cae en el sector siguiente. Un byte
+                 * suelto y no otro sector entero: esto pasa una vez por
+                 * busqueda, y solo cuando el hueco cae justo en el borde. */
+                spi_flash_read(RAIZ_ABS + aqui + 32U, &b, 1U);
+            }
+            libre_detras = (uint8_t)((b == 0x00U) || (b == 0xFFU) || (b == 0xE5U));
+
+            *out_offset = aqui;
             *out_needs_terminator = (uint8_t)(libre_detras ? 1U : 0U);
             return 1;
         }
         if ((sector[i * 32U] == 0xE5U) && !have_deleted) {
-            deleted_offset = i * 32U; /* remember the FIRST one - matches this
-                                        * driver's existing "earliest usable
-                                        * slot" preference elsewhere */
-            have_deleted = 1U;
+            deleted_offset = (sec * ROOT_DIR_SECTOR_BYTES) + (i * 32U);
+            have_deleted = 1U;            /* el PRIMERO: misma preferencia de
+                                           * "la ranura mas temprana" que el
+                                           * resto del driver */
         }
+    }
     }
     if (have_deleted) {
         *out_offset = deleted_offset;
@@ -1232,16 +1787,19 @@ static int dir_find_entry(const char name8[8], const char ext3[3],
                            uint32_t *out_dir_off, uint16_t *out_first_cluster, uint32_t *out_size)
 {
     uint8_t sector[ROOT_DIR_SECTOR_BYTES];
-    uint32_t i;
+    uint32_t i, sec;
+    uint32_t nsec = ROOT_DIR_SECTORS;
 
-    spi_flash_read(ROOT_DIR_LBA * ROOT_DIR_SECTOR_BYTES, sector, sizeof(sector));
+    /* La raiz ENTERA. Ver ROOT_DIR_SECTORS. */
+    for (sec = 0U; sec < nsec; sec++) {
+    spi_flash_read((ROOT_DIR_LBA + sec) * ROOT_DIR_SECTOR_BYTES, sector, sizeof(sector));
     for (i = 0U; i < (sizeof(sector) / 32U); i++) {
         const uint8_t *e = &sector[i * 32U];
         uint8_t match;
         uint32_t j;
 
         if (e[0] == 0x00U) {
-            break;
+            return 0;
         }
         if ((e[0] == 0xE5U) || (e[11] == 0x0FU) || ((e[11] & 0x18U) != 0U)) {
             continue;
@@ -1256,10 +1814,11 @@ static int dir_find_entry(const char name8[8], const char ext3[3],
         if (!match) {
             continue;
         }
-        *out_dir_off = i * 32U;
+        *out_dir_off = (sec * ROOT_DIR_SECTOR_BYTES) + (i * 32U);
         *out_first_cluster = (uint16_t)(e[26] | ((uint16_t)e[27] << 8));
         *out_size = (uint32_t)e[28] | ((uint32_t)e[29] << 8) | ((uint32_t)e[30] << 16) | ((uint32_t)e[31] << 24);
         return 1;
+    }
     }
     return 0;
 }
@@ -1277,8 +1836,6 @@ static void fat_free_chain(uint32_t fat_start_lba, uint32_t first_cluster, uint3
     uint32_t last_entry_off = last_cluster + (last_cluster / 2U) + 1U;
     uint32_t span_bytes = last_entry_off - first_entry_off + 1U;
     uint32_t abs_addr = (fat_start_lba * ROOT_DIR_SECTOR_BYTES) + first_entry_off;
-    uint32_t block_addr = abs_addr & ~(uint32_t)(FLASH_SECTOR_SIZE - 1U);
-    uint32_t off_in_block = abs_addr - block_addr;
     uint32_t i;
 
     spi_flash_read(abs_addr, buf, span_bytes);
@@ -1286,7 +1843,7 @@ static void fat_free_chain(uint32_t fat_start_lba, uint32_t first_cluster, uint3
         uint32_t cluster = first_cluster + i;
         fat12_pack_entry(buf, (cluster + cluster / 2U) - first_entry_off, cluster, 0x0000U);
     }
-    spi_flash_block_read_modify_write(abs_addr, off_in_block, buf, span_bytes);
+    escribe_datos_fichero(abs_addr, buf, span_bytes);   /* ver fat_write_chain() */
 }
 
 /* Shared tail for both spi_flash_write_new_file() and
@@ -1297,12 +1854,22 @@ static void fat_free_chain(uint32_t fat_start_lba, uint32_t first_cluster, uint3
  * set (a BRAND NEW entry needs one; an entry being overwritten in
  * place does not, since whatever terminator already followed it is
  * still correct). */
+/*
+ * UN CLUSTER YA NO SON 512 BYTES - 02/10/2026.
+ *
+ * Todas estas cuentas decian ROOT_DIR_SECTOR_BYTES, que vale 512, porque
+ * hasta ahora el driver exigia un sector por cluster y las dos cosas
+ * coincidian. Al admitir clusters de 1, 2 y 4 kB dejan de coincidir, y
+ * una cuenta de clusters hecha con 512 no falla con estruendo: escribe
+ * CUATRO VECES mas clusters de los que el fichero ocupa, encadenandolos
+ * encima de los del vecino. Cada sitio lleva ahora CLUSTER_BYTES.
+ */
 static int write_file_data_and_entry(uint32_t dir_off, uint8_t write_terminator, uint8_t write_fat_chain,
                                       const spi_flash_fat_scan_t *scan,
                                       const char name8[8], const char ext3[3],
                                       const uint8_t *data, uint32_t len)
 {
-    uint32_t num_clusters = (len + (ROOT_DIR_SECTOR_BYTES - 1U)) / ROOT_DIR_SECTOR_BYTES;
+    uint32_t num_clusters = (len + (CLUSTER_BYTES - 1U)) / CLUSTER_BYTES;
     uint32_t first_cluster = scan->free_block_first_cluster;
     uint8_t entry_buf[64];
     uint32_t entry_write_len = write_terminator ? 64U : 32U;
@@ -1344,7 +1911,8 @@ static int write_file_data_and_entry(uint32_t dir_off, uint8_t write_terminator,
     entry_buf[31] = (uint8_t)((len >> 24) & 0xFFU);
     /* entry_buf[32..63] (if included) stays all-zero: the fresh end-of-directory terminator. */
 
-    spi_flash_block_read_modify_write(ROOT_DIR_LBA * ROOT_DIR_SECTOR_BYTES, dir_off, entry_buf, entry_write_len);
+    escribe_datos_fichero((ROOT_DIR_LBA * ROOT_DIR_SECTOR_BYTES) + dir_off,
+                          entry_buf, entry_write_len);
     return 1;
 }
 
@@ -1359,7 +1927,7 @@ int spi_flash_write_new_file(const spi_flash_fat_scan_t *scan,
         debug_print("spi_flash_write_new_file: no confirmed-free block in `scan` - aborting\n");
         return 0;
     }
-    if (len > (CLUSTERS_PER_BLOCK * ROOT_DIR_SECTOR_BYTES)) {
+    if (len > FLASH_SECTOR_SIZE) {
         debug_print("spi_flash_write_new_file: file too big for one confirmed-free block (4096 bytes max right now) - aborting\n");
         return 0;
     }
@@ -1370,7 +1938,7 @@ int spi_flash_write_new_file(const spi_flash_fat_scan_t *scan,
     /* A reused 0xE5 slot only needs room for the entry itself (32
      * bytes) - the fresh terminator (needs_terminator) is what
      * pushes this to 64. */
-    if ((dir_off + (needs_terminator ? 64U : 32U)) > ROOT_DIR_SECTOR_BYTES) {
+    if ((dir_off + (needs_terminator ? 64U : 32U)) > ROOT_DIR_BYTES) {
         debug_print("spi_flash_write_new_file: not enough room in the root directory's first sector for the new entry - aborting\n");
         return 0;
     }
@@ -1405,17 +1973,17 @@ int spi_flash_write_or_update_file(const char name8[8], const char ext3[3],
         debug_print("spi_flash_write_or_update_file: la distribucion del volumen no es de las que sabemos - no se escribe\n");
         return 0;
     }
-    if (len > (CLUSTERS_PER_BLOCK * ROOT_DIR_SECTOR_BYTES)) {
+    if (len > FLASH_SECTOR_SIZE) {
         debug_print("spi_flash_write_or_update_file: data too big for one block (4096 bytes max right now) - aborting\n");
         return 0;
     }
-    new_num_clusters = (len + (ROOT_DIR_SECTOR_BYTES - 1U)) / ROOT_DIR_SECTOR_BYTES;
+    new_num_clusters = (len + (CLUSTER_BYTES - 1U)) / CLUSTER_BYTES;
     if (new_num_clusters == 0U) {
         new_num_clusters = 1U;
     }
 
     if (dir_find_entry(name8, ext3, &dir_off, &old_cluster, &old_size)) {
-        uint32_t old_num_clusters = (old_size + (ROOT_DIR_SECTOR_BYTES - 1U)) / ROOT_DIR_SECTOR_BYTES;
+        uint32_t old_num_clusters = (old_size + (CLUSTER_BYTES - 1U)) / CLUSTER_BYTES;
 
         if (old_num_clusters == 0U) {
             old_num_clusters = 1U;
@@ -1504,7 +2072,7 @@ int spi_flash_write_or_update_file(const char name8[8], const char ext3[3],
              * primitives themselves to be interruptible.
              */
             spi_flash_fat_scan_t synth;
-            uint32_t first_data_sector = DATA_START_SECTOR + ((uint32_t)old_cluster - 2U);
+            uint32_t first_data_sector = SECTOR_DE_CLUSTER(old_cluster);
 
             synth.total_data_clusters = 0U; /* unused below */
             synth.free_data_clusters = 0U;  /* unused below */
@@ -1549,7 +2117,7 @@ int spi_flash_write_or_update_file(const char name8[8], const char ext3[3],
         debug_print("spi_flash_write_or_update_file: root directory full (no end-of-directory marker AND no reusable deleted (0xE5) slot) - aborting\n");
         return 0;
     }
-    if ((dir_off + (needs_terminator ? 64U : 32U)) > ROOT_DIR_SECTOR_BYTES) {
+    if ((dir_off + (needs_terminator ? 64U : 32U)) > ROOT_DIR_BYTES) {
         debug_print("spi_flash_write_or_update_file: not enough room for the new entry - aborting\n");
         return 0;
     }
@@ -1594,9 +2162,12 @@ static uint32_t read_file_by_name_interno(const char name8[8], const char ext3[3
                                           uint8_t *out_buf, uint32_t out_buf_size)
 {
     uint8_t sector[ROOT_DIR_SECTOR_BYTES];
-    uint32_t i;
+    uint32_t i, sec;
+    uint32_t nsec = ROOT_DIR_SECTORS;
 
-    spi_flash_read(ROOT_DIR_LBA * ROOT_DIR_SECTOR_BYTES, sector, sizeof(sector));
+    /* La raiz ENTERA. Ver ROOT_DIR_SECTORS. */
+    for (sec = 0U; sec < nsec; sec++) {
+    spi_flash_read((ROOT_DIR_LBA + sec) * ROOT_DIR_SECTOR_BYTES, sector, sizeof(sector));
 
     for (i = 0U; i < (sizeof(sector) / 32U); i++) {
         const uint8_t *e = &sector[i * 32U];
@@ -1604,7 +2175,7 @@ static uint32_t read_file_by_name_interno(const char name8[8], const char ext3[3
         uint32_t j;
 
         if (e[0] == 0x00U) {
-            break; /* end of directory */
+            return 0U; /* end of directory */
         }
         if ((e[0] == 0xE5U) || (e[11] == 0x0FU) || ((e[11] & 0x18U) != 0U)) {
             continue; /* deleted / long-filename fragment / volume-label / directory */
@@ -1628,10 +2199,10 @@ static uint32_t read_file_by_name_interno(const char name8[8], const char ext3[3
             uint32_t remaining = (size < out_buf_size) ? size : out_buf_size;
             uint32_t written = 0U;
 
-            spi_flash_read(FAT1_LBA * ROOT_DIR_SECTOR_BYTES, fat, FAT_BYTES);
+            spi_flash_read(FAT1_LBA * ROOT_DIR_SECTOR_BYTES, fat, FAT_UTIL);
             while ((cluster >= 2U) && (cluster < 0xFF8U) && (remaining > 0U)) {
-                uint32_t data_sector = DATA_START_SECTOR + (cluster - 2U);
-                uint32_t chunk = (remaining < ROOT_DIR_SECTOR_BYTES) ? remaining : ROOT_DIR_SECTOR_BYTES;
+                uint32_t data_sector = SECTOR_DE_CLUSTER(cluster);
+                uint32_t chunk = (remaining < CLUSTER_BYTES) ? remaining : CLUSTER_BYTES;
 
                 spi_flash_read(data_sector * ROOT_DIR_SECTOR_BYTES, out_buf + written, chunk);
                 written += chunk;
@@ -1640,6 +2211,7 @@ static uint32_t read_file_by_name_interno(const char name8[8], const char ext3[3
             }
             return written;
         }
+    }
     }
     return 0U; /* not found */
 }
@@ -1772,7 +2344,7 @@ uint8_t spi_flash_async_save_start(const char name8[8], const char ext3[3],
     if (new_num_clusters == 0U) {
         new_num_clusters = 1U;
     }
-    if (len > (CLUSTERS_PER_BLOCK * ROOT_DIR_SECTOR_BYTES)) {
+    if (len > FLASH_SECTOR_SIZE) {
         return 0U; /* too big for the fast path (and for the slow one too, for that matter) */
     }
     if (!dir_find_entry(name8, ext3, &dir_off, &old_cluster, &old_size)) {
@@ -1800,7 +2372,7 @@ uint8_t spi_flash_async_save_start(const char name8[8], const char ext3[3],
      * se pierde es el guardado rapido de esa vez.
      */
     {
-        uint32_t addr = (uint32_t)(DATA_START_SECTOR + ((uint32_t)old_cluster - 2U))
+        uint32_t addr = (uint32_t)SECTOR_DE_CLUSTER(old_cluster)
                         * ROOT_DIR_SECTOR_BYTES;
         uint32_t bloque = addr & ~(uint32_t)(FLASH_SECTOR_SIZE - 1U);
         uint32_t off = addr - bloque;
@@ -2358,7 +2930,7 @@ static uint8_t fichero_busca_interno(const char name8[8], const char ext3[3],
                  * queje. Pedirla seguida convierte eso en un "no" claro,
                  * y en un volumen casi vacio Windows la deja seguida.
                  */
-                spi_flash_read(FAT1_LBA * ROOT_DIR_SECTOR_BYTES, fat, FAT_BYTES);
+                spi_flash_read(FAT1_LBA * ROOT_DIR_SECTOR_BYTES, fat, FAT_UTIL);
                 c = c0; esperado = c0;
                 while ((c >= 2U) && (c < 0xFF8U)) {
                     if (!troceado_ok && (c != esperado)) {
@@ -2382,13 +2954,13 @@ static uint8_t fichero_busca_interno(const char name8[8], const char ext3[3],
                  * directorio, este troceada o no: si no da, el fichero
                  * esta a medias y copiarlo seria copiar basura.
                  */
-                if (n * ROOT_DIR_SECTOR_BYTES < size) {
+                if (n * CLUSTER_BYTES < size) {
                     s_vol_porque = SPI_VOL_CORTO;
                     return 0U;
                 }
                 if (c0_out) { *c0_out = c0; }
 
-                if (addr)  { *addr = (DATA_START_SECTOR + (uint32_t)c0 - 2U)
+                if (addr)  { *addr = SECTOR_DE_CLUSTER(c0)
                                      * ROOT_DIR_SECTOR_BYTES; }
                 if (bytes) { *bytes = size; }
                 s_vol_porque = SPI_VOL_OK;
@@ -2713,10 +3285,10 @@ static void vol_lee_fichero(uint32_t off, uint8_t *dst, uint32_t n)
     while (n > 0UL) {
         uint32_t dentro, m;
 
-        while ((off >= s_vol_cl_off + ROOT_DIR_SECTOR_BYTES)
+        while ((off >= s_vol_cl_off + CLUSTER_BYTES)
                && (s_vol_cl >= 2U) && (s_vol_cl < 0xFF8U)) {
             s_vol_cl = fat12_del_chip(s_vol_cl);
-            s_vol_cl_off += ROOT_DIR_SECTOR_BYTES;
+            s_vol_cl_off += CLUSTER_BYTES;
         }
         if ((s_vol_cl < 2U) || (s_vol_cl >= 0xFF8U)) {
             /* Se acabo la cadena antes que el fichero. No deberia pasar
@@ -2726,9 +3298,9 @@ static void vol_lee_fichero(uint32_t off, uint8_t *dst, uint32_t n)
             return;
         }
         dentro = off - s_vol_cl_off;
-        m = ROOT_DIR_SECTOR_BYTES - dentro;
+        m = CLUSTER_BYTES - dentro;
         if (m > n) { m = n; }
-        spi_flash_read((DATA_START_SECTOR + (uint32_t)s_vol_cl - 2UL)
+        spi_flash_read(SECTOR_DE_CLUSTER(s_vol_cl)
                        * ROOT_DIR_SECTOR_BYTES + dentro, dst, m);
         dst += m; off += m; n -= m;
     }
@@ -2764,7 +3336,8 @@ uint32_t spi_flash_volcado_total(void)  { return s_vol_total; }
  * ENCAJE CON LO QUE YA HABIA
  * --------------------------
  * fat_write_chain() solo admite hasta CLUSTERS_PER_BLOCK clusters
- * empezando en frontera de bloque, o sea 8 de 512 = 4096 bytes justos. Un
+ * empezando en frontera de bloque: 8 de 512, 2 de 2048... 4096 bytes
+ * justos sea cual sea el tamaño del cluster. Un
  * trozo por pulsacion es exactamente eso, asi que cada pulsacion cae
  * clavada en la primitiva que ya lleva meses probada contra hardware. No
  * hay codigo nuevo de FAT: hay un orden nuevo de llamadas a lo de antes.
@@ -2793,8 +3366,10 @@ uint32_t spi_flash_volcado_total(void)  { return s_vol_total; }
  * --------------------
  * El unico borrado que hace esto es el del bloque de datos, y su
  * direccion sale de spi_flash_probe_fat_scan(), que solo da por libre un
- * bloque cuyos OCHO clusters tienen la entrada de FAT a 0x000. No se
- * borra nunca un bloque que no este certificado vacio por la FAT misma.
+ * bloque cuyos clusters -los CLUSTERS_PER_BLOCK que quepan- tienen la
+ * entrada de FAT a 0x000, y que ademas empieza en frontera de bloque de
+ * borrado. No se borra nunca un bloque que no este certificado vacio por
+ * la FAT misma.
  *
  * Es bloqueante, del orden de medio segundo (cuatro ciclos de borrado y
  * programado, y el borrado de 4 kB de un W25Q son ~50 ms que pone el
@@ -2805,7 +3380,7 @@ uint32_t spi_flash_volcado_total(void)  { return s_vol_total; }
  */
 
 #define ANADE_TROZO        FLASH_SECTOR_SIZE      /* 4096: un bloque de borrado */
-#define ANADE_CLUSTERS     CLUSTERS_PER_BLOCK     /* 8 clusters de 512 */
+#define ANADE_CLUSTERS     CLUSTERS_PER_BLOCK     /* los que quepan en el bloque */
 #define ANADE_TOPE_TROZOS  200U                   /* 800 kB, tope de cordura */
 
 /*
@@ -2826,12 +3401,11 @@ static void fat_pon_una(uint32_t cluster, uint16_t valor)
     for (copia = 0U; copia < 2U; copia++) {
         uint32_t lba = FAT1_LBA + ((uint32_t)copia * FAT_SECTORS);
         uint32_t abs = (lba * ROOT_DIR_SECTOR_BYTES) + off;
-        uint32_t blq = abs & ~(uint32_t)(FLASH_SECTOR_SIZE - 1U);
         uint8_t  buf[2];
 
         spi_flash_read(abs, buf, 2U);
         fat12_pack_entry(buf, 0U, cluster, valor);
-        spi_flash_block_read_modify_write(abs, abs - blq, buf, 2U);
+        escribe_datos_fichero(abs, buf, 2U);   /* ver fat_write_chain() */
     }
 }
 
@@ -2877,7 +3451,7 @@ static uint8_t cadena_ultimo_interno(uint32_t primero, uint32_t *ultimo, uint32_
     uint32_t c = primero, n = 1U, atras = 0U;
 
     if (primero < 2U || primero >= (2U + DATA_CLUSTER_COUNT)) { return 0U; }
-    spi_flash_read(FAT1_LBA * ROOT_DIR_SECTOR_BYTES, fat, sizeof fat);
+    spi_flash_read(FAT1_LBA * ROOT_DIR_SECTOR_BYTES, fat, FAT_UTIL);
 
     for (;;) {
         uint16_t sig = fat12_entry(fat, c);
@@ -2966,7 +3540,7 @@ uint8_t spi_flash_anade_trozo(const char name8[8], const char ext3[3],
         return 0U;
     }
     if (!cadena_ultimo(primero, &ultimo, &clusters, 0) ||
-        clusters != (tam / ROOT_DIR_SECTOR_BYTES)) {
+        clusters != (tam / CLUSTER_BYTES)) {
         /* La cadena y el tamano no cuentan lo mismo: algo no cuadra y
          * este no es sitio para adivinar. */
         if (porque) { *porque = SPI_ANADE_CADENA; }
@@ -2992,8 +3566,8 @@ uint8_t spi_flash_anade_trozo(const char name8[8], const char ext3[3],
         t[1] = (uint8_t)((nuevo >> 8) & 0xFFU);
         t[2] = (uint8_t)((nuevo >> 16) & 0xFFU);
         t[3] = (uint8_t)((nuevo >> 24) & 0xFFU);
-        spi_flash_block_read_modify_write(ROOT_DIR_LBA * ROOT_DIR_SECTOR_BYTES,
-                                          dir_off + 28U, t, 4U);
+        escribe_datos_fichero((ROOT_DIR_LBA * ROOT_DIR_SECTOR_BYTES) + dir_off + 28U,
+                              t, 4U);
     }
     return 1U;
 }
@@ -3030,9 +3604,14 @@ uint8_t spi_flash_fichero_cadena(const char name8[8], const char ext3[3],
 uint32_t spi_flash_dir_max_indice(const char pre[4], const char ext3[3])
 {
     uint8_t  sector[ROOT_DIR_SECTOR_BYTES];
-    uint32_t i, max = 0UL;
+    uint32_t i, sec, max = 0UL;
+    uint32_t nsec = ROOT_DIR_SECTORS;
 
-    spi_flash_read(ROOT_DIR_LBA * ROOT_DIR_SECTOR_BYTES, sector, sizeof sector);
+    /* La raiz ENTERA: si una PANT007.BMP vive en el sector tres y aqui solo
+     * se mirara el cero, la siguiente foto se llamaria PANT001 y pisaria.
+     * Ver ROOT_DIR_SECTORS. */
+    for (sec = 0U; sec < nsec; sec++) {
+    spi_flash_read((ROOT_DIR_LBA + sec) * ROOT_DIR_SECTOR_BYTES, sector, sizeof sector);
     for (i = 0U; i < (sizeof(sector) / 32U); i++) {
         const uint8_t *e = &sector[i * 32U];
         uint32_t n = 0UL;
@@ -3051,6 +3630,7 @@ uint32_t spi_flash_dir_max_indice(const char pre[4], const char ext3[3])
             n = (n * 10UL) + (uint32_t)(e[j] - (uint8_t)'0');
         }
         if (ok && n > max) { max = n; }
+    }
     }
     return max;
 }
@@ -3076,7 +3656,7 @@ uint8_t spi_flash_fichero_cabeza(const char name8[8], const char ext3[3],
     if (!dir_find_entry(name8, ext3, &dir_off, &primero, &tam)) { return 0U; }
     if (primero < 2U || primero >= (2U + DATA_CLUSTER_COUNT)) { return 0U; }
     if (addr) {
-        *addr = (DATA_START_SECTOR + ((uint32_t)primero - 2UL)) * ROOT_DIR_SECTOR_BYTES;
+        *addr = SECTOR_DE_CLUSTER(primero) * ROOT_DIR_SECTOR_BYTES;
     }
     return 1U;
 }
@@ -3162,17 +3742,19 @@ const char *spi_flash_anade_porque_txt(spi_anade_r_t r)
 #define FAT2_OFF   ((FAT1_LBA + FAT_SECTORS) * ROOT_DIR_SECTOR_BYTES)
 #define RAIZ_OFF   (ROOT_DIR_LBA * ROOT_DIR_SECTOR_BYTES)
 
-/* Vuelca una copia entera de la FAT desde un buffer de FAT_BYTES,
+/* Vuelca la parte UTIL de una copia de la FAT desde el borrador (ver
+ * FAT_UTIL: lo que el formateador haya reservado de mas no describe ningun
+ * cluster, no se ha leido y no se toca),
  * partiendola por los bloques de borrado que cruce. */
 static void fat_vuelca(uint32_t off, const uint8_t *fat)
 {
     uint32_t hecho = 0U;
 
-    while (hecho < FAT_BYTES) {
+    while (hecho < FAT_UTIL) {
         uint32_t abs = off + hecho;
         uint32_t blq = abs & ~(uint32_t)(FLASH_SECTOR_SIZE - 1U);
         uint32_t cabe = (blq + FLASH_SECTOR_SIZE) - abs;
-        uint32_t n = ((FAT_BYTES - hecho) < cabe) ? (FAT_BYTES - hecho) : cabe;
+        uint32_t n = ((FAT_UTIL - hecho) < cabe) ? (FAT_UTIL - hecho) : cabe;
 
         spi_flash_block_read_modify_write(abs, abs - blq, &fat[hecho], n);
         hecho += n;
@@ -3204,6 +3786,108 @@ uint8_t spi_flash_reserva(const char name8[8], const char ext3[3],
  * primero y eso es exactamente lo que paso: el banco de FAT lo cazo con
  * "se ha estropeado ZONAALTABIN" y el compilador no dijo ni mu. Con el
  * #define, el nombre sigue siendo un array y no hay nada que recordar. */
+/*
+ * EL ESCANEO DE BLOQUES LIBRES, EN UN SITIO - 05/10/2026.
+ *
+ * *** El dueño: "pero como va a estar lleno si las he borrado desde
+ * windows". ***
+ *
+ * Pregunta buena, y la radio no sabia contestarla: decia "el disco esta
+ * lleno" y punto. Ahora hay una fila en Ajustes -> Informacion que dice
+ * cuanto hay libre, cuanto SEGUIDO y cuantos huecos quedan en el
+ * directorio, que son las tres cosas por las que una foto no cabe.
+ *
+ * Y esa fila no puede tener su propio escaneo: tiene que contestar por el
+ * MISMO recorrido que decide si cabe o no. Si no, el dia que discrepen, la
+ * fila dira que hay sitio y la radio dira que no.
+ *
+ * Se mira por bloques de borrado enteros y no por clusters sueltos porque
+ * el borrado va por bloques: medio bloque libre no sirve de nada, y
+ * empezar a media frontera obligaria a releer para no pisar al vecino.
+ *
+ * El primer grupo es el de CLUSTER_ALI y no el del cluster 2: ver su
+ * comentario. Con el volumen de siempre valen lo mismo.
+ *
+ * Con `pide` a cero recorre el volumen entero y rellena total y mayor; con
+ * `pide` distinto de cero se para en cuanto encuentra ese numero de
+ * bloques seguidos, y entonces total y mayor se quedan a medias -que es
+ * justo lo que quiere quien solo necesita saber donde ponerlos-.
+ */
+static void sitio_mira(const uint8_t *fatbuf, uint32_t pide,
+                       uint32_t *total, uint32_t *mayor,
+                       uint32_t *primero, uint8_t *hallado)
+{
+    uint32_t b, i;
+    uint32_t seguidos = 0U, n_total = 0U, n_mayor = 0U, ini = 0U;
+    uint8_t  ok = 0U;
+
+    for (b = 0U; b < ((DATA_CLUSTER_COUNT + 2U - CLUSTER_ALI) / CLUSTERS_PER_BLOCK); b++) {
+        uint32_t c0 = CLUSTER_ALI + (b * CLUSTERS_PER_BLOCK);
+        uint8_t  libre = 1U;
+
+        for (i = c0; i < c0 + CLUSTERS_PER_BLOCK; i++) {
+            if (fat12_entry(fatbuf, i) != 0x000U) { libre = 0U; break; }
+        }
+        if (libre) {
+            if (seguidos == 0U) { ini = c0; }
+            seguidos++;
+            n_total++;
+            if (seguidos > n_mayor) { n_mayor = seguidos; }
+            if (pide != 0U && seguidos == pide) { ok = 1U; break; }
+        } else {
+            seguidos = 0U;
+        }
+    }
+
+    if (total)   { *total = n_total; }
+    if (mayor)   { *mayor = n_mayor; }
+    if (primero) { *primero = ini; }
+    if (hallado) { *hallado = ok; }
+}
+
+uint8_t spi_flash_sitio(uint32_t *libre_kb, uint32_t *seguido_kb,
+                        uint16_t *dir_huecos, uint16_t *dir_ranuras)
+{
+    uint32_t total = 0U, mayor = 0U, off = 0U;
+    uint8_t  term = 0U;
+
+    if (!borrador_coge(BORRADOR_FAT)) { return 0U; }
+    if (!geo_lee()) { borrador_suelta(BORRADOR_FAT); return 0U; }
+
+    spi_flash_read(FAT1_OFF, s_fat, FAT_UTIL);
+    sitio_mira(s_fat, 0U, &total, &mayor, 0, 0);
+    borrador_suelta(BORRADOR_FAT);
+
+    if (libre_kb)   { *libre_kb   = total * (FLASH_SECTOR_SIZE / 1024U); }
+    if (seguido_kb) { *seguido_kb = mayor * (FLASH_SECTOR_SIZE / 1024U); }
+
+    /*
+     * Y los huecos del directorio. Es la OTRA razon por la que una foto no
+     * cabe, y no tiene nada que ver con los kilobytes: este driver usa el
+     * primer sector de la raiz y nada mas, o sea dieciseis entradas. Una
+     * ranura borrada (0xE5) cuenta como hueco, porque
+     * dir_find_end_marker_offset() la reutiliza.
+     */
+    if (dir_huecos || dir_ranuras) {
+        uint8_t  sector[ROOT_DIR_SECTOR_BYTES];
+        uint32_t i, sec, nsec = ROOT_DIR_SECTORS;
+        uint16_t n = 0U;
+
+        for (sec = 0U; sec < nsec; sec++) {
+            spi_flash_read((ROOT_DIR_LBA + sec) * ROOT_DIR_SECTOR_BYTES,
+                           sector, sizeof sector);
+            for (i = 0U; i < (sizeof(sector) / 32U); i++) {
+                uint8_t c = sector[i * 32U];
+                if (c == 0x00U || c == 0xFFU || c == 0xE5U) { n++; }
+            }
+        }
+        if (dir_huecos)  { *dir_huecos = n; }
+        if (dir_ranuras) { *dir_ranuras = (uint16_t)(nsec * 16UL); }
+    }
+    (void)off; (void)term;
+    return 1U;
+}
+
 #define fat s_fat
 static uint8_t reserva_interno(const char name8[8], const char ext3[3],
                                uint32_t bytes, uint32_t *addr, spi_anade_r_t *porque)
@@ -3216,9 +3900,8 @@ static uint8_t reserva_interno(const char name8[8], const char ext3[3],
     uint8_t  entrada[64];
     uint32_t bloques = bytes / FLASH_SECTOR_SIZE;
     uint32_t clusters = bloques * CLUSTERS_PER_BLOCK;
-    uint32_t primero = 0U, b, i, dir_off = 0U;
+    uint32_t primero = 0U, i, dir_off = 0U;
     uint8_t  terminador = 0U, hallado = 0U;
-    uint32_t seguidos = 0U;
 
     if (porque) { *porque = SPI_ANADE_OK; }
     if (!geo_lee()) {
@@ -3236,34 +3919,23 @@ static uint8_t reserva_interno(const char name8[8], const char ext3[3],
         if (porque) { *porque = SPI_ANADE_DIR_LLENO; }
         return 0U;
     }
-    if ((dir_off + (terminador ? 64U : 32U)) > ROOT_DIR_SECTOR_BYTES) {
+    if ((dir_off + (terminador ? 64U : 32U)) > ROOT_DIR_BYTES) {
         if (porque) { *porque = SPI_ANADE_DIR_LLENO; }
         return 0U;
     }
 
-    spi_flash_read(FAT1_OFF, fat, sizeof fat);
+    spi_flash_read(FAT1_OFF, fat, FAT_UTIL);
 
     /*
      * Bloques ENTEROS libres y seguidos. Se mira por bloques y no por
      * clusters sueltos porque el borrado va por bloques: medio bloque
      * libre no sirve de nada, y empezar a media frontera obligaria a
      * releer para no pisar al vecino.
+     *
+     * El primer grupo es el de CLUSTER_ALI y no el del cluster 2: ver su
+     * comentario. Con el volumen de siempre valen lo mismo.
      */
-    for (b = 0U; b < (DATA_CLUSTER_COUNT / CLUSTERS_PER_BLOCK); b++) {
-        uint32_t c0 = 2U + (b * CLUSTERS_PER_BLOCK);
-        uint8_t  libre = 1U;
-
-        for (i = c0; i < c0 + CLUSTERS_PER_BLOCK; i++) {
-            if (fat12_entry(fat, i) != 0x000U) { libre = 0U; break; }
-        }
-        if (libre) {
-            if (seguidos == 0U) { primero = c0; }
-            seguidos++;
-            if (seguidos == bloques) { hallado = 1U; break; }
-        } else {
-            seguidos = 0U;
-        }
-    }
+    sitio_mira(fat, bloques, 0, 0, &primero, &hallado);
     if (!hallado) {
         /* Puede haber sitio de sobra y aun asi no caber: lo que falta es un
          * hueco SEGUIDO. */
@@ -3296,11 +3968,10 @@ static uint8_t reserva_interno(const char name8[8], const char ext3[3],
     entrada[29] = (uint8_t)((bytes >> 8) & 0xFFU);
     entrada[30] = (uint8_t)((bytes >> 16) & 0xFFU);
     entrada[31] = (uint8_t)((bytes >> 24) & 0xFFU);
-    spi_flash_block_read_modify_write(RAIZ_OFF, dir_off, entrada,
-                                      terminador ? 64U : 32U);
+    escribe_datos_fichero(RAIZ_OFF + dir_off, entrada, terminador ? 64U : 32U);
 
     if (addr) {
-        *addr = (DATA_START_SECTOR + (primero - 2U)) * ROOT_DIR_SECTOR_BYTES;
+        *addr = SECTOR_DE_CLUSTER(primero) * ROOT_DIR_SECTOR_BYTES;
     }
     return 1U;
 }
@@ -3452,7 +4123,7 @@ static uint8_t fichero_borra_interno(const char name8[8], const char ext3[3])
     /* 2. Y la cadena, si la entrada apuntaba a algun sitio con sentido.
      * Un fichero de 0 bytes no tiene cadena y no es un error. */
     if ((primero >= 2U) && (primero < (2U + DATA_CLUSTER_COUNT))) {
-        spi_flash_read(FAT1_OFF, fat, sizeof fat);
+        spi_flash_read(FAT1_OFF, fat, FAT_UTIL);
         c = primero;
         for (n = 0U; n < DATA_CLUSTER_COUNT; n++) {
             uint16_t sig = fat12_entry(fat, c);
@@ -3505,10 +4176,10 @@ static uint8_t recorta_interno(const char name8[8], const char ext3[3], uint32_t
     bloques = (bytes + FLASH_SECTOR_SIZE - 1UL) / FLASH_SECTOR_SIZE;
     if (bloques == 0UL) { bloques = 1UL; }
     quedan = bloques * CLUSTERS_PER_BLOCK;
-    tenia  = (viejo + ROOT_DIR_SECTOR_BYTES - 1UL) / ROOT_DIR_SECTOR_BYTES;
+    tenia  = (viejo + CLUSTER_BYTES - 1UL) / CLUSTER_BYTES;
     if (quedan >= tenia) { return 1U; }   /* no sobra nada: nada que hacer */
 
-    spi_flash_read(FAT1_OFF, fat, sizeof fat);
+    spi_flash_read(FAT1_OFF, fat, FAT_UTIL);
     /* El nuevo ultimo dice fin... */
     fat12_pack_entry(fat, (primero + quedan - 1U) + ((primero + quedan - 1U) / 2U),
                      primero + quedan - 1U, 0x0FFFU);
@@ -3529,7 +4200,7 @@ static uint8_t recorta_interno(const char name8[8], const char ext3[3], uint32_t
     tam4[1] = (uint8_t)((bytes >> 8) & 0xFFU);
     tam4[2] = (uint8_t)((bytes >> 16) & 0xFFU);
     tam4[3] = (uint8_t)((bytes >> 24) & 0xFFU);
-    spi_flash_block_read_modify_write(RAIZ_OFF, dir_off + 28U, tam4, 4U);
+    escribe_datos_fichero(RAIZ_OFF + dir_off + 28U, tam4, 4U);
     return 1U;
 }
 #undef fat

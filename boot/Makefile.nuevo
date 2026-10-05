@@ -44,4 +44,8 @@ customboot.elf: $(SRC) $(ASM) GD32F450VE_BOOT.ld
 	arm-none-eabi-size $@
 customboot.bin: customboot.elf
 	$(OBJCOPY) -O binary $< $@
+# El sello: version, tamaño y CRC del contenido, mas el aviso si esa
+# version ya salio con otro contenido. Ver tools/bootsello.py - y el
+# comentario de CARGADOR_VERSION en boot_main.c, que es el porque.
+	@python3 ../tools/bootsello.py customboot.bin boot_main.c customboot.map
 clean: ; rm -f customboot.elf customboot.bin customboot.map

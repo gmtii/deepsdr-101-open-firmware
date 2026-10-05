@@ -1,0 +1,42 @@
+HF DSC - llamada selectiva digital del GMDSS.
+Lista de costeras de William Hepburn, edicion 2025-03-26.
+La paso el dueño el 03/10/2026.
+
+MODO: FSK 100 baudios / 170 Hz de separacion. LA MISMA MODULACION QUE EL
+SITOR-B que ya decodifica navtex.c. Lo que cambia es el codigo de arriba:
+simbolos de 10 bits (ITU-R M.493) en vez de los 7 bits con 4 unos del
+CCIR 476. O sea que los filtros de tono, el reloj de bit y la medida del
+centro por cruces por cero valen tal cual.
+
+Frecuencias de socorro y llamada (son estas seis y no hay mas):
+  2187.5  4207.5  6312  8414.5  12577  16804.5 kHz
+Cada una esta un par de kHz POR DEBAJO de su vecina de telex:
+  DSC 4207.5 <-> NBDP 4209.5/4210
+  DSC 8414.5 <-> NBDP 8416.5   (y 8424, la de Olympia)
+
+LO QUE SE OYE DESDE ESPAÑA. El indicativo MMSI empieza por el codigo de
+pais: 224 = España, 237/239 = Grecia, 232 = Reino Unido.
+
+  224/1022  EAR  CORUÑA (ESPAÑA)      8414.5  12577
+  224/1078  EAD  MADRID (ESPAÑA)      8414.5  12577
+  237/1000  SVO  OLYMPIA (Grecia)     4207.5  6312  8414.5  12577  16804.5
+  239/1000  SXE  ASPROPIRGOS (Grecia) 4207.5  6312  8414.5  12577  16804.5
+  239/2000  SXE2 PIRAEUS (Grecia)     4207.5  6312  8414.5  12577  16804.5
+  232/204   MNC  FAVERSHAM (R.Unido)  4207.5  6312  8414.5  12577  16804.5
+  209/1000  5BA  CHIPRE               4207.5        8414.5
+  271/1000  TAH  ESTAMBUL (Turquia)   4207.5  6312  8414.5  12577  16804.5
+  264/0570  YQI  CONSTANZA (Rumania)  4207.5        8414.5  12577
+  257/0     LML  ISFJORD (Svalbard)   4207.5  6312  8414.5
+
+SVO Olympia es la misma estacion cuyo NAVTEX se decodifico en 8424 kHz el
+02/10/2026, asi que esa ya esta probada: llega.
+
+DIFERENCIA PRACTICA CON EL TELEX. El telex emite parrafos largos en
+franjas horarias fijas; el DSC son RAFAGAS DE UN SEGUNDO que saltan cuando
+un barco llama. Para el DSC no sirve ir barriendo: hay que quedarse
+sentado en 8414.5 (de dia) o en 4207.5 / 6312 (de noche) y esperar.
+
+Y es trafico de seguridad de verdad: recibirlo es informacion publica y
+normal, pero una alerta de socorro que salga ahi no se reenvia ni se actua
+sobre ella. De eso se encargan los centros de salvamento, que la estan
+oyendo igual.

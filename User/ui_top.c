@@ -226,16 +226,22 @@ static void draw_header(gfx2_surf_t *s, void *ctx)
      * ui_top_draw_rds(), que renderiza SOLO el hueco y por tanto recorta por
      * construccion. ui_top_draw() la llama al final. */
 
-    /* --- error de PLL en SAM ---
-     * Ocupa el mismo hueco que tenia antes, a la izquierda del reloj. En los
-     * demas modos NO se pinta nada: la version anterior rellenaba ese
+    /*
+     * --- error de PLL en SAM ---
+     *
+     * En el renglon de ARRIBA y a la derecha de la marquesina, no dentro de
+     * ella: ver UI_TOP_SAM_X en ui_top.h, que lleva el por que y los numeros
+     * medidos.
+     *
+     * En los demas modos NO se pinta nada: la version anterior rellenaba ese
      * rectangulo con el gris de la barra para "limpiarlo", lo que con un
      * fondo plano era invisible y con el degradado de aqui dejaba un
      * cuadrado gris a la vista. Aqui el fondo lo pone el repintado de la
-     * banda, asi que no hay nada que limpiar. */
+     * banda, asi que no hay nada que limpiar.
+     */
     if (st->sam_ppm) {
-        gfx2_text_in(s, 470, 40, 160, st->sam_ppm, &font_ui_14, dim,
-                     GFX2_ALIGN_R);
+        gfx2_text_in(s, UI_TOP_SAM_X, UI_TOP_SAM_Y, UI_TOP_SAM_W,
+                     st->sam_ppm, &font_ui_14, dim, GFX2_ALIGN_R);
     }
 
     /* --- reloj arriba a la derecha --- */
@@ -690,36 +696,29 @@ static void rds_franja(gfx2_surf_t *s, void *ctx)
     }
 
     /*
-     * Y EL ERROR DE PLL DE SAM, QUE VIVE DENTRO DE ESTA MISMA FRANJA.
-     * 28/09/2026.
+     * AQUI YA NO SE PINTA EL PPM DE SAM - 05/10/2026.
      *
-     * *** Es la QUINTA vez que aparece esta familia de fallo en el
-     * proyecto: una funcion que repinta una franja FIJA y borra algo que
-     * dibuja otro dentro de ella. Las cuatro anteriores fueron el tercer
-     * boton con la barra, el cuarto con la chapa, y el del mapa con
-     * solo_chip() -esa, tres veces seguidas-. ***
+     * Desde el 28/09 se repintaba tambien aqui dentro, y la razon era buena:
+     * el numero caia dentro de esta franja -una zona FIJA- y la franja se lo
+     * comia al refrescar la marquesina. Es la QUINTA vez que aparece esa
+     * familia de fallo en el proyecto; las cuatro anteriores fueron en el
+     * panel digital -el tercer boton con la barra, el cuarto con la chapa, y
+     * el del mapa con solo_chip(), esa tres veces seguidas-.
      *
-     * Medido antes de tocar nada: la huella del PPM son 304 px en
-     * x[566..628] y[42..55], y 300 de ellos -el 98%- caen dentro de esta
-     * franja. Poniendo y quitando st->sam_ppm sobre el dibujado completo
-     * cambian 4 pixeles de 384.000, que son los dos renglones de cola por
-     * debajo de y=54, adonde la franja no llega. O sea que el numero NO SE
-     * VE, y es el unico indicador de si el enganche de SAM es bueno.
+     * Pero pintarlo DOS veces arreglaba que se borrara y dejaba el otro
+     * problema entero en pie: el numero quedaba ENCIMA del horario de la
+     * emisora, que vive en este mismo renglon.
      *
-     * Y NO BASTA CON REORDENAR ui_top_draw(). La franja se repinta tambien
-     * desde emis_marq_poll() y emisoras_tick() (main.c), en cualquier modo
-     * que no sea WFM -SAM incluido- cada RDS_MARQ_MS. Arreglarlo solo en el
-     * dibujado completo lo dejaria borrado igual dos decimas de segundo
-     * despues.
+     * *** El dueño, con una foto de la pantalla: "y arregla eso tambien, los
+     * ppm pisan la marquesima" / "ponlos mas a la derecha no se". ***
      *
-     * Asi que se repinta AQUI DENTRO, detras del degradado, que es
-     * exactamente lo que hace solo_chip() con los botones cuarto y quinto
-     * por este mismo motivo.
+     * Lo que estaba mal era compartir sitio. Ahora el numero vive FUERA de
+     * esta franja, en el renglon de arriba y a su derecha (UI_TOP_SAM_X en
+     * ui_top.h), y con eso se caen las dos cosas de golpe: ni lo borra nadie
+     * ni pisa a nadie, y este parche sobra. sim/top_franjas.c vigila las dos
+     * -que el repintado parcial sea idempotente, y que las dos huellas no
+     * compartan ni un pixel-.
      */
-    if (st->sam_ppm && st->sam_ppm[0] != '\0') {
-        gfx2_text_in(s, 470, 40, 160, st->sam_ppm, &font_ui_14,
-                     gfx2_rgb(PAL_INK_DIM), GFX2_ALIGN_R);
-    }
 }
 
 int16_t ui_top_rds_nombre_w(const char *t)
@@ -745,6 +744,44 @@ void ui_top_draw_rds(const ui_top_state_t *st)
 }
 
 /* =========================================================================== */
+/*
+ * LAS TRES FRANJAS, EN UNA SUPERFICIE QUE TRAE OTRO - 05/10/2026.
+ *
+ * *** El dueño: "me gustaria implementar el poder hacer capturas de pantalla
+ * y que se graben en el usb". ***
+ *
+ * Y esa es la pieza que faltaba. Esta radio NO tiene copia de la pantalla en
+ * memoria: una pantalla son 768 kB y aqui quedan dos y medio. Lo que hay es
+ * este compositor, que monta franjas de 16 filas, las empuja al panel y las
+ * olvida. Asi que una captura no es volcar lo que hay, es VOLVER A DIBUJARLO
+ * franja por franja metiendolo en el fichero.
+ *
+ * Para eso hace falta poder decirle a cada capa "pintate en ESTA banda" en
+ * vez de "pintate y vuelcate". Esto es eso para la cabecera, y no duplica ni
+ * una linea: llama a las mismas tres funciones de dibujo a las que llama
+ * ui_top_draw(), que es justo lo que hace que la captura se parezca a la
+ * pantalla.
+ *
+ * El orden es el mismo que el de ui_top_draw(): cabecera, marquesina encima
+ * -que se recorta a su hueco por construccion- y franja de estado.
+ */
+void ui_top_pinta_en(gfx2_surf_t *s, const ui_top_state_t *st)
+{
+    draw_header(s, (void *)st);
+    /*
+     * La marquesina, SOLO EN SU FRANJA. Pinta su degradado de y=0 a y=63 y
+     * se queda en y=10..53 porque ui_top_draw_rds() le pide a gfx2 esa
+     * ventana y nada mas. Aqui no hay ventana que recorte, asi que hay que
+     * dársela: sin esto taparia la raya de abajo de la cabecera. Medido: 172
+     * pixeles distintos entre la captura y la pantalla, todos en y=63.
+     */
+    {
+        gfx2_surf_t sub = gfx2_sub_y(s, UI_TOP_RDS_Y, UI_TOP_RDS_H);
+        if (sub.h > 0) { rds_franja(&sub, (void *)st); }
+    }
+    draw_status(s, (void *)st);
+}
+
 void ui_top_draw(const ui_top_state_t *st)
 {
     gfx2_render(0, 0, GFX2_W, UI_TOP_H, draw_header, (void *)st);
@@ -796,6 +833,73 @@ void ui_top_draw_status(const ui_top_state_t *st)
 void ui_top_draw_smeter(const ui_top_state_t *st)
 {
     gfx2_render(0, UI_STATUS_Y, ST_MOVIL_W, UI_STATUS_H, draw_status, (void *)st);
+}
+
+/*
+ * Y EL DEL PPM DEL SAM, QUE ES EL MISMO CUENTO OTRA VEZ - 04/10/2026.
+ *
+ * *** El dueño: "al elegir modo sam la radio se ralentiza un monton", y
+ * despues de arreglarle el coste de la interrupcion: "el modo sam se sigue
+ * ralientizando". ***
+ *
+ * Seguia porque el otro extremo estaba intacto. main.c mira el error del PLL
+ * una vez por fotograma y, si el numero cambio, llamaba a ui_top_draw(): la
+ * cabecera ENTERA (800x64) mas la franja de estado ENTERA (800x40), 83.200
+ * pixeles compuestos y empujados al bus. Y el numero cambia casi siempre,
+ * porque son las DECIMAS de un lazo persiguiendo una portadora con
+ * desvanecimiento: "+19,4 PPM" no para quieto ni un fotograma.
+ *
+ * El comentario de main.c daba por bueno ese repintado con el argumento de
+ * que era "un numero que se mueve despacio". No se mueve despacio. Esa es
+ * toda la historia.
+ *
+ * Es exactamente el fallo que ya se arreglo el 30/09 con el S-metro -"se
+ * sigue ralentizando cuando recibe senal"- y la solucion es la misma: el
+ * MISMO dibujo con la ventana recortada a donde vive el numero. 160x28 son
+ * 4.480 accesos en vez de 83.200, o sea dieciocho veces menos, y no hay una
+ * segunda funcion de dibujo que mantener al dia.
+ *
+ * La ventana sale de UI_TOP_SAM_R* (ui_top.h), que es donde estan tambien
+ * las coordenadas del texto: un solo sitio para las dos cosas, para que
+ * mover el numero no pueda dejar la ventana apuntando a donde ya no esta.
+ * El 05/10/2026 se movio -ver UI_TOP_SAM_X- y esta ventana se vino sola.
+ */
+void ui_top_draw_sam(const ui_top_state_t *st)
+{
+    gfx2_render(UI_TOP_SAM_RX, UI_TOP_SAM_RY, UI_TOP_SAM_RW, UI_TOP_SAM_RH,
+                draw_header, (void *)st);
+}
+
+/*
+ * Y EL DE LA FRECUENCIA, QUE ES EL QUE MAS VECES CORRE - 05/10/2026.
+ *
+ * *** El dueño: "quiero que repases absolutamente todo de la radio y busques
+ * razones que hagan que se ralentice tanto la radio completa como el
+ * espectro". ***
+ *
+ * Esta es la tercera de la misma familia, y la mas cara de las tres por el
+ * ritmo al que corre. El S-metro (30/09) se repinta con la señal; el PPM del
+ * SAM (04/10), con las decimas del PLL. La frecuencia se repinta CADA CLIC
+ * DEL MANDO, o sea veinte o treinta veces por segundo mientras alguien
+ * sintoniza - que es justo cuando mas falta hace que la radio responda.
+ *
+ * Y lo que llamaba, ui_top_draw(), es la cabecera entera (800x64) MAS la
+ * marquesina MAS la franja de estado entera (800x40): unos 96.000 pixeles
+ * compuestos y empujados al bus, de los cuales la franja de estado -32.000-
+ * no tiene NADA que ver con la frecuencia.
+ *
+ * Esta ventana coge desde el borde izquierdo hasta donde empieza la
+ * marquesina, que es lo unico que mueve un cambio de frecuencia: las cifras,
+ * el subrayado del digito, la pastilla de modo y la de banda. Son unos
+ * 31.000 pixeles, tres veces menos, y ni uno de ellos es de nadie mas.
+ *
+ * El limite es rds_x1() y no un numero escrito: si la pastilla de banda
+ * cambia de ancho, el limite se mueve con ella. Un numero fijo aqui seria
+ * exactamente como se consigue borrar la marquesina.
+ */
+void ui_top_draw_freq(const ui_top_state_t *st)
+{
+    gfx2_render(0, 0, rds_x1(), UI_TOP_H, draw_header, (void *)st);
 }
 
 /* Para el banco: ver ui_top_chip_w_dbg(). El enlazador la tira. */

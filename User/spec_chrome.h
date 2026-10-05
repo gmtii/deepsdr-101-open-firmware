@@ -2,6 +2,7 @@
 #define SPEC_CHROME_H_INCLUDED
 
 #include <stdint.h>
+#include "gfx2.h"   /* gfx2_surf_t: ver spec_chrome_pinta_en() */
 
 /*
  * ETAPA 3b: los ejes del espectro y la leyenda del waterfall.
@@ -95,6 +96,12 @@ void spec_chrome_draw_ruler(const spec_chrome_t *st);
 /* Solo el eje de dB y la leyenda de color, que dependen de otra cosa
  * distinta (los limites de escala y la paleta). */
 void spec_chrome_draw_axis(const spec_chrome_t *st);
+
+/* Todo el cromo en una banda que trae otro, para la captura de pantalla. */
+void spec_chrome_pinta_en(gfx2_surf_t *s, const spec_chrome_t *st);
+
+/* Para el banco - ver spec_chrome_divisiones() en spec_chrome.c. */
+int spec_chrome_divisiones(void);
 
 /* Cierto si `a` y `b` producirian una REGLA distinta / un EJE distinto.
  *

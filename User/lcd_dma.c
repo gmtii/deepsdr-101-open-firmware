@@ -81,19 +81,42 @@ static void arranca(uint32_t origen, uint32_t destino, uint32_t n)
     dma_channel_enable(LCD_DMA_PERIF, LCD_DMA_CANAL);
 }
 
+/*
+ * LA ESPERA TAMBIEN CUENTA COMO TIEMPO DE BUS - 05/10/2026.
+ *
+ * *** El dueño: "busca razones que hagan que se ralentice tanto la radio
+ * completa como el espectro". ***
+ *
+ * Y la primera razon por la que no se encontraban era que el instrumento
+ * mentia. g_lcd_ciclos -la fila "empuje" de la ventana de Fotograma- solo
+ * se sumaba dentro de gfx_blit(), o sea por el camino SIN DMA. Con el DMA
+ * encendido -que es lo de serie- gfx_blit_arranca() se va sin pasar por
+ * ahi, y la espera de verdad ocurre aqui, donde nadie contaba nada.
+ *
+ * O sea que "empuje" valia CERO SIEMPRE que el DMA funcionara, por
+ * construccion. No porque el tiempo de bus hubiera desaparecido, sino
+ * porque se escondia dentro del cajon de la etapa que estuviera esperando.
+ * Y con ese cero se dio por demostrado que el bus "se solapa entero".
+ *
+ * Esta espera es CPU parada mirando una bandera: cuenta igual que empujar
+ * pixeles a mano, y ahora se cuenta.
+ */
 static uint8_t espera_fin(void)
 {
     uint32_t v;
+    uint32_t t0 = rm68120_ciclo();
+    uint8_t  bien = 0U;
 
     for (v = 0UL; v < LCD_DMA_TOPE; v++) {
         if (dma_flag_get(LCD_DMA_PERIF, LCD_DMA_CANAL, DMA_FLAG_FTF) != RESET) {
             dma_flag_clear(LCD_DMA_PERIF, LCD_DMA_CANAL, DMA_FLAG_FTF);
-            dma_channel_disable(LCD_DMA_PERIF, LCD_DMA_CANAL);
-            return 1U;
+            bien = 1U;
+            break;
         }
     }
     dma_channel_disable(LCD_DMA_PERIF, LCD_DMA_CANAL);
-    return 0U;
+    g_lcd_ciclos += rm68120_ciclo() - t0;
+    return bien;
 }
 
 void lcd_dma_init(void)

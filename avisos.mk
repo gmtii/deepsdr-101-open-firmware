@@ -105,6 +105,45 @@ ASFLAGS += -MMD -MP
 # Makefile se puede tocar, esto se mueve a su propio optim.mk.
 CFLAGS += -Os
 
+# ---------------------------------------------------------------------
+# EL CMSIS-DSP ESTABA COMPILANDO SU CAMINO LENTO - 05/10/2026
+# ---------------------------------------------------------------------
+#
+# *** El dueño, con la radio delante: "reparto de audio rf8 ex21 au4 ag2",
+# en LSB y con el ruido encendido. ***
+#
+# Esos 21 puntos de "ex" -la cadena de banda lateral: diezmar I y Q,
+# Hilbert, interpolar de vuelta- no salian de ninguna cuenta. Sumando las
+# multiplicaciones que hace esa cadena por bloque salen unas 11.200, que a
+# dos ciclos cada una son 25.000 de los 533.333 que dura un bloque: el 4,7 %.
+# Medido, el 21. Cuatro veces y media mas.
+#
+# Y la razon es de una linea: **ARM_MATH_LOOPUNROLL no estaba definido en
+# ninguna parte**. Se comprobo con un grep sobre todo CMSIS/: no lo define
+# ni el Makefile, ni los includes, ni nada. Esa macro es la que decide, en
+# CADA funcion del CMSIS-DSP, si se compila el bucle desenrollado o el
+# camino escalar de respaldo, que hace UNA toma por vuelta con su carga, su
+# multiplicacion-acumulacion, su resta y su salto. En un Cortex-M4 eso son
+# siete u ocho ciclos por toma en vez de dos.
+#
+# O sea que la radio llevaba desde siempre corriendo el camino de respaldo
+# del CMSIS en los cuatro filtros que mas corren: el diezmador, el
+# interpolador, el FIR del Hilbert y la cascada de biquads del filtro de
+# canal y del de audio.
+#
+# POR QUE ES SEGURO, Y ESTO SE MIRO ANTES DE TOCARLO. El desenrollado NO
+# cambia ni un bit del resultado, y no es una opinion: en el bucle
+# desenrollado del diezmador las cuatro tomas se acumulan EN EL MISMO
+# acumulador y EN EL MISMO ORDEN que el camino escalar -acc0 += x0*c0,
+# cuatro veces seguidas-, y en el biquad cada muestra se calcula con la
+# misma expresion y la recursion se actualiza igual. En coma flotante lo
+# unico que cambiaria el resultado es cambiar el ORDEN de las sumas, y no
+# cambia. Lo que se quita es el salto y la cuenta del bucle, nada mas.
+#
+# Lo que SI crece es la flash, que es el precio del desenrollado. Sobran
+# 135 kB.
+DEFS += -DARM_MATH_LOOPUNROLL
+
 # La lista caliente: todo lo que toca una muestra de audio o un pixel del
 # espectro por fotograma, mas los CMSIS-DSP que llaman. Si anades un
 # fichero nuevo a la cadena de audio, tiene que entrar AQUI.

@@ -60,9 +60,21 @@ static int16_t chip_w(const ui_digi_state_t *st)
 
     if (!st->chip) { return 0; }
     w = (int16_t)(gfx2_text_w(st->chip, &font_ui_14b) + 34);
-    /* Con quinto boton, nunca menos que lo reservado: es lo que impide que
-     * el borde izquierdo se mueva y arrastre al boton. */
-    if (st->btn5 && w < (int16_t)UDG_CHIP_RES) { w = (int16_t)UDG_CHIP_RES; }
+    /*
+     * CON QUINTO BOTON, NI MENOS NI MAS QUE LO RESERVADO.
+     *
+     * El minimo ya estaba, y es lo que impide que el borde izquierdo se
+     * mueva y arrastre al boton. Faltaba el TOPE, y se vio el 02/10/2026
+     * en una foto del dueño: el estado del demodulador de STANAG pone
+     * cosas como "llenando el entrelazador 180/392", la chapa crecia
+     * hacia la izquierda y se pintaba ENCIMA del quinto boton.
+     *
+     * El arreglo de verdad no es acortar ese texto -que tambien- sino
+     * que la chapa NO PUEDA invadirlo: lo reservado es lo reservado, y
+     * el texto que no quepa se recorta. Un panel no se rompe porque otro
+     * modulo escriba una linea larga.
+     */
+    if (st->btn5) { w = (int16_t)UDG_CHIP_RES; }
     return w;
 }
 static int16_t chip_x(const ui_digi_state_t *st)
@@ -112,9 +124,16 @@ static void pinta_chip(gfx2_surf_t *s, const ui_digi_state_t *st)
     /* Pegado a la derecha: con la caja justa sale en x+10 -donde estaba- y
      * con la caja reservada el numero crece hacia la izquierda desde el
      * punto en vez de empujar al boton. Ver chip_w(). */
-    gfx2_text(s, (int16_t)(x + w - 24 - gfx2_text_w(st->chip, &font_ui_14b)),
-              (int16_t)(btn_y(st) + 4),
-              st->chip, &font_ui_14b, gfx2_rgb(PAL_INK));
+    {
+        /* Recortado a lo que cabe: ver el tope de chip_w(). Se quitan
+         * letras POR DELANTE, que en un contador es lo que menos duele. */
+        const char *txt = st->chip;
+        int16_t hueco = (int16_t)(w - 34);
+        while (*txt != '\0' && gfx2_text_w(txt, &font_ui_14b) > hueco) { txt++; }
+        gfx2_text(s, (int16_t)(x + w - 24 - gfx2_text_w(txt, &font_ui_14b)),
+                  (int16_t)(btn_y(st) + 4),
+                  txt, &font_ui_14b, gfx2_rgb(PAL_INK));
+    }
     /* El punto: verde cuando lo que llega tiene forma de Morse, apagado
      * cuando no. No es adorno - es la diferencia entre "esta leyendo" y
      * "esta inventando letras a partir de ruido", que desde fuera no se
@@ -546,6 +565,9 @@ const int16_t ui_digi_cols_wspr[UI_DIGI_COLS_WSPR_N] = { 8, 110, 260, 380, 500, 
  */
 const int16_t ui_digi_cols_jtty[UI_DIGI_COLS_JTTY_N] = { 8, 62, 132, 176, 672 };
 
+/* Ver el comentario de UI_DIGI_COLS_IDENT_N en ui_digi.h. */
+const int16_t ui_digi_cols_ident[UI_DIGI_COLS_IDENT_N] = { 8, 120, 680 };
+
 /*
  * AIS: quien es el barco, como se llama, donde esta y a que va.
  *
@@ -793,6 +815,17 @@ static void solo_cabecera(gfx2_surf_t *s, void *ctx)
      * pinte sale negro - ver fondo_fila(). */
     gfx2_fill(s, 0, st->y, GFX2_W, UDG_HDR_H, gfx2_rgb(PAL_SURF_0));
     cabecera(s, st);
+}
+
+/* El panel entero en una banda que trae otro, para la captura de pantalla.
+ * La misma funcion de dibujo que usa ui_digi_draw_texto(), que es la que
+ * pinta el panel completo -cabecera, filas, barra y chapas-. */
+/* Recortado a su hueco, igual que lo recorta su ventana en
+ * ui_digi_draw_texto(). Ver spec_chrome_pinta_en() para por que hace falta. */
+void ui_digi_pinta_en(gfx2_surf_t *s, const ui_digi_state_t *st)
+{
+    gfx2_surf_t sub = gfx2_sub_y(s, st->y, st->h);
+    if (sub.h > 0) { texto(&sub, (void *)st); }
 }
 
 void ui_digi_draw_texto(const ui_digi_state_t *st)

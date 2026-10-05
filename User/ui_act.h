@@ -2,6 +2,7 @@
 #define UI_ACT_H_INCLUDED
 
 #include <stdint.h>
+#include "gfx2.h"   /* gfx2_surf_t: ver ui_act_pinta_en() */
 
 /*
  * ETAPA 4: la barra de acciones de abajo.
@@ -63,6 +64,9 @@ typedef struct {
 } ui_act_state_t;
 
 void ui_act_draw(const ui_act_state_t *st);
+
+/* La barra en una banda que trae otro, para la captura de pantalla. */
+void ui_act_pinta_en(gfx2_surf_t *s, const ui_act_state_t *st);
 
 /* Repinta un solo boton, para el retorno visual del toque sin volcar la
  * barra entera. */

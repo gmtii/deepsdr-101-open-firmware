@@ -2,6 +2,7 @@
 #define UI_TOP_H_INCLUDED
 
 #include <stdint.h>
+#include "gfx2.h"   /* gfx2_surf_t: ver ui_top_pinta_en() */
 
 /*
  * Cabecera y barra de estado del DEEPSDR 101, dibujadas con gfx2.
@@ -155,7 +156,49 @@ typedef struct {
 #define UI_TOP_RDS_H      44
 #define UI_TOP_RDS_NOM_Y  (UI_TOP_RDS_Y + 2)    /* el renglon fijo */
 #define UI_TOP_RDS_MAR_Y  (UI_TOP_RDS_Y + 24)   /* la marquesina */
-#define UI_TOP_RDS_X2  632   /* hasta aqui: despues viene el reloj */
+/*
+ * 05/10/2026: 632 -> 620. Los doce pixeles son para que la lectura de PPM de
+ * SAM, que se ha mudado aqui al lado, no empiece dentro de la franja. Ver
+ * UI_TOP_SAM_X justo debajo.
+ */
+#define UI_TOP_RDS_X2  620   /* hasta aqui: despues viene el PPM y el reloj */
+
+/*
+ * EL HUECO DE LA LECTURA DE PPM DE SAM - 05/10/2026.
+ *
+ * *** El dueño, con una foto de la pantalla: "y arregla eso tambien, los ppm
+ * pisan la marquesima" / "ponlos mas a la derecha no se". ***
+ *
+ * Estaba en (470, 40): dentro de la franja de la marquesina, encima del
+ * renglon de abajo -el del horario de la emisora-. Los dos se pintaban y
+ * ganaba el ultimo. El 28/09 ya se habia peleado con esa franja por otro
+ * motivo -la franja lo borraba- y se resolvio pintandolo TAMBIEN dentro de
+ * ella; eso lo hizo visible y lo dejo encima del horario.
+ *
+ * La solucion de verdad es no compartir sitio: se va al renglon de ARRIBA,
+ * a la derecha de donde acaba la franja y a la izquierda del reloj. Ahi no
+ * pinta nadie mas, asi que ya no hay que repintarlo en dos sitios y
+ * rds_franja() se queda sin su parche.
+ *
+ * Los numeros, medidos y no supuestos (gfx2_text_w, font_ui_14):
+ *     "+23,7 PPM"   74 px      "-199,9 PPM"   77 px
+ *     "+123,4 PPM"  83 px      el reloj "22:14" (font_num_20)  65 px
+ * El reloj va alineado a la derecha en 790, o sea que ocupa 725..790, y su
+ * zona de toque empieza en 715. De 620 a 712 hay 92 px libres: caben los 83
+ * del peor caso y quedan tres de margen antes del toque del reloj.
+ *
+ * sim/top_franjas.c comprueba que la huella de esto y la de la marquesina no
+ * comparten NI UN pixel, y que el ancho del peor texto cabe en el hueco.
+ */
+#define UI_TOP_SAM_X   622
+#define UI_TOP_SAM_Y   12
+#define UI_TOP_SAM_W   90
+/* Lo que hay que repintar para refrescar solo este numero. Un poco mas
+ * ancho y alto que el texto, para coger el degradado de alrededor. */
+#define UI_TOP_SAM_RX  620
+#define UI_TOP_SAM_RY  6
+#define UI_TOP_SAM_RW  94
+#define UI_TOP_SAM_RH  24
 
 /* Solo la marquesina. Se llama muchas veces por segundo, asi que tiene su
  * propia franja: repintar la cabecera entera treinta veces por segundo para
@@ -180,6 +223,10 @@ int16_t ui_top_rds_nombre_w(const char *t);
 /* Repinta cabecera y barra de estado enteras. */
 void ui_top_draw(const ui_top_state_t *st);
 
+/* Las tres franjas de arriba pintadas en una banda que trae otro, para la
+ * captura de pantalla. Ver ui_top_pinta_en() en ui_top.c. */
+void ui_top_pinta_en(gfx2_surf_t *s, const ui_top_state_t *st);
+
 /* Solo la barra de estado, para los refrescos periodicos del S-meter. */
 void ui_top_draw_status(const ui_top_state_t *st);
 /* Solo la parte de la franja de estado que se mueve con la señal: la barra
@@ -187,6 +234,17 @@ void ui_top_draw_status(const ui_top_state_t *st);
  * repintar la franja entera cada vez que la barra se mueve era el 21 % de
  * mas que costaba el fotograma cuando entraba señal. */
 void ui_top_draw_smeter(const ui_top_state_t *st);
+
+/*
+ * Solo el hueco del PPM del SAM. Ese numero cambia casi en cada fotograma
+ * -son decimas de un PLL- y repintar la cabecera entera por el costaba
+ * 83.200 accesos al bus; recortado a su ventana son 4.480. Ver ui_top.c.
+ */
+void ui_top_draw_sam(const ui_top_state_t *st);
+
+/* Y solo la parte que mueve un cambio de frecuencia: cifras, subrayado del
+ * digito, pastilla de modo y de banda. Ver ui_top_draw_freq() en ui_top.c. */
+void ui_top_draw_freq(const ui_top_state_t *st);
 int16_t ui_top_movil_w_dbg(void);
 int16_t ui_top_read_x_dbg(void);
 
