@@ -21,6 +21,7 @@
  *    constantes, asi que una imagen grabada a medias ya no arranca.
  */
 #include "cargador.h"
+#include "idioma.h"
 #include "spi_flash.h"
 #include <string.h>
 
@@ -141,7 +142,28 @@ static uint8_t  s_spc;      /* sectores por cluster; 0 = sin leer */
 static uint8_t geo(void)
 {
     if (!s_geo_ok) {
-        s_geo_ok = spi_flash_geometria(&s_fat1, &s_raiz, &s_datos, &s_nclus);
+        /*
+         * LECTURA, NO ESCRITURA - 06/10/2026.
+         *
+         * *** De un issue: "The loader doesn't see update.bin on the disk",
+         * con una ficha que decia "Volumen: no se reconoce". Y la radio con
+         * el formateo DE FABRICA, sin tocar. ***
+         *
+         * Este cargador SOLO LEE: busca un fichero, lo copia a la flash
+         * interna y se aparta. spi_flash_geometria() contesta a otra
+         * pregunta -si se puede ESCRIBIR sin romper nada-, y para eso exige
+         * dos copias de la FAT, que el cluster divida el bloque de borrado
+         * de 4 kB, que el area de datos caiga en frontera y que sea FAT12 y
+         * no FAT16. Nada de eso hace falta para leer, y son condiciones de
+         * ESTE driver, no del formato.
+         *
+         * Con el formato de fabrica rechazado por alguna de ellas, esto
+         * devolvia 0 y cargador_busca_update() se iba sin mirar el
+         * directorio: el fichero estaba en el disco y nadie lo buscaba. Y
+         * la salida que la pantalla ofrece -copiar update.bin al disco USB-
+         * es justo la que no funciona. Pescadilla.
+         */
+        s_geo_ok = spi_flash_geometria_lectura(&s_fat1, &s_raiz, &s_datos, &s_nclus);
         s_spc    = spi_flash_spc();
         if (s_spc == 0U) { s_geo_ok = 0U; }   /* sin esto no se puede andar la cadena */
     }
@@ -417,20 +439,35 @@ carga_r_t cargador_arranca(const carga_fmc_t *fmc)
 
 uint32_t cargador_grabados(void) { return s_grabados; }
 
+/*
+ * EL VEREDICTO, EN EL IDIOMA DE LA RADIO - 06/10/2026.
+ *
+ * Esto sale en la pantalla de MODO ACTUALIZACION y era la otra tanda de
+ * cadenas de interfaz que no pasaba por tr(). Y es de las peores donde
+ * dejarlo sin traducir: son exactamente las frases que lee alguien cuando
+ * algo no le ha funcionado, y el que abrio el issue de "the loader doesn't
+ * see update.bin" escribe en ingles.
+ */
 const char *cargador_porque_txt(carga_r_t r)
 {
     switch (r) {
-    case CARGA_ARRANCA:         return "arranca";
-    case CARGA_GRABADA:         return "grabada y arranca";
-    case CARGA_SIN_APP:         return "no hay aplicacion";
-    case CARGA_SIN_CABECERA:    return "sin cabecera: ahi no hay imagen";
-    case CARGA_CAB_RARA:        return "cabecera con longitud imposible";
-    case CARGA_CRC_MALO:        return "imagen incompleta o corrompida";
-    case CARGA_NO_HAY_VOLUMEN:  return "no se lee el volumen";
-    case CARGA_FICHERO_GRANDE:  return "update.bin no cabe en la flash";
-    case CARGA_FICHERO_ROTO:    return "la cadena del fichero no cuadra";
-    case CARGA_ERROR_BORRAR:    return "no se pudo borrar";
-    case CARGA_ERROR_GRABAR:    return "no se pudo grabar";
+    case CARGA_ARRANCA:         return tr("arranca", "boots");
+    case CARGA_GRABADA:         return tr("grabada y arranca", "written, booting");
+    case CARGA_SIN_APP:         return tr("no hay aplicacion", "no application");
+    case CARGA_SIN_CABECERA:    return tr("sin cabecera: ahi no hay imagen",
+                                          "no header: there is no image there");
+    case CARGA_CAB_RARA:        return tr("cabecera con longitud imposible",
+                                          "header with an impossible length");
+    case CARGA_CRC_MALO:        return tr("imagen incompleta o corrompida",
+                                          "incomplete or corrupted image");
+    case CARGA_NO_HAY_VOLUMEN:  return tr("no se lee el volumen",
+                                          "the volume cannot be read");
+    case CARGA_FICHERO_GRANDE:  return tr("update.bin no cabe en la flash",
+                                          "update.bin does not fit in flash");
+    case CARGA_FICHERO_ROTO:    return tr("la cadena del fichero no cuadra",
+                                          "the file chain does not add up");
+    case CARGA_ERROR_BORRAR:    return tr("no se pudo borrar", "could not erase");
+    case CARGA_ERROR_GRABAR:    return tr("no se pudo grabar", "could not write");
     default:                    return "?";
     }
 }

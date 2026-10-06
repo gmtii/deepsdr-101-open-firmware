@@ -132,4 +132,20 @@ void sdr_rx_reset_ferr_count(void);
 uint8_t sdr_rx_last_block_corrupted(void);
 uint8_t sdr_rx_get_ferr_snapshot(int16_t *i_out, int16_t *q_out, uint32_t n);
 
+/*
+ * El chequeo de bloque corrupto, encendido o apagado. Se APAGA en WFM: ahi
+ * la I/Q va sin mezclar a 192 kHz y los saltos grandes entre muestras son
+ * lo NORMAL, no una anomalia - ver la cuenta en sdr_rx.c. Encendido en
+ * AM/SSB, donde la senal si va mezclada a banda base y es estrecha.
+ */
+void sdr_rx_set_chequeo_corrupcion(uint8_t on);
+
+/* Cuantas veces la ISR del audio llego tan tarde que HTF y FTF estaban las
+ * dos puestas y se perdio media captura. Antes esto no dejaba rastro. */
+uint32_t sdr_rx_get_tarde(void);
+
+/* Cuantos bloques se han dado por corruptos y se han descartado. Cada uno
+ * repite 2,67 ms de audio ya sonado. */
+uint32_t sdr_rx_get_descartes(void);
+
 #endif /* SDR_RX_H */

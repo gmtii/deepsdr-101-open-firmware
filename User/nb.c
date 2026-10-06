@@ -47,7 +47,28 @@ static float mag_l1(float i, float q)
 
 void nb_set_nivel(uint8_t nivel)
 {
+    uint8_t antes = s_nivel;
+
     s_nivel = (nivel <= 3U) ? nivel : 0U;
+
+    /*
+     * AL ENCENDERLO, EL SUELO SE MIDE DE NUEVO - 06/10/2026.
+     *
+     * Con el nivel a cero, nb_proceso() vuelve antes de actualizar el suelo
+     * (ver su propio return), pero s_suelo_listo se queda a 1 de la ultima
+     * vez. Al volver a encender el supresor desde el menu, el umbral salia
+     * de un suelo medido en otras condiciones de señal y de ganancia: o
+     * demasiado alto -y el NB no cazaba nada- o demasiado bajo, y entonces
+     * el freno saltaba en cada bloque y el suelo tardaba medio segundo en
+     * ponerse al dia (NB_SUELO_ALFA a 375 bloques por segundo).
+     *
+     * apply_demod_mode() ya llamaba a nb_reset() por esta misma razon, y lo
+     * explica bien. Lo que faltaba era aplicar el mismo criterio al
+     * encendido manual, que es el que hace el usuario.
+     */
+    if ((antes == 0U) && (s_nivel != 0U)) {
+        nb_reset();
+    }
 }
 
 uint8_t nb_get_nivel(void)

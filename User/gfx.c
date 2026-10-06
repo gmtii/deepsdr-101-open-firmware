@@ -30,6 +30,58 @@
  */
 static uint16_t s_guard_top = 0U;
 
+/*
+ * ===========================================================================
+ * QUIEN HA PINTADO DENTRO DE ESTE RECTANGULO - 05/10/2026.
+ * ===========================================================================
+ *
+ * El espectro se salta las bandas que no han cambiado desde el cuadro
+ * anterior (ver "LAS BANDAS QUE NO HACE FALTA VOLCAR" en spectrum.c), y eso
+ * solo vale mientras lo que hay en el panel sea lo que el creia haber
+ * dejado. Cualquiera que pinte dentro de su rectangulo lo rompe.
+ *
+ * LA PRIMERA VERSION contaba solo los borrados de pantalla y confiaba en
+ * que todo lo demas avisara a mano. Duro lo que tardo en leerse el
+ * comentario de rtty_scope_draw(), que dice, con todas las letras, que sus
+ * dos rayas verticales no borran la posicion anterior "porque
+ * spectrum_draw() repinta todas las columnas en cada llamada". O sea que ya
+ * habia un sitio apoyado justo en lo que esto cambia, y nadie se habria
+ * acordado de el.
+ *
+ * ASI QUE SE MIDE. Las cinco funciones de este fichero que abren una
+ * ventana en el panel -pixel, rectangulo, los dos volcados y el borrado
+ * entero- pasan por aqui, y si lo que van a pintar toca el rectangulo
+ * vigilado, sube el contador. Todo lo que dibuja en la radio acaba en una
+ * de esas cinco, incluido gfx2_render(). No hay nada que recordar
+ * actualizar, y los caminos que aun no existen quedan cubiertos el dia que
+ * se escriban.
+ *
+ * gfx.c sigue sin saber nada de spectrum.c: aqui solo hay un rectangulo y
+ * un contador.
+ */
+static uint16_t s_vig_x0, s_vig_y0, s_vig_x1, s_vig_y1;
+static uint8_t  s_vig_on;
+static uint32_t s_vig_n;
+
+void gfx_vigila(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
+{
+    s_vig_x0 = x; s_vig_y0 = y;
+    s_vig_x1 = (uint16_t)(x + w - 1U);
+    s_vig_y1 = (uint16_t)(y + h - 1U);
+    s_vig_on = 1U;
+}
+
+uint32_t gfx_vigilancia(void) { return s_vig_n; }
+
+/* Un rectangulo que se va a pintar. Si toca el vigilado, se apunta. */
+static void chiva(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1)
+{
+    if (s_vig_on == 0U) { return; }
+    if (x1 < s_vig_x0 || x0 > s_vig_x1) { return; }
+    if (y1 < s_vig_y0 || y0 > s_vig_y1) { return; }
+    s_vig_n++;
+}
+
 void gfx_guard_top_set(uint16_t rows)
 {
     s_guard_top = (rows > GFX_SCREEN_HEIGHT) ? GFX_SCREEN_HEIGHT : rows;
@@ -45,6 +97,7 @@ void gfx_pixel(uint16_t x, uint16_t y, uint16_t color)
     if (y < s_guard_top) {
         return;
     }
+    chiva(x, y, x, y);
     rm68120_set_window(x, y, x, y);
     rm68120_write_data(color);
 }
@@ -66,6 +119,7 @@ void gfx_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t colo
         h = (uint16_t)(h - skip);
     }
 
+    chiva(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
     rm68120_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
 
     n = (uint32_t)w * (uint32_t)h;
@@ -100,6 +154,7 @@ void gfx_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color)
 
 void gfx_fill_screen(uint16_t color)
 {
+    if (s_vig_on != 0U) { s_vig_n++; }   /* la pantalla entera lo toca seguro */
     if (s_guard_top != 0U) {
         /* Respeta la banda reservada: borra solo de ahi para abajo. Quien
          * quiera borrar el panel ENTERO (dormir, calibrar) desarma el guard
@@ -188,7 +243,8 @@ uint8_t gfx_blit_arranca(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const u
     }
 
     if (lcd_dma_hay()) {
-        rm68120_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
+        chiva(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
+    rm68120_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
         if (lcd_dma_manda(pixels, (uint32_t)w * (uint32_t)h)) {
             return 1U;
         }
@@ -234,7 +290,8 @@ void gfx_blit(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pi
          * devuelven cero y el bucle queda igual. */
         uint32_t t0 = rm68120_ciclo();
 
-        rm68120_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
+        chiva(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
+    rm68120_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
 
         n = (uint32_t)w * (uint32_t)h;
         for (i = 0; i < n; i++) {

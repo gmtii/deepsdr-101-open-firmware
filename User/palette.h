@@ -88,6 +88,24 @@ typedef struct {
     uint32_t warn;
     uint32_t crit;
 
+    /*
+     * EL MAPA SIGUE AL TEMA - 05/10/2026, de un issue.
+     *
+     * mapa.c nacio con NUEVE colores escritos a pelo y cero referencias a
+     * esta paleta: mar, rejilla, ecuador, costa, los dos botones de zoom y
+     * la casa. Siempre azul oscuro, pusieras el tema que pusieras.
+     *
+     * Esto NO se arregla armonizando el mapa para todos: los seis temas de
+     * antes se disenaron con ese mapa azul delante, y cambiarselo de golpe
+     * es cambiarle la pantalla a quien no ha pedido nada. Asi que el mapa
+     * sigue al tema SOLO donde el tema lo pide, y hoy lo pide uno.
+     *
+     * Quien anada un tema claro nuevo pone este 1 y se lleva el mapa
+     * detras; quien no lo ponga se queda con el azul de siempre, que es lo
+     * que ya tenia.
+     */
+    uint8_t mapa_sigue;
+
 } palette_t;
 
 /* Revision 1: superficies oscuras, saltos de 8-12 unidades. Por defecto.
@@ -97,7 +115,8 @@ static const palette_t k_pal_oscura = {
     0x0D0F12, 0x15181D, 0x1E232A, 0x2A313A, 0x323A45, 0x1E242C, 0x1B2027,
     0xEEF2F7, 0x9AA5B3, 0x646E7C,
     0x17A394, 0xC77A14, 0x3B7FD4,
-    0x2F9E52, 0xC77A14, 0xD94040
+    0x2F9E52, 0xC77A14, 0xD94040,
+    0U    /* mapa: el azul de siempre */
 };
 
 /* Revision 2: negro real y saltos ~3 veces mayores. Se conserva porque para
@@ -108,7 +127,8 @@ static const palette_t k_pal_contraste = {
     0x000000, 0x24282E, 0x3C424B, 0x555D68, 0x6A7381, 0x2A2F36, 0x2E343C,
     0xF2F5F8, 0xAEB6C0, 0x868F99,
     0x17A394, 0xC77A14, 0x3B7FD4,
-    0x2F9E52, 0xC77A14, 0xD94040
+    0x2F9E52, 0xC77A14, 0xD94040,
+    0U    /* mapa: el azul de siempre */
 };
 
 /*
@@ -150,7 +170,8 @@ static const palette_t k_pal_ambar = {
     0x120F0B, 0x1C1811, 0x272118, 0x342C21, 0x3E3428, 0x261F16, 0x221C14,
     0xF8F2E8, 0xB9AB92, 0x7F7360,
     0x17A394, 0xC77A14, 0x3B7FD4,
-    0x2F9E52, 0xC77A14, 0xD94040
+    0x2F9E52, 0xC77A14, 0xD94040,
+    0U    /* mapa: el azul de siempre */
 };
 
 /* Grises azulados. Es la mas parecida a la oscura de siempre, un punto
@@ -161,7 +182,8 @@ static const palette_t k_pal_fria = {
     0x0A0F15, 0x131A22, 0x1C2430, 0x27313F, 0x313C4B, 0x1B232D, 0x18202A,
     0xEEF4FB, 0x9DABBC, 0x667381,
     0x17A394, 0xC77A14, 0x3B7FD4,
-    0x2F9E52, 0xC77A14, 0xD94040
+    0x2F9E52, 0xC77A14, 0xD94040,
+    0U    /* mapa: el azul de siempre */
 };
 
 /*
@@ -226,7 +248,8 @@ static const palette_t k_pal_oliva = {
     0x9BAA50, 0x949E4F, 0x8B954B, 0x848E47, 0x798141, 0x95A34D, 0x98A550,
     0x000000, 0x282A15, 0x3E4321,
     0x095E49, 0xA31010, 0x4E18F0,
-    0x1C5E43, 0x664F0A, 0x4F0808
+    0x1C5E43, 0x664F0A, 0x4F0808,
+    0U    /* mapa: el azul de siempre */
 };
 
 /* Naranja fuerte con tinta negra. El mas duro de los tres para las marcas:
@@ -237,7 +260,8 @@ static const palette_t k_pal_naranja = {
     0xFF6C25, 0xF06422, 0xE2601F, 0xD75C1D, 0xCB561B, 0xF76924, 0xF96924,
     0x000000, 0x3A1808, 0x62290D,
     0x214E6E, 0x300530, 0x1313C2,
-    0x104F15, 0x301E05, 0x940F30
+    0x104F15, 0x301E05, 0x940F30,
+    0U    /* mapa: el azul de siempre */
 };
 
 /* Fosforo: casi negro con tinta verde, como un terminal. Aqui la rampa va
@@ -247,7 +271,89 @@ static const palette_t k_pal_fosforo = {
     0x081810, 0x091F14, 0x0A2618, 0x05452A, 0x0C3320, 0x0B2F1E, 0x081C12,
     0x27FF9B, 0x1A9D60, 0x167F4D,
     0x388C70, 0xFFD91A, 0x1168A6,
-    0x1AFF9F, 0xFFE41A, 0xC91432
+    0x1AFF9F, 0xFFE41A, 0xC91432,
+    0U    /* mapa: el azul de siempre */
+};
+
+/*
+ * ===========================================================================
+ * CHEMISTRY - 05/10/2026, de un issue, y la paleta la escribio el que
+ * abrio el issue.
+ * ===========================================================================
+ * "my LCD must be far less capable of displaying low intensity colours than
+ * yours. This means that pretty much all of the palette options are
+ * completely unusable for me. Anywhere where you have decided on any colour
+ * with a main component less than 7F makes it unreadable on my screen."
+ *
+ * Su panel APLASTA LA ZONA OSCURA: por debajo de 0x7F todo se le va al
+ * negro, asi que no distingue un tono oscuro de otro. Los seis temas de
+ * antes construyen la jerarquia de superficies ahi abajo -la oscura va de
+ * 0x0D a 0x2A-, de modo que para el son una mancha plana. No es que se vean
+ * mal: es que no se ven.
+ *
+ * DOS COSAS QUE CONFIRMAN EL DIAGNOSTICO, y las dos las cuenta el en el
+ * issue sin saber que lo confirman:
+ *
+ *   "I have tried the brightness on 100% and it's still not clear". Claro:
+ *   subir la retroiluminacion sube tambien el negro, asi que los tonos
+ *   oscuros no se SEPARAN. No hay ajuste de brillo que arregle un panel que
+ *   aplasta sombras; la unica salida es no usar tonos oscuros.
+ *
+ *   "when I tried to take a picture it was readable, I guess the phone
+ *   camera is more sensitive to IR or something". No es infrarrojo. Es la
+ *   curva de tono del movil, que levanta mucho las sombras - exactamente lo
+ *   que ya esta escrito en la cabecera de este fichero, donde esa misma
+ *   curva nos hizo tirar una paleta buena creyendo que era mala. Alli la
+ *   camara nos engano; aqui le revela a el un texto que su panel no le
+ *   ensena. Mismo fenomeno, direcciones contrarias.
+ *
+ * LA PALETA ES SUYA, NO MIA. Surfaces y tinta van TAL CUAL las mando, sin
+ * redondear ni "mejorar": las ajusto yo a ojo en un panel que no tengo
+ * delante y las rompo. El es el instrumento de medida aqui. Y pasan enteras
+ * tools/paleta_check.py: los cuatro saltos de superficie y la tinta con
+ * 21:1 sobre el fondo, que es el mejor numero de los ocho temas.
+ *
+ * LOS DOS QUE SI HE CAMBIADO, y por que. paleta_check.py no mira ok/warn, y
+ * ahi su paleta tenia dos agujeros que el no podia ver porque no corre el
+ * script:
+ *
+ *     ok    #00FF00 sobre blanco   1,37:1
+ *     warn  #FFD700 sobre blanco   1,40:1
+ *
+ * Verde puro y oro sobre papel blanco. Eso no es cosmetico, apaga cuatro
+ * cosas: la LUZ DE ENGANCHE de los modos digitales (ui_digi.c pinta ok
+ * enganchado y line suelto - con su paleta los dos quedaban a ~1,3:1 contra
+ * el blanco, o sea que la luz dejaba de decir nada), el ICONO DE BATERIA,
+ * el TEXTO DE AVISO del teclado y los MARCADORES del espectro.
+ *
+ * Los de aqui cumplen las DOS reglas a la vez, la del proyecto y la suya:
+ *
+ *     ok    #00A000   3,48:1 sobre blanco   componente mayor 0xA0  >= 0x7F
+ *     warn  #C47A00   3,43:1 sobre blanco   componente mayor 0xC4  >= 0x7F
+ *
+ * o sea que se ven en un panel normal Y le siguen quedando por encima de su
+ * umbral, que es lo que no conseguia ningun verde oscuro de los habituales.
+ * El crit que el eligio, #FF0029, ya cumplia las dos (3,97:1 y 0xFF) y se
+ * queda como esta.
+ *
+ * EL MAPA. Es la otra mitad del issue: "the world map uses its own palette
+ * ... the outlines for the continents are barely legible for me". Cierto,
+ * mapa.c llevaba nueve colores a pelo. Este es el unico tema con
+ * mapa_sigue = 1, asi que el mapa se vuelve claro SOLO aqui y los demas
+ * temas no se enteran. Ver mapa.c.
+ *
+ * LO QUE NO SE HA PODIDO COMPROBAR. Ninguno de nosotros dos tiene ese
+ * panel. Las superficies y la tinta las ha probado el en el suyo; los dos
+ * colores de estado y el mapa estan medidos, no vistos. Si vuelve a
+ * escribir, eso es lo que hay que preguntarle.
+ */
+static const palette_t k_pal_chemistry = {
+    "Chemistry",
+    0xFFFFFF, 0xEDEDED, 0xE9E9E9, 0xCCCCCC, 0xC7C7C7, 0xF0F0F0, 0xFFFFFF,
+    0x000000, 0x000000, 0x7F7F7F,
+    0x919191, 0x6B6B6B, 0x000000,
+    0x00A000, 0xC47A00, 0xFF0029,
+    1U    /* el mapa sigue a este tema */
 };
 
 /* La paleta activa. Cambiarla y repintar es todo lo que hace falta. */

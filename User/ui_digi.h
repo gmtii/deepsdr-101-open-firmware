@@ -311,6 +311,7 @@ int16_t ui_digi_btn5_x_dbg(const ui_digi_state_t *st);
 int16_t ui_digi_btn5_w_dbg(const ui_digi_state_t *st);
 int16_t ui_digi_btn4_x_dbg(const ui_digi_state_t *st);
 int16_t ui_digi_btn4_w_dbg(const ui_digi_state_t *st);
+int16_t ui_digi_btn3_w_dbg(const ui_digi_state_t *st);
 int16_t ui_digi_chip_x_dbg(const ui_digi_state_t *st);
 int16_t ui_digi_chip_w_dbg(const ui_digi_state_t *st);
 uint8_t ui_digi_chip_hit(const ui_digi_state_t *st, uint16_t x, uint16_t y);

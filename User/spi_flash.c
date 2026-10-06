@@ -1001,6 +1001,8 @@ typedef struct {
     uint32_t clusters;
     uint32_t c_ali;       /* primer cluster que cae en frontera de 4 kB */
     uint8_t  porque;      /* si no vale, cual de las comprobaciones fallo */
+    uint8_t  lee;         /* 1 = se puede LEER aunque no se pueda escribir */
+    uint8_t  mirado;      /* 1 = ya se ha leido el sector de arranque */
 } fat_geo_t;
 
 static fat_geo_t s_geo;
@@ -1039,7 +1041,13 @@ static uint8_t geo_lee(void);
  */
 static const fat_geo_t *geo(void)
 {
-    if (!s_geo.vale) {
+    /* `vale` quiere decir "se puede escribir". Desde que leer y escribir
+     * se deciden por separado (06/10/2026), un volumen legible-pero-no-
+     * escribible tiene vale=0 y lee=1, y preguntar solo por `vale` volvia
+     * a releer el sector de arranque en CADA llamada - 64 bytes por un bus
+     * a patadas, en el bucle que recorre el directorio raiz. Se mira si ya
+     * se ha mirado. */
+    if (!s_geo.mirado) {
         (void)geo_lee();
     }
     return &s_geo;
@@ -1300,6 +1308,8 @@ static uint8_t geo_lee(void)
     uint32_t datos_ent;
 
     s_geo.vale = 0U;
+    s_geo.lee = 0U;
+    s_geo.mirado = 1U;
     s_geo.porque = GEO_NO_ES_FAT;
 
     spi_flash_read(0UL, bs, sizeof bs);
@@ -1334,20 +1344,20 @@ static uint8_t geo_lee(void)
     {
         uint32_t cl = (uint32_t)s_geo.spc * s_geo.bps;
 
-        if (cl == 0UL || cl > FLASH_SECTOR_SIZE
-            || (cl & (cl - 1UL)) != 0UL
-            || (FLASH_SECTOR_SIZE % cl) != 0UL) {
+        /* Para LEER basta que sea potencia de dos: es lo unico que la
+         * cadena de clusters necesita. Lo de que divida al bloque de
+         * borrado se mira mas abajo, con el resto de lo de escribir. */
+        if (cl == 0UL || (cl & (cl - 1UL)) != 0UL) {
             s_geo.porque = GEO_CLUSTER;
             return 0U;
         }
     }
-    if (s_geo.nfat != 2U)                   { s_geo.porque = GEO_COPIAS;   return 0U; }
-
     s_geo.raiz_lba  = (uint32_t)s_geo.res + ((uint32_t)s_geo.nfat * s_geo.fat_sec);
     datos_ent       = ((uint32_t)s_geo.raiz_ent * 32UL + s_geo.bps - 1UL) / s_geo.bps;
     s_geo.datos_lba = s_geo.raiz_lba + datos_ent;
     if (s_geo.datos_lba >= s_geo.sectores) { return 0U; }
     s_geo.clusters  = (s_geo.sectores - s_geo.datos_lba) / s_geo.spc;
+    if (s_geo.clusters == 0UL) { return 0U; }
 
     /*
      * Y QUE SEA FAT12 DE VERDAD - 02/10/2026. Hasta ahora esto no se
@@ -1385,6 +1395,56 @@ static uint8_t geo_lee(void)
     }
 
     /*
+     * ===================================================================
+     * HASTA AQUI, LO QUE HACE FALTA PARA LEER - 06/10/2026.
+     * ===================================================================
+     *
+     * *** De un issue: "The loader doesn't see update.bin on the disk",
+     * con una ficha que decia "Volumen: no se reconoce" y la radio con el
+     * formateo DE FABRICA, sin reformatear nunca. ***
+     *
+     * Son el mismo fallo: cargador_busca_update() empieza con
+     * `if (!geo()) { return 0U; }`, asi que un volumen rechazado deja el
+     * fichero sin buscar. Y lo que estaba mal de fondo es que esta funcion
+     * contestaba a DOS preguntas distintas con un solo si o no.
+     *
+     * EL CORTE NO ES DONDE PARECE, y lo primero que hice estaba mal: puse
+     * el tope de 4084 clusters del lado de escribir, y es del lado de
+     * LEER. Por encima de 4084 el formato ES OTRO -FAT16, entradas de 16
+     * bits- y recorrer esa tabla como si fuera FAT12 no da error: da
+     * clusters equivocados y lee basura. Lo mismo con la FAT corta: una
+     * cadena que se sale de su tabla no se lee, se inventa.
+     *
+     * La regla de verdad es esta:
+     *
+     *   DEL FORMATO (y por tanto, para LEER):
+     *     sector de 512, cluster potencia de dos, FAT12 y no FAT16, y que
+     *     la tabla declarada llegue para sus propios clusters.
+     *
+     *   DE ESTE DRIVER Y SU BORRADO POR BLOQUES (solo para ESCRIBIR):
+     *     dos copias de la FAT -hay que actualizar las dos-, cluster que
+     *     quepa en el bloque de 4 kB y lo divida exacto, y area de datos
+     *     en numero entero de clusters. Nada de eso lo exige FAT12: lo
+     *     exige el ciclo leer-borrar-escribir de 4 kB de este chip.
+     *
+     * Un volumen perfectamente legal y legible puede no pasar las
+     * segundas - y el cargador, que SOLO LEE, se quedaba sin poder
+     * arreglar una radio que no arranca, con la pantalla pidiendole que
+     * copiara un fichero a un disco donde no se puede copiar. Pescadilla.
+     *
+     * Lo ata sim/geo_lectura.c, que comprueba las dos cosas y, sobre todo,
+     * que la negativa a ESCRIBIR sigue intacta: lo que se aflojo fue la
+     * pregunta de leer.
+     */
+    s_geo.lee = 1U;
+
+    /* Y a partir de aqui, lo de escribir. Dos copias de la FAT: al
+     * escribir hay que actualizar las dos, y un volumen con una sola -o
+     * con tres- no es algo que este driver sepa mantener coherente. Para
+     * LEER da igual: se lee la primera, que es la que hay. */
+    if (s_geo.nfat != 2U)                   { s_geo.porque = GEO_COPIAS;   return 0U; }
+
+    /*
      * Que ALGUN cluster caiga en frontera de bloque de borrado. Antes se
      * exigia que cayera el primero -o sea que el area de datos empezara
      * en frontera-, y eso dejaba fuera el formato que Windows propone
@@ -1392,6 +1452,17 @@ static uint8_t geo_lee(void)
      * cluster divide al bloque, hay alineados si y solo si el area de
      * datos empieza en un numero entero de clusters. Ver CLUSTER_ALI.
      */
+    {
+        uint32_t cl = (uint32_t)s_geo.spc * s_geo.bps;
+
+        /* La otra mitad de la comprobacion del cluster: para ESCRIBIR
+         * tiene que caber en el bloque de borrado y dividirlo exacto, o el
+         * ciclo leer-borrar-escribir de 4 kB se lleva por delante clusters
+         * vecinos. Para leer no importa. */
+        if (cl > FLASH_SECTOR_SIZE || (FLASH_SECTOR_SIZE % cl) != 0UL) {
+            s_geo.porque = GEO_CLUSTER;     return 0U;
+        }
+    }
     if ((s_geo.datos_lba % s_geo.spc) != 0U) {
         s_geo.porque = GEO_DESALINEADO;     return 0U;
     }
@@ -1412,6 +1483,40 @@ static uint8_t geo_lee(void)
 
     s_geo.porque = GEO_OK;
     s_geo.vale = 1U;
+    return 1U;
+}
+
+/*
+ * ¿Se puede LEER este volumen? Mas flojo que spi_flash_geometria(), que
+ * contesta si se puede ESCRIBIR - ver el corte dentro de geo_lee().
+ *
+ * Lo usa el cargador, que solo lee: con esto puede sacar un update.bin de
+ * un disco que el firmware no se atreveria a tocar. Devuelve los mismos
+ * cuatro numeros.
+ */
+/*
+ * Olvidar lo leido: el siguiente que pregunte vuelve a mirar el sector de
+ * arranque. Hace falta cuando el volumen puede haber cambiado por debajo
+ * -el disco USB lo escribe el PC- y en los bancos, que cargan un volumen
+ * distinto en cada caso.
+ */
+void spi_flash_geo_olvida(void)
+{
+    s_geo.mirado = 0U;
+    s_geo.vale   = 0U;
+    s_geo.lee    = 0U;
+}
+
+uint8_t spi_flash_geometria_lectura(uint32_t *fat1_lba, uint32_t *raiz_lba,
+                                    uint32_t *datos_lba, uint32_t *clusters)
+{
+    const fat_geo_t *g = geo();
+
+    if (g == (const fat_geo_t *)0 || !g->lee) { return 0U; }
+    if (fat1_lba)  { *fat1_lba  = g->res; }
+    if (raiz_lba)  { *raiz_lba  = g->raiz_lba; }
+    if (datos_lba) { *datos_lba = g->datos_lba; }
+    if (clusters)  { *clusters  = g->clusters; }
     return 1U;
 }
 

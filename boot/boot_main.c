@@ -58,7 +58,25 @@ extern usb_core_driver g_usb;   /* en soporte.c, compartido con usb_it.c */
 #define FONDO     0x0861U   /* casi negro, con una pizca de azul */
 #define BARRA     0x18C3U   /* la banda del titulo */
 #define ACENTO    0x3D7FU   /* azul claro, para el titulo */
-#define ETIQUETA  0x6B6DU   /* gris apagado: la columna de la izquierda */
+/*
+ * LA ETIQUETA SUBE DE 0x6D A 0xA6 - 05/10/2026, de un issue.
+ *
+ * *** El que lo abrio: "on the new bootloader, I cannot see the text
+ * clearly on the left hand side of 'flash 512 kB'". *** La columna de la
+ * izquierda es justo esta, y el numero canta:
+ *
+ *     ETIQUETA  RGB565 0x6B6D -> #6B6D6B   componente mayor 0x6D
+ *     VALOR     RGB565 0xE73C -> #E6E7E6   componente mayor 0xE7
+ *
+ * Su panel no distingue nada por debajo de 0x7F, asi que leia la columna
+ * de la derecha y no la de la izquierda. Exactamente lo que dijo.
+ *
+ * Esto NO es cosa del panel ni de la gamma: es un gris que elegimos
+ * nosotros para que la jerarquia la hiciera el contraste entre las dos
+ * columnas. La jerarquia se mantiene -0xA6 sigue siendo mas apagado que
+ * 0xE7- pero ahora las dos estan por encima de su umbral.
+ */
+#define ETIQUETA  0xA534U   /* gris medio: la columna de la izquierda */
 #define VALOR     0xE73CU   /* casi blanco: la columna de la derecha */
 #define SUAVE     0x4A69U   /* separadores */
 
@@ -223,7 +241,7 @@ static void borra_linea(uint16_t y)
  * SUBIRLA al tocar cualquier cosa del cargador. Si no se sube, miente, y
  * un numero de version que miente es peor que no tenerlo.
  */
-#define CARGADOR_VERSION  "v2.1"
+#define CARGADOR_VERSION  "v2.15"
 
 /*
  * Y EL CRC DEL CARGADOR DETRAS DE LA VERSION - 02/10/2026.
@@ -493,8 +511,16 @@ static void ficha(void)
     p = pega(p, " MHz     depuracion "); p = x2s(p, *(volatile uint32_t *)0xE0042000UL, 8);
     fila(y, "Reloj", l); y = (uint16_t)(y + 28U);
 
+    /*
+     * Esta linea es el instrumento de medida del asunto de los paneles:
+     * sin ella no hay forma de saber que cristal lleva una radio que esta
+     * a dos mil kilometros. Por eso dice tambien si la lectura fue FIRME
+     * -el mismo valor en las tres- o no: una rama elegida con una lectura
+     * que baila no vale como dato.
+     */
     p = pega(l, "rama "); *p++ = (char)g_panel_rama; *p = '\0';
-    p = pega(p, "     0x000A="); p = x2s(p, g_panel_id_0a, 4);
+    p = pega(p, g_panel_firme ? " firme" : " INESTABLE");
+    p = pega(p, "  0x000A="); p = x2s(p, g_panel_id_0a, 4);
     p = pega(p, "  0x3A00=");    p = x2s(p, g_panel_id_3a, 4);
     fila(y, "Panel", l); y = (uint16_t)(y + 28U);
 
@@ -506,11 +532,33 @@ static void ficha(void)
     p = pega(p, " kB");
     fila(y, "Flash SPI", l); y = (uint16_t)(y + 28U);
 
+    /*
+     * Y SI NO SE RECONOCE, POR QUE - 06/10/2026.
+     *
+     * *** De un issue: "The loader doesn't see update.bin on the disk". Y
+     * la foto de su ficha decia "Volumen: no se reconoce". ***
+     *
+     * Son el MISMO fallo y no dos: cargador_busca_update() empieza con
+     * `if (!geo()) { return 0U; }`, asi que con el volumen rechazado ni
+     * siquiera mira el directorio raiz. El fichero esta ahi y nadie lo
+     * busca.
+     *
+     * Lo que hacia falta para diagnosticarlo a dos mil kilometros ya
+     * estaba escrito: spi_flash_geo_txt() dice cual de las nueve
+     * comprobaciones fallo, y el comentario de ese enum dice, con todas
+     * las letras, "hay que poder distinguirlas: 'no escribo' sin decir
+     * por que es lo mismo que no decir nada".
+     *
+     * Pues esta ficha decia exactamente eso y nada mas. El firmware si lo
+     * saca -en Ajustes, Informacion-, pero al firmware no se llega cuando
+     * el problema es este. Aqui es donde hace falta.
+     */
     if (spi_flash_geometria(&f1, &rz, &dt, &nc)) {
         p = pega(l, "FAT12     "); p = u2s(p, nc);
         p = pega(p, " clusters     raiz en el sector "); p = u2s(p, rz);
     } else {
-        p = pega(l, "no se reconoce");
+        p = pega(l, "no se reconoce: ");
+        p = pega(p, spi_flash_geo_txt());
     }
     fila(y, "Volumen", l); y = (uint16_t)(y + 28U);
 
@@ -789,6 +837,28 @@ static void modo_actualizacion(void)
      * bytes y son el unico instrumento que hay aqui dentro. Si el disco
      * vuelve a fallar algun dia, se vuelve a pintar esa linea y la discusion
      * se acaba en treinta segundos en vez de en media tarde.
+     */
+    /*
+     * LA PANTALLA DE PRUEBA DEL PANEL, Y POR QUE YA NO ESTA - 05/10/2026.
+     *
+     * Hubo aqui una escala de grises con el mando cambiando de rama, para
+     * que quien tiene un panel malo midiera el suyo y mandara una foto. La
+     * idea era buena y la ejecucion costo cuatro versiones: primero
+     * rearrancaba el panel vivo y salia en colores; con un reset delante,
+     * igual; movida a reiniciar la radio, se disparaba sola porque al modo
+     * actualizacion se entra con el mando pulsado; y arreglado eso, SEGUIA
+     * saliendo en verde, con el texto perfectamente nitido al lado.
+     *
+     * *** El dueno: "que te dejes de pruebas". *** Y tiene razon: el
+     * instrumento se estaba comiendo el trabajo. Queda quitada.
+     *
+     * LO QUE SE APRENDIO Y NO HAY QUE PERDER: *** el dueno, corrigiendome
+     * cuando dije que el texto salia nitido: "ni nitido ni pollas", "el
+     * texto sale como el culo", "los bordes estan mal". *** O sea que no
+     * fallaba solo el color: fallaban tambien los bordes y las letras. Yo
+     * lo di por bueno mirando una FOTO, que es el error que este proyecto
+     * ya tiene documentado dos veces en palette.h. Quien retome esto, que
+     * no diga lo que se ve si no lo tiene delante.
      */
     while (1) { }
 }

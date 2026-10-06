@@ -82,11 +82,33 @@ void nco_sen_cos_rad(float rad, float *sen, float *cos_)
     const float k = 683565275.0f;
     float r = rad;
 
-    /* Fuera de una vuelta el truncado a uint32 no esta definido, asi que se
+    /*
+     * Fuera de una vuelta el truncado a uint32 no esta definido, asi que se
      * trae dentro. sam.c ya la mantiene en [0, 2pi), pero esto no se fia:
-     * una fase que se escape no puede convertirse en basura silenciosa. */
-    while (r >= 6.28318530718f) { r -= 6.28318530718f; }
-    while (r < 0.0f)            { r += 6.28318530718f; }
+     * una fase que se escape no puede convertirse en basura silenciosa.
+     *
+     * ACOTADO - 06/10/2026. Era un par de while de restas, y eso no es una
+     * salvaguarda: es una bomba de latencia DENTRO del camino de la
+     * interrupcion de audio. Los llamantes -rds.c y hfdl_costas.c- sacan la
+     * fase de un integrador de lazo; si un lazo se desboca y r llega a 1e5
+     * son dieciseis mil vueltas en un bloque de 2,67 ms, y con r infinito no
+     * termina nunca. Con r NaN las dos comparaciones son falsas y se cae en
+     * un truncado indefinido, que es justo lo que el while pretendia evitar.
+     *
+     * fmodf() cuesta lo mismo y esta acotada. El NaN se mira aparte, porque
+     * fmodf(NaN) sigue siendo NaN: se devuelve el angulo cero, que es lo que
+     * menos daño hace y lo unico que se puede decir de una fase que no es un
+     * numero.
+     */
+    if (!(r == r)) {              /* NaN: r != r */
+        r = 0.0f;
+    } else {
+        r = fmodf(r, 6.28318530718f);
+        if (r < 0.0f) { r += 6.28318530718f; }
+        /* fmodf de un infinito devuelve NaN; y si aun asi quedara fuera de
+         * la vuelta -no deberia-, se recorta en vez de truncar mal. */
+        if (!(r == r) || (r < 0.0f) || (r >= 6.28318530718f)) { r = 0.0f; }
+    }
 
     sen_cos((uint32_t)(r * k), sen, cos_);
 }

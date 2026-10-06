@@ -42,6 +42,7 @@
 #include "touch.h"
 #include "touch_calib.h"
 #include "spi_flash.h"
+#include "formato.h"
 #include "anotch.h"     /* notch automatico - etapa 35 */
 #include "settings.h"
 #include "aic3204.h"
@@ -135,6 +136,8 @@ static volatile uint16_t s_tactil_us;   /* demo_touch_poll() */
 static volatile uint16_t s_polls_us;    /* los poll de los decodificadores */
 
 static void radio_screen_draw(void);
+static void info_vivo_invalida(void);
+static void ale_reloj_borra(void);   /* el minutero de la ultima rafaga ALE */
 static void sdr_spectrum_waterfall_tick(void);
 static void franja_arriba_tick(void);
 static void demo_touch_poll(void);
@@ -254,6 +257,9 @@ static uint8_t s_att_suelo;
  * las de al lado - el autoguardado del bucle principal la necesita antes.
  * Ver apply_demod_mode() para el porque. */
 static int16_t s_pga_hf_x2;
+/* Lo que tiene que ir a CONFIG.CSV en la casilla del PGA: TU ajuste, nunca
+ * el tope que la radio se pone sola en WFM. Ver pga_para_guardar(). */
+static int16_t pga_para_guardar(void);
 static uint8_t spectrum_smooth_pct_for_save(void);
 static void rf_agc_poll(void);
 static void rtty_poll(void);
@@ -1322,13 +1328,43 @@ int main(void)
      * own call sites further up), and the codec is already up (same
      * "safe to apply here" reasoning as volume_db_x2), so all four are
      * safe to apply right here. */
+    /*
+     * EL PGA GUARDADO NO PISA EL TOPE DE WFM - 05/10/2026.
+     *
+     * Este bloque corre DESPUES del apply_demod_mode() de mas arriba, y
+     * apply_demod_mode(WFM) acaba de poner el PGA al tope a proposito
+     * (ver su comentario de cabecera: en WFM la VHF entra por una antena
+     * de HF y hace falta toda la ganancia que hay). Si aqui se metia lo
+     * guardado en el valor VIVO, se cargaba ese tope: arrancabas en WFM
+     * con tus 20 dB de HF en vez de con los 47,5, el espectro salia plano
+     * y el S-metro en S6. Bastaba cambiar de modo y volver para que
+     * apply_demod_mode() lo arreglara y apareciera la emisora entera en
+     * S9+7. Medido en el video del arranque del 05/10: misma frecuencia,
+     * mismo modo, misma antena, 23 dB de diferencia.
+     *
+     * Y habia una segunda mitad. s_pga_hf_x2 se quedaba con el valor por
+     * defecto del firmware (lo que apply_demod_mode() guardo antes de
+     * pisarlo, porque en ese momento lo guardado aun no se habia
+     * aplicado), asi que al SALIR de WFM no te devolvia tu ganancia: te
+     * devolvia los 20 dB de fabrica.
+     *
+     * Lo guardado en CONFIG.CSV es, por definicion, tu ajuste de HF (el
+     * autoguardado del bucle principal escribe s_pga_hf_x2, no el vivo).
+     * Asi que va a s_pga_hf_x2 SIEMPRE, y al vivo solo cuando el modo que
+     * se acaba de restaurar no es WFM.
+     */
     if (s_loaded_settings.have_pga_gain_db_x2) {
         int32_t v = s_loaded_settings.pga_gain_db_x2;
 
         if (v < PGA_MIN_X2) { v = PGA_MIN_X2; }
         if (v > PGA_MAX_X2) { v = PGA_MAX_X2; }
-        s_pga_gain_db_x2 = (int16_t)v;
-        rf_agc_apply_pga(); /* the only allowed call site for aic3204_set_pga_gain_db() - see its own comment */
+        s_pga_hf_x2 = (int16_t)v;   /* tu ajuste, pase lo que pase */
+        if (demod_am_get_mode() != DEMOD_MODE_WFM) {
+            s_pga_gain_db_x2 = (int16_t)v;
+            rf_agc_apply_pga(); /* the only allowed call site for aic3204_set_pga_gain_db() - see its own comment */
+        } else {
+            debug_print_dec("pga: arranque en WFM, el tope manda; tu HF guardado x2", (uint32_t)v);
+        }
     }
     if (s_loaded_settings.have_spectrum_smooth_pct) {
         float alpha = (float)s_loaded_settings.spectrum_smooth_pct * 0.01f; /* inverse of spectrum_smooth_pct_for_save()'s rounding */
@@ -1752,7 +1788,7 @@ int main(void)
             settings_extra_t extra;
             extras_leer(&extra);
             settings_poll(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2, s_nonwfm_use_48k,
-                          ((s_pga_hf_x2 >= 0) ? s_pga_hf_x2 : s_pga_gain_db_x2), spectrum_smooth_pct_for_save(), s_speaker_pa_enabled, s_att_suelo, s_tema_idx, &extra);
+                          pga_para_guardar(), spectrum_smooth_pct_for_save(), s_speaker_pa_enabled, s_att_suelo, s_tema_idx, &extra);
         } /* debounced CONFIG.CSV autosave - see settings.h's comment; cheap no-op most iterations */
 #if TOUCH_EDGE_DEBUG
         touch_debug_stream_poll(); /* see TOUCH_EDGE_DEBUG's comment */
@@ -4844,7 +4880,28 @@ static const tema_t k_temas[] = {
       &k_pal_naranja,   SPECTRUM_PALETTE_FIRE },
     { T("Fósforo", "Phosphor"),
       T("Verde fósforo sobre negro, como un terminal", "Phosphor green on black, like a terminal"),
-      &k_pal_fosforo,   SPECTRUM_PALETTE_PHOSPHOR }
+      &k_pal_fosforo,   SPECTRUM_PALETTE_PHOSPHOR },
+    /*
+     * 05/10/2026, de un issue: un panel que aplasta la zona oscura y deja
+     * los otros siete temas ilegibles. La paleta la escribio el que abrio
+     * el issue y va tal cual; el porque entero esta en palette.h.
+     *
+     * VA AL FINAL, y eso no se negocia: el tema se guarda en CONFIG.CSV por
+     * INDICE, asi que colocarlo en cualquier hueco de en medio le cambiaria
+     * el tema a todo el que tenga puesto uno de ese hueco en adelante. Los
+     * temas se anaden por el final o no se anaden.
+     *
+     * Waterfall SMOKE: es la unica escala CLARA que hay -blanco abajo,
+     * negro arriba-, la misma que lleva Oliva, y la unica que no pone una
+     * mancha oscura en mitad de una pantalla de papel.
+     *
+     * Y es el unico tema con mapa_sigue = 1, asi que al elegirlo el mapa
+     * del mundo se vuelve claro tambien. Ver mapa.c.
+     */
+    { T("Chemistry", "Chemistry"),
+      T("Papel blanco con tinta negra, para pantallas flojas",
+        "Paper white, black ink, for weak displays"),
+      &k_pal_chemistry, SPECTRUM_PALETTE_SMOKE }
 };
 #define TEMA_COUNT (sizeof(k_temas) / sizeof(k_temas[0]))
 
@@ -5033,6 +5090,99 @@ static uint8_t s_cw_wpm_idx = 2U;   /* 20 PPM, igual que CONFIG_CW_WPM_HINT */
 static const char *const k_rtty_baud_labels[4] = { "45.45", "50", "75", "100" };
 #define RTTY_BAUD_COUNT 4U
 static uint8_t s_rtty_baud_idx = 1U;
+
+/*
+ * LOS DOS BOTONES DEL PANEL DE RTTY - 05/10/2026.
+ *
+ * *** Por el dueño, escuchando FUG en 13.418: "hay que poner botones en
+ * el modo rtty para poder cambiar directo los 850 y los 50". ***
+ *
+ * Y tiene toda la razon, porque es justo lo que acababa de hacer a mano:
+ * ver dos tonos en la pantalla, medirles el salto, irse a Ajustes ->
+ * Digital, cambiar el desplazamiento, volver, cambiar la velocidad y
+ * volver otra vez. Seis toques y dos pantallas para dos numeros que se
+ * deciden MIRANDO el panel que acabas de dejar atras. Con los botones
+ * puestos, la diferencia entre una pantalla llena de basura y uno de
+ * estos
+ *
+ *     SUUPDBBWPSJGXF TIHVKAAD
+ *     SQTSPNPAVLP OCPLU2"937?6!15-
+ *
+ * son dos toques sin salir de donde estas.
+ *
+ * LOS CUATRO DESPLAZAMIENTOS son los que de verdad se usan:
+ *   170  aficionado y SITOR/NAVTEX
+ *   425  comercial europeo
+ *   450  meteorologia (el DWD de esta misma mañana)
+ *   850  naval y diplomatico (FUG, y el 4481 de la OTAN)
+ *
+ * NO HAY INDICE QUE MANTENER, a diferencia de la velocidad. El
+ * desplazamiento tambien se puede poner a mano desde la pantalla de
+ * detalle de Ajustes, con el mando y a cualquier valor; un indice
+ * guardado aparte se quedaria desfasado en cuanto alguien lo usara, y el
+ * boton empezaria a saltar desde un sitio donde ya no esta. Asi que el
+ * boton lee el valor DE VERDAD y busca el siguiente de la lista por
+ * encima de el. Da igual de donde venga.
+ */
+static const float k_rtty_shift_values[4] = { 170.0f, 425.0f, 450.0f, 850.0f };
+#define RTTY_SHIFT_COUNT 4U
+
+static void rtty_shift_siguiente(void)
+{
+    float hoy = rtty_get_shift_hz();
+    uint8_t i;
+    for (i = 0U; i < (uint8_t)RTTY_SHIFT_COUNT; i++) {
+        if (k_rtty_shift_values[i] > hoy + 1.0f) {
+            rtty_set_shift_hz(k_rtty_shift_values[i]);
+            return;
+        }
+    }
+    rtty_set_shift_hz(k_rtty_shift_values[0]);
+}
+
+static void rtty_baud_siguiente(void)
+{
+    s_rtty_baud_idx = (uint8_t)((s_rtty_baud_idx + 1U) % RTTY_BAUD_COUNT);
+    rtty_set_baud(k_rtty_baud_values[s_rtty_baud_idx]);
+}
+
+/*
+ * Los rotulos. Buffers propios y no el de los ajustes: digi_sync() corre
+ * en cada cuadro y los deja apuntados en s_digi, asi que tienen que vivir
+ * mientras viva el panel. Y el del desplazamiento se compone del valor
+ * leido, no del indice, por lo dicho arriba.
+ */
+static char s_rtty_btn_shift[12];
+static char s_rtty_btn_baud[12];
+
+static const char *rtty_btn_shift_txt(void)
+{
+    char n[12];
+    uint8_t i = 0U, k = 0U;
+    (void)top_u2s(n, (uint32_t)(rtty_get_shift_hz() + 0.5f));
+    while (n[k] != '\0' && i < (uint8_t)(sizeof s_rtty_btn_shift - 4U)) {
+        s_rtty_btn_shift[i++] = n[k++];
+    }
+    s_rtty_btn_shift[i++] = ' ';
+    s_rtty_btn_shift[i++] = 'H';
+    s_rtty_btn_shift[i++] = 'z';
+    s_rtty_btn_shift[i]   = '\0';
+    return s_rtty_btn_shift;
+}
+
+static const char *rtty_btn_baud_txt(void)
+{
+    const char *v = k_rtty_baud_labels[s_rtty_baud_idx];
+    uint8_t i = 0U;
+    while (v[i] != '\0' && i < (uint8_t)(sizeof s_rtty_btn_baud - 4U)) {
+        s_rtty_btn_baud[i] = v[i]; i++;
+    }
+    s_rtty_btn_baud[i++] = ' ';
+    s_rtty_btn_baud[i++] = 'B';
+    s_rtty_btn_baud[i++] = 'd';
+    s_rtty_btn_baud[i]   = '\0';
+    return s_rtty_btn_baud;
+}
 /* Same indexing, in Hz - the nominal -3dB corner each ALPF_*_COEFFS
  * table was designed for (see their comments in demod_am.c). Added
  * 03/08/2026 for the spectrum panadapter's demodulated-bandwidth tint
@@ -6335,6 +6485,26 @@ static uint8_t rx_capture_looks_corrupted(void)
  */
 static int16_t s_pga_hf_x2 = -1;   /* -1 = aun sin inicializar */
 
+/*
+ * El unico valor del PGA que puede acabar en CONFIG.CSV.
+ *
+ * En WFM el valor VIVO es el tope (47,5 dB) que puso apply_demod_mode(),
+ * no una eleccion tuya. Guardarlo te dejaria 47,5 dB clavados como ajuste
+ * de HF la proxima vez que encendieras - es el mismo fallo que tenia el
+ * atenuador antes del suelo manual, y esta avisado arriba. Mientras
+ * s_pga_hf_x2 siga sin estrenar (-1, nadie ha pasado por apply_demod_mode()
+ * todavia) el vivo ES el tuyo y vale.
+ *
+ * Esta funcion existe (05/10/2026) porque la cuenta estaba escrita a mano
+ * en el autoguardado del bucle principal y los dos settings_save_now() de
+ * las calibraciones NO la hacian: guardaban el vivo. Calibrar la pantalla
+ * estando en WFM te envenenaba la ganancia de HF.
+ */
+static int16_t pga_para_guardar(void)
+{
+    return (s_pga_hf_x2 >= 0) ? s_pga_hf_x2 : s_pga_gain_db_x2;
+}
+
 static void apply_demod_mode(demod_mode_t mode)
 {
     uint8_t will_be_wfm = (mode == DEMOD_MODE_WFM) ? 1U : 0U;
@@ -6505,12 +6675,45 @@ static void apply_demod_mode(demod_mode_t mode)
         /* AHORA, con los filtros, los diezmadores y los interpoladores ya
          * coherentes entre si, vuelve a entrar la ISR. Ver el comentario de
          * mas arriba, donde estaba esto antes. */
+        /*
+         * Y EL CHEQUEO DE BLOQUE CORRUPTO, QUE EN WFM SOBRA - 05/10/2026.
+         *
+         * De un issue: siseo en WFM mientras se repinta el espectro. Ese
+         * chequeo mira si hay saltos de mas de 16000 entre muestras
+         * consecutivas, y en WFM -I/Q sin mezclar, a 192 kHz, desviacion de
+         * hasta 75 kHz- eso es lo NORMAL: basta una amplitud del 26% del
+         * fondo de escala para que lo cruce cada muestra. Daba por corruptos
+         * bloques buenos, y cada descarte repite 2,67 ms de audio ya sonado.
+         * La cuenta entera esta en sdr_rx.c.
+         */
+        sdr_rx_set_chequeo_corrupcion((uint8_t)(will_be_wfm ? 0U : 1U));
+
+        /*
+         * PRIMERO ARMAR, DESPUES ENGANCHAR - 06/10/2026.
+         *
+         * Estaba al reves: se enganchaba el gancho y DESPUES se llamaba a
+         * reset_diag(), que es quien pone el silenciador de entrada
+         * (s_wfm_mute_remaining = 200 bloques). Entre las dos lineas caben
+         * unas pocas instrucciones, y en ellas puede entrar la interrupcion
+         * y procesar un bloque entero de WFM con el silenciador TODAVIA a
+         * cero -lo dejo asi la sesion anterior al agotar su ventana-.
+         *
+         * Dos consecuencias: sale por el altavoz un bloque del transitorio
+         * de entrada a WFM, que es justo lo que esos 200 bloques existen
+         * para tapar; y, peor, ese pico envenena el detector de pico del
+         * AGC, que es el fallo que WFM_SETTLE_MUTE_BLOCKS documenta como ya
+         * corregido en demod_am.c.
+         *
+         * Falla una vez de cada muchas, que es la peor clase de fallo.
+         * Armar primero cierra la ventana del todo: cuando el gancho queda
+         * puesto, el silenciador ya esta.
+         */
         if (will_be_wfm) {
-            sdr_rx_set_block_hook(demod_wfm_process_raw);
             demod_wfm_reset_diag(); /* fresh diagnostic log for this WFM entry - see its own comment */
+            sdr_rx_set_block_hook(demod_wfm_process_raw);
         } else {
-            sdr_rx_set_block_hook(demod_am_process_raw);
             demod_am_reset_diag(); /* fresh diagnostic log for this AM/SSB/LSB/NFM entry - see its own comment */
+            sdr_rx_set_block_hook(demod_am_process_raw);
         }
 
         s_current_rate = desired_rate;
@@ -6887,7 +7090,7 @@ static void touch_calib_done_callback(const touch_calibration_t *cal)
         settings_extra_t extra;
         extras_leer(&extra);
         settings_save_now(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2, s_nonwfm_use_48k,
-        s_pga_gain_db_x2, spectrum_smooth_pct_for_save(), s_speaker_pa_enabled, s_rf_agc_rin_level, s_tema_idx, &extra);
+        pga_para_guardar(), spectrum_smooth_pct_for_save(), s_speaker_pa_enabled, s_att_suelo, s_tema_idx, &extra);
     }
 }
 
@@ -7044,7 +7247,7 @@ static void menu_tile_cal_ppm_callback(void *widget, ui_event_t event, void *use
                 settings_extra_t extra;
                 extras_leer(&extra);
                 settings_save_now(s_tune_hz, demod_am_get_mode(), k_tune_steps[s_tune_step_idx], demod_am_get_audio_bw(), s_volume_db_x2, s_nonwfm_use_48k,
-                s_pga_gain_db_x2, spectrum_smooth_pct_for_save(), s_speaker_pa_enabled, s_rf_agc_rin_level, s_tema_idx, &extra);
+                pga_para_guardar(), spectrum_smooth_pct_for_save(), s_speaker_pa_enabled, s_att_suelo, s_tema_idx, &extra);
             }
 
             /* Lo que se ha APLICADO, no el residuo de despues -que leeria
@@ -8344,8 +8547,12 @@ static void hora_poll(void)
         break;
     case DCF_LEYENDO:
     case DCF_PERDIDO:
-        s_hora.estado = (inf.estado == DCF_PERDIDO) ? "Se ha perdido - reintentando"
-                                                    : tr("Leyendo la trama", "Reading the frame");
+        /* Las DOS ramas por tr(): la de abajo lo estaba y esta no, asi que
+         * en ingles la pantalla de hora se pasaba al castellano justo
+         * cuando se perdia la senal. 06/10/2026. */
+        s_hora.estado = (inf.estado == DCF_PERDIDO)
+                          ? tr("Se ha perdido - reintentando", "Lost it - retrying")
+                          : tr("Leyendo la trama", "Reading the frame");
         p = hora_u2(p, inf.bits); *p++ = '/'; p = hora_u2(p, 59U);
         /* Y los dos numeros que de verdad explican lo que pasa cuando no
          * avanza: cuanto duro la ultima marca y cuanto hay entre segundos.
@@ -10589,10 +10796,29 @@ static uint8_t info_hex32(char *b, uint8_t i, uint32_t v)
  * Con eso la pagina "Volcar y restaurar" desaparece entera y la de flash
  * externa se queda en cinco filas.
  */
+/*
+ * EL CAMBIO DE SITIO DE 06/10/2026.
+ *
+ * *** El dueño: "pon el boton de formatear flash en la ventana de
+ * informacion, quita el boton de cascada y el de cascada ponlo en el menu
+ * oculto". ***
+ *
+ * Y las dos mitades tienen el mismo motivo, que es el de siempre en esta
+ * pantalla: lo que se busca cuando algo NO FUNCIONA va delante, y lo que
+ * se mira por curiosidad va detras.
+ *
+ * "Formatear disco" es lo que se busca cuando la radio dice que no
+ * reconoce el volumen -el issue que trajo todo esto-, y esconderlo detras
+ * de cinco toques en la fila de la version es esconderlo justo de quien lo
+ * necesita. "Cascada" dice cuantos kilobytes de RAM se ha prestado la
+ * cascada: eso es de destripar, no de arreglar.
+ */
 enum { INFO_VERSION = 0, INFO_MICRO, INFO_FLASH,
-       INFO_SRAM, INFO_TCM, INFO_PILA, INFO_CASCADA, INFO_TEMP, INFO_BATT, INFO_TICS, INFO_RTC,
-       INFO_XDFU,
-       INFO_XCHIP, INFO_XSERIE, INFO_XFS, INFO_XFORMATO, INFO_XSITIO, INFO_XAVIONES,
+       INFO_SRAM, INFO_TCM, INFO_PILA, INFO_TEMP, INFO_BATT, INFO_TICS, INFO_RTC,
+       INFO_XDFU, INFO_XFORMATEAR,
+       INFO_XCHIP, INFO_XSERIE, INFO_XFS, INFO_XFORMATO,
+       INFO_CASCADA,
+       INFO_XSITIO, INFO_XAVIONES,
        INFO_XIPA, INFO_XDMA, INFO_XBUS, INFO_XFRAME, INFO_XMSFRAME, INFO_XISR,
        INFO_XREPARTO, INFO_XAUDIO,
        INFO_XAJUSTES, INFO_XARRANQUE, INFO_COUNT };
@@ -10632,17 +10858,22 @@ _Static_assert((INFO_COUNT - INFO_XIPA) <= UIG_CELLS,
  * la pantalla, igual que el contador de los cinco toques de la version: si
  * sales y vuelves, hay que volver a tocar dos veces. */
 static uint8_t s_dfu_armado = 0U;
+/* Los dos toques de "Formatear disco", y si ya se hizo en este arranque. */
+static uint8_t s_fmt_armado = 0U;
+static char    s_fmt_res[44] = "";   /* el veredicto, mientras se enseña */
 
 static const texto_t k_info_nombres[INFO_COUNT] = {
     T("Versión", "Version"), T("Micro", "MCU"), T("Flash", "Flash"),
     T("SRAM", "SRAM"), T("TCM", "TCM"),
-    T("Pila", "Stack"), T("Cascada", "Waterfall"),
+    T("Pila", "Stack"),
     T("Temp. del chip", "Chip temp."), T("Batería", "Battery"),
     T("Reloj", "Clock"), T("RTC", "RTC"),
     T("Modo DFU", "DFU mode"),
+    T("Formatear disco", "Format disk"),
     T("Flash externa", "External flash"), T("Nº de serie", "Serial number"),
     T("Sist. ficheros", "File system"),
     T("Formato", "Format"),
+    T("Cascada", "Waterfall"),
     T("Sitio para fotos", "Room for photos"),
     T("Cargar datos", "Load data"),
     T("Acelerador IPA", "IPA accelerator"), T("DMA de pantalla", "Display DMA"),
@@ -10688,7 +10919,67 @@ static char s_info_val[UIG_CELLS][32];
  * un buffer compartido lo borraria la celda siguiente -y la fila se
  * quedaria con su tercer renglon vacio sin que nada avisara-.
  */
-static char s_info_pie[UIG_CELLS][24];
+/*
+ * TREINTA Y DOS, Y HAY UN BANCO QUE LO MIDE - 06/10/2026.
+ *
+ * Eran 24 y se desbordaron el mismo dia que se escribieron: la fila de
+ * audio paso a llevar cuatro numeros -"0dsc 0trd 1rep 75-255/1024"- que
+ * son 26 caracteres mas el fin de cadena, o sea 27 en un hueco de 24. El
+ * dueño lo vio como "75-255/10", el texto cortado; lo que no se ve es que
+ * los tres bytes de mas van a parar al pie de la celda SIGUIENTE.
+ *
+ * Esto se arma byte a byte con aj_u2s() y punteros, sin snprintf ni nada
+ * que recorte, asi que el tamaño no se puede comprobar al compilar: el que
+ * añade un numero tiene que contar. Por eso hay ahora un banco que monta
+ * todos los pies posibles con sus valores mas largos y mide - ver
+ * tools/pie_check.py y `make pie`.
+ */
+#define INFO_PIE_MAX 40
+static char s_info_pie[UIG_CELLS][INFO_PIE_MAX];
+
+/*
+ * Y PARA NO TENER QUE CONTAR - 06/10/2026.
+ *
+ * El pie se arma byte a byte con aj_u2s() y punteros. Eso no recorta nada,
+ * asi que el que añade un numero tiene que contar a mano cuanto ocupa en el
+ * PEOR caso - y el peor caso de un contador uint32_t son diez cifras, no
+ * las dos que uno ve mientras prueba. Contando a mano se desbordo el mismo
+ * dia que se escribio.
+ *
+ * Estas dos escriben lo que quepa y nada mas, y devuelven el nuevo final.
+ * Si algun dia no cabe, el texto sale cortado -feo- en vez de pisar el pie
+ * de la celda siguiente -silencioso-.
+ *
+ * pie_num() ademas acota el numero: por encima de 99999 pone "99999+". Un
+ * contador de estos se mira para ver SI SUBE, no para leer su valor exacto,
+ * y seis caracteres es todo lo que merece.
+ */
+static uint8_t pie_txt(char *pie, uint8_t j, const char *t)
+{
+    while ((*t != '\0') && (j < (uint8_t)(INFO_PIE_MAX - 1U))) {
+        pie[j++] = *t++;
+    }
+    pie[j] = '\0';
+    return j;
+}
+
+static uint8_t pie_num_tope(char *pie, uint8_t j, uint32_t v, uint32_t tope)
+{
+    char tmp[12];
+
+    if (v > tope) {
+        aj_u2s(tmp, tope);
+        j = pie_txt(pie, j, tmp);
+        return pie_txt(pie, j, "+");
+    }
+    aj_u2s(tmp, v);
+    return pie_txt(pie, j, tmp);
+}
+
+static uint8_t pie_num(char *pie, uint8_t j, uint32_t v)
+{
+    return pie_num_tope(pie, j, v, 99999UL);
+}
 
 /* Los dos renglones de abajo de cada celda de la rejilla de modos de SSTV.
  * Se arman al vuelo, como los de Informacion, asi que necesitan donde
@@ -10950,24 +11241,19 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
          * Arriba lo que decide si una foto entra -el hueco SEGUIDO- y
          * abajo el resto. Ver spi_flash_sitio().
          */
+        /* Con pie_txt()/pie_num() y no a mano: ver su comentario y
+         * tools/pie_check.py. Aqui los numeros vienen de la flash y nadie
+         * sabe cuanto pueden crecer el dia que cambie el chip. */
         {
-            uint8_t j = 0U, k = 0U;
-            const char *d = tr("dir ", "dir ");
+            uint8_t j = 0U;
 
-            while (d[k] != '\0') { pie[j++] = d[k++]; }
-            pie[j] = '\0';
-            aj_u2s(&pie[j], (uint32_t)huecos);
-            while (pie[j] != '\0') { j++; }
-            pie[j++] = '/';
-            pie[j] = '\0';
-            aj_u2s(&pie[j], (uint32_t)ranuras);
-            while (pie[j] != '\0') { j++; }
-            pie[j++] = ','; pie[j++] = ' ';
-            pie[j] = '\0';
-            aj_u2s(&pie[j], libre);
-            while (pie[j] != '\0') { j++; }
-            pie[j++] = ' '; pie[j++] = 'k'; pie[j++] = 'B';
-            pie[j] = '\0';
+            j = pie_txt(pie, j, tr("dir ", "dir "));
+            j = pie_num(pie, j, (uint32_t)huecos);
+            j = pie_txt(pie, j, "/");
+            j = pie_num(pie, j, (uint32_t)ranuras);
+            j = pie_txt(pie, j, ", ");
+            j = pie_num(pie, j, libre);
+            (void)pie_txt(pie, j, " kB");
         }
         aj_u2s(&buf[i], seg);
         while (buf[i] != '\0') { i++; }
@@ -10988,6 +11274,56 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
          * escritura. Ahora se comprueba, y esta fila dice el veredicto.
          */
         return spi_flash_geo_txt();
+
+    case INFO_XFORMATEAR: {
+        /*
+         * FORMATEAR EL DISCO DESDE LA PROPIA RADIO - 06/10/2026.
+         *
+         * *** El dueño, con el issue de "no se lee el volumen" todavia
+         * abierto despues de que el usuario formateara el pendrive desde
+         * Windows sin que sirviera: "haz un puto boton en el menu oculto
+         * que formatee la flash al formato que a ti te gusta leer". ***
+         *
+         * Es la respuesta correcta al issue, y la razon esta en formato.h:
+         * este driver no admite cualquier FAT, y Windows no tiene por que
+         * elegir la que admite. Pedirle al usuario que acierte con las
+         * opciones de formateo es pedirle que adivine; ponerlo desde aqui
+         * es poner exactamente lo que el driver sabe leer.
+         *
+         * La fila dice ANTES de tocar nada lo que va a quedar -el tamaño
+         * de cluster y cuantos caben-, porque un boton que solo dice
+         * "formatear" no deja decidir nada.
+         *
+         * Y pide DOS toques, como el de DFU. Aqui si es por peligro: esto
+         * borra el indice del disco y lo que hubiera dentro deja de
+         * encontrarse.
+         */
+        static char buf[44];
+        uint8_t  spc; uint16_t res, fat, raiz, clus;
+
+        /*
+         * Y NO SE QUEDA EN "HECHO" PARA SIEMPRE - 06/10/2026, el mismo dia.
+         *
+         * *** El dueño, nada mas probarlo: "y ahora se queda en hecho para
+         * siempre". *** Que es verdad y es inutil de dos maneras: no deja
+         * volver a formatear sin reiniciar, y "hecho" no dice si lo que
+         * quedo sirve para algo.
+         *
+         * Ahora el resultado se enseña UNA vez -con el veredicto de la
+         * comprobacion, que es lo que de verdad importa- y al siguiente
+         * toque la fila vuelve a ser el plan. Sin reiniciar nada.
+         */
+        if (s_fmt_res[0] != '\0') { return s_fmt_res; }
+        if (s_fmt_armado) { return tr("BORRA TODO: tocar otra vez",
+                                      "ERASES ALL: tap again"); }
+        if (!formato_plan(disco_bloques(), &spc, &res, &fat, &raiz, &clus)) {
+            return tr("no se puede", "cannot");
+        }
+        (void)snprintf(buf, sizeof buf, "%u B/cluster, %u %s",
+                       (unsigned)(spc * 512U), (unsigned)clus,
+                       tr("clusters", "clusters"));
+        return buf;
+    }
 
     case INFO_XDFU:
         /*
@@ -11206,7 +11542,38 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
          * problema de verdad y ademas se sabe de que lado; si se quedan en
          * cero y aun asi suena peor, el problema no es que se pierdan
          * muestras y hay que mirar otra cosa. */
+        /*
+         * Y CUATRO NUMEROS MAS, EN EL SEGUNDO RENGLON - 06/10/2026.
+         *
+         * Los tres caminos que pueden meter una discontinuidad UNA VEZ POR
+         * BLOQUE, que es lo que suena a siseo: a 375 bloques por segundo,
+         * una costura por bloque es un peine de armonicos a 375 Hz y sus
+         * multiplos. Medido en el audio del dueño: hasta 38 dB sobre el
+         * ruido mientras se pinta el espectro, y 2-8 dB con un menu tapando
+         * la pantalla. Lo que no se cuenta no se puede atribuir.
+         *
+         *   dsc   bloques dados por corruptos y descartados. Cada uno repite
+         *         2,67 ms de audio ya sonado. En WFM el chequeo va apagado
+         *         desde V3.49, asi que ahi tiene que salir 0; en AM/BLU sigue
+         *         encendido y es donde hay que mirarlo.
+         *   trd   veces que la interrupcion llego tan tarde que las dos
+         *         banderas del DMA estaban puestas y se perdio media captura.
+         *   rep   veces que el ping-pong de salida eligio la MISMA mitad que
+         *         la vez anterior: una se escribe dos veces y la otra repite.
+         *         Ver gd32_i2s_stream_write_half().
+         *   y DONDE CAE la llamada dentro de la mitad, en tanto por ciento,
+         *   lo mas bajo y lo mas alto vistos. Los dos bajos = la
+         *   interrupcion va sobrada; los dos altos = esta llegando al final
+         *   de su presupuesto; y si el tramo se acerca a 0 o a 100, esta
+         *   pisando la frontera. "-" mientras no se haya escrito ninguna
+         *   mitad.
+         *
+         * Se leen con el espectro pintando y otra vez con FUNC abierto: la
+         * diferencia es el dato.
+         */
         uint8_t i = 0U;
+        uint8_t j = 0U;
+        uint32_t mn = gd32_i2s_get_half_min();
 
         aj_u2s(buf, gd32_i2s_get_tx_ferr_count());
         while (buf[i] != '\0') { i++; }
@@ -11216,6 +11583,49 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
         while (buf[i] != '\0') { i++; }
         buf[i++] = ' '; buf[i++] = 'r'; buf[i++] = 'f';
         buf[i] = '\0';
+
+        /*
+         * SIN LETRAS Y EN TANTO POR CIENTO, Y NO POR GUSTO - 06/10/2026.
+         *
+         * *** El dueño, dos veces el mismo dia: "0 0 1 75-255/10" y luego
+         * "0d 0t 1r 75-256/104". Las dos acababan cortadas. ***
+         *
+         * La primera vez lo arregle contando caracteres y ampliando el
+         * buffer. Y seguia cortado, porque el limite que manda NO es el
+         * buffer: es el ANCHO DE LA CELDA, 192 px, con una fuente
+         * PROPORCIONAL. Por eso los dos recortes caen en sitios distintos.
+         *
+         * Contar no sirve. Ahora se MIDE, con gfx2_text_w() y la misma
+         * fuente que pinta este renglon - ver sim/pie_ancho.c y `make
+         * pieancho`. Y el banco dijo que de las formas probadas solo cabe
+         * el peor caso sin las letras y con el margen en tanto por ciento:
+         *
+         *   "999+ 999+ 999+ 99-99%"   185 px de 192   cabe
+         *   "99+d 99+t 99+r 100-100%" 199 px de 192   NO cabe
+         *
+         * El tanto por ciento ademas se lee mejor: la mitad son 1024
+         * palabras en WFM y 512 en el resto, y nadie tiene por que saberlo
+         * para entender que 7-25% es holgura y 95-99% es ir al borde.
+         *
+         * Los tres contadores van en el orden de siempre: descartes,
+         * tarde, repeticiones de mitad. Los tres tienen que ser 0.
+         */
+        uint32_t pal = gd32_i2s_get_half_palabras();
+
+        j = pie_num_tope(pie, j, sdr_rx_get_descartes(), 999UL);
+        j = pie_txt(pie, j, " ");
+        j = pie_num_tope(pie, j, sdr_rx_get_tarde(), 999UL);
+        j = pie_txt(pie, j, " ");
+        j = pie_num_tope(pie, j, gd32_i2s_get_half_repes(), 999UL);
+        j = pie_txt(pie, j, " ");
+        if ((mn == 0xFFFFFFFFUL) || (pal == 0UL)) {
+            (void)pie_txt(pie, j, "-");
+        } else {
+            j = pie_num(pie, j, (mn * 100UL) / pal);
+            j = pie_txt(pie, j, "-");
+            j = pie_num(pie, j, (gd32_i2s_get_half_max() * 100UL) / pal);
+            (void)pie_txt(pie, j, "%");
+        }
         return buf;
     }
     case INFO_XAJUSTES: {
@@ -12266,11 +12676,67 @@ static void grid_fill(void)
  * repintar la rejilla entera a la velocidad del bucle principal costaria
  * mas que lo que mide.
  */
+/*
+ * Y SOLO LAS CELDAS QUE HAN CAMBIADO - 06/10/2026.
+ *
+ * *** El dueño: "si entro dentro de informacion el siseo cambia a un gr gr
+ * gr gr constante" ... "sigue habiendo un gr gr gr gr en ajustes info
+ * pantalla". ***
+ *
+ * Medido en el audio de sus videos: el gruñido es una modulacion de la
+ * envolvente a 2,00 Hz con armonico a 4,07 Hz, periodo 500 ms. O sea
+ * exactamente este poll.
+ *
+ * Y la cuenta de lo que costaba: ui_grid_draw() pinta la rejilla ENTERA,
+ * 800 x 318 = 254.400 pixeles, dos veces por segundo. Una celda son 192 x
+ * 76 = 14.592. De las nueve filas de esta pagina, en medio segundo cambian
+ * una o dos: el resto -el reparto de IPA, el DMA, los ciclos del bus- se
+ * repintaban identicas a si mismas.
+ *
+ * Asi que se compara y se pinta lo que cambia, que es lo mismo que se hizo
+ * con el espectro en V3.50 y por el mismo motivo. Con dos celdas cambiando,
+ * de 254.400 pixeles a 29.184: un 89% menos de golpe de bus cada medio
+ * segundo.
+ *
+ * COMO SE COMPARA. Un resumen FNV-1a de los tres renglones de cada celda,
+ * que son punteros: hay que mirar el TEXTO al que apuntan y no el puntero,
+ * porque info_valor() reescribe siempre los mismos buffers. Treinta y seis
+ * bytes de estado frente a los 864 que costaria guardar copias - y aqui la
+ * RAM esta contada: el repintado parcial del espectro ya se paso de la raya
+ * una vez por 1.464 bytes.
+ *
+ * Una colision del resumen dejaria una celda sin refrescar medio segundo y
+ * se arregla sola al siguiente. Y el cinturon de siempre: una pasada
+ * completa cada ocho, por si acaso y para el marco.
+ */
+static uint8_t s_info_vivo_vale;   /* 0 = los resumenes guardados no sirven */
+
+static uint32_t cel_resumen(const ui_grid_cell_t *c)
+{
+    const char *ls[3];
+    uint32_t f = 2166136261UL;
+    uint8_t k;
+
+    ls[0] = c->l1; ls[1] = c->l2; ls[2] = c->l3;
+    for (k = 0; k < 3U; k++) {
+        const char *p = ls[k];
+
+        if (p == 0) { f = (f ^ 0xFFU) * 16777619UL; continue; }
+        while (*p != '\0') { f = (f ^ (uint32_t)(uint8_t)*p) * 16777619UL; p++; }
+        f = (f ^ 0xFEU) * 16777619UL;   /* separador: "ab"+"" no es "a"+"b" */
+    }
+    return f;
+}
+
 static void info_vivo_poll(void)
 {
     static uint32_t ultimo;
+    static uint32_t resumen[UIG_CELLS];
+    static uint8_t  desde;         /* pasadas desde la ultima completa */
     uint16_t primero = 0U;
     uint8_t  n = 0U, grupo = 0U;
+    uint8_t  i;
+    uint8_t  entera;
 
     if (!s_menu_open || s_grid_pant != GRID_INFO) { return; }
     if (!grid_page_info(s_grid_page, &primero, &n, &grupo)) { return; }
@@ -12283,7 +12749,29 @@ static void info_vivo_poll(void)
     ultimo = g_msticks;
 
     grid_fill();
-    ui_grid_draw(&s_grid);
+
+    desde++;
+    entera = (uint8_t)(!s_info_vivo_vale || (desde >= 8U));
+    if (entera) {
+        ui_grid_draw(&s_grid);
+        desde = 0U;
+    }
+    for (i = 0; i < (uint8_t)UIG_CELLS; i++) {
+        uint32_t r = cel_resumen(&s_grid.cel[i]);
+
+        if (!entera && (i < n) && (r != resumen[i])) {
+            ui_grid_draw_one(&s_grid, (int8_t)i);
+        }
+        resumen[i] = r;
+    }
+    s_info_vivo_vale = 1U;
+}
+
+/* La rejilla la pisa cualquiera que pinte encima: al volver hay que
+ * repintarla entera una vez. Lo llama quien cambia de pagina o de pantalla. */
+static void info_vivo_invalida(void)
+{
+    s_info_vivo_vale = 0U;
 }
 
 
@@ -12304,6 +12792,7 @@ static void grid_apply(uint8_t cel)
         if (s_grid_pant == GRID_AJUSTES && !s_menu_detail_active && !s_screen_asleep) {
             grid_fill();
             ui_grid_draw(&s_grid);
+            info_vivo_invalida(); /* pintada entera: la proxima pasada viva empieza de cero */
         }
         break;
     case GRID_BANDAS:
@@ -12359,10 +12848,39 @@ static void grid_apply(uint8_t cel)
                     }
                     grid_fill();
                     ui_grid_draw(&s_grid);
+                    info_vivo_invalida(); /* pintada entera: la proxima pasada viva empieza de cero */
                 }
                 break;
             }
             if (id == (uint8_t)INFO_XAVIONES)       { (void)datos_arranca(); }
+            else if (id == (uint8_t)INFO_XFORMATEAR) {
+                if (s_fmt_res[0] != '\0') {
+                    /* Se estaba enseñando el resultado: se borra y la fila
+                     * vuelve al plan. Un toque, no dos. */
+                    s_fmt_res[0] = '\0';
+                } else if (s_fmt_armado) {
+                    formato_r_t r = formato_haz();
+                    s_fmt_armado = 0U;
+                    /*
+                     * Y DESPUES SE COMPRUEBA. Ver formato_comprueba():
+                     * escribir sin error no demuestra nada, y el issue que
+                     * trajo esto iba justo de un volumen escrito sin
+                     * errores que el driver no podia usar.
+                     */
+                    if (r == FORMATO_OK) { r = formato_comprueba(); }
+                    (void)snprintf(s_fmt_res, sizeof s_fmt_res, "%s",
+                                   (r == FORMATO_OK)
+                                     ? tr("hecho: lee y graba", "done: reads and writes")
+                                     : formato_porque_txt(r));
+                    if (r != FORMATO_OK) {
+                        debug_print("formato: ");
+                        debug_print(formato_porque_txt(r));
+                        debug_print("\n");
+                    }
+                } else {
+                    s_fmt_armado = 1U;
+                }
+            }
             else if (id == (uint8_t)INFO_XDFU) {
                 if (s_dfu_armado) { dfu_pide_reinicio(); }   /* no vuelve */
                 s_dfu_armado = 1U;
@@ -12405,6 +12923,7 @@ static void grid_apply(uint8_t cel)
             else { break; }
             grid_fill();
             ui_grid_draw(&s_grid);
+            info_vivo_invalida(); /* pintada entera: la proxima pasada viva empieza de cero */
         }
         break;
     default: break;
@@ -12432,6 +12951,7 @@ static void grid_show(grid_pant_t p)
     if (s_grid.marcada != 0xFFU) { s_grid_cursor = (int8_t)s_grid.marcada; }
     grid_fill();
     ui_grid_draw(&s_grid);
+    info_vivo_invalida(); /* pintada entera: la proxima pasada viva empieza de cero */
 
     /* s_menu_screen se deja vacia: estas pantallas no usan widgets de ui.c.
      * Inicializarla evita que un toque herede los botones de la anterior. */
@@ -12478,6 +12998,7 @@ static void grid_cursor_move(int32_t d)
     }
     grid_fill();
     ui_grid_draw(&s_grid);
+    info_vivo_invalida(); /* pintada entera: la proxima pasada viva empieza de cero */
 }
 
 /* Reparto de un toque dentro de una pantalla de rejilla. */
@@ -12789,7 +13310,7 @@ static void menu_mode_preset_callback(void *widget, ui_event_t event, void *user
 
         if (k_demod_modes[idx].ft8)   { ft8_modo_start(12000.0f); }
         if (k_demod_modes[idx].ais)   { (void)ais_modo_start(); }
-        if (k_demod_modes[idx].ale)   { (void)ale_modo_start(); }
+        if (k_demod_modes[idx].ale)   { (void)ale_modo_start(); ale_reloj_borra(); }
         if (k_demod_modes[idx].jtty)  { (void)jtty_modo_start(); }
         if (k_demod_modes[idx].stanag) { (void)stanag_modo_start(); }
         if (k_demod_modes[idx].ident)  { (void)ident_modo_start(); }
@@ -14804,9 +15325,13 @@ static void ft8_num(char *b, uint8_t *i, int32_t v)
  */
 static void hfdl_chapa(void)
 {
-    static const char *const k_fase[4] = {
+    static const char *const k_fase_es[4] = {
         "buscando", "media senal", "casi", "ENGANCHADO"
     };
+    static const char *const k_fase_en[4] = {
+        "searching", "half a signal", "almost", "LOCKED"
+    };
+    const char *const *k_fase = (idioma() == IDIOMA_EN) ? k_fase_en : k_fase_es;
     uint8_t e = hfdl_modo_estado();
 
     if (e > 3U) { e = 3U; }
@@ -15079,12 +15604,61 @@ static void wspr_chapa(void)
  * y la calidad dice si lo que hay se entiende. En un modo sin CRC, lo
  * segundo es lo que hace falta mirar.
  */
+/*
+ * CUANTO HACE DE LA ULTIMA RAFAGA - 06/10/2026.
+ *
+ * *** El dueño, sobre 5339: "el modo ale no decodifica nada en 5339", y
+ * despues: "pero entonces ale me va a sacar algo por pantalla?". ***
+ *
+ * Y la pregunta es justa. Una red ALE no emite en continuo: cada estacion
+ * suelta un sondeo de dos o tres segundos y se calla, y entre sondeo y
+ * sondeo pueden pasar minutos u horas. Con la tabla vacia y la barra
+ * diciendo "buscando palabra", la pantalla es EXACTAMENTE LA MISMA si la
+ * red esta callada que si el decodificador esta roto, y desde el sillon no
+ * hay forma de saber cual de las dos.
+ *
+ * Asi que en cuanto se oye algo, la barra deja de decir "buscando" y dice
+ * cuanto hace. "ultima hace 4 min" es "esto funciona y la red va floja";
+ * "buscando palabra" despues de media hora es "aqui no hay ALE, prueba
+ * otra frecuencia". Son dos respuestas distintas y antes se parecian.
+ *
+ * El reloj se lleva AQUI y no en ale_modo.c porque ale_modo.c no tiene
+ * reloj: su s_reloj es un contador de orden para saber que estacion tirar
+ * primero, no un tiempo. g_msticks esta aqui.
+ */
+static uint32_t s_ale_ult_ms;     /* cuando se oyo la ultima palabra */
+static uint32_t s_ale_pal_vista;  /* para enterarse de que ha subido */
+static uint8_t  s_ale_hubo;
+
+static uint16_t ale_desde_min(void)
+{
+    if (!s_ale_hubo) { return 0xFFFFU; }
+    return (uint16_t)(((g_msticks - s_ale_ult_ms) / 1000U) / 60U);
+}
+
+static void ale_reloj_poll(void)
+{
+    uint32_t w = ale_modo_palabras();
+
+    if (w != s_ale_pal_vista) {
+        s_ale_pal_vista = w;
+        if (w != 0U) { s_ale_ult_ms = g_msticks; s_ale_hubo = 1U; }
+    }
+}
+
+static void ale_reloj_borra(void)
+{
+    s_ale_ult_ms = 0U; s_ale_pal_vista = 0U; s_ale_hubo = 0U;
+}
+
 static void ale_chapa(void)
 {
-    static char barra[28];
+    static char barra[40];
     static char chapa[16];
     uint8_t i = 0U;
     uint8_t cal = ale_modo_calidad();
+
+    ale_reloj_poll();
 
     s_digi.barra_on  = 1U;
     s_digi.barra_max = 48U;
@@ -15092,8 +15666,17 @@ static void ale_chapa(void)
     s_digi.enganchado = ale_modo_enganchado();
 
     if (!ale_modo_enganchado()) {
+        uint16_t min = ale_desde_min();
         s_digi.barra_v = 0U;
-        s_digi.barra_txt = tr("buscando palabra", "searching for a word");
+        if (min == 0xFFFFU) {
+            s_digi.barra_txt = tr("buscando palabra", "searching for a word");
+        } else {
+            if (min > 999U) { min = 999U; }
+            i = 0U;
+            (void)snprintf(barra, sizeof barra, "%s %u min",
+                           tr("ultima hace", "last one"), (unsigned)min);
+            s_digi.barra_txt = barra;
+        }
     } else {
         i = 0U;
         barra[i++] = 'c'; barra[i++] = 'a'; barra[i++] = 'l'; barra[i++] = 'i';
@@ -15772,6 +16355,23 @@ static void ft8_panel_draw(void)
 
         digi_sync();
 
+        /*
+         * El minutero de "ultima hace N min" cambia una vez por minuto y no
+         * mueve ni las palabras ni la calidad, asi que sin esto se quedaria
+         * congelado en pantalla hasta la siguiente rafaga - que es justo lo
+         * que no se quiere, porque el numero esta para mirarlo MIENTRAS no
+         * pasa nada. Se mete en la cuenta de arriba para no pintar de mas:
+         * es un repintado por minuto.
+         */
+        {
+            static uint16_t min_visto = 0xFFFEU;
+            uint16_t min = ale_desde_min();
+            if (min != min_visto) {
+                min_visto = min;
+                if (!ale_modo_enganchado()) { s_ft8_todo = 1U; }
+            }
+        }
+
         if (s_ft8_todo || (t != s_ft8_total_visto)) {
             s_ft8_todo = 0U;
             s_ft8_total_visto = t;
@@ -16449,8 +17049,40 @@ static void digi_sync(void)
     s_digi.filas = (uint8_t)RTTY_TEXT_ROWS;
     s_digi.barra_on = 0U;
     s_digi.barra_w  = 0;
-    s_digi.btn3     = 0;
-    s_digi.btn4     = 0;
+    /*
+     * EN RTTY, LOS DOS NUMEROS QUE DE VERDAD SE TOCAN - 05/10/2026.
+     *
+     * Este panel lo comparten RTTY, CW y NAVTEX, y por eso estos dos
+     * botones se ponen SOLO con rtty_get_enabled(): el NAVTEX va siempre a
+     * 170 Hz y 100 baudios -son fijos en la norma, no hay nada que elegir-
+     * y el CW no tiene ni desplazamiento ni velocidad de bit. Ensenarles
+     * dos botones que no hacen nada seria peor que no tenerlos.
+     */
+    if (rtty_get_enabled()) {
+        /*
+         * Y HAY QUE ACORTAR LA BARRA, QUE SI NO LOS BOTONES NO SALEN.
+         *
+         * btn3_w() de ui_digi.c se calcula como "lo que queda entre el
+         * final de la barra y la chapa", y bar_w() devuelve la barra
+         * ENTERA cuando barra_w vale 0 - que es lo que valia aqui, porque
+         * en RTTY no hay barra de progreso que pintar-. O sea que el hueco
+         * salia negativo, btn3_w() devolvia 0 y los dos botones se
+         * quedaban puestos en la estructura y sin un pixel donde dibujarse.
+         *
+         * barra_on sigue a 0: la barra NO se pinta, solo reserva sitio.
+         * Son dos cosas distintas y por eso son dos campos.
+         *
+         * 170 es lo mismo que usa el panel de STANAG para sus tres
+         * botones; aqui con dos sobra de largo. Ya habia un comentario en
+         * esa rama avisando de esta misma piedra, y he tropezado igual.
+         */
+        s_digi.barra_w = 170;
+        s_digi.btn3 = rtty_btn_shift_txt();
+        s_digi.btn4 = rtty_btn_baud_txt();
+    } else {
+        s_digi.btn3 = 0;
+        s_digi.btn4 = 0;
+    }
     s_digi.btn5     = 0;   /* RTTY, CW y NAVTEX no tienen mapa */
     s_digi.cebra    = 0U;
     /* Sin columnas ni titulos: lo que llega en RTTY, CW y NAVTEX es texto
@@ -18970,10 +19602,41 @@ static void tune_encoder_poll(void)
      * Va antes que la pulsacion larga porque esta se queda como esta: larga
      * = salir, desde cualquier pantalla.
      */
+    /*
+     * EL VOLUMEN, CON EL MENU DELANTE - 05/10/2026.
+     *
+     * *** De un issue: "volume doesn't work when in settings menu... the
+     * 'volume' text box appears as expected, but moving the encoder goes
+     * through the settings options instead of changing the volume. If it's
+     * by design, then the volume button shouldn't be able to be
+     * activated." ***
+     *
+     * Y tenia razon en lo peor: el boton SI hacia algo -ponia el destino
+     * del mando en VOLUMEN, encendia el boton y sacaba la caja- y despues
+     * el giro se lo quedaba la rejilla, que corre antes y hace return. O
+     * sea que la radio prometia una cosa y hacia otra. De las dos salidas
+     * que proponia -que funcione, o que el boton no se pueda pulsar- esta
+     * es la primera, porque bajar el volumen sin salir de Ajustes es algo
+     * que se quiere hacer de verdad: la alternativa es salir, bajarlo y
+     * volver a entrar.
+     *
+     * LOS DETENTES SON DEL VOLUMEN, LA PULSACION SIGUE SIENDO DE LA
+     * REJILLA. Asi el mando hace una cosa y el boton del mando otra, y no
+     * hay que elegir entre mover el volumen y poder seguir usando el menu.
+     *
+     * Y NO SE QUEDA ENGANCHADO: el tiempo de vuelta a sintonia (4 s) ahora
+     * tambien corre con el menu abierto. Antes lo excluia `!s_menu_open`
+     * para no deshacer el VOLUMEN al que se llega por su propia casilla de
+     * Ajustes, que se sale con EXIT y no por tiempo; esa sigue protegida,
+     * pero por `!s_menu_detail_active`, que es lo que de verdad la
+     * distingue. Sin esto, el mando se quedaria en el volumen para siempre
+     * y la rejilla muerta.
+     */
     if (s_menu_cfg_active && !s_menu_detail_active && !long_press) {
-        if (detents != 0) { cfg_cursor_move(detents); }
-        if (press)        { cfg_apply((uint8_t)s_cfg_cursor); }
-        if (detents != 0 || press) { return; }
+        uint8_t vol = (uint8_t)(s_encoder_target == ENCODER_TARGET_VOLUME);
+        if (detents != 0 && !vol) { cfg_cursor_move(detents); }
+        if (press)                { cfg_apply((uint8_t)s_cfg_cursor); }
+        if ((detents != 0 && !vol) || press) { return; }
     }
 
     /* Con el teclado numerico delante el mando no hace nada. 23/09/2026:
@@ -18983,17 +19646,34 @@ static void tune_encoder_poll(void)
      * del teclado. El teclado desaparecia de la vista pero seguia activo:
      * veias la radio y tocabas teclas invisibles. */
     if (kbd_activa() && !long_press) {
-        if (detents != 0 || press) { return; }
+        /*
+         * Y aqui lo mismo que en la rejilla (05/10/2026): el teclado se
+         * tragaba los detentes sin usarlos para nada -solo para que no
+         * cayeran mas abajo-, asi que con el mando enganchado al volumen el
+         * boton se encendia y el giro no hacia nada. Tecleando una
+         * frecuencia se puede querer bajar el volumen igual que en
+         * Ajustes, y el teclado no pierde nada: no usa el mando.
+         */
+        if (s_encoder_target == ENCODER_TARGET_VOLUME) {
+            if (press) { return; }
+        } else if (detents != 0 || press) {
+            return;
+        }
     }
 
     if (grid_activa() && !long_press) {
-        if (detents != 0) {
+        /* Ver el comentario del volumen unas lineas mas arriba: con el
+         * mando enganchado al volumen los detentes NO son de la rejilla,
+         * pero la pulsacion si. */
+        uint8_t vol = (uint8_t)(s_encoder_target == ENCODER_TARGET_VOLUME);
+
+        if (detents != 0 && !vol) {
             grid_cursor_move(detents);
         }
         if (press) {
             grid_apply((uint8_t)s_grid_cursor);
         }
-        if (detents != 0 || press) {
+        if ((detents != 0 && !vol) || press) {
             return;
         }
     }
@@ -19066,7 +19746,7 @@ static void tune_encoder_poll(void)
          * timeout. */
         if (volume_activity) {
             s_volume_target_last_ms = g_msticks;
-        } else if (!s_menu_open && s_encoder_ajuste == AJ_ENGANCHE_NINGUNO
+        } else if (!s_menu_detail_active && s_encoder_ajuste == AJ_ENGANCHE_NINGUNO
                    && ((g_msticks - s_volume_target_last_ms) >= VOLUME_TARGET_TIMEOUT_MS)) {
             /* El enganche de Func queda fuera del timeout (23/09/2026).
              * Antes no: engancharse a "Volumen" ponia el destino en VOLUME
@@ -20620,6 +21300,18 @@ static void demo_touch_poll(void)
             debug_print("stanag: velocidad cambiada\n");
             goto fin;
         }
+        /*
+         * Y en RTTY rueda el desplazamiento: 170 -> 425 -> 450 -> 850.
+         * El rotulo se vuelve a componer ANTES de repintar, que si no se
+         * queda el de antes hasta el cuadro siguiente.
+         */
+        if (rtty_get_enabled()) {
+            rtty_shift_siguiente();
+            s_digi.btn3 = rtty_btn_shift_txt();
+            ui_digi_draw_boton3(&s_digi);
+            debug_print("rtty: desplazamiento cambiado\n");
+            goto fin;
+        }
         ui_digi_draw_boton3(&s_digi);
         if (hfdl_modo_activo()) {
             grid_show(GRID_HFDL);
@@ -20639,6 +21331,14 @@ static void demo_touch_poll(void)
             s_digi.btn4 = stanag_modo_entre_txt();
             ui_digi_draw_boton4(&s_digi);
             debug_print("stanag: entrelazado cambiado\n");
+            goto fin;
+        }
+        /* Y en RTTY, la velocidad: 45,45 -> 50 -> 75 -> 100. */
+        if (rtty_get_enabled()) {
+            rtty_baud_siguiente();
+            s_digi.btn4 = rtty_btn_baud_txt();
+            ui_digi_draw_boton4(&s_digi);
+            debug_print("rtty: velocidad cambiada\n");
             goto fin;
         }
         /* El rotulo es la frecuencia, asi que cambia con el salto: hay que
@@ -20767,6 +21467,7 @@ static void demo_touch_poll(void)
             /* Vacia la tabla de estaciones. Util al cambiar de frecuencia:
              * lo que habia era de otro canal. */
             ale_modo_borra();
+            ale_reloj_borra();
             ft8_panel_reinicia();
             debug_print("ale: tabla borrada\n");
         } else if (ais_modo_activo()) {
@@ -21722,7 +22423,84 @@ static void sdr_spectrum_waterfall_tick(void)
     if (((int32_t)(g_msticks - s_next_frame_ms) < 0) || s_db_count == 0U) {
         return;
     }
-    s_next_frame_ms = g_msticks + SPECTRUM_FRAME_MS;
+    /*
+     * =====================================================================
+     * EL VAIVEN DEL FOTOGRAMA: DESENGANCHAR EL DIBUJO DEL AUDIO - 06/10/2026
+     * =====================================================================
+     *
+     * *** El dueño, sobre el siseo: "por mucho que me aleje ya raya del
+     * centro sigue pintando lo mismo" ... "lo esta tapando la emisora" ...
+     * "porque yo sigo viendolo en el espectro" ... "y aumenta conforme
+     * aumento la ganancia". ***
+     *
+     * EL ENGANCHE, que estaba a la vista y nadie habia mirado. Veinte lineas
+     * mas arriba, esta funcion entera vuelve si no ha llegado un bloque:
+     *
+     *     if (sdr_rx_poll_block_iq(...) == 0U) { return; }
+     *
+     * Asi que el dibujo SOLO PUEDE EMPEZAR en el instante en que llega un
+     * bloque de audio. Y la linea de abajo reengancha el siguiente plazo a
+     * ESE instante. Resultado: el tiempo entre un cuadro y el siguiente es
+     * siempre un numero ENTERO de bloques, y nunca se suelta.
+     *
+     * Con los 22 ms por defecto, el primer bloque que pasa de 22 son los
+     * 24,0 ms: NUEVE bloques exactos. 375 / 9 = 41,667 cuadros por segundo.
+     *
+     * Y eso es lo que convierte el ruido del repintado en un SISEO TONAL:
+     * si la perturbacion se repite cada nueve bloques clavados, todos sus
+     * armonicos caen ENCIMA de los multiplos de 375 Hz -la tasa de bloques-
+     * y el oido los junta en un tono. Medido en el audio del dueño: el peine
+     * a multiplos de 375 Hz, con bandas laterales separadas 41,75 Hz, que es
+     * exactamente esos 24,0 ms.
+     *
+     * Explica ademas lo que el ya habia notado: "los fps han modificado un
+     * poco el siseo". Cambiar los fps mueve de 9 bloques a 8, a 10 o a 13,
+     * pero SIGUE SIENDO ENTERO - cambia el timbre y no se va.
+     *
+     * LO QUE SE HACE: que el plazo baile unos milisegundos, asi que unos
+     * cuadros caen a los 8 bloques y otros a los 9. La misma energia, pero
+     * repartida en muchas rayas pequeñas en vez de apilada en seis grandes.
+     *
+     * MEDIDO ANTES DE ENTREGARLO (simulando la secuencia de instantes de
+     * dibujo con la regla real de arriba y sacandole el espectro):
+     *
+     *   fps pedidos   enganchado        con vaiven de +-2 ms
+     *     33 ms       +50,5 dB (13)     +30,2 dB (12,13,14)
+     *     28 ms       +52,0 dB (11)     +31,8 dB (10,11,12)
+     *     25 ms       +54,2 dB (10)     +31,5 dB (9,10,11)
+     *     22 ms       +60,0 dB  (9)     +34,1 dB (8,9)
+     *     20 ms       +56,9 dB  (8)     +33,2 dB (7,8,9)
+     *     18 ms       +55,5 dB  (7)     +33,0 dB (6,7,8)
+     *     16 ms       +66,5 dB  (6)     +35,4 dB (6,7)
+     *
+     * Entre veinte y veinticinco decibelios menos de concentracion en las
+     * rayas, en TODOS los ajustes de fps. Y los cuadros por segundo apenas
+     * se mueven: 41,70 -> 43,50 con 22 ms, porque el vaiven es simetrico y
+     * la media del plazo no cambia.
+     *
+     * NO ES MAGIA NI ES GRATIS DE ENTENDER: la energia total que el dibujo
+     * mete en el audio es la misma. Lo que cambia es que deja de ser un
+     * tono y pasa a ser un suelo, y un suelo del mismo nivel se oye mucho
+     * menos. Lo que NO arregla es el acoplo en si - el dueño midio que el
+     * ruido sube con la ganancia de entrada, o sea que entra ANTES del PGA,
+     * en la cadena de radiofrecuencia, y eso no lo toca ningun firmware.
+     *
+     * Dos milisegundos de vaiven sobre veinticuatro son invisibles: ni el
+     * ojo ni la cascada notan que un cuadro llegue 2,67 ms antes.
+     *
+     * El sorteo es un congruencial de los de siempre, como el del splash:
+     * no hace falta nada mejor para decidir si este cuadro espera ocho
+     * bloques o nueve, y no arrastra rand() de la libreria.
+     */
+    {
+        static uint32_t vai = 0x2F6E2B1u;
+        uint32_t paso;
+
+        vai = vai * 1103515245u + 12345u;
+        paso = SPECTRUM_FRAME_MS + ((vai >> 16) % 5U);   /* +0..+4 */
+        if (paso >= 2U) { paso -= 2U; }                  /* o sea -2..+2 */
+        s_next_frame_ms = g_msticks + paso;
+    }
 
     /* Per-frame status updates, all cheap and all OUTSIDE the ISR:
      * S-meter (skips its blits when the segment count is unchanged)

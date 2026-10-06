@@ -153,7 +153,33 @@ typedef struct {
                             * con que numeros. 0 = el numero sale de la
                             * norma y nadie lo ha medido todavia. */
     const char *nota;      /* lo que hay que saber para no confundirse */
+    /*
+     * LAS DOS EN INGLES - 06/10/2026.
+     *
+     * *** El dueño: "los mensajes del ident si pongo la radio en ingles los
+     * tienes que mostrar en ingles joder". *** Y llevaba razon: la tabla y
+     * los renglones de escribe() eran las unicas cadenas de interfaz de toda
+     * la radio que no pasaban por tr(), asi que con la radio en ingles el
+     * modo Ident seguia contestando en castellano.
+     *
+     * Van AL FINAL de la estructura, detras de `nota`, y no al lado de su
+     * pareja: asi cada fila solo añade dos cadenas en la cola y los
+     * inicializadores posicionales de las veintisiete filas no se tocan. Un
+     * campo nuevo en medio habria obligado a reordenar los veinte numeros de
+     * cada fila, que es justo donde se cuelan los errores que no compilan
+     * mal pero identifican mal.
+     *
+     * No se traducen los NOMBRES DE PROTOCOLO -"STANAG 4481 FSK (KG-84)" es
+     * igual en los dos idiomas-, pero si lo que los rodea: "Portadora sola"
+     * o "Podria ser ALE 2G" son frases, no nombres.
+     */
+    const char *nombre_en;
+    const char *nota_en;
 } ident_firma_t;
+
+/* El nombre y la nota en el idioma que toque. Ver ident_firma_t. */
+const char *ident_nombre(const ident_firma_t *f);
+const char *ident_nota(const ident_firma_t *f);
 
 /*
  * A QUIEN SE PARECEN ESTAS MEDIDAS. Rellena `salen` con los indices de las

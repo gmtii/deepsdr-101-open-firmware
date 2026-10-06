@@ -99,10 +99,34 @@
 #define NR_SS_NOISE_MIN 0.0f
 #define NR_SS_NOISE_MAX 11.0f
 
-/* sqrtf(2.667f) (Hann window, 4x/75% overlap power-compensation
- * factor), precomputed - see this file's header comment on why this
- * port uses it (unlike the original's active code path, which didn't). */
-#define NR_SS_ATT_RATIO 1.63309522f
+/*
+ * LA NORMALIZACION DEL SOLAPADO, MEDIDA - 06/10/2026.
+ *
+ * Era sqrtf(2,667) = 1,63309522, presentado en la cabecera de este fichero
+ * como "la normalizacion matematicamente correcta de ganancia unidad". No
+ * lo es, y se ve contandolo:
+ *
+ * La ventana de Hann se aplica SOLO EN ANALISIS -no hay ventana de
+ * sintesis- y el solape es del 75 %, o sea cuatro copias desplazadas un
+ * cuarto de ventana. La suma de esas cuatro copias vale EXACTAMENTE 2,0 en
+ * todo el tramo (medido, rizado 0,0000 dB: es la propiedad de solapado-suma
+ * de Hann a 75 %). Asi que para ganancia unidad hay que multiplicar por
+ * 1/2,0 = 0,5.
+ *
+ * Lo que habia multiplicaba por 1,63309522/4 = 0,408274, o sea ganancia
+ * total 0,816548 = -1,76 dB. Encender el reductor de ruido bajaba el audio
+ * 1,76 dB, siempre, aunque la fuerza estuviera a cero.
+ *
+ * De donde salia el numero: sqrt(2,667) es la compensacion de POTENCIA de
+ * Hann con solape 4x, que es otra cuenta -la buena para estimar cuanta
+ * potencia de ruido deja pasar la ventana- y no la de reconstruir la señal.
+ * El comentario de la cabecera ya avisaba de que "puede necesitar un ajuste
+ * empirico"; no hacia falta ajustar nada a oido, el numero se deduce.
+ *
+ * Se deja como NR_SS_ATT_RATIO = 2,0 para que la cuenta de abajo
+ * -ATT_RATIO * (1/NFRAME)- siga leyendose igual y de 0,5.
+ */
+#define NR_SS_ATT_RATIO 2.0f
 
 /*
  * *** 01/09/2026: moved to TCM RAM *** - same reasoning as fft.c's own

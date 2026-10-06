@@ -422,6 +422,79 @@ uint8_t sdr_rx_last_block_corrupted(void)
 #define SDR_RX_BLOCK_JUMP_THRESHOLD 16000
 #define SDR_RX_BLOCK_BAD_FRACTION_NUM 1U
 #define SDR_RX_BLOCK_BAD_FRACTION_DEN 20U
+
+/*
+ * ESTE CHEQUEO NO VALE PARA WFM, Y HAY QUE PODER APAGARLO - 05/10/2026.
+ *
+ * De un issue: en WFM se oye un siseo mientras el espectro y la cascada se
+ * repintan; al abrir FUNC desaparece al instante. Repasando el camino
+ * entero, la unica cosa que se para al abrir FUNC es DIBUJAR -la FFT y el
+ * poll de bloques quedan fuera de esa guarda-, asi que lo audible tenia
+ * que ser un artefacto del audio, no carga de CPU.
+ *
+ * Y el artefacto es este chequeo. La cuenta, que es lo que decide:
+ *
+ *   En WFM la I/Q va SIN mezclar a banda base, a 192 kHz. Un tono a f de
+ *   desviacion gira la fase 2*pi*f/192000 por muestra, y la diferencia
+ *   entre muestras consecutivas vale 2*A*sin(giro/2):
+ *
+ *     desviacion 75 kHz -> giro 2,454 rad -> |delta| = 1,883 x amplitud
+ *     desviacion 50 kHz -> giro 1,636 rad -> |delta| = 1,460 x amplitud
+ *     desviacion 25 kHz -> giro 0,818 rad -> |delta| = 0,795 x amplitud
+ *
+ *   Con el umbral en 16000, a desviacion plena basta una amplitud de 8.496
+ *   de 32.767 -el 26% del fondo de escala- para que CADA MUESTRA lo cruce.
+ *   Y en WFM el PGA va clavado al tope (main.c, "WFM, al tope por perdida
+ *   de VHF"), asi que cualquier emisora decente pasa de ahi.
+ *
+ * O sea que en WFM este chequeo no distingue basura de senal: da por
+ * corrupto un bloque bueno, el bloque se descarta, su mitad del buffer de
+ * salida no se refresca y se REPITEN 2,67 ms de audio ya sonado. El
+ * comentario de demod_am.c da eso por "inaudible as a glitch" - y lo seria
+ * UNA vez. A ritmo de bloque son 375 por segundo, y una cadencia de
+ * discontinuidades a esa velocidad no suena a clic: suena a siseo.
+ *
+ * El umbral viene de rx_capture_looks_corrupted(), pensado para detectar un
+ * ADC railado en el arranque. Alli vale. Aqui, sobre I/Q de FM de banda
+ * ancha sin mezclar, no mide lo que cree que mide.
+ *
+ * Para AM/SSB se queda encendido: alli la senal SI va mezclada a banda base
+ * y es estrecha comparada con la frecuencia de muestreo, asi que un salto
+ * de medio fondo de escala entre muestras consecutivas si es una anomalia.
+ */
+static uint8_t s_chequeo_corrupcion = 1U;
+
+void sdr_rx_set_chequeo_corrupcion(uint8_t on)
+{
+    s_chequeo_corrupcion = (on != 0U) ? 1U : 0U;
+}
+
+/*
+ * LA ISR LLEGO TARDE: LAS DOS BANDERAS PUESTAS A LA VEZ.
+ *
+ * Si esta ISR se retrasa mas de media vuelta del DMA, HTF y FTF estan
+ * puestas las dos. La mitad vieja ya la esta pisando el DMA -es circular-
+ * asi que NO se puede recuperar: se coge la nueva y la otra se pierde.
+ *
+ * Eso era correcto y era SILENCIOSO, que es lo que estaba mal: no habia
+ * forma de saber que pasaba ni cada cuanto. s_hook_runs existia y no lo
+ * leia nadie en todo el proyecto. Ahora se cuenta y se puede mirar.
+ */
+static volatile uint32_t s_rx_tarde = 0U;
+
+uint32_t sdr_rx_get_tarde(void)
+{
+    return s_rx_tarde;
+}
+
+/* Cuantos bloques se han descartado por parecer corruptos. Sin esto, el
+ * descarte -y su repeticion de 2,67 ms- no deja rastro ninguno. */
+static volatile uint32_t s_rx_descartes = 0U;
+
+uint32_t sdr_rx_get_descartes(void)
+{
+    return s_rx_descartes;
+}
 static int16_t s_ferr_snapshot[SDR_RX_FERR_SNAPSHOT_FRAMES * 2U];
 static volatile uint8_t s_ferr_snapshot_ready = 0U;
 
@@ -447,17 +520,24 @@ void DMA0_Channel3_IRQHandler(void)
 {
     const int16_t *half = 0;
     uint8_t ferr_this_block = 0U;
+    uint8_t htf = 0U, ftf = 0U;
 
     if (dma_interrupt_flag_get(DMA0, DMA_CH3, DMA_INT_FLAG_HTF) == SET) {
         dma_interrupt_flag_clear(DMA0, DMA_CH3, DMA_INT_FLAG_HTF);
         half = &s_raw_buf[0];
         s_pending_half = 0U;
+        htf = 1U;
     }
     if (dma_interrupt_flag_get(DMA0, DMA_CH3, DMA_INT_FLAG_FTF) == SET) {
         dma_interrupt_flag_clear(DMA0, DMA_CH3, DMA_INT_FLAG_FTF);
         half = &s_raw_buf[s_raw_half_words];
         s_pending_half = 1U;
+        ftf = 1U;
     }
+    /* Las dos a la vez = hemos llegado tarde y se pierde la mitad vieja.
+     * Ver el comentario de s_rx_tarde: no se puede recuperar, pero se
+     * cuenta. */
+    if (htf && ftf) { s_rx_tarde++; }
 
     {
         /*
@@ -519,7 +599,7 @@ void DMA0_Channel3_IRQHandler(void)
      */
     {
         uint8_t corrupted = 0U;
-        if (half != 0) {
+        if ((half != 0) && (s_chequeo_corrupcion != 0U)) {
             uint32_t n_samples = s_raw_half_words / 2U; /* stereo frames in this half */
             if (n_samples > 1U) {
                 uint32_t k;
@@ -544,6 +624,7 @@ void DMA0_Channel3_IRQHandler(void)
                 }
             }
         }
+        if (corrupted != 0U) { s_rx_descartes++; }
         s_last_block_had_ferr = corrupted;
     }
 

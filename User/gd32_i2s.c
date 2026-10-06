@@ -520,8 +520,20 @@ static uint32_t s_stream_words_per_half  = SDR_RX_BLOCK_SAMPLES * 2U;
 static uint32_t s_stream_total_words     = SDR_RX_BLOCK_SAMPLES * 4U;
 
 /* See gd32_i2s_stream_write_half()'s own comment - counts real FERR
- * occurrences on I2S1_ADD, cheaply, once per TX block. */
+ * occurrences on I2S1_ADD, cheaply, once per TX block.
+ *
+ * ACUMULATIVO DESDE EL ARRANQUE - 06/10/2026. El comentario de al lado
+ * decia que stream_arm_dma() lo pone a cero en cada armado, y NO lo hace:
+ * no lo toca nadie salvo gd32_i2s_reset_tx_ferr_count(), que llama main.c
+ * desde la ventana de informacion. Quien leyera el numero creyendo que era
+ * "de esta sesion de stream" lo estaba sobreestimando. */
 static volatile uint32_t s_tx_ferr_count = 0U;
+
+/* El margen de fase del ping-pong - ver gd32_i2s_stream_write_half(). */
+static volatile uint32_t s_half_repes = 0U;
+static volatile uint32_t s_half_min   = 0xFFFFFFFFU;
+static volatile uint32_t s_half_max   = 0U;
+static volatile uint8_t  s_half_ult   = 0xFFU;
 
 /* Shared DMA-arming step - used by both gd32_i2s_dma_start_stream()
  * and gd32_i2s_stream_start() (the re-arm half of reconfigure - see
@@ -609,6 +621,22 @@ void gd32_i2s_stream_arm(uint32_t frames_per_half)
  */
 void gd32_i2s_stream_stop(void)
 {
+    /*
+     * Y LA PETICION DE DMA DEL I2S, TAMBIEN - 06/10/2026.
+     *
+     * Antes solo se apagaba el canal. El periferico se quedaba con
+     * SPI_DMA_TRANSMIT puesto, o sea pidiendo palabras a un canal que ya no
+     * estaba, que es exactamente la condicion de subdesbordamiento que el
+     * resto de este fichero persigue como FERR. Hoy queda tapado porque
+     * quien llama a esto llama despues a gd32_i2s_init_slave(), que hace un
+     * spi_i2s_deinit() entero - pero eso es una garantia del LLAMANTE, y
+     * una funcion que se llama "parar el stream" tiene que dejarlo parado
+     * ella sola.
+     *
+     * Primero la peticion y despues el canal: al reves, entre las dos
+     * lineas el periferico seguiria pidiendo sin nadie que sirva.
+     */
+    spi_dma_disable(I2S1_ADD, SPI_DMA_TRANSMIT);
     dma_channel_disable(DMA0, DMA_CH4);
     while ((DMA_CHCTL(DMA0, DMA_CH4) & DMA_CHXCTL_CHEN) != 0U) {
         /* a disable request can take a few cycles to complete */
@@ -630,8 +658,7 @@ void gd32_i2s_stream_stop(void)
  */
 
 /* Diagnostic-only: logs the first several gd32_i2s_stream_write_half()
- * calls after each gd32_i2s_stream_start() (stream_arm_dma() resets
- * this to 0) - added 05/08/2026 to chase the "first mode switch after
+ * calls after each gd32_i2s_stream_start() - added 05/08/2026 to chase the "first mode switch after
  * boot is silent, but the switch after that works" report. Original
  * theory: if dma_transfer_number_get() returns something unexpected
  * right after a fresh arm, the playing_half/write_half math below
@@ -685,6 +712,81 @@ void gd32_i2s_stream_write_half(const int16_t *stereo_frames)
     uint32_t w;
 
     /*
+     * ===================================================================
+     * EL MARGEN DE FASE DEL PING-PONG, MEDIDO - 06/10/2026.
+     * ===================================================================
+     *
+     * *** El dueño: "haz una revision profunda a todo lo que pueda afectar
+     * a cualquier audio en cualquier momento". ***
+     *
+     * ESTO NO ARREGLA NADA: MIDE. Y mide una sospecha concreta que no se
+     * puede confirmar ni descartar sin la radio delante.
+     *
+     * LA SOSPECHA. La eleccion de mitad de arriba es una sola foto
+     * instantanea del contador del DMA, sin memoria y sin histeresis: no
+     * recuerda que mitad escribio la vez anterior. Mientras la llamada caiga
+     * lejos de la frontera de la mitad, alterna sola y funciona. Pero el
+     * margen que tiene depende de cuanto tarde el procesado -esta funcion es
+     * la ULTIMA linea del gancho de audio- y ese tiempo NO es constante:
+     * cambia con el perfil del AGC, con el reductor de ruido, con los
+     * decodificadores, y con la contencion del bus mientras se repinta la
+     * pantalla.
+     *
+     * Si el punto de trabajo esta cerca de la frontera, un cuadro de
+     * espectro basta para cruzarla. Entonces write_half DEJA DE ALTERNAR:
+     * una mitad se escribe dos veces -y el bloque de en medio se pierde- y
+     * la otra no se refresca -y repite 2,67 ms ya sonados-. Eso es una
+     * discontinuidad en la misma posicion relativa de cada bloque, o sea un
+     * PEINE de armonicos a la tasa de bloques: 375 Hz y multiplos.
+     *
+     * Que es exactamente lo que se midio en el audio del dueño: multiplos de
+     * 375 Hz hasta 38 dB sobre el ruido mientras se pinta, y 2-8 dB con un
+     * menu tapando el espectro.
+     *
+     * POR QUE NO SE "ARREGLA" Y PUNTO. Porque hay por lo menos tres cosas
+     * mas que producen ese mismo peine -el descarte de bloque por corrupto,
+     * la interrupcion que llega tarde, y el solapado del reductor de ruido-
+     * y cambiar a ciegas el corazon del transporte de audio para perseguir
+     * una de ellas es como se rompen las radios. Primero se mira el numero.
+     *
+     * QUE SE MIDE, y por que asi:
+     *
+     *   s_half_repes   cuantas veces se ha elegido la MISMA mitad que la vez
+     *                  anterior. En regimen bueno tiene que ser 0. Cualquier
+     *                  numero que suba mientras se pinta es la confirmacion.
+     *
+     *   s_half_min     donde cae la llamada DENTRO de la mitad, en palabras,
+     *   s_half_max     lo mas bajo y lo mas alto vistos. Dice de que lado
+     *                  esta el borde y cuanto se mueve.
+     *
+     *                  LA PRIMERA VERSION GUARDABA LA DISTANCIA AL BORDE MAS
+     *                  CERCANO Y ERA AMBIGUA - 06/10/2026. El dueño leyo
+     *                  "123/1024" y ese numero vale para dos cosas opuestas:
+     *                  la llamada cae en la palabra 123 -o sea el procesado
+     *                  tardo 320 us, va sobrado- o en la 901, o sea tardo
+     *                  2,35 ms de los 2,67 que hay. Con el minimo y el
+     *                  maximo no hay duda: si los dos numeros son bajos, la
+     *                  holgura esta arriba; si son altos, la interrupcion
+     *                  esta llegando al final de su presupuesto.
+     *
+     * Contadores y nada mas: ni un debug_print aqui dentro. Esta funcion
+     * tiene su propia leccion escrita arriba sobre lo que cuesta un UART
+     * dentro del camino de la interrupcion - la instrumentacion llego a
+     * CAUSAR el sintoma que estaba midiendo. Se leen desde la ventana de
+     * informacion, en el bucle principal.
+     */
+    {
+        uint32_t dentro = pos - (playing_half * s_stream_words_per_half);
+
+        if (s_half_ult != 0xFFU) {
+            if ((uint32_t)s_half_ult == write_half) { s_half_repes++; }
+        }
+        s_half_ult = (uint8_t)write_half;
+        if (dentro < s_half_min) { s_half_min = dentro; }
+        if (dentro > s_half_max) { s_half_max = dentro; }
+    }
+
+    /*
      * *** 05/08/2026, added for WFM FERR frequency diagnostics *** -
      * same reasoning as sdr_rx.c's DMA0_Channel3_IRQHandler() counter:
      * this function already runs every TX block, so it's the cheapest
@@ -719,6 +821,37 @@ void gd32_i2s_stream_write_half(const int16_t *stereo_frames)
 uint32_t gd32_i2s_get_tx_ferr_count(void)
 {
     return s_tx_ferr_count;
+}
+
+uint32_t gd32_i2s_get_half_repes(void)
+{
+    return s_half_repes;
+}
+
+/* 0xFFFFFFFF = todavia no se ha escrito ninguna mitad. El llamante lo
+ * distingue; devolverlo tal cual es mas honrado que inventarse un cero que
+ * se leeria como "sin margen ninguno", que es justo lo contrario. */
+uint32_t gd32_i2s_get_half_min(void)
+{
+    return s_half_min;
+}
+
+uint32_t gd32_i2s_get_half_max(void)
+{
+    return s_half_max;
+}
+
+uint32_t gd32_i2s_get_half_palabras(void)
+{
+    return s_stream_words_per_half;
+}
+
+void gd32_i2s_reset_half_diag(void)
+{
+    s_half_repes = 0U;
+    s_half_min   = 0xFFFFFFFFU;
+    s_half_max   = 0U;
+    s_half_ult   = 0xFFU;
 }
 
 void gd32_i2s_reset_tx_ferr_count(void)

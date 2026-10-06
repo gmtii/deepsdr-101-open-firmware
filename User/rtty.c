@@ -1,4 +1,6 @@
 #include "rtty.h"
+#include <string.h>
+#include "rtty_auto.h"
 #include "config.h"
 #include "debug_uart.h"
 #include <math.h>
@@ -143,12 +145,135 @@ static uint8_t  s_bits_captured;
 static uint8_t  s_shift_reg;
 static uint8_t  s_prev_bit;     /* last block's bit decision, for edge detection */
 static uint8_t  s_figs_shift;   /* 0=letters, 1=figures - current Baudot shift state */
+
+/*
+ * LA INVERSION, SOLA - 06/10/2026.
+ *
+ * *** El dueño, despues de pasarse media mañana con 3712 sacando basura
+ * porque el desplazamiento estaba del reves: "lo de la inversion no lo
+ * puede detectar automaticamente?". ***
+ *
+ * Puede, y sale casi gratis: los dos Goertzels YA estan calculados y la
+ * polaridad contraria es el mismo bit con el signo cambiado. O sea que no
+ * hay que medir nada nuevo - solo hay que mirar que pasaria.
+ *
+ * COMO SE SABE CUAL ES LA BUENA, sin leer el texto. Un caracter de ITA2
+ * lleva arranque a espacio y parada a marca, y la parada se comprueba 6,5
+ * periodos despues del flanco. Con la polaridad CORRECTA esa parada esta
+ * donde tiene que estar casi siempre; con la contraria, el "flanco de
+ * arranque" que engancha la maquina es ruido y la parada cae donde cae.
+ * Asi que no hace falta entender lo que pone: basta contar cuantos marcos
+ * cierran bien por un lado y por el otro.
+ *
+ * La SOMBRA es esa cuenta. Lleva la misma maquina de estados pero no
+ * decodifica nada: ni registro de desplazamiento, ni letras/cifras, ni
+ * cola. Cuatro variables y un contador.
+ *
+ * Y SOLO SE MUEVE CUANDO LA ACTIVA VA MAL. La condicion no es "la sombra
+ * va mejor", es "la activa va mal Y la sombra la triplica". Sin esa
+ * primera mitad, una radio que esta decodificando perfectamente podria
+ * darse la vuelta sola por una racha de ruido, y eso es peor que no tener
+ * la deteccion: el dueño ya ha elegido, y lo que elige el dueño no se le
+ * cambia por detras mientras le este funcionando.
+ *
+ * COMPROBADO EN ANTENA - 06/10/2026, sobre otro RTTY distinto del que
+ * sirvio para ajustar los numeros. *** El dueño: "lo ha hecho, primero ha
+ * sacado 2 lineas de basura y luego ya a decodificado bien". ***
+ *
+ * Dos lineas de basura son unos cuarenta caracteres, o sea una ventana de
+ * 48 marcos sin llegar a cerrar: justo lo que las cuentas dicen que tiene
+ * que tardar. Y no se toco ni un umbral despues de medirlos en la
+ * grabacion de 3712 - son los mismos numeros contra una señal distinta.
+ */
+typedef struct {
+    rtty_state_t est;
+    uint32_t     desde;
+    uint8_t      nbits;
+    uint8_t      ant;
+    uint16_t     bien;
+    uint16_t     marcos;
+} rtty_sombra_t;
+
+/*
+ * LOS NUMEROS, MEDIDOS SOBRE LA GRABACION DE 3712 DEL DUEÑO y no puestos a
+ * ojo. La misma grabacion, metida por aqui con las dos polaridades, da
+ * esto por ventana de marcos:
+ *
+ *                    del reves          bien puesta
+ *     activa        77 / 52 / 69 %     94 / 100 /  98 %
+ *     sombra        94 / 100 / 99 %    77 /  54 /  67 %
+ *
+ * Entre 77 y 94 cabe una puerta de sobra. Las tres condiciones de abajo
+ * -la activa floja, la sombra buena de verdad, y quince puntos de
+ * diferencia- separan las dos columnas sin rozar ninguna.
+ */
+#define RTTY_INV_VENTANA  48U   /* marcos mirados antes de decidir: ~7 s a 50 Bd */
+#define RTTY_INV_FLOJA    85U   /* la activa por debajo de esto es "va mal" */
+#define RTTY_INV_BUENA    90U   /* y la sombra por encima de esto es "va bien" */
+#define RTTY_INV_MARGEN   15U   /* puntos de diferencia que hay que sacar */
+
+static rtty_sombra_t s_sombra;
+static uint16_t s_marcos;       /* marcos cerrados por la activa, buenos o malos */
+static uint16_t s_bien;         /* y cuantos de ellos cerraron bien */
+static uint16_t s_auto_inv_n;   /* veces que se ha dado la vuelta sola */
+static uint8_t  s_salud_pc = 100U;
+static uint32_t s_marcos_total;
+static uint16_t s_salud_n;    /* ventanas de salud cerradas */  /* % de marcos que cerraron bien en la ultima ventana */
 static uint32_t s_bit_period_samples; /* Fs/baud, precomputed in rtty_init() */
 
 static uint8_t s_enabled;
 static uint8_t s_last_bit;
 static float   s_last_mark_mag;
 static float   s_last_space_mag;
+
+/*
+ * El nivel de cada tono CUANDO SUENA. Ver el comentario largo de
+ * rtty_process(). goertzel_mag() devuelve magnitud AL CUADRADO, asi que
+ * estos son potencias y el suelo tiene que ser una potencia tambien.
+ */
+#define RTTY_REF_ALFA   (1.0f / 512.0f)   /* ~1,4 s a 32 muestras y 12 kHz */
+#define RTTY_REF_SUELO  (1e-9f)
+static float   s_mark_ref;
+static float   s_space_ref;
+
+/*
+ * LA VENTANA DE MEDIDA, QUE NO TIENE POR QUE SER EL BLOQUE - 06/10/2026.
+ *
+ * El Goertzel corria sobre RTTY_BLOCK_SAMPLES, o sea 32 muestras. A 12 kHz
+ * eso son 2,67 ms, y la resolucion de un Goertzel es 1/ventana:
+ *
+ *     1 / 2,67 ms  =  375 Hz
+ *
+ * Con un desplazamiento de 450 Hz, los dos tonos estan a UNA RESOLUCION de
+ * distancia. O sea que el filtro de la marca no ve solo la marca: se le
+ * cuela media raya del espacio, y al reves. Y peor: entran 375 Hz de ruido
+ * en cada medida cuando la señal ocupa 50.
+ *
+ * Con una señal fuerte -el 3382 del dueño- sobra margen y sale igual. Con
+ * una floja -el 3712, la misma emision por otro camino- no sale.
+ *
+ * La ventana buena es MEDIO BIT: a 50 baudios, 10 ms y 100 Hz de
+ * resolucion, que separa los 450 de sobra y mete cuatro veces menos ruido
+ * -6 dB-. Medio y no un bit entero porque la decision se sigue tomando
+ * cada 32 muestras, y una ventana de un bit entero se comeria el bit de al
+ * lado en cada transicion.
+ *
+ * El bloque SIGUE siendo de 32: lo que cambia es que se mira hacia atras.
+ * Por eso hace falta el historial - en la pila no, que esto corre en la
+ * cadena del audio.
+ */
+/*
+ * 128 Y NO 256: la ventana mas larga que se llega a pedir es medio bit a
+ * 45,45 baudios, o sea 132 muestras, y redondeada hacia abajo a bloques
+ * enteros son 128. Con 256 sobraba medio kilobyte de RAM, y de RAM libre
+ * quedan menos de dos - el enlazador lo dijo sin rodeos: "region RAM
+ * overflowed by 80 bytes".
+ */
+#define RTTY_VENT_MAX   128U
+#define RTTY_VENT_MIN    32U
+static float   s_hist[RTTY_VENT_MAX];
+static uint16_t s_hist_n;        /* cuantas muestras validas hay */
+static uint16_t s_vent;          /* la ventana de ahora, en muestras */
 
 /* --- baud rate (bit period), see rtty_set_baud()'s comment in rtty.h --- */
 static float s_baud;
@@ -220,6 +345,35 @@ static void rtty_baudot_decode(uint8_t code)
 }
 
 /*
+ * La misma maquina de estados, pero SIN decodificar: solo mira si el marco
+ * cierra con su bit de parada. Ver el comentario de rtty_sombra_t.
+ */
+static void sombra_tick(rtty_sombra_t *m, uint8_t bit)
+{
+    if (m->est == RTTY_ST_IDLE) {
+        if (m->ant == 1U && bit == 0U) {
+            m->est = RTTY_ST_RECEIVING;
+            m->desde = RTTY_BLOCK_SAMPLES;
+            m->nbits = 0U;
+        }
+        m->ant = bit;
+        return;
+    }
+    m->desde += RTTY_BLOCK_SAMPLES;
+    while (m->nbits < 5U
+           && m->desde >= (uint32_t)((float)s_bit_period_samples * ((float)m->nbits + 1.5f))) {
+        m->nbits++;
+    }
+    if (m->nbits == 5U
+        && m->desde >= (uint32_t)((float)s_bit_period_samples * 6.5f)) {
+        m->marcos++;
+        if (bit == 1U) { m->bien++; }
+        m->est = RTTY_ST_IDLE;
+        m->ant = bit;
+    }
+}
+
+/*
  * Per-block bit-sync/framing state machine - see this file's
  * top-of-file pipeline comment (step 3) for the design. Called once
  * per rtty_process() with that block's bit decision.
@@ -270,7 +424,10 @@ static void rtty_state_machine(uint8_t bit)
         debug_print_dec("rtty: raw 5-bit code (LSB-first)", (uint32_t)s_shift_reg);
         debug_print(bit ? "rtty: stop bit OK\n" : "rtty: *** framing error, no stop bit ***\n");
 #endif
+        s_marcos++;
+        s_marcos_total++;
         if (bit == 1U) {
+            s_bien++;
             rtty_baudot_decode(s_shift_reg);
         }
         /* else: framing error (no stop bit where expected) - drop
@@ -322,6 +479,14 @@ void rtty_init(void)
     s_last_bit = 1U;
     s_last_mark_mag = 0.0f;
     s_last_space_mag = 0.0f;
+    s_mark_ref = 0.0f;
+    s_space_ref = 0.0f;
+    s_hist_n = 0U;
+    memset(s_hist, 0, sizeof s_hist);
+    memset(&s_sombra, 0, sizeof s_sombra);
+    s_sombra.ant = 1U;
+    s_marcos = 0U;
+    s_bien = 0U;
     s_station_inverted = 0U; /* NORMAL by default - matches CONFIG_RTTY_MARK_HZ/SPACE_HZ's own polarity */
 
     debug_print_dec("rtty: init, bit period (samples @ 12kHz)", s_bit_period_samples);
@@ -339,15 +504,145 @@ void rtty_process(const float *audio, uint32_t n)
         return; /* contract violation - see rtty.h, silently ignore rather than read OOB */
     }
 
-    mark_mag  = goertzel_mag(audio, GOERTZEL_N, s_mark_coeff,  s_mark_cos,  s_mark_sin);
-    space_mag = goertzel_mag(audio, GOERTZEL_N, s_space_coeff, s_space_cos, s_space_sin);
-    bit = (mark_mag >= space_mag) ? 1U : 0U;
+    /*
+     * El bloque nuevo al final del historial, lo viejo se corre hacia
+     * atras. Son 256 flotantes como mucho y un bloque son 32: ocho
+     * memmove al segundo de 1 kB. Un anillo seria mas fino pero obligaria
+     * a partir el Goertzel en dos tramos, y el Goertzel es recursivo: hay
+     * que darle las muestras SEGUIDAS y en orden.
+     */
+    if (s_vent < RTTY_VENT_MIN) { s_vent = RTTY_VENT_MIN; }
+    memmove(&s_hist[0], &s_hist[RTTY_BLOCK_SAMPLES],
+            (RTTY_VENT_MAX - RTTY_BLOCK_SAMPLES) * sizeof s_hist[0]);
+    memcpy(&s_hist[RTTY_VENT_MAX - RTTY_BLOCK_SAMPLES], audio,
+           RTTY_BLOCK_SAMPLES * sizeof s_hist[0]);
+    if (s_hist_n < RTTY_VENT_MAX) { s_hist_n = (uint16_t)(s_hist_n + RTTY_BLOCK_SAMPLES); }
+
+    {
+        uint16_t v = (s_hist_n < s_vent) ? s_hist_n : s_vent;
+        const float *p = &s_hist[RTTY_VENT_MAX - v];
+        mark_mag  = goertzel_mag(p, v, s_mark_coeff,  s_mark_cos,  s_mark_sin);
+        space_mag = goertzel_mag(p, v, s_space_coeff, s_space_cos, s_space_sin);
+    }
+
+    /*
+     * CADA TONO CONTRA SI MISMO, NO CONTRA EL OTRO - 06/10/2026.
+     *
+     * *** El dueño, con la misma emision -el boletin del DWD- en dos
+     * frecuencias: en 3382 el texto entero, en 3712 "solo me decodifca
+     * mierda". Y despues: "quiero que se pueda decodificar el 3712". ***
+     *
+     * Las dos estaban bien sintonizadas. Medido sobre sus dos fotos, las
+     * rayas del oscilador caen ENCIMA de los tonos en las dos:
+     *
+     *     3712   rayas  918 y 1385 Hz    tonos  927 y 1374 Hz
+     *     3382   rayas 2438 y 2904 Hz    tonos 2438 y 2904 Hz
+     *
+     * Lo que las separa es el desvanecimiento, y lo que no lo aguantaba
+     * era esta linea:
+     *
+     *     bit = (mark_mag >= space_mag) ? 1U : 0U;
+     *
+     * Un tono contra EL OTRO. Es la MISMA piedra que tenia stanag_det.c
+     * hasta esa misma mañana, y por la misma razon fisica: 850 -o 450- Hz
+     * de separacion son dos caminos distintos por la ionosfera, y se
+     * desvanecen por separado. Cuando la marca llega 10 dB mas floja que
+     * el espacio, esa comparacion no decide que bit se ha transmitido:
+     * decide cual de los dos tonos se esta desvaneciendo menos, y dice
+     * "espacio" durante todo el rato que dure el desvanecimiento.
+     *
+     * LO QUE SE MIDE AHORA. De cada tono se lleva el nivel QUE TIENE
+     * CUANDO LE TOCA SONAR -su referencia- y se compara cada uno con la
+     * suya:
+     *
+     *     mark_mag / s_mark_ref   contra   space_mag / s_space_ref
+     *
+     * que sin dividir es el producto cruzado de abajo. Si la marca llega
+     * la mitad de fuerte que el espacio pero AHORA esta en su nivel y el
+     * espacio no, gana la marca, que es lo correcto.
+     *
+     * La referencia se actualiza SOLO con el tono que va ganando, nunca
+     * con los dos a la vez: lo que se quiere estimar es cuanto vale ese
+     * tono encendido, no su media con el apagado. Por eso un idle largo
+     * -todo marca- no arrastra la referencia del espacio hacia el ruido;
+     * se queda en el ultimo valor bueno que se le vio.
+     *
+     * La constante es 1/512 de bloque, y un bloque son 32 muestras a 12
+     * kHz: 1,4 s de memoria. Tiene que ser MUCHO mas larga que un
+     * caracter -150 ms a 50 baudios- para que no la mueva el propio
+     * texto, y mucho mas corta que un desvanecimiento, que dura decenas
+     * de segundos.
+     *
+     * Y MIENTRAS NO HAYA VISTO LOS DOS TONOS, la regla de siempre. Con
+     * una referencia a cero el producto cruzado daria cero contra algo y
+     * decidiria siempre lo mismo: justo el fallo que se viene a quitar.
+     */
+    if (mark_mag >= space_mag) {
+        s_mark_ref  += (mark_mag  - s_mark_ref)  * RTTY_REF_ALFA;
+    } else {
+        s_space_ref += (space_mag - s_space_ref) * RTTY_REF_ALFA;
+    }
+
+    if (s_mark_ref > RTTY_REF_SUELO && s_space_ref > RTTY_REF_SUELO) {
+        bit = (mark_mag * s_space_ref >= space_mag * s_mark_ref) ? 1U : 0U;
+    } else {
+        bit = (mark_mag >= space_mag) ? 1U : 0U;
+    }
 
     s_last_mark_mag  = mark_mag;
     s_last_space_mag = space_mag;
     s_last_bit = bit;
 
     rtty_state_machine(bit);
+
+    /*
+     * Y la sombra: la misma trama con la polaridad contraria. Ver
+     * rtty_sombra_t. Cuesta cuatro variables y ninguna medida nueva.
+     */
+    sombra_tick(&s_sombra, (uint8_t)(bit ^ 1U));
+    rtty_auto_bit(bit);
+
+    if (s_marcos >= RTTY_INV_VENTANA) {
+        /*
+         * La activa va mal Y la sombra la triplica: es que el
+         * desplazamiento esta del reves. Se da la vuelta sola.
+         *
+         * rtty_set_station_inverted() intercambia marca y espacio y
+         * recalcula los coeficientes, que es exactamente lo que hace el
+         * boton de Ajustes - asi el ajuste guardado y lo que se ve en
+         * pantalla siguen diciendo la verdad despues de darse la vuelta.
+         */
+        uint32_t act = (uint32_t)s_bien * 100UL;              /* por s_marcos */
+        uint32_t som = (uint32_t)s_sombra.bien * 100UL;       /* por s_sombra.marcos */
+        uint8_t  vale = 0U;
+
+        if (s_sombra.marcos >= (RTTY_INV_VENTANA / 2U)) {
+            vale = (uint8_t)(
+                  act < (uint32_t)s_marcos * RTTY_INV_FLOJA
+               && som >= (uint32_t)s_sombra.marcos * RTTY_INV_BUENA
+               /* y la sombra saca RTTY_INV_MARGEN puntos a la activa,
+                * multiplicado en cruz para no dividir */
+               && som * (uint32_t)s_marcos
+                  >= (act + (uint32_t)RTTY_INV_MARGEN * (uint32_t)s_marcos)
+                     * (uint32_t)s_sombra.marcos);
+        }
+        if (vale) {
+            rtty_set_station_inverted((uint8_t)(s_station_inverted ? 0U : 1U));
+            s_auto_inv_n++;
+            debug_print("rtty: desplazamiento del reves, me doy la vuelta\n");
+            /* Y a empezar de cero: la maquina llevaba medio caracter con
+             * la polaridad vieja, y las cuentas son de otra medida. */
+            s_state = RTTY_ST_IDLE;
+            s_prev_bit = 1U;
+            s_bits_captured = 0U;
+        }
+        s_salud_pc = (uint8_t)(((uint32_t)s_bien * 100UL) / (uint32_t)s_marcos);
+        s_salud_n++;
+        s_marcos = 0U;
+        s_bien = 0U;
+        s_sombra.bien = 0U;
+        s_sombra.marcos = 0U;
+    }
 }
 
 uint8_t rtty_get_char(char *out)
@@ -456,6 +751,14 @@ void rtty_set_baud(float baud)
 {
     s_baud = baud;
     s_bit_period_samples = (uint32_t)(RTTY_FS_HZ / s_baud + 0.5f);
+    /* medio bit, redondeado a bloques enteros y dentro de los topes */
+    {
+        uint32_t v = s_bit_period_samples / 2U;
+        v = (v / RTTY_BLOCK_SAMPLES) * RTTY_BLOCK_SAMPLES;
+        if (v < RTTY_VENT_MIN) { v = RTTY_VENT_MIN; }
+        if (v > RTTY_VENT_MAX) { v = RTTY_VENT_MAX; }
+        s_vent = (uint16_t)v;
+    }
     s_state = RTTY_ST_IDLE;
     s_prev_bit = 1U;
     s_bits_captured = 0U;
@@ -496,3 +799,27 @@ void rtty_reapply_station_inversion(void)
         rtty_recompute_coeffs();
     }
 }
+
+/* Cuantas veces se ha dado la vuelta sola. Ver rtty_sombra_t. */
+uint16_t rtty_auto_inv_veces(void) { return s_auto_inv_n; }
+
+/*
+ * Que parte de los caracteres de la ultima ventana cerraron con su bit de
+ * parada. Es la medida que usan la deteccion de inversion de aqui y el
+ * ajuste automatico de rtty_auto.c para saber si hay que tocar algo: por
+ * encima del 85% esto esta decodificando y no se le toca nada.
+ */
+uint8_t rtty_salud_pc(void) { return s_salud_pc; }
+
+/* Marcos cerrados desde que arranco el modo: el reloj con el que
+ * rtty_auto.c le da a cada velocidad candidata su turno. */
+uint16_t rtty_marcos_n(void) { return (uint16_t)s_marcos_total; }
+
+/*
+ * Cuantas ventanas de salud se han cerrado. rtty_auto.c lo usa para saber
+ * si el numero que esta leyendo es NUEVO: al cambiar la velocidad, la
+ * ventana en curso todavia lleva caracteres de la velocidad anterior, y
+ * puntuar una candidata con la mitad de los marcos de otra es como medir
+ * dos cosas y apuntar una.
+ */
+uint16_t rtty_salud_n(void) { return s_salud_n; }

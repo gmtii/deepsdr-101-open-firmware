@@ -103,6 +103,27 @@ void backlight_init(void)
      * ONE place. */
     timer_channel_output_pulse_value_config(TIMER1, TIMER_CH_3, 0U);
 
+    /*
+     * EL COMPARADOR, CON SOMBRA - 06/10/2026.
+     *
+     * Faltaba, y el auto-reload de la linea de abajo si la tenia. Sin
+     * sombra, cada escritura del comparador entra EN CALIENTE: si el
+     * contador ya ha pasado el valor nuevo, ese periodo sale entero
+     * encendido o entero apagado. Son 50 us de pulso espurio en el driver
+     * conmutado de la retroiluminacion por cada escritura, y
+     * backlight_set_percent() se llama una vez por detente del mando.
+     *
+     * Eso se cuela en la alimentacion y se oye como un crepitar en el
+     * altavoz mientras se mueve el brillo. Con la sombra, el valor nuevo
+     * espera al siguiente desbordamiento del contador y el periodo en curso
+     * sale entero y bien.
+     *
+     * (Hay cincuenta lineas mas abajo dedicadas a un glitch de diez
+     * nanosegundos por periodo al 100 %. Este es cinco mil veces mas largo
+     * y no estaba mirado.)
+     */
+    timer_channel_output_shadow_config(TIMER1, TIMER_CH_3, TIMER_OC_SHADOW_ENABLE);
+
     timer_auto_reload_shadow_enable(TIMER1);
     timer_enable(TIMER1);
 

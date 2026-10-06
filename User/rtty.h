@@ -155,4 +155,30 @@ uint8_t rtty_get_station_inverted(void);
  */
 void rtty_reapply_station_inversion(void);
 
+/*
+ * LA INVERSION SE DETECTA SOLA. Ver el comentario de rtty_sombra_t en
+ * rtty.c: mientras se decodifica, se lleva la cuenta de cuantos marcos
+ * cerrarian bien con la polaridad CONTRARIA, y si la de ahora va mal y la
+ * otra la triplica, la radio se da la vuelta ella misma. No hay que tocar
+ * nada ni darle al boton dos veces.
+ *
+ * Esto devuelve cuantas veces lo ha hecho desde que se encendio el modo:
+ * cero y texto limpio es lo normal; uno y texto limpio es que acertó.
+ */
+uint16_t rtty_auto_inv_veces(void);
+
+/*
+ * Salud del decodificador: que % de los caracteres de la ultima ventana
+ * cerraron con su bit de parada donde tocaba. 100 es texto limpio; por
+ * debajo de 85 algo esta mal puesto. Es lo que mira rtty_auto.c antes de
+ * cambiar nada, para no tocarle los ajustes a una radio que va bien.
+ */
+uint8_t rtty_salud_pc(void);
+
+/* Marcos cerrados desde que arranco el modo (cuenta corrida). */
+uint16_t rtty_marcos_n(void);
+
+/* Ventanas de salud cerradas: para saber si rtty_salud_pc() es nuevo. */
+uint16_t rtty_salud_n(void);
+
 #endif /* RTTY_H */

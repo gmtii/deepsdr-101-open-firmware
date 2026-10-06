@@ -67,6 +67,22 @@ void audiofil_disena(float lo_hz, float hi_hz, float fs_hz, float *coef,
 {
     float nyq;
 
+    /*
+     * LAS SALIDAS SE ESCRIBEN ANTES DE PODER IRSE - 06/10/2026.
+     *
+     * Este return dejaba *lo_usado y *hi_usado sin tocar, y el llamante
+     * -fil_construye() en demod_am.c- los declara sin inicializar y GUARDA
+     * lo que salga en s_fil_lo[fam]/s_fil_hi[fam], que es la configuracion
+     * que luego se enseña y que entra como peticion del siguiente diseño.
+     * O sea que la basura de la pila no se quedaba en la pila: se
+     * persistia.
+     *
+     * Hoy no se dispara -coef nunca es nulo y fs_hz es 48000 o 96000- pero
+     * un camino de salida que deja medio escrito su contrato es una trampa
+     * puesta para el dia que alguien añada un llamante.
+     */
+    if (lo_usado != 0) { *lo_usado = lo_hz; }
+    if (hi_usado != 0) { *hi_usado = hi_hz; }
     if (coef == 0 || fs_hz <= 0.0f) { return; }
     nyq = fs_hz * 0.5f;
 

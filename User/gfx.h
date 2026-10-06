@@ -74,6 +74,12 @@ void gfx_hline(uint16_t x, uint16_t y, uint16_t w, uint16_t color);
 void gfx_vline(uint16_t x, uint16_t y, uint16_t h, uint16_t color);
 void gfx_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color); /* solo borde, 1px */
 void gfx_fill_screen(uint16_t color); /* wrapper de rm68120_fill_screen, mismo formato de API */
+/* Vigilar un rectangulo del panel: gfx_vigilancia() sube cada vez que algo
+ * de este fichero pinta dentro de el. Lo usa el repintado parcial del
+ * espectro para enterarse de que alguien le ha pintado encima - ver
+ * "QUIEN HA PINTADO DENTRO DE ESTE RECTANGULO" en gfx.c. */
+void     gfx_vigila(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
+uint32_t gfx_vigilancia(void);
 
 /* Linea generica (Bresenham). Para pendientes arbitrarias hace falta
  * reabrir ventana pixel a pixel (mas lenta que gfx_hline/vline) - la usa

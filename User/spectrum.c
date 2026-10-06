@@ -826,6 +826,186 @@ static struct {
 
 /*
  * ===========================================================================
+ * LAS BANDAS QUE NO HACE FALTA VOLCAR - 05/10/2026.
+ * ===========================================================================
+ *
+ * El montaje del espectro ya esta apretado (ver "MONTAJE POR BANDAS Y
+ * TRAMOS", 25/09): decidir el color costaba 31 ms de 45 y ahora cuesta
+ * poco. Lo que no habia bajado de ahi es el VOLCADO: 157.248 escrituras
+ * por el EXMC, todos los cuadros, pase lo que pase. A 45 ms por cuadro eso
+ * son unos 9,5 ms de bus que la radio paga siempre.
+ *
+ * Y la mayor parte de esos pixeles son identicos al cuadro anterior. El
+ * espectro es una traza pegada abajo con dos tercios de rejilla vacia
+ * encima; esa rejilla no cambia de un cuadro al siguiente salvo que cambie
+ * la rejilla misma, el tinte de la banda de paso o el tamaño del panel.
+ *
+ * ASI QUE: se calcula el TECHO DE CADA COLUMNA, la fila mas alta donde esa
+ * columna pinta algo que no sea plantilla -traza, relleno o pico, lo que
+ * suba mas-. Por encima del techo de ESTE cuadro Y del anterior, la columna
+ * es la misma plantilla en los dos, pixel a pixel.
+ *
+ * Con eso, de cada banda de filas se vuelca solo el TROZO DE ANCHO que
+ * tiene algo: de la primera a la ultima columna cuyo techo entra en esa
+ * banda. Las bandas en las que no entra ninguna se saltan enteras.
+ *
+ * El trozo y no el techo a secas, y esto no es un refinamiento: la primera
+ * version uso el techo mas bajo de TODAS las columnas, y un solo pico
+ * estrecho -cuatro columnas de 756- lo hundia y dejaba el ahorro en el 13%.
+ * Con el trozo, esas cuatro columnas se vuelcan en las bandas de arriba y
+ * las otras 752 no. Medido en el banco de la imagen patron: de 157.690
+ * accesos al bus por cuadro a 94.000, un 40% menos.
+ *
+ * Es UN trozo seguido, no una lista: asi sigue habiendo una ventana por
+ * banda, como antes. Dos picos altos en los dos extremos lo dejan ancho, y
+ * ese caso no gana nada - pero tampoco pierde.
+ *
+ * EL TECHO SE GUARDA POR TRAMOS DE SPEC_TRAMO COLUMNAS, no por columna.
+ * Guardarlo por columna hacen falta dos tablas de 800 uint16 y la RAM se
+ * paso de la raya por 1.464 bytes - el enlazador lo dijo. Por tramos son
+ * 200 bytes, el bucle que busca el trozo recorre 50 huecos en vez de 800, y
+ * lo unico que se pierde son hasta quince columnas de margen a cada lado.
+ *
+ * LA FIRMA es lo que hace que esto sea seguro y no una apuesta. En vez de
+ * acordarse de que cosas entran en la plantilla -que es lo que se olvida el
+ * dia que alguien le añade un elemento nuevo- se resume el CONTENIDO de las
+ * tres tablas que la forman, mas la geometria. Si algo cambia, la firma
+ * cambia, y el cuadro sale entero. No hay nada que recordar actualizar.
+ *
+ * s_row_color[] NO entra en la firma a proposito: solo lo leen el relleno y
+ * la traza de fila, o sea solo por DEBAJO del techo, que es justo lo que
+ * nunca se salta.
+ *
+ * Y DOS CINTURONES, porque esto depende de que nadie pinte dentro del
+ * rectangulo del espectro sin que se note:
+ *
+ *   1. gfx_vigila()/gfx_vigilancia(). gfx.c cuenta cuantas veces se ha
+ *      pintado algo que toca el rectangulo del espectro; aqui se apunta el
+ *      numero al acabar el cuadro y se mira al empezar el siguiente. Si ha
+ *      subido, alguien ha pintado encima y el cuadro sale entero.
+ *
+ *      NO hay que acordarse de nada: todo lo que dibuja en la radio pasa
+ *      por gfx.c, incluidos los caminos que aun no existen. Y hacia falta:
+ *      rtty_scope_draw() pinta dos rayas verticales ENCIMA del espectro y
+ *      su propio comentario dice que no borra la anterior "porque
+ *      spectrum_draw() repinta todas las columnas en cada llamada". Nadie
+ *      se habria acordado de ese sitio.
+ *
+ *      spectrum_invalida() sigue existiendo para quien quiera forzarlo a
+ *      mano, pero ya no hay que llamarla desde ningun sitio.
+ *
+ *   2. un cuadro completo cada SPEC_REFRESCO_CUADROS pase lo que pase. Si
+ *      algun dia apareciera un camino que pintase en el panel sin pasar por
+ *      gfx.c, se corrige solo en menos de un segundo en vez de quedarse
+ *      sucio para siempre.
+ */
+#define SPEC_REFRESCO_CUADROS 32U
+
+static uint32_t s_firma_ant;         /* firma de la plantilla del cuadro anterior */
+/* El techo de cada tramo de SPEC_TRAMO columnas, en filas desde arriba: la
+ * primera fila donde alguna columna del tramo pinta algo que no sea
+ * plantilla. h = el tramo no pinta nada. Dos tablas porque hace falta el de
+ * este cuadro y el del anterior: una banda hay que volcarla si la toca
+ * cualquiera de los dos. */
+#define SPEC_TRAMO    16U
+#define SPEC_TRAMOS   ((SPEC_MAX_W + SPEC_TRAMO - 1U) / SPEC_TRAMO)
+static uint16_t s_tramo_techo[SPEC_TRAMOS];
+static uint16_t s_tramo_techo_ant[SPEC_TRAMOS];
+static uint16_t s_n_tramos;
+static uint8_t  s_parcial_vale;      /* 0 = el cuadro anterior no sirve de referencia */
+static uint8_t  s_cuadros_desde;     /* cuantos cuadros desde el ultimo completo */
+static uint8_t  s_parcial_hay;       /* 1 = este cuadro puede saltarse bandas */
+static uint32_t s_vig_ant;           /* gfx_vigilancia() al acabar el cuadro anterior */
+static uint32_t s_saltadas;          /* diagnostico: bandas saltadas en el ultimo cuadro */
+static uint32_t s_bandas;            /* diagnostico: bandas en total en el ultimo cuadro */
+
+static uint8_t s_parcial = 1U;       /* el atajo, encendido */
+
+void spectrum_invalida(void)
+{
+    s_parcial_vale = 0U;
+}
+
+/*
+ * Apagar el atajo y pintar siempre entero. Existe para el banco de la
+ * imagen patron, que corre los doce casos con el encendido y otra vez con
+ * el apagado contra la MISMA referencia: si las dos pasan, el atajo pinta
+ * lo que pintaba el camino largo. Tambien es la salida de emergencia si
+ * algun dia apareciera un camino de pintado que lo rompa en la radio.
+ */
+void spectrum_parcial_set(uint8_t on)
+{
+    s_parcial = on ? 1U : 0U;
+    s_parcial_vale = 0U;
+}
+
+uint8_t spectrum_parcial_get(void) { return s_parcial; }
+
+void spectrum_parcial_diag(uint32_t *saltadas, uint32_t *total)
+{
+    if (saltadas) { *saltadas = s_saltadas; }
+    if (total)    { *total    = s_bandas; }
+}
+
+/* FNV-1a de 32 bits. No es criptografia, es un detector de cambios - el
+ * mismo que usa el banco de la imagen patron del espectro. */
+static uint32_t firma_mezcla(uint32_t h, uint32_t v)
+{
+    h ^= v;
+    return h * 16777619UL;
+}
+
+static uint32_t firma_plantilla(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
+{
+    uint32_t f = 2166136261UL;
+    uint16_t i;
+
+    f = firma_mezcla(f, (uint32_t)x);
+    f = firma_mezcla(f, (uint32_t)y);
+    f = firma_mezcla(f, (uint32_t)w);
+    f = firma_mezcla(f, (uint32_t)h);
+    for (i = 0; i < w; i++) { f = firma_mezcla(f, (uint32_t)s_plant_lisa[i]); }
+    for (i = 0; i < w; i++) { f = firma_mezcla(f, (uint32_t)s_plant_rej[i]); }
+    for (i = 0; i < h; i++) { f = firma_mezcla(f, (uint32_t)s_row_grid[i]); }
+    return f;
+}
+
+/*
+ * El techo de cada columna: la fila mas alta donde pinta algo que no sea
+ * plantilla. h = esa columna no pinta nada.
+ *
+ * Mira las tres cosas que pueden subir: la traza (s_bar_hi, que ya incluye
+ * el puente con la vecina), el relleno (s_bar_h) y el pico (s_peak_h). El
+ * borde del filtro no cuenta: ya viene DENTRO de la plantilla.
+ *
+ * El relleno empieza en h-bar_h+1, una fila MAS ABAJO, asi que usar h-bar_h
+ * se pasa de prudente por una fila. Mejor eso que quedarse corto.
+ */
+static void techos_por_tramo(uint16_t w, uint16_t h, uint8_t fill_enabled)
+{
+    uint16_t col, t;
+
+    s_n_tramos = (uint16_t)((w + SPEC_TRAMO - 1U) / SPEC_TRAMO);
+    for (t = 0; t < s_n_tramos; t++) { s_tramo_techo[t] = h; }
+    for (col = 0; col < w; col++) {
+        uint16_t alto = s_bar_hi[col];
+        uint16_t techo;
+
+        if (fill_enabled && (s_bar_h[col] > alto)) { alto = s_bar_h[col]; }
+#if SPECTRUM_PEAK_HOLD
+        if ((s_peak_h[col] >= 1U) && (s_peak_h[col] <= h) &&
+            (s_peak_h[col] > alto)) {
+            alto = s_peak_h[col];
+        }
+#endif
+        techo = (alto >= h) ? 0U : (uint16_t)(h - alto);
+        t = (uint16_t)(col / SPEC_TRAMO);
+        if (techo < s_tramo_techo[t]) { s_tramo_techo[t] = techo; }
+    }
+}
+
+/*
+ * ===========================================================================
  * EL MONTAJE DE UNA BANDA, EN UN DESTINO CUALQUIERA - 05/10/2026.
  * ===========================================================================
  *
@@ -852,9 +1032,9 @@ static struct {
  *   row     primera fila del panel que entra en esta banda (0 = arriba)
  *   nf      cuantas filas
  */
-static void compon(uint16_t *dst, uint32_t stride, uint16_t row, uint16_t nf)
+static void compon(uint16_t *dst, uint32_t stride, uint16_t row, uint16_t nf,
+                   uint16_t c0, uint16_t c1)
 {
-    const uint16_t w = s_ult.w;
     const uint16_t h = s_ult.h;
     const uint8_t  band_active = s_ult.band_active;
     const uint16_t band_col_lo = s_ult.band_col_lo;
@@ -867,12 +1047,12 @@ static void compon(uint16_t *dst, uint32_t stride, uint16_t row, uint16_t nf)
     /* 1. la plantilla de cada fila de la banda */
         for (k = 0; k < nf; k++) {
             memcpy(&dst[(uint32_t)k * stride],
-                   s_row_grid[row + k] ? s_plant_rej : s_plant_lisa,
-                   (size_t)w * sizeof dst[0]);
+                   (s_row_grid[row + k] ? s_plant_rej : s_plant_lisa) + c0,
+                   (size_t)(c1 - c0 + 1U) * sizeof dst[0]);
         }
 
         /* 2. lo que depende de la barra, columna a columna y en tramos */
-        for (col = 0; col < w; col++) {
+        for (col = c0; col <= c1; col++) {
             uint8_t  borde = (uint8_t)(band_active &&
                                        ((col == band_col_lo) || (col == band_col_hi)));
             uint16_t lo = s_bar_lo[col];
@@ -886,7 +1066,7 @@ static void compon(uint16_t *dst, uint32_t stride, uint16_t row, uint16_t nf)
                 if ((s_peak_h[col] >= 1U) && (s_peak_h[col] <= h)) {
                     r = (uint16_t)(h - s_peak_h[col]);
                     if ((r >= row) && (r < (uint16_t)(row + nf))) {
-                        dst[(uint32_t)(r - row) * stride + col] = SPEC_COLOR_PEAK;
+                        dst[(uint32_t)(r - row) * stride + (col - c0)] = SPEC_COLOR_PEAK;
                     }
                 }
 #endif
@@ -902,7 +1082,7 @@ static void compon(uint16_t *dst, uint32_t stride, uint16_t row, uint16_t nf)
                          * multiplicar (fila x ancho) en cada pixel: esa
                          * multiplicacion era casi todo lo que quedaba del
                          * coste del montaje. */
-                        uint16_t *pb = &dst[(uint32_t)(ra - row) * stride + col];
+                        uint16_t *pb = &dst[(uint32_t)(ra - row) * stride + (col - c0)];
                         const uint16_t *pc = &s_row_color[ra];
                         for (r = ra; r <= rb; r++) {
                             *pb = *pc++;
@@ -920,7 +1100,7 @@ static void compon(uint16_t *dst, uint32_t stride, uint16_t row, uint16_t nf)
                 if (ra < row) { ra = row; }
                 if (rb > (uint16_t)(row + nf - 1U)) { rb = (uint16_t)(row + nf - 1U); }
                 if (ra <= rb) {
-                    uint16_t *pb = &dst[(uint32_t)(ra - row) * stride + col];
+                    uint16_t *pb = &dst[(uint32_t)(ra - row) * stride + (col - c0)];
 
                     if (traza_de_fila) {
                         const uint16_t *pc = &s_row_color[ra];
@@ -1334,23 +1514,99 @@ void spectrum_draw(const float *db, uint32_t n_bins,
         s_ult.traza_de_fila = traza_de_fila;
         s_ult.hay = 1U;
 
+        /*
+         * QUE BANDAS SE PUEDEN SALTAR. Ver "LAS BANDAS QUE NO HACE FALTA
+         * VOLCAR" arriba. Las dos cuentas se hacen AQUI, una vez por
+         * cuadro, con las tablas ya calculadas y las plantillas ya
+         * montadas - antes no existirian.
+         */
+        {
+            uint32_t firma = firma_plantilla(x, y, w, h);
+            uint16_t t;
+
+            techos_por_tramo(w, h, fill_enabled);
+            s_cuadros_desde++;
+            if (s_parcial && s_parcial_vale && (firma == s_firma_ant) &&
+                (gfx_vigilancia() == s_vig_ant) &&
+                (s_cuadros_desde < SPEC_REFRESCO_CUADROS)) {
+                /* El techo que manda es el MAS ALTO de los dos cuadros: hay
+                 * que repintar tanto lo que esta traza pinta como lo que
+                 * pintaba la anterior y ahora destapa. */
+                s_parcial_hay = 1U;
+                for (t = 0; t < s_n_tramos; t++) {
+                    if (s_tramo_techo_ant[t] < s_tramo_techo[t]) {
+                        s_tramo_techo[t] = s_tramo_techo_ant[t];
+                    }
+                }
+            } else {
+                s_parcial_hay = 0U;
+                s_cuadros_desde = 0U;
+            }
+            s_firma_ant = firma;
+            s_parcial_vale = 1U;
+            s_saltadas = 0UL;
+            s_bandas = 0UL;
+        }
+
         for (row = 0; row < h; row = (uint16_t)(row + nb)) {
             uint16_t nf = (uint16_t)(h - row);
+            uint16_t c0 = 0U, c1 = (uint16_t)(w - 1U);
 
             if (nf > nb) { nf = nb; }
 
-            compon(buf[cual], w, row, nf);
+            s_bandas++;
+            if (s_parcial_hay) {
+                uint16_t t;
+                uint16_t fin = (uint16_t)(row + nf);   /* primera fila de fuera */
+                uint16_t pri = s_n_tramos, ult = 0U;
+
+                for (t = 0; t < s_n_tramos; t++) {
+                    if (s_tramo_techo[t] < fin) {
+                        if (pri == s_n_tramos) { pri = t; }
+                        ult = t;
+                    }
+                }
+                if (pri == s_n_tramos) {
+                    /* Ningun tramo pinta nada en estas filas: la banda
+                     * entera es la misma plantilla que el cuadro anterior. */
+                    s_saltadas++;
+                    continue;
+                }
+                c0 = (uint16_t)(pri * SPEC_TRAMO);
+                c1 = (uint16_t)((ult + 1U) * SPEC_TRAMO - 1U);
+                if (c1 > (uint16_t)(w - 1U)) { c1 = (uint16_t)(w - 1U); }
+            }
+
+            compon(buf[cual], (uint32_t)(c1 - c0 + 1U), row, nf, c0, c1);
 
             /* 3. un solo volcado por banda, y sin esperarlo: se espera al
              * ANTERIOR justo antes de abrir la ventana del siguiente, que es
              * lo ultimo posible. Entre medias ha cabido el montaje entero de
              * esta banda. */
             if (vuela) { (void)gfx_blit_espera(); vuela = 0U; }
-            vuela = gfx_blit_arranca(x, (uint16_t)(y + row), w, nf, buf[cual]);
+            vuela = gfx_blit_arranca((uint16_t)(x + c0), (uint16_t)(y + row),
+                                     (uint16_t)(c1 - c0 + 1U), nf, buf[cual]);
             cual = (uint8_t)(cual ^ 1U);
         }
         if (vuela) { (void)gfx_blit_espera(); }
         gfx2_banda_suelta();
+
+        /* El techo de ESTE cuadro para la vez siguiente. Se vuelve a calcular
+         * AQUI, al final, y no se guarda el de arriba: aquel ya se mezclo con
+         * el del cuadro anterior, y guardar la mezcla haria que el techo solo
+         * pudiera bajar - un pico alto de hace diez cuadros seguiria
+         * obligando a repintar media pantalla para siempre. */
+        techos_por_tramo(w, h, fill_enabled);
+        memcpy(s_tramo_techo_ant, s_tramo_techo,
+               (size_t)s_n_tramos * sizeof s_tramo_techo[0]);
+
+        /* Y el contador del chivato, AQUI, cuando ya se ha volcado todo lo
+         * de este cuadro: lo que suba a partir de ahora lo habra pintado
+         * otro. El rectangulo se vuelve a declarar en cada cuadro porque la
+         * geometria puede cambiar (el osciloscopio de los modos digitales
+         * usa otra). */
+        gfx_vigila(x, y, w, h);
+        s_vig_ant = gfx_vigilancia();
     }
 }
 
@@ -1388,7 +1644,7 @@ void spectrum_pinta_en(gfx2_surf_t *sf, int16_t px, int16_t py)
     if (dy < 0 || (int32_t)dy + (y1 - y0) > sf->h) { return; }
 
     compon(&sf->px[(int32_t)dy * sf->w + dx], (uint32_t)sf->w,
-           (uint16_t)y0, (uint16_t)(y1 - y0));
+           (uint16_t)y0, (uint16_t)(y1 - y0), 0U, (uint16_t)(s_ult.w - 1U));
 }
 
 void spectrum_set_bridge(uint8_t on) { s_bridge = on ? 1U : 0U; }

@@ -1071,6 +1071,9 @@ int16_t ui_digi_btn5_x_dbg(const ui_digi_state_t *st) { return btn5_x(st); }
 int16_t ui_digi_btn5_w_dbg(const ui_digi_state_t *st) { return btn5_w(st); }
 int16_t ui_digi_btn4_x_dbg(const ui_digi_state_t *st) { return btn4_x(st); }
 int16_t ui_digi_btn4_w_dbg(const ui_digi_state_t *st) { return btn4_w(st); }
+/* El del tercero faltaba, y es el que de verdad se queda en cero cuando
+ * la barra ocupa todo el ancho. Ver sim/digi.c. */
+int16_t ui_digi_btn3_w_dbg(const ui_digi_state_t *st) { return btn3_w(st); }
 int16_t ui_digi_chip_x_dbg(const ui_digi_state_t *st) { return chip_x(st); }
 int16_t ui_digi_chip_w_dbg(const ui_digi_state_t *st) { return chip_w(st); }
 

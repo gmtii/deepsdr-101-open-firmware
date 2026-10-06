@@ -358,6 +358,22 @@ uint32_t spi_flash_read_file_by_name(const char name8[8], const char ext3[3],
  * de clusters a mano, como User/cargador.c. */
 uint8_t spi_flash_spc(void);
 
+/*
+ * ¿Se puede LEER el volumen? Mas flojo que spi_flash_geometria(), que dice
+ * si se puede ESCRIBIR. Las comprobaciones de escritura -dos copias de la
+ * FAT, cluster que divida el bloque de borrado, datos alineados, FAT12 y no
+ * FAT16- son de ESTE driver y de su borrado por bloques, no del formato: un
+ * volumen puede ser legible sin pasar ninguna. Lo usa el cargador, que solo
+ * lee. Ver el corte dentro de geo_lee().
+ */
+uint8_t spi_flash_geometria_lectura(uint32_t *fat1_lba, uint32_t *raiz_lba,
+                                    uint32_t *datos_lba, uint32_t *clusters);
+
+/* Olvidar lo leido: el siguiente que pregunte vuelve a mirar el sector de
+ * arranque. Para cuando el volumen cambia por debajo (el PC escribiendo en
+ * el disco USB) y para los bancos. */
+void spi_flash_geo_olvida(void);
+
 uint8_t spi_flash_geometria(uint32_t *fat1_lba, uint32_t *raiz_lba,
                             uint32_t *datos_lba, uint32_t *clusters);
 

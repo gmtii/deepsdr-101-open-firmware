@@ -50,11 +50,57 @@
  * que un heterodino es una FSK.
  */
 #define TONO_SEP_MIN 120.0f
-#define TONO_CAIDA   10.0f    /* la segunda no puede estar mas de 10 dB abajo */
+/*
+ * LA SEGUNDA RAYA YA NO SE MIDE CONTRA LA PRIMERA - 06/10/2026.
+ *
+ * *** El dueño, con la radio en IDENT sobre 5339 kHz: "el modo ident va
+ * variando entre lo que es". Y la pantalla decia "un solo tono o fase: no
+ * es FSK de dos" delante de una FSK que la propia radio estaba
+ * decodificando en RTTY-U con 850 Hz y 75 Bd puestos a mano. ***
+ *
+ * Los dos criterios que miraban las rayas POR SEPARADO -que la segunda no
+ * cayera mas de 10 dB bajo la primera, y que cada una llevara el 12 % de
+ * la potencia- daban por hecho que los dos tonos llegan parejos. Y eso es
+ * cierto EN EL TRANSMISOR. Despues de 2.000 km de ionosfera, no: los dos
+ * tonos van separados 850 Hz, los desvanece por su cuenta, y uno llega 11
+ * dB mas flojo que el otro. Un minuto despues, al reves. Por eso "iba
+ * variando": cuando el desvanecimiento los juntaba, el detector si veia la
+ * FSK.
+ *
+ * Medido sobre la grabacion de 5339: caida 11,1 dB (el limite eran 10) y la
+ * raya baja con el 4,8 % (el minimo era 12). Fallaba por los dos, y pasaba
+ * de sobra el que mira las dos JUNTAS: 78,1 % contra un minimo de 35.
+ *
+ * LO QUE SE MIDE AHORA: cuanto destaca CADA raya sobre el ruido DE SU
+ * PROPIO ENTORNO. Eso no lo toca el desvanecimiento -sube y baja la raya y
+ * su ruido a la vez- y distingue lo que hay que distinguir: una raya de FSK
+ * desvanecida sigue sobresaliendo de lo que tiene al lado; una cresta de
+ * ruido, por definicion, no.
+ *
+ * Medido sobre las diez grabaciones del banco (mediana de las ventanas):
+ *
+ *   SON dos tonos                     NO lo son
+ *     sitor de Oostende ... 26,1        stanag 4285 ..... 6,4
+ *     4481 FSK ............ 25,6        4481 PSK ........ 6,3
+ *     navtex de 8424 ...... 17,7        4415 ............ 4,7
+ *     el de 5339 .......... 10,8        4529 ............ 4,3
+ *                                       4538 ............ 4,0
+ *                                       4539 ............ 2,9
+ *
+ * Entre 6,4 y 10,8 hay un hueco limpio. El corte va en 9 dB, con margen
+ * por los dos lados. Lo ata sim/tonos_aire.c, que pasa las diez.
+ */
+#define TONO_REALCE   9.0f    /* dB que cada raya saca al ruido de al lado */
+#define TONO_ENTORNO  300.0f  /* hasta donde se mira ese ruido */
+#define TONO_HUECO     75.0f  /* y lo que se deja fuera, por ser la raya */
+#define TONO_VALLE      6.0f  /* dB que tiene que bajar entre las dos rayas */
+#define TONO_CAIDA   100.0f   /* puerta floja: 20 dB. El realce es quien decide */
 #define PICO_VENT_HZ 8.0f     /* el +-8 Hz del "esto es una portadora" */
 #define TONO_ANCHO   50.0f    /* cuanto se le cuenta a cada raya, a cada lado */
 #define TONO_PARTE   0.35f    /* y que parte de la potencia tienen que ser */
-#define TONO_MIN_UNO 0.12f    /* y lo minimo que puede llevar CADA una */
+/* TONO_MIN_UNO se retiro el 06/10/2026: era un minimo ABSOLUTO de potencia
+ * por raya, y el desvanecimiento selectivo de la ionosfera lo hace inutil.
+ * Lo sustituye TONO_REALCE, que mide cada raya contra su propio ruido. */
 
 /*
  * EL HISTOGRAMA DE RACHAS VIVE EN LA COLA DE s_acf, Y ESO HAY QUE DECIRLO.
@@ -380,7 +426,49 @@ static void mide_rachas(void)
      * señal cambia. Es el mismo promediado que la autocorrelacion de
      * abajo, por la misma razon.
      */
-    for (i = 0U; i < HIST_N; i++) { s_acf[HIST_BASE + i] *= 0.8f; }
+    /*
+     * EL OLVIDO ERA 0,8 Y A 50 BAUDIOS SALIA CARA O CRUZ - 05/10/2026.
+     *
+     * El dueño mando FUG, la marina francesa en 13.418 kHz: FSK limpia,
+     * 850 Hz de salto, 50 baudios. El motor le vio los dos tonos perfectos
+     * -1195 y 2045- y dijo "velocidad 0,0 Bd". Sin velocidad no cuadra
+     * ninguna fila de dos tonos, asi que la pantalla se cayo a la pista
+     * del ancho y solto "SSTV o fax meteorologico". Un disparate con dos
+     * tonos delante.
+     *
+     * Sinteticé FSK limpia y la barrí, y el patron no era el salto:
+     *
+     *    salto  170 Hz  50 Bd -> 50,0      170 Hz  75 Bd -> 75,1
+     *    salto  450 Hz  50 Bd ->  0,0      450 Hz  75 Bd -> 75,3
+     *    salto  850 Hz  50 Bd -> 50,0      850 Hz  75 Bd -> 75,3
+     *    salto 1000 Hz  50 Bd ->  0,0     1000 Hz  75 Bd -> 75,2
+     *
+     * Los 75 salen SIEMPRE. Los 50 fallan a capricho. Y la cuenta lo dice:
+     * una ventana son 341 ms, a 50 baudios caben 17 simbolos, y con bits
+     * al azar la racha media son dos simbolos -o sea unas 8,5 rachas por
+     * ventana-. Con olvido 0,8 el regimen permanente es
+     *
+     *     8,5 / (1 - 0,8) = 42,5 rachas   contra un umbral de 40.
+     *
+     * Un SEIS POR CIENTO de margen. A 75 baudios son 64 contra 40, que si
+     * es margen, y por eso 75 no fallaba nunca. Seis por ciento no es
+     * margen: es que la decida el desvanecimiento de turno.
+     *
+     * Con 0,94 el permanente es 8,5/0,06 = 142 a 50 baudios, y 130 a
+     * 45,45, que es la velocidad mas lenta de la tabla. Tres veces el
+     * umbral en el peor caso.
+     *
+     * LO QUE CUESTA, dicho claro: la memoria pasa de 1/(1-0,8) = 5
+     * ventanas -1,7 s- a 16,7 -5,7 s-. O sea que al cambiar de señal tarda
+     * cuatro segundos mas en olvidar la anterior. Se acepta: una velocidad
+     * que no sale es un fallo que se ve en pantalla, y cuatro segundos de
+     * mas al sintonizar no los nota nadie en un modo que existe justo para
+     * quedarse mirando una señal.
+     *
+     * Es el mismo fallo que la V3.42, con la misma forma: memoria corta
+     * medida con una señal rapida y estrenada con una lenta.
+     */
+    for (i = 0U; i < HIST_N; i++) { s_acf[HIST_BASE + i] *= 0.94f; }
 
     {
         uint8_t ant = 2U;          /* 2 = todavia no hay anterior */
@@ -695,6 +783,81 @@ static void mide_simbolos(void)
     }
 }
 
+/*
+ * Cuanto sobresale una raya del ruido que tiene AL LADO - 06/10/2026.
+ *
+ * Es lo que sustituye a los dos criterios que comparaban las dos rayas
+ * entre si (ver TONO_REALCE). El desvanecimiento selectivo sube y baja una
+ * raya y su ruido a la vez, asi que esta medida no se entera de el; y
+ * separa lo que hay que separar: una raya de FSK sobresale de lo que tiene
+ * alrededor aunque llegue floja, y una cresta de ruido no, por definicion.
+ *
+ * El fondo se toma como la MEDIA de las casillas que caen entre TONO_HUECO
+ * y TONO_ENTORNO de la raya: el hueco deja fuera la propia raya y su falda,
+ * y el entorno acota para que no se cuele la otra raya, que esta a 850 Hz
+ * en el caso que origino esto.
+ */
+/*
+ * ¿Hay un valle entre las dos rayas? Ver donde se usa.
+ *
+ * El minimo del tramo de en medio -dejando fuera las faldas de las dos-
+ * tiene que estar TONO_VALLE decibelios por debajo de la MENOR de las dos
+ * rayas. Con la menor y no con la media: si una viene desvanecida, exigir
+ * el valle contra la fuerte seria pedirle al valle que baje mas de lo que
+ * baja la propia raya floja.
+ */
+static float realce(float fc);
+
+static uint8_t hay_valle(float fa, float fb)
+{
+    float lo = (fa < fb) ? fa : fb;
+    float hi = (fa < fb) ? fb : fa;
+    float pa = 0.0f, pb = 0.0f, valle = 0.0f;
+    float menor;
+    uint32_t i;
+    uint8_t  hay = 0U;
+
+    for (i = 0U; i < NFFT; i++) {
+        float f = casilla_a_audio(i);
+        float v = s_fft[2U*i];
+
+        if (f >= lo - TONO_ANCHO && f <= lo + TONO_ANCHO) {
+            if (v > pa) { pa = v; }
+        } else if (f >= hi - TONO_ANCHO && f <= hi + TONO_ANCHO) {
+            if (v > pb) { pb = v; }
+        } else if (f > lo + TONO_ANCHO && f < hi - TONO_ANCHO) {
+            if (!hay || v < valle) { valle = v; hay = 1U; }
+        }
+    }
+    /* Sin tramo de en medio no hay nada que mirar: las dos rayas estan
+     * pegadas y eso ya lo filtra TONO_SEP_MIN. */
+    if (!hay || pa <= 0.0f || pb <= 0.0f) { return 0U; }
+    menor = (pa < pb) ? pa : pb;
+    if (valle <= 0.0f) { return 1U; }
+    return (uint8_t)((10.0f * log10f(menor / valle)) >= TONO_VALLE);
+}
+
+static float realce(float fc)
+{
+    uint32_t i;
+    float pico = 0.0f, suma = 0.0f;
+    uint32_t n = 0U;
+
+    for (i = 0U; i < NFFT; i++) {
+        float f = casilla_a_audio(i);
+        float d = (f > fc) ? (f - fc) : (fc - f);
+
+        if (d <= TONO_ANCHO) {
+            if (s_fft[2U*i] > pico) { pico = s_fft[2U*i]; }
+        } else if (d > TONO_HUECO && d <= TONO_ENTORNO) {
+            suma += s_fft[2U*i];
+            n++;
+        }
+    }
+    if (n == 0U || suma <= 0.0f || pico <= 0.0f) { return 0.0f; }
+    return 10.0f * log10f(pico / (suma / (float)n));
+}
+
 static void mide_espectro(void)
 {
     uint32_t i, kp = 0U;
@@ -789,6 +952,8 @@ static void mide_espectro(void)
          * Con 35% se parten por la mitad y sobra sitio por los dos lados.
          */
         float en1 = 0.0f, en2 = 0.0f;
+        float r1, r2;
+
         for (i = 0U; i < NFFT; i++) {
             float f = casilla_a_audio(i);
             float d1 = (f > f1) ? (f - f1) : (f1 - f);
@@ -796,6 +961,8 @@ static void mide_espectro(void)
             if (d1 <= TONO_ANCHO)      { en1 += s_fft[2U*i]; }
             else if (d2 <= TONO_ANCHO) { en2 += s_fft[2U*i]; }
         }
+        r1 = realce(f1);
+        r2 = realce(f2);
         /*
          * CADA UNO LA SUYA, Y ESTO ES LO QUE DESCARTA UNA PORTADORA.
          *
@@ -812,7 +979,34 @@ static void mide_espectro(void)
         { extern void det_dbg_tonos(double f1,double f2,double e1,double e2);
           det_dbg_tonos((double)f1,(double)f2,(double)(en1/tot),(double)(en2/tot)); }
 #endif
-        if (en1 >= tot * TONO_MIN_UNO && en2 >= tot * TONO_MIN_UNO
+        /*
+         * Y el veredicto: las dos juntas se llevan casi toda la potencia
+         * (eso descarta las PSK anchas) Y cada una sobresale de su propio
+         * ruido (eso descarta una portadora con una cresta al lado, y
+         * aguanta el desvanecimiento selectivo). Ver TONO_REALCE.
+         */
+        /*
+         * Y QUE ENTRE LAS DOS HAYA UN VALLE - 06/10/2026.
+         *
+         * Sin esto, el arreglo del realce hizo que el detector encontrara
+         * dos tonos el 90 % del tiempo en la grabacion de 5339 -frente al 2
+         * % de antes- pero la separacion bailaba entre 124 y 876 Hz. O sea
+         * que en algunas ventanas la "segunda raya" era la FALDA de la
+         * primera, no el otro tono.
+         *
+         * Y eso importa mas de lo que parece: ident_casa() busca la fila por
+         * la separacion, asi que una separacion que baila es un nombre que
+         * baila. Es exactamente lo que el dueño veia: "el modo ident va
+         * variando entre lo que es".
+         *
+         * Subir TONO_SEP_MIN no vale: el RTTY de aficionado va a 170 Hz de
+         * salto y se quedaria fuera. Lo que distingue dos rayas de una raya
+         * ancha es que entre ellas la señal BAJA. Se mira el minimo del
+         * tramo de en medio: tiene que estar por debajo de la menor de las
+         * dos rayas, y por un margen.
+         */
+        if (r1 >= TONO_REALCE && r2 >= TONO_REALCE
+            && hay_valle(f1, f2)
             && ((en1 + en2) / tot) >= TONO_PARTE) {
             s_r.hay_tonos = 1U;
             s_r.tono_bajo = (uint16_t)(((f1 < f2) ? f1 : f2) + 0.5f);

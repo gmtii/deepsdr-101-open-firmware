@@ -164,6 +164,28 @@ void gd32_i2s_stream_write_half(const int16_t *stereo_frames);
  * missing from this header (implicit-declaration warning fixed
  * 05/08/2026 alongside the R27/R30 clock-start reordering). */
 uint32_t gd32_i2s_get_tx_ferr_count(void);
+
+/*
+ * EL MARGEN DE FASE DEL PING-PONG DE SALIDA - 06/10/2026.
+ *
+ * Ver el comentario largo dentro de gd32_i2s_stream_write_half(). En corto:
+ * la eleccion de mitad no tiene memoria, y si la llamada cae cerca de la
+ * frontera del buffer, deja de alternar - una mitad se escribe dos veces y
+ * la otra repite 2,67 ms, que es un peine de armonicos a 375 Hz.
+ *
+ *   repes     veces que se ha repetido mitad. En regimen bueno: 0.
+ *   min/max   donde cae la llamada DENTRO de la mitad, en palabras: lo mas
+ *             bajo y lo mas alto vistos. Los dos bajos = la interrupcion va
+ *             sobrada; los dos altos = esta llegando al final de su
+ *             presupuesto. min a 0xFFFFFFFF = aun no se ha escrito ninguna.
+ *   palabras  cuantas palabras tiene una mitad, para leerlo como fraccion
+ *             (en WFM son 1024; en el resto, 512).
+ */
+uint32_t gd32_i2s_get_half_repes(void);
+uint32_t gd32_i2s_get_half_min(void);
+uint32_t gd32_i2s_get_half_max(void);
+uint32_t gd32_i2s_get_half_palabras(void);
+void     gd32_i2s_reset_half_diag(void);
 void gd32_i2s_reset_tx_ferr_count(void);
 
 #endif /* GD32_I2S_H */

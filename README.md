@@ -84,6 +84,15 @@ el firmware mira si hay un `BD.BIN`.
 - **JTTY**: receptor propio, frecuencias, mapa, FEC y unión de trozos.
 - **NAVTEX, WEFAX, SSTV, APRS, RTTY, RDS, DCF77, ALS162**: en el firmware, con
   sus bancos.
+- **IDENT**: "¿qué señal es esta?". Mide ancho, tonos, separación, velocidad de
+  símbolo, periodo de trama y cadencia, y los convierte en un nombre con una
+  tabla de 27 firmas. Doce confirmadas en antena. Desde la V3.57 avisa además
+  cuando por la frecuencia pasa **más de una señal turnándose** (`y a ratos:`).
+- **El RTTY se ajusta solo** desde la V3.59: pone los tonos encima de la señal,
+  acierta el desplazamiento, mide la velocidad por la racha más corta y detecta
+  si el desplazamiento está invertido. Sólo se mueve cuando lo que hay puesto
+  va mal — la salud del decodificador (qué parte de los caracteres cierran con
+  su bit de parada) es la que manda — y se puede apagar.
 - Se añadió **mapa del mundo** (costa en 7,1 kB y **cero** bytes de SRAM), con
   botón, zoom y de borde a borde, y puntos de FT8, WSPR, JTTY, HFDL y AIS.
 - Se añadió **"quién emite en esta frecuencia"**: lista de emisoras cargada de
@@ -117,8 +126,13 @@ el firmware mira si hay un `BD.BIN`.
 - Se añadió botón de **DFU** en Información, y se dejó funcionando tras once
   intentos documentados (V2.31 a V2.44): el testigo en `.noinit`, el reset de
   periféricos, el `BOOT_MODE`, los vectores a cero y el DP abajo 300 ms.
+- **Formatear el disco desde la radio** (Información → *Formatear disco*, desde
+  la V3.59). El driver no admite cualquier FAT —512 B/sector, cluster potencia
+  de dos que divida al borrado de 4 kB, dos tablas, datos alineados a 4 kB— y
+  Windows no tiene por qué elegir eso. La fila dice antes de tocar nada lo que
+  va a quedar, y pide dos toques.
 
-## Cargador de arranque propio (`boot/`, v1.1)
+## Cargador de arranque propio (`boot/`, v2.15)
 
 - Se escribió un **cargador de arranque nuestro** que reemplaza al de fábrica,
   en 0x08000000, sin tocar la aplicación ni abrir la radio.
@@ -186,7 +200,8 @@ el firmware mira si hay un `BD.BIN`.
 
 - Se montó un **simulador** (`deepsdr-ui/`) que compila los ficheros reales del
   firmware en el PC y saca PNG.
-- Hay **111 bancos**, de los que más de 80 corren en `make comprueba` sin placa.
+- Hay más de **115 bancos**, de los que la mayoría corren en `make comprueba`
+  sin placa.
 - La regla del proyecto: **los bancos escriben la regla aparte**. Si el banco
   llamara a la función del firmware comprobaría que hace lo que hace, no lo que
   debe.
@@ -195,6 +210,16 @@ el firmware mira si hay un `BD.BIN`.
   mapas de flash dicen lo mismo), `tools/panel_check.py` y el utillaje de
   datos que tiene su apartado aquí abajo.
 - Se añadió `avisos.mk`: el firmware compila con **cero avisos**.
+- Se añadió `tools/idioma_check.py`: recorre los 130 fuentes de `User/` y falla
+  si una cadena de pantalla no pasa por `tr()` o por `T()`. Nació el 06/10/2026
+  porque el modo Ident, el veredicto del cargador y las fases de HFDL seguían
+  contestando en castellano con la radio en inglés, y eso no se ve leyendo: se
+  ve poniendo la radio en inglés y llegando a esa pantalla.
+- Bancos nuevos del 06/10/2026: `rttyaire` (una grabación por el `rtty.c` de
+  verdad), `rttysolo` (el ajuste automático, arrancando mal **y** arrancando
+  bien), `identturnos` (dos señales turnándose) y `formato` (que lo que escribe
+  el formateador lo acepte el mismo `spi_flash.c` que rechazaba el volumen del
+  issue).
 - Se arreglaron, en distintas tandas, bancos que llevaban días o semanas en
   verde sin comprobar nada.
 
@@ -244,35 +269,121 @@ python3 ../datos_pack.py BD.BIN ICAO24.BIN EMISORAS.BIN
   exactamente `UPDATE.BIN`. Un guión y un fallo silencioso.
 - Después de escribir, **releer y comparar el sha256** con el de la compilación.
 
+### `update4.bin` no se tira
+
+En la raíz hay además un `update4.bin`, de una compilación anterior. **No es
+basura y no se borra**: *por el dueño, 05/10/2026,* "el update4.bin no se tira
+porque se necesita para pasar de la version vieja a la nueva".
+
+El "4" es del **gestor de fábrica**, que abre `update4.bin` por FatFs; nuestro
+cargador abre `UPDATE.BIN`. O sea que son dos nombres para dos programas
+distintos, y una radio que todavía lleve el de fábrica **sólo** mira el
+primero. Ése es el puente: sin él no hay forma de llegar desde el firmware
+viejo hasta esta rama sin abrir la radio, y abrir la radio es justo lo que no
+se hace aquí.
+
+Por eso parece atrasado —lo está, es de antes— y por eso tiene que seguir
+estándolo. Lo que no hay que hacer es **grabar ése** en una radio que ya está
+en la rama `reload`: para el día a día el fichero es `update.bin`.
+
 ## Estado
 
 ```
-  VERSION V3.42          CARGADOR v2.1
+  VERSION V3.60          CARGADOR v2.15
   update.bin             customboot.bin          BD.BIN
   ZONA ALTA  733.184 de 1.040.384   libre 311.296  (101.432 aviones)
   DISCO USB  capacidad del chip - 1 MB  (hoy 7 MB con el W25Q64 soldado)
-  FLASH   359.228 de 475.136   libre 115.908   <- UNA region, sin desvan
-  CARGADOR 34.172 de  49.152   libre  14.980
+  FLASH   368.892 de 475.136   libre 106.244   <- UNA region, sin desvan
+  CARGADOR 39.400 de  49.152   libre   9.752
   RAM     194.648 de 196.608   libre   1.960
   TCM      59.476 de  65.536   libre   6.060   <- y eso ES la pila
-  PILA      5.456 peor caso    margen    600 (10%)  <- CON anidamiento
-  avisos del compilador  0     comprobaciones  97 en verde
+  PILA      5.104 de  8.104    margen  3.000 (37%)  <- CON anidamiento
+  avisos del compilador  0     comprobaciones  todas en verde
 ```
 
 ## Lo que queda pendiente
 
-- El suelo de negro del cargador nuestro sale ~4 puntos por encima del
+*Repasado contra el código y el diario el 05/10/2026. La lista anterior daba
+por pendientes cinco cosas que ya estaban hechas, y una de ellas al revés del
+todo.*
+
+### Lo que ya NO está pendiente, aunque esta lista lo dijera
+
+- **FT8 sí ha decodificado en antena.** Lo dice el diario del 25/09/2026:
+  7.074,0 kHz, siete mensajes en dos tandas, uno a 7.116 km, con los desvíos
+  anotados (153, 263, 266 y 350 Hz). La lista llevaba desde entonces diciendo
+  que no, que es el peor error que puede tener un "pendiente": manda a repetir
+  algo que ya salió.
+- **La carga de audio con el Ruido encendido está medida**, y en la radio, no
+  en el banco. De ahí salió la fila "Reparto del audio" y la conclusión de la
+  V3.05: *el NR no era el problema*. Las dos transformadas de `nr_ss.c` se
+  quedan como están.
+- **El NAVTEX está probado en antena** desde la V3.25, y además arreglado con
+  señal de verdad: antes no sacaba una letra del aire.
+- **`ICAO24.BIN` ya no está vacío**: la zona alta lleva 101.432 aviones y 356
+  tipos, cargados y comprobados en la radio.
+- **RTTY y CW sí guardan sus ajustes**: desplazamiento, baudios e inversión del
+  RTTY, y tono, velocidad y autoenganche del CW. Todo persiste.
+
+### En antena, que es donde se decide
+
+- **WEFAX, SSTV, APRS y el notch no se han probado nunca con señal real.** Lo
+  dicho de FT8 vale igual aquí: banco en verde no es lo mismo.
+- **La mayoría de las 27 firmas del Ident siguen sin comprobar en antena.**
+  Van trece confirmadas, la última el STANAG 4481 FSK de 5339 kHz medido dos
+  veces por caminos que no comparten nada (la radio y numpy sobre una
+  grabación, los cuatro números por debajo del 0,5%). Confirmadas: FT8 por
+  cadencia, RTTY comercial de 50 Bd (el DWD) y la FSK naval de 850 Hz a 50 Bd
+  (FUG en 13.418). Las que caerían con una grabación de treinta segundos:
+  NAVTEX, WSPR, una portadora sola y PSK31.
+
+### Fallos conocidos
+
+- **El botón "Borrar" del panel de CW desaparece** después de mucho rato
+  decodificando. Descartados por inspección: `solo_chip()` no llega a su
+  franja, el repintado por desplazamiento sí redibuja la cabecera, y
+  `ui_digi_draw_fila()` no puede alcanzarla. Queda un cursor de renglón que
+  puede desincronizarse.
+- **El suelo de negro del cargador** sale unos 4 puntos por encima del
   original. Descartados con datos: reloj, temporización, las tres secuencias,
   pines de placa, PMU y EXMC.
-- Medir la carga de audio con el botón de Ruido apagado y encendido, que es lo
-  que decide si hay que reescribir las dos transformadas de `nr_ss.c`.
-- FT8 **no ha decodificado nunca en antena**. Cabe, está enganchado y el banco
-  está en verde, pero eso no es lo mismo.
-- Nada de NAVTEX, WEFAX, SSTV, APRS ni el notch se ha probado en antena.
-- El filtro adaptado de PSK31 va 3 dB por detrás de fldigi: es la mejora con
-  mejor relación entre lo que cuesta y lo que da.
-- Mensajes de tipo 2 y 3 de WSPR, texto ACARS de HFDL en crudo, giros 6 y 7 de
-  HFDL (no caben en este chip), y el `ICAO24.BIN` montado pero vacío.
-- RTTY y CW no guardan velocidad ni tono en `CONFIG.CSV`.
-- La paleta `DEEPSDR` sigue fuera: rompía el audio de WFM por un mecanismo que
-  nunca llegué a entender, y preferí no meter código cuyo fallo no entiendo.
+- **La paleta `DEEPSDR` sigue fuera**: rompía el audio de WFM por un mecanismo
+  que nunca llegué a entender, y prefiero no meter código cuyo fallo no
+  entiendo.
+
+### Decodificadores, por orden de lo que dan
+
+- **Los ~2 dB de PSK31 contra fldigi siguen sin explicación, y el culpable que
+  se le achacaba está descartado.** Medido el 05/10/2026: el 50 % de las letras
+  cae en **−7,97 dB en 2,5 kHz** (amplitud 0,258; el banco lo da en amplitud y
+  la conversión es 10·log10(a²·2,4)). A fldigi se le atribuyen −10 dB, pero en
+  **3 kHz**, que pasados a 2,5 kHz son −9,2: la diferencia real son **~1,2 dB**,
+  no tres, y encima los criterios no son el mismo ("50 % de las letras" aquí,
+  "copia legible" allí).
+
+  Lo que esta lista decía —que la culpa era el filtro adaptado y que era la
+  mejora de mejor relación coste/beneficio— **ya se había medido el 30/09 y es
+  que no**: el coseno de 64, que es el adaptado de verdad, gana **0,12 dB** por
+  64 multiplicaciones por muestra y 256 bytes de RAM. Está escrito con las
+  cuatro tandas en la cabecera de `psk31.c`. Donde sí hay sitio es en el
+  **rechazo al vecino**: aguanta uno de hasta **+4,74 dB** y en 14.070 hay una
+  emisión cada 50 Hz.
+- Mensajes de **tipo 2 y 3 de WSPR**, y el **texto ACARS de HFDL en crudo**.
+- Los **giros 6 y 7 de HFDL** no caben en este chip.
+- **Separar SSTV de WEFAX por el periodo de línea**: hacen falta 500 ms y la
+  autocorrelación del Ident llega a 256.
+- **AIS y JTTY los decodifica la radio pero el Ident no los nombra**: les falta
+  su fila en `k_firmas[]`, y una fila sólo entra con su número medido.
+- **El cargador (`boot/`) sigue sólo en castellano.** Arranca antes que los
+  ajustes y no tiene dónde leer el idioma, así que `tools/idioma_check.py` no
+  lo mira. Que no salga ahí no quiere decir que esté bien: el que abrió el
+  issue del volumen escribe en inglés y lo que lee es *"no se reconoce"*.
+
+### Herramientas
+
+- **`tools/sitios_xy.csv` está a medias a propósito**: 46 centros emisores de
+  los 824 que aparecen en las listas. Añadir uno es una línea, y es justo lo
+  que mejora el orden por cercanía de una zona concreta.
+- Renombrar `Makefile.nuevo` a `Makefile`, en la raíz y en `boot/`. No es
+  manía: el puente que escribe en el disco se niega a crear un fichero que se
+  llame exactamente `Makefile`.

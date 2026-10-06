@@ -153,6 +153,23 @@ uint8_t spectrum_get_heatmap_trace_white(void);
  * spectrum_pinta_en() en spectrum.c. */
 void    spectrum_pinta_en(gfx2_surf_t *sf, int16_t px, int16_t py);
 
+/*
+ * REPINTADO PARCIAL DEL ESPECTRO - 05/10/2026.
+ *
+ * spectrum_draw() se salta las bandas de filas que son identicas al cuadro
+ * anterior (ver "LAS BANDAS QUE NO HACE FALTA VOLCAR" en spectrum.c). Eso
+ * vale mientras nadie pinte dentro del rectangulo del espectro por su
+ * cuenta. Quien lo haga -o quien borre la pantalla entera- tiene que
+ * llamar a esto para que el siguiente cuadro salga completo.
+ *
+ * spectrum_parcial_diag() saca cuantas bandas se saltaron y cuantas habia,
+ * para la ventana de informacion y para los bancos.
+ */
+void    spectrum_invalida(void);
+void    spectrum_parcial_diag(uint32_t *saltadas, uint32_t *total);
+void    spectrum_parcial_set(uint8_t on);
+uint8_t spectrum_parcial_get(void);
+
 void    spectrum_set_bridge(uint8_t on);
 uint8_t spectrum_get_bridge(void);
 

@@ -1,4 +1,72 @@
 #include "mapa.h"
+#include "palette.h"
+
+/*
+ * EL MAPA SIGUE AL TEMA (SOLO EN UNO) - 05/10/2026, de un issue.
+ *
+ * *El que lo abrio:* "I have noticed that the world map uses its own
+ * palette. I am hoping at some point this will be harmonised with the
+ * standard colour palette, as again the outlines for the continents are
+ * barely legible for me".
+ *
+ * Tenia razon y era peor de lo que el creia: este fichero llevaba NUEVE
+ * colores escritos a pelo y CERO referencias a la paleta. El mapa salia
+ * azul oscuro con el tema que fuera, incluidos los dos claros que ya
+ * habia. Un tema no cambiaba el mapa ni un pixel.
+ *
+ * POR QUE NO SE ARMONIZA PARA TODOS. Porque seria cambiarle la pantalla a
+ * quien no ha pedido nada: los seis temas de antes se disenaron mirando
+ * este mapa azul, y el azul sobre fondo oscuro funciona. Asi que el mapa
+ * sigue al tema SOLO donde el tema lo pide -palette.h, campo mapa_sigue-,
+ * y hoy lo pide Chemistry y nadie mas.
+ *
+ * EL REPARTO DE PAPELES, que es lo unico que hay que entender para anadir
+ * otro tema a esto:
+ *
+ *     mar       surf_0     el fondo del mapa es un fondo de pantalla
+ *     rejilla   grid       recesiva a proposito, como la del espectro
+ *     ecuador   line       la misma rejilla, un escalon por encima
+ *     costa     ink_dim    es el CONTENIDO del mapa, no decoracion
+ *     boton     surf_2     un control en reposo
+ *     borde     line       un contorno
+ *     tinta     ink        el signo + / - encendido
+ *     tinta_off ink_mute   y apagado
+ *     casa      accent     "lo tuyo", igual que el digito de sintonia
+ *
+ * La casa va en accent y NO en warn aunque el amarillo de antes se le
+ * pareciera: un color de estado no se reutiliza como decoracion, que es
+ * regla vieja de palette.h.
+ */
+typedef struct {
+    uint32_t mar, rejilla, ecuador, costa;
+    uint32_t boton, borde, tinta, tinta_off, casa;
+} mapa_tinte_t;
+
+static void mapa_tinte(mapa_tinte_t *t)
+{
+    if (g_pal->mapa_sigue) {
+        t->mar       = PAL_SURF_0;
+        t->rejilla   = PAL_GRID;
+        t->ecuador   = PAL_LINE;
+        t->costa     = PAL_INK_DIM;
+        t->boton     = PAL_SURF_2;
+        t->borde     = PAL_LINE;
+        t->tinta     = PAL_INK;
+        t->tinta_off = PAL_INK_MUTE;
+        t->casa      = PAL_ACCENT;
+    } else {
+        /* Los nueve de siempre, que es lo que veia la radio hasta hoy. */
+        t->mar       = 0x0B1A2AUL;
+        t->rejilla   = 0x16304AUL;
+        t->ecuador   = 0x24466AUL;
+        t->costa     = 0x3E7FA8UL;
+        t->boton     = 0x0A1622UL;
+        t->borde     = 0x2C4356UL;
+        t->tinta     = 0xDCE8F4UL;
+        t->tinta_off = 0x44535FUL;
+        t->casa      = 0xFFC83CUL;
+    }
+}
 
 /*
  * LA PROYECCION, EN DOS LINEAS.
@@ -418,16 +486,15 @@ uint8_t mapa_loc_de_linea(const char *linea, char *out)
 
 void mapa_dibuja(gfx2_surf_t *s, const mapa_caja_t *c)
 {
-    static const uint32_t k_mar    = 0x0B1A2AUL;
-    static const uint32_t k_rejilla= 0x16304AUL;
-    static const uint32_t k_costa  = 0x3E7FA8UL;
+    mapa_tinte_t t;
     const int16_t *p = k_mapa_pts;
     uint16_t linea;
     int16_t i;
 
     if (!gfx2_band_hits(s, c->y, c->h)) { return; }
 
-    gfx2_fill(s, c->x, c->y, c->w, c->h, gfx2_rgb(k_mar));
+    mapa_tinte(&t);
+    gfx2_fill(s, c->x, c->y, c->w, c->h, gfx2_rgb(t.mar));
 
     /*
      * LA REJILLA VA CADA 30 GRADOS y el ecuador va mas claro. No es
@@ -438,13 +505,13 @@ void mapa_dibuja(gfx2_surf_t *s, const mapa_caja_t *c)
         int16_t x = px_de_lon(c, (int32_t)i * 100L);
 
         if (x < c->x || x >= (int16_t)(c->x + c->w)) { continue; }
-        gfx2_vline(s, x, c->y, c->h, gfx2_rgb(k_rejilla));
+        gfx2_vline(s, x, c->y, c->h, gfx2_rgb(t.rejilla));
     }
     for (i = -60; i <= 60; i += 30) {
         int16_t y = py_de_lat(c, (int32_t)i * 100L);
 
         if (y < c->y || y >= (int16_t)(c->y + c->h)) { continue; }
-        gfx2_hline(s, c->x, y, c->w, gfx2_rgb(i == 0 ? 0x24466AUL : k_rejilla));
+        gfx2_hline(s, c->x, y, c->w, gfx2_rgb(i == 0 ? t.ecuador : t.rejilla));
     }
 
     /*
@@ -482,7 +549,7 @@ void mapa_dibuja(gfx2_surf_t *s, const mapa_caja_t *c)
                     if (recorta(c, &rx0, &ry0, &rx1, &ry1)) {
                         gfx2_line(s, (int16_t)rx0, (int16_t)ry0,
                                      (int16_t)rx1, (int16_t)ry1,
-                                  gfx2_rgb(k_costa));
+                                  gfx2_rgb(t.costa));
                     }
                 }
             }
@@ -545,13 +612,17 @@ static int16_t mz_x(const mapa_caja_t *c, uint8_t mas)
 static void mz_uno(gfx2_surf_t *s, const mapa_caja_t *c, uint8_t mas, uint8_t vale)
 {
     int16_t x = mz_x(c, mas), y = mz_y(c);
-    uint32_t tinta = vale ? 0xDCE8F4UL : 0x44535FUL;
+    mapa_tinte_t t;
+    uint32_t tinta;
     int16_t cx = (int16_t)(x + MAPA_MZ_LADO / 2);
     int16_t cy = (int16_t)(y + MAPA_MZ_LADO / 2);
 
-    gfx2_rrect(s, x, y, MAPA_MZ_LADO, MAPA_MZ_LADO, 8, gfx2_rgba(0x0A1622UL, 215U));
+    mapa_tinte(&t);
+    tinta = vale ? t.tinta : t.tinta_off;
+
+    gfx2_rrect(s, x, y, MAPA_MZ_LADO, MAPA_MZ_LADO, 8, gfx2_rgba(t.boton, 215U));
     gfx2_rrect_outline(s, x, y, MAPA_MZ_LADO, MAPA_MZ_LADO, 8, 1,
-                       gfx2_rgb(0x2C4356UL));
+                       gfx2_rgb(t.borde));
     /* El signo son dos rectangulos y no un caracter: asi no depende de que
      * tipografia este cargada ni de como centre ella el '+'. */
     gfx2_fill(s, (int16_t)(cx - 8), (int16_t)(cy - 1), 17, 3, gfx2_rgb(tinta));
@@ -580,14 +651,16 @@ uint8_t mapa_zoom_hit(const mapa_caja_t *c, int16_t x, int16_t y)
 
 void mapa_casa(gfx2_surf_t *s, const mapa_caja_t *c, int16_t px, int16_t py)
 {
-    static const uint32_t k_casa = 0xFFC83CUL;
+    mapa_tinte_t t;
 
     if (px < c->x || px >= (int16_t)(c->x + c->w)) { return; }
     if (py < c->y || py >= (int16_t)(c->y + c->h)) { return; }
 
+    mapa_tinte(&t);
+
     /* Un aspa, que no se confunde con ninguna marca de estacion. */
     gfx2_line(s, (int16_t)(px - 4), (int16_t)(py - 4),
-                 (int16_t)(px + 4), (int16_t)(py + 4), gfx2_rgb(k_casa));
+                 (int16_t)(px + 4), (int16_t)(py + 4), gfx2_rgb(t.casa));
     gfx2_line(s, (int16_t)(px - 4), (int16_t)(py + 4),
-                 (int16_t)(px + 4), (int16_t)(py - 4), gfx2_rgb(k_casa));
+                 (int16_t)(px + 4), (int16_t)(py - 4), gfx2_rgb(t.casa));
 }
