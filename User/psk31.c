@@ -374,7 +374,23 @@ static void bit_mete(uint8_t b)
              * sintonia a medio baudio escribe texto con toda la pinta de
              * estar bien.
              */
-            if (hay && s_vc >= 0.5f) { saca((char)i); }
+            /*
+     * NI EL CERO NI LOS CONTROLES - revision del 08/10/2026.
+     *
+     * La entrada 0 de la tabla varicode es ASCII NUL, y un solo bit
+     * cambiado sobre una señal por lo demas buena la produce. Ese '\0'
+     * llega hasta la rejilla de texto del panel, que se mide y se pinta
+     * como cadena C: el cero incrustado CORTA el renglon y todo lo que se
+     * escriba detras queda invisible hasta el siguiente salto de linea.
+     *
+     * rtty.c y navtex.c ya filtran el cero; aqui faltaba.
+     */
+    if (hay && s_vc >= 0.5f && i != 0U) {
+        char c = (char)i;
+        if (c == '\r' || c == '\n' || c == '\t' || (c >= 32 && c <= 126)) {
+            saca(c);
+        }
+    }
         }
     } else {
         /* reposo: mas ceros seguidos, nada que hacer */

@@ -42,6 +42,26 @@ void debug_print_hex32(const char *label, uint32_t val);
 void debug_print_hex16(const char *label, uint16_t val);
 void debug_print_dec(const char *label, uint32_t val);
 
+/*
+ * REVISION A FONDO DEL 08/10/2026: LAS CUATRO "_always", TAMBIEN AQUI.
+ *
+ * Estaban definidas SOLO en la rama de abajo, la del UART apagado. Con
+ * -DDEBUG_UART_ENABLED=1 -que es justo lo que recomienda el comentario
+ * de la cabecera para una sesion de depuracion- hfdl_payload_decode.c
+ * las llama diecisiete veces y no habia nada que las declarara: o
+ * llegaban como implicitas, que es lo que el comentario de abajo dice
+ * querer evitar y lo que ya mordio una vez con backlight_sleep/wake, o
+ * directamente no compila. O sea que el interruptor de depuracion rompia
+ * la compilacion exactamente cuando se iba a usar.
+ *
+ * Con el UART encendido "siempre" quiere decir lo que dice, asi que van
+ * a las funciones de verdad.
+ */
+#define debug_print_always(s)                debug_print(s)
+#define debug_print_hex32_always(label, val) debug_print_hex32((label), (val))
+#define debug_print_hex16_always(label, val) debug_print_hex16((label), (val))
+#define debug_print_dec_always(label, val)   debug_print_dec((label), (val))
+
 #else
 
 #define debug_uart_init()             ((void)0)

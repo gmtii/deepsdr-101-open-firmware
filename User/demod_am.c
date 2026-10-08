@@ -29,6 +29,7 @@
 #include "psk31.h"     /* decodificador de NAVTEX - ver donde se llama abajo */
 #include "wefax.h"      /* y el de WEFAX, en el mismo sitio */
 #include "sstv.h"       /* y el de SSTV */
+#include "hell.h"       /* y el de Feld-Hell */
 #include "ft8_modo.h"
 #include "wspr_modo.h"
 #include "ais_modo.h"
@@ -37,6 +38,7 @@
 #include "stanag_modo.h" /* JTTY: banda lateral a 12 kHz, como FT8 y WSPR */
 #include "ident.h"        /* y el IDENT, que come de ese mismo sitio */
 #include "ax25.h"       /* y el de APRS, que se engancha en la rama de FM */
+#include "dsc.h"        /* y el DSC, que come del camino de banda lateral */
 #include "rtty_scope.h" /* dedicated audio-domain tuning scope for RTTY,
                            * see this file's RTTY INTEGRATION comment
                            * and rtty_scope.h's own "why a separate FFT"
@@ -1034,10 +1036,37 @@ static uint8_t  s_fil_fam_puesta = 0xFFU;   /* la que hay construida */
  * son unos 10 ciclos por etapa y muestra: a 96 kHz, 2 Mciclos/s de 200, o
  * sea un 1% del reloj, y solo en CW.
  */
+/*
+ * DOS JUEGOS TAMBIEN AQUI - revision a fondo del 08/10/2026.
+ *
+ * Esto era UN solo juego de coeficientes y alpf_cw_build() los reescribia
+ * encima, con la interrupcion de audio viva. Es exactamente la averia que
+ * el comentario de s_fil_coef -unas lineas mas arriba- describe y evita
+ * desde el 24/09, solo que al filtro de CW se le olvido darle la misma
+ * solucion.
+ *
+ * Y AQUI DUELE MAS QUE EN EL OTRO, porque son cuatro secciones iguales en
+ * cascada: si la interrupcion entra entre la escritura de a1 y la de a2,
+ * la cascada entera corre con el a1 nuevo y el a2 viejo. Medido sobre la
+ * formula de arriba, con el tono en 800 Hz y bajando el ancho de 500 a
+ * 450 Hz, los polos de esa mezcla salen en 1,04; entre dos de los anchos
+ * que ofrece la radio, en 1,21. Un polo fuera del circulo es una
+ * exponencial creciente: unas pocas muestras bastan para llevar el audio
+ * al tope de escala, y eso es el chasquido fuerte que se oye al mover el
+ * mando de ancho o el de tono en CW.
+ *
+ * El arreglo es el mismo de s_fil_coef y por las mismas razones: se
+ * construye en el juego que NO suena y luego se cambia el indice, que es
+ * una sola escritura de una palabra. La interrupcion lo lee una vez por
+ * bloque y a partir de ahi todo lo que toca es coherente. Lo que queda es
+ * el chasquido honrado de tirar el historial del biquad, que es el que
+ * hace cualquier radio al mover un filtro.
+ */
 #define ALPF_CW_STAGES 4U
-static arm_biquad_casd_df1_inst_f32 s_alpf_cw_inst;
-static float32_t s_alpf_cw_state[ALPF_CW_STAGES * 4U];
-static float32_t s_alpf_cw_coeffs[ALPF_CW_STAGES * 5U];
+static arm_biquad_casd_df1_inst_f32 s_alpf_cw_inst[FIL_JUEGOS];
+static float32_t s_alpf_cw_state[FIL_JUEGOS][ALPF_CW_STAGES * 4U];
+static float32_t s_alpf_cw_coeffs[FIL_JUEGOS][ALPF_CW_STAGES * 5U];
+static volatile uint8_t s_alpf_cw_act;   /* cual usa la interrupcion */
 static float     s_alpf_cw_hz = CONFIG_CW_PITCH_HZ;
 /* Ancho a -3 dB del filtro de CW. 500 Hz de partida, que es el ancho
  * clasico de un filtro de CW de radio comercial. */
@@ -1721,6 +1750,10 @@ static void alpf_cw_build(void)
     float Q  = ALPF_CW_Q_K * (s_alpf_cw_hz / s_alpf_cw_bw);
     float w0, alpha, a0, b0n, a1n, a2n;
     uint32_t k;
+    /* El juego que NO esta sonando - revision a fondo del 08/10/2026, ver
+     * el comentario de s_alpf_cw_coeffs. Antes se escribia encima del que
+     * usaba la interrupcion y una cascada a medio cambiar es inestable. */
+    uint8_t otro = (uint8_t)(s_alpf_cw_act ^ 1U);
 
     if (Q < 0.20f)  { Q = 0.20f; }
     if (Q > 20.0f)  { Q = 20.0f; }
@@ -1733,14 +1766,17 @@ static void alpf_cw_build(void)
     a2n   = -(1.0f - alpha) / a0;
 
     for (k = 0U; k < ALPF_CW_STAGES; k++) {
-        s_alpf_cw_coeffs[k * 5U + 0U] =  b0n;
-        s_alpf_cw_coeffs[k * 5U + 1U] =  0.0f;
-        s_alpf_cw_coeffs[k * 5U + 2U] = -b0n;
-        s_alpf_cw_coeffs[k * 5U + 3U] =  a1n;
-        s_alpf_cw_coeffs[k * 5U + 4U] =  a2n;
+        s_alpf_cw_coeffs[otro][k * 5U + 0U] =  b0n;
+        s_alpf_cw_coeffs[otro][k * 5U + 1U] =  0.0f;
+        s_alpf_cw_coeffs[otro][k * 5U + 2U] = -b0n;
+        s_alpf_cw_coeffs[otro][k * 5U + 3U] =  a1n;
+        s_alpf_cw_coeffs[otro][k * 5U + 4U] =  a2n;
     }
-    arm_biquad_cascade_df1_init_f32(&s_alpf_cw_inst, ALPF_CW_STAGES,
-                                    s_alpf_cw_coeffs, s_alpf_cw_state);
+    arm_biquad_cascade_df1_init_f32(&s_alpf_cw_inst[otro], ALPF_CW_STAGES,
+                                    s_alpf_cw_coeffs[otro], s_alpf_cw_state[otro]);
+    /* Y SOLO AHORA se pone en servicio: una escritura de una palabra, con
+     * el juego nuevo ya entero. Igual que fil_construye(). */
+    s_alpf_cw_act = otro;
 }
 
 void demod_am_set_cw_filter_hz(float centre_hz)
@@ -2099,7 +2135,7 @@ void demod_am_init(void)
     demod_am_set_active_rate(0U);
 
     nr_ss_init();
-    anotch_init(12000.0f);   /* la tasa del camino decimado - ver anotch.h */
+    anotch_init(DEMOD_DEC_FS_HZ);   /* ver DEMOD_DEC_FS_HZ en demod_am.h */
     rtty_init();
     /* CW: aqui al lado del RTTY porque se alimenta del mismo sitio y en
      * el mismo momento. El tono y la siembra de velocidad salen de
@@ -2374,7 +2410,7 @@ static void aprs_scope_feed(const float *x, uint32_t n)
     float    lote[64];
     uint16_t m = 0U;
     uint32_t k;
-    uint16_t dec = (uint16_t)(demod_am_active_fs_hz() / 12000.0f + 0.5f);
+    uint16_t dec = (uint16_t)(demod_am_active_fs_hz() / DEMOD_DEC_FS_HZ + 0.5f);
 
     if (dec < 1U) { dec = 1U; }
 
@@ -3219,7 +3255,36 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * the warning in practice for this specific access pattern. */
         {
             uint32_t base = s_dec_block_samples - HILBERT_GROUP_DELAY_DEC;
-            if (base > DEC_BLOCK_SAMPLES_MAX) { base = 0U; } /* unreachable in practice (see
+            /*
+             * LA RED SUJETABA UN TRAPECIO QUE NO ERA - revision a fondo del
+             * 08/10/2026.
+             *
+             * Aqui ponia `if (base > DEC_BLOCK_SAMPLES_MAX)`, y el indice
+             * mas alto que se lee tres lineas mas abajo NO es base: es
+             * base + HILBERT_GROUP_DELAY_DEC - 1, porque el bucle suma k.
+             * O sea que la comprobacion dejaba pasar justo los treinta
+             * valores de base que se salen del array por el otro extremo:
+             * con base = DEC_BLOCK_SAMPLES_MAX la guarda decia que si y la
+             * ultima lectura caia 29 posiciones fuera.
+             *
+             * Hoy no se llega ahi -s_dec_block_samples solo vale 32 o 64,
+             * ver el comentario de arriba-, asi que esto no arregla ningun
+             * sintoma: arregla la red. Una guarda que comprueba otra cosa
+             * de la que protege es peor que no tenerla, porque el que la
+             * lee se queda tranquilo. Comprobando el indice de verdad, la
+             * red sujeta lo que dice sujetar, y GCC sigue teniendo su cota
+             * explicita para dejar de avisar.
+             *
+             * La condicion esta escrita restando y no sumando -o sea
+             * `base > MAX - RETARDO` en vez de `base + RETARDO > MAX`-
+             * porque base es sin signo y viene de una RESTA: si algun dia
+             * s_dec_block_samples fuese menor que el retardo, base seria un
+             * numero enorme y sumarle 30 daria la vuelta al contador,
+             * colandose por la guarda justo en el caso que mas falta hace
+             * atrapar. Restando no hay vuelta posible: los dos son
+             * constantes de compilacion y MAX es mayor que el retardo.
+             */
+            if (base > DEC_BLOCK_SAMPLES_MAX - HILBERT_GROUP_DELAY_DEC) { base = 0U; } /* unreachable in practice (see
                                                                  * comment above) - just gives
                                                                  * GCC's range analysis an
                                                                  * explicit upper bound so it
@@ -3292,6 +3357,34 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
             navtex_process(s_ssb_dec, s_dec_block_samples);
         }
         /*
+         * Paquete de HF, 07/10/2026. Mismo sitio, mismo buffer y mismas
+         * razones que los tres de arriba: audio de banda lateral crudo
+         * antes de la reduccion de ruido, y ya a 12 kHz. El APRS de VHF
+         * usa ESTE MISMO ax25_process() pero desde el otro sitio -la
+         * salida del discriminador de FM, mas arriba en este fichero-, y
+         * los dos no pueden estar activos a la vez porque el modo es uno
+         * solo: aquel es NFM y este banda lateral.
+         *
+         * ax25_process() acepta cualquier n: trabaja muestra a muestra
+         * contra su propio reloj de bit, sin ventana de bloque.
+         */
+        if (ax25_activo()) {
+            ax25_process(s_ssb_dec, s_dec_block_samples);
+        }
+        /*
+         * DSC, 07/10/2026. Mismo sitio, mismo buffer y mismas razones que
+         * los anteriores: audio de banda lateral crudo antes de la
+         * reduccion de ruido -que esta pensada para que se entienda una voz
+         * y lo que hace con dos tonos estrechos no ayuda a un detector que
+         * vive de medirlos- y ya a DEMOD_DEC_FS_HZ, que es lo que quiere.
+         *
+         * Acepta cualquier n: trabaja muestra a muestra contra su propio
+         * reloj de bit, sin ventana de bloque.
+         */
+        if (dsc_activo()) {
+            dsc_process(s_ssb_dec, s_dec_block_samples);
+        }
+        /*
          * PSK31, 28/09/2026. Mismo sitio, mismo buffer, mismas razones, y
          * aqui la de la reduccion de ruido es la mas clara de todas: lo
          * que este decodificador mide es la FASE de una portadora de
@@ -3325,6 +3418,17 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * segun la frecuencia. Cruda. */
         if (sstv_activo()) {
             sstv_process(s_ssb_dec, s_dec_block_samples);
+        }
+        /*
+         * FELD-HELL, 06/10/2026. El sexto oyente del mismo buffer, y el mas
+         * barato de todos: solo mide la ENVOLVENTE -valor absoluto y un
+         * suavizado de un cuarto de punto-, porque lo que se manipula ahi es
+         * la portadora entera. Ni transformadas ni discriminador. Crudo como
+         * los demas: la sustraccion espectral le movería el brillo de los
+         * puntos y aqui el brillo ES el dato.
+         */
+        if (hell_activo()) {
+            hell_process(s_ssb_dec, s_dec_block_samples);
         }
         /*
          * FT8, 25/09/2026. El sexto oyente del mismo buffer, y el unico que
@@ -3428,7 +3532,7 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * corre luego desde el bucle principal. */
         if (rtty_get_enabled() || cw_get_enabled() || navtex_activo()
             || wefax_activo() || sstv_activo() || ft8_modo_activo()
-            || psk31_activo()) {
+            || psk31_activo() || dsc_activo()) {
             rtty_scope_feed(s_ssb_dec, s_dec_block_samples);
         }
 
@@ -3601,7 +3705,11 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
              * nada: pedir 4 kHz de audio en telegrafia no es una
              * preferencia, es no tener filtro. Ver
              * demod_am_set_cw_filter_hz(). */
-            arm_biquad_cascade_df1_f32(&s_alpf_cw_inst, s_env, s_env,
+            /* El indice se lee UNA vez, igual que el del filtro de dos
+             * cortes de abajo - revision a fondo del 08/10/2026, ver el
+             * comentario de s_alpf_cw_coeffs. */
+            uint8_t jc = s_alpf_cw_act;
+            arm_biquad_cascade_df1_f32(&s_alpf_cw_inst[jc], s_env, s_env,
                                        SDR_RX_BLOCK_SAMPLES);
         } else {
             /*
@@ -3671,9 +3779,46 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
      * they'd tune an RF gain or squelch control, so this ordering
      * isn't load-bearing the way it would be for an automatic/
      * adaptive threshold). */
-    if (s_mode == (uint8_t)DEMOD_MODE_AM && nr_ss_get_enabled()) {
+    /*
+     * Y EL NOTCH AUTOMATICO TAMBIEN PASA POR AQUI - revision a fondo del
+     * 08/10/2026.
+     *
+     * anotch.h dice, desde que se escribio: "En AM, SAM y banda lateral;
+     * en FM no". Y hasta hoy el unico anotch_process() que habia en este
+     * fichero estaba dentro de la rama de banda lateral (paso 2d), que es
+     * la unica que llega hasta alli: AM, SAM y NFM salen por su propio
+     * camino mucho antes. O sea que en AM y en SAM el notch NO SE APLICABA
+     * NUNCA, y el mando de la pantalla no esta limitado por modo: el dueño
+     * lo pone "a saco" estando en AM, la etiqueta cambia de NOTCH a la
+     * fuerza elegida, y el heterodino sigue sonando igual. Un mando que
+     * cambia de etiqueta y no cambia el audio es peor que no tenerlo.
+     *
+     * Se engancha AQUI, en el diezmado/interpolado que ya tenia montado la
+     * reduccion de ruido de AM, y no en otro sitio, por tres razones: es
+     * la misma tasa de 12 kHz a la que el notch esta medido (ver anotch.h
+     * y sim/anotchtest.c), es DESPUES de la reduccion de ruido igual que
+     * en banda lateral -al notch le estorba el ruido, a la reduccion no le
+     * estorba una portadora-, y no cuesta un segundo par de filtros.
+     *
+     * Lo que cambia en la condicion de entrada es que este bloque ya no se
+     * monta solo cuando esta encendida la reduccion de ruido: tambien
+     * cuando lo que esta encendido es el notch, y tambien en SAM, que
+     * hasta ahora no entraba aqui en absoluto. Lo que NO cambia es quien
+     * hace que: la reduccion de ruido sigue siendo solo de AM -en SAM no
+     * estaba y no se le añade-, y en NFM no entra ninguno de los dos,
+     * porque alli un tono fijo es parte de lo que se escucha.
+     *
+     * Apagado no cuesta ni un ciclo: con los dos apagados no se entra, y
+     * anotch_process() con el notch apagado se va sin tocar el audio.
+     */
+    if (((s_mode == (uint8_t)DEMOD_MODE_AM) && nr_ss_get_enabled())
+        || (((s_mode == (uint8_t)DEMOD_MODE_AM) || (s_mode == (uint8_t)DEMOD_MODE_SAM))
+            && anotch_activo())) {
         arm_fir_decimate_f32(&s_nr_decim_inst, s_env, s_nr_buf, SDR_RX_BLOCK_SAMPLES);
-        nr_ss_process_chunks(s_nr_buf, s_dec_block_samples);
+        if ((s_mode == (uint8_t)DEMOD_MODE_AM) && nr_ss_get_enabled()) {
+            nr_ss_process_chunks(s_nr_buf, s_dec_block_samples);
+        }
+        anotch_process(s_nr_buf, s_dec_block_samples);
         arm_fir_interpolate_f32(&s_nr_interp_inst, s_nr_buf, s_env, s_dec_block_samples);
 
         {

@@ -1,4 +1,6 @@
 #include "sdr_rx.h"
+#include "iqbal.h"
+#include "iqancho.h"
 #include "irq_prio.h"
 #include "gd32f4xx.h"
 #include "debug_uart.h"
@@ -302,20 +304,60 @@ void sdr_rx_init(void)
     sdr_rx_bringup(SDR_RX_BLOCK_SAMPLES);
 }
 
+/* Vueltas de espera para que un canal de DMA suelte CHEN. Ver el
+ * comentario de dentro de sdr_rx_stop(). */
+#define DMA_CHEN_VUELTAS  100000UL
+
 void sdr_rx_stop(void)
 {
     /* Same disable-then-wait-for-CHEN-to-drop pattern gd32_i2s.c
      * already uses for its own DMA channels - a plain
      * dma_channel_disable() request can take a few cycles to actually
      * complete, so blindly reconfiguring right after it would race
-     * the hardware. spi_dma_enable() is NOT undone here (SPI1's DMA
-     * receive request stays enabled) - re-arming the channel via
-     * sdr_rx_start()/sdr_rx_arm_dma() is what matters; leaving the
-     * SPI-side enable bit alone is harmless and one less thing to get
-     * back in sync. */
+     * the hardware.
+     *
+     * *** AQUI PONIA QUE LA PETICION DEL LADO DEL SPI NO SE TOCABA, Y QUE
+     * ERA "HARMLESS". 08/10/2026. ***
+     *
+     * Decia: "spi_dma_enable() is NOT undone here (SPI1's DMA receive
+     * request stays enabled) ... harmless and one less thing to get back in
+     * sync". Pero su gemela del lado de audio -gd32_i2s_stream_stop()-
+     * explica justo lo contrario y lo explica bien: "Primero la peticion y
+     * despues el canal: al reves, entre las dos lineas el periferico
+     * seguiria pidiendo sin nadie que sirva". Dos funciones que hacen lo
+     * mismo y solo una seguia su propia regla.
+     *
+     * Dejar SPI1 pidiendo recepcion sin canal que la sirva es ademas lo que
+     * puede retrasar -o impedir- que CHEN caiga, que es exactamente lo que
+     * el bucle de abajo espera. Se puede quitar sin miedo porque
+     * sdr_rx_arm_dma() lo vuelve a encender al final (ver su ultima linea),
+     * y por ahi pasa todo rearmado.
+     */
+    spi_dma_disable(SPI1, SPI_DMA_RECEIVE);
     dma_channel_disable(DMA0, DMA_CH3);
-    while ((DMA_CHCTL(DMA0, DMA_CH3) & DMA_CHXCTL_CHEN) != 0U) {
-        /* a disable request can take a few cycles to complete */
+    /*
+     * Y CON TOPE. Un bucle sobre un bit de hardware sin salida es un
+     * cuelgue esperando: esta radio no tiene perro guardian y su
+     * HardFault_Handler es un bucle infinito, asi que aqui no se reinicia
+     * nada, se queda la pantalla congelada con el audio sonando -va por
+     * DMA-. Y este camino se recorre CADA VEZ que se cambia de modo
+     * cruzando un cambio de tasa de muestreo, o sea a diario.
+     *
+     * El tope es el mismo razonamiento que BATTERY_EOC_VUELTAS: una vuelta
+     * son unos pocos ciclos de nucleo y lo que se espera son unos pocos
+     * tambien, asi que cien mil vueltas son dos ordenes de magnitud de
+     * sobra. Si se agota, se sigue: lo que venga detras hace un
+     * dma_deinit() entero, que es mas fuerte que este apagado.
+     */
+    {
+        uint32_t guard = DMA_CHEN_VUELTAS;
+        while (((DMA_CHCTL(DMA0, DMA_CH3) & DMA_CHXCTL_CHEN) != 0U)
+               && (guard != 0U)) {
+            guard--;
+        }
+        if (guard == 0U) {
+            debug_print("sdr_rx_stop: DMA0/CH3 no suelta CHEN, sigo\n");
+        }
     }
     /* Drop any pending half the ISR left behind - it references the
      * OLD buffer geometry and would otherwise get de-interleaved with
@@ -626,6 +668,82 @@ void DMA0_Channel3_IRQHandler(void)
         }
         if (corrupted != 0U) { s_rx_descartes++; }
         s_last_block_had_ferr = corrupted;
+    }
+
+    /*
+     * EL CORRECTOR DE ESPEJO, AQUI Y EN NINGUN OTRO SITIO - 07/10/2026.
+     *
+     * *** El dueño, con un video girando el encoder hacia abajo: "todas las
+     * señales al girar el encoder disminuyendo la frecuencia avanzan de
+     * izquierda a derecha pero hay una señal que lo hace de derecha a
+     * izquierda". ***
+     *
+     * Esa señal es el espejo de otra, y el espejo sale del desequilibrio
+     * entre I y Q. El porque esta entero en iqbal.h.
+     *
+     * El SITIO es lo unico que tiene miga. Esta es la unica linea del
+     * proyecto por la que pasan TODAS las muestras una sola vez: por aqui
+     * salen las dos ramas, la del demodulador -el gancho, justo debajo- y
+     * la de la pantalla -sdr_rx_poll_block_iq(), que lee este mismo buffer-.
+     * Corregir aqui es corregir las dos a la vez y exactamente una vez.
+     * Ponerlo en las dos por separado seria corregir dos veces el camino que
+     * usa las dos, y acabar enseñando en el espectro una señal distinta de
+     * la que se oye.
+     *
+     * Y va DESPUES del chequeo de corrupcion, para no meter un bloque de
+     * basura en el promedio: con un FERR las muestras pueden venir con los
+     * canales cambiados, que es exactamente lo que este corrector mide.
+     */
+    if ((half != 0) && (s_last_block_had_ferr == 0U)) {
+        /* half apunta dentro de s_raw_buf, que no es const; el const de la
+         * variable local es para el gancho, que no debe escribir. */
+        int16_t *b = &s_raw_buf[(half == &s_raw_buf[0]) ? 0U : s_raw_half_words];
+        /*
+         * Los dos, y EN ESTE ORDEN. El plano se come la parte constante del
+         * desequilibrio -que es la grande y converge en un segundo- y el de
+         * banda ancha se queda con lo que depende de la frecuencia, que es
+         * poco y tarda cuatro. Al reves, el de banda ancha tendria que
+         * cargar tambien con la parte plana y los dos lazos se pelearian por
+         * la misma magnitud. Ver iqancho.h.
+         */
+        /*
+         * SOLO EL ESTRECHO. EL ANCHO SE QUEDA FUERA - 08/10/2026.
+         *
+         * *** El dueño: "va lento desde el ultimo stanag" ... "que mires que
+         * coño has cambiado con el ultimo stanag que has metido joder". Y con
+         * los dos correctores compilados fuera: "ya reacciona a la primera
+         * los botones". ***
+         *
+         * TENIA RAZON Y YO LLEVABA TRES HIPOTESIS FALLADAS. Mire el coste de
+         * la interrupcion del 4415, el de los repintados del panel y el del
+         * detector; los tres eran defectos de verdad, los tres los arregle, y
+         * la averia seguia. Lo que no mire fue lo que yo mismo habia metido
+         * EN ESTA interrupcion el dia anterior, que es por donde pasan TODAS
+         * las muestras de TODOS los modos.
+         *
+         * Medido, 60 s de audio del ADC a 96 kHz:
+         *
+         *     iqbal_bloque()    13,0 ms      el corrector estrecho
+         *     iqa_bloque()     123,2 ms      el ancho, de seis tomas
+         *
+         * NUEVE VECES Y MEDIA. El ancho es un filtro complejo de seis tomas
+         * sobre el conjugado, muestra a muestra, a 96 kHz: ese es su precio y
+         * no se puede abaratar sin quitarle tomas. El estrecho son dos
+         * multiplicaciones y una suma.
+         *
+         * Y LO QUE DAN NO ESTA EN PROPORCION. El estrecho es el que arregla
+         * el espejo que el dueño vio en el video -de 25 a 86 dB de rechazo-.
+         * El ancho solo añade algo EN LOS BORDES de la banda, donde el
+         * estrecho se queda en 5,8 dB y el ancho llega a 24,5. Eso es una
+         * mejora fina; lo otro era la averia. Pagar nueve veces mas por el
+         * remate, dentro de una interrupcion, y que la radio pierda
+         * pulsaciones, es un cambio malo.
+         *
+         * Asi que el ancho sale del camino de siempre. El codigo se queda
+         * -esta escrito y medido, y su banco sigue pasando- para cuando haya
+         * sitio o alguien lo quiera a mano.
+         */
+        iqbal_bloque(b, s_block_samples);
     }
 
     if ((half != 0) && (s_block_hook != 0)) {

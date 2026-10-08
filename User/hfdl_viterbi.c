@@ -113,7 +113,21 @@ static inline void hfdl_viterbi_bfly(hfdl_viterbi_t *v, uint32_t i,
 
 bool hfdl_viterbi_update_block(hfdl_viterbi_t *v, const uint8_t *syms, uint32_t nbits)
 {
-    if (nbits > v->decisions_capacity - v->decisions_used) {
+    /*
+     * Revision a fondo del 08/10/2026: la guarda aceptaba
+     * nbits == capacity - used, y eso NO es lo que sujeta.
+     * hfdl_viterbi_chainback() arranca en decisions[used - nbits], le suma
+     * los 6 de "look past tail" (la linea d += 6u de mas abajo) y recorre
+     * nbits entradas, asi que llega a leer hasta decisions[used + 5]: con
+     * la guarda floja eran seis entradas -48 bytes- fuera del buffer del
+     * llamante. Hoy los dos llamantes reservan nbits+6 y por eso no se ha
+     * notado nunca, pero la guarda decia sujetar algo que no sujetaba, y
+     * el dia que alguien dimensione justo lo que la guarda permite se
+     * lleva por delante lo que haya detras sin un solo aviso. Los mismos
+     * 6 que reserva HFDL_VITERBI_DECISION_BYTES() son los que hay que
+     * exigir aqui.
+     */
+    if ((nbits + 6u) > (v->decisions_capacity - v->decisions_used)) {
         /* Would overrun the caller's buffer - refuse cleanly, touch
          * NOTHING (no partial write). See hfdl_viterbi.h's top
          * comment, M1=7/PSK8-double-slot case - this is exactly the

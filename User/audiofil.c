@@ -117,8 +117,17 @@ void audiofil_disena(float lo_hz, float hi_hz, float fs_hz, float *coef,
 
 float audiofil_respuesta_db(const float *coef, float hz, float fs_hz)
 {
-    float w = 2.0f * PI_F * hz / fs_hz;
-    float c1 = cosf(w),  s1 = sinf(w);
+    float w, c1, s1;
+    /* Revision a fondo del 08/10/2026: audiofil_disena() si mira coef y
+     * fs_hz antes de usarlos -"un camino de salida que deja medio escrito
+     * su contrato es una trampa puesta", dice su comentario- y esta, que
+     * divide por fs_hz en la primera linea, no miraba nada: con fs_hz a
+     * cero salia inf o NaN y la curva del panel se pintaba con eso. Misma
+     * guarda, y se devuelve el mismo "no se puede medir" que ya usa el
+     * denominador degenerado de abajo. */
+    if (coef == 0 || fs_hz <= 0.0f) { return -999.0f; }
+    w = 2.0f * PI_F * hz / fs_hz;
+    c1 = cosf(w);  s1 = sinf(w);
     float c2 = cosf(2.0f * w), s2 = sinf(2.0f * w);
     float mag = 1.0f;
     uint8_t k;

@@ -757,6 +757,26 @@ uint8_t demod_am_get_and_clear_rf_clip_flag(void);
 #define DEMOD_IF_OFFSET_HZ 24000UL /* Fs/4 @ 96kHz - the default/96kHz-rate value */
 #define DEMOD_IF_OFFSET_HZ_48K 12000UL /* Fs/4 @ 48kHz */
 
+/*
+ * LA TASA DEL CAMINO DECIMADO, UNA SOLA VEZ - 07/10/2026.
+ *
+ * Todo lo que escucha banda lateral -RTTY, CW, NAVTEX, PSK31, WEFAX, SSTV,
+ * Feld-Hell, FT8, el paquete de HF, el notch automatico- trabaja sobre
+ * s_ssb_dec, que sale del decimador de este fichero a 12 kHz. Ese numero
+ * estaba escrito A MANO en una docena de sitios repartidos por ocho
+ * ficheros, y el decimador lo calculaba con OTRA copia del mismo literal.
+ *
+ * Es exactamente la forma de averia que costo la tabla de zonas del
+ * oscilador: dos numeros que TIENEN que ser el mismo, escritos por
+ * separado, y nada que los compare. Alli uno decia 300 kHz y el otro 100, y
+ * la tabla se derivo para un tramo que no existia.
+ *
+ * Aqui vive el bueno. Los consumidores lo usan; el que no pueda incluir
+ * esta cabecera se ata con un _Static_assert donde se vean los dos (ver
+ * main.c y PKT_HF_FS_HZ en ax25.h).
+ */
+#define DEMOD_DEC_FS_HZ 12000.0f
+
 /* Speaker enable pin: PB7, driven high to unmute the speaker amp. */
 
 /* Configure PB7 (speaker enable, set high), initialize the CMSIS-DSP

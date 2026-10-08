@@ -1494,9 +1494,18 @@ void spectrum_draw(const float *db, uint32_t n_bins,
             if (caben < (uint32_t)nb) { nb = (uint16_t)caben; }
             if (nb == 0U) { nb = 1U; }          /* no deberia pasar nunca */
         }
-        buf[0] = banda;
-        buf[1] = banda + ((uint32_t)nb * w);
-
+        /*
+         * LA COMPROBACION VA ANTES DE LA ARITMETICA - 07/10/2026,
+         * encontrado por cppcheck.
+         *
+         * Estaba al reves: primero se calculaba `banda + nb*w` y se
+         * guardaban los dos punteros, y DESPUES se miraba si banda era
+         * nula. Sumarle un desplazamiento a un puntero nulo es
+         * comportamiento indefinido aunque no se desreferencie, y en esta
+         * placa no reventaba precisamente por eso: es aritmetica, no un
+         * acceso. Pero una guarda escrita detras de lo que guarda no esta
+         * guardando nada.
+         */
         if (banda == (uint16_t *)0) {
             /* No puede pasar -quien mas la usa la suelta antes de volver- y
              * si pasa, mejor un fotograma sin espectro que un espectro
@@ -1504,6 +1513,9 @@ void spectrum_draw(const float *db, uint32_t n_bins,
              * gfx2 lo cuenta y sale en la ventana de informacion. */
             return;
         }
+
+        buf[0] = banda;
+        buf[1] = banda + ((uint32_t)nb * w);
 
         /* Lo que la captura necesita saber de esta pasada. Ver compon(). */
         s_ult.w = w; s_ult.h = h;

@@ -188,7 +188,17 @@ static float haversine_km(float lat1, float lon1, float lat2, float lon2)
     float dlon = (lon2 - lon1) * deg2rad;
     float a = sinf(dlat * 0.5f) * sinf(dlat * 0.5f)
             + cosf(lat1 * deg2rad) * cosf(lat2 * deg2rad) * sinf(dlon * 0.5f) * sinf(dlon * 0.5f);
-    float c = 2.0f * atan2f(sqrtf(a), sqrtf(1.0f - a));
+    /* Revision a fondo del 08/10/2026: `a` sale de sumar dos productos de
+     * senos y cosenos y en teoria vive en [0,1], pero en float el
+     * redondeo lo saca por los dos bordes justo en los dos casos que mas
+     * se dan: el QTH propio -distancia cero, a ligeramente negativo- y su
+     * antipoda -a ligeramente por encima de 1-. sqrtf(1.0f - a) daba
+     * entonces NaN, la distancia salia NaN y la columna de kilometros
+     * imprimia 0000 con el locator bien leido. Se recorta y ya. */
+    float c;
+    if (a < 0.0f) { a = 0.0f; }
+    if (a > 1.0f) { a = 1.0f; }
+    c = 2.0f * atan2f(sqrtf(a), sqrtf(1.0f - a));
     return earth_radius_km * c;
 }
 
@@ -685,8 +695,9 @@ uint8_t ft8_decoder_slot_paso(void)
         /*
          * DT: EL DESFASE TEMPORAL DE ESTA SEÑAL, en segundos - 25/09/2026.
          *
-         * *** Pedido por el dueno del proyecto viendo otra radio: "en ft8 el
-         * kleos tiene un campo mas que es dl". Es la columna DT de WSJT-X. ***
+         * *** Pedido por el dueno del proyecto viendo otra radio: la de
+         * referencia "tiene un campo mas que es dl". Es la columna DT de
+         * WSJT-X. ***
          *
          * Y aqui no es adorno ni copiar al vecino: es el UNICO numero que
          * mide si la ranura esta cuadrada. El dueno del proyecto habia

@@ -140,17 +140,30 @@ static uint16_t s_cuenta;           /* muestras dentro del simbolo, 0..95 */
 static uint8_t  s_bits[ALE_ANILLO];
 static uint16_t s_pos;          /* donde entra el siguiente bit */
 
+/*
+ * REVISION A FONDO DEL 08/10/2026: LO QUE CRUZA CON LA INTERRUPCION DE
+ * AUDIO, VOLATILE.
+ *
+ * ale_rx_mete() corre en la interrupcion y es quien escribe la palabra
+ * recien sacada (s_pal, s_pal_cal, s_pal_hay), el estado del enganche
+ * (s_eng) y los contadores de s_info; el bucle principal los lee desde
+ * ale_rx_saca() -que ademas baja s_pal_hay- y desde ale_rx_info(). Sin
+ * volatile el compilador puede cachear s_pal_hay y la palabra se pierde,
+ * o puede adelantar la lectura de s_pal a la comprobacion de s_pal_hay y
+ * sacar la palabra ANTERIOR. Y el sintoma -"se salta palabras"- se busca
+ * en el demodulador, que es donde no esta.
+ */
 /* Sincronismo de palabra. */
-static uint8_t  s_eng;          /* 1 = enganchado */
+static volatile uint8_t  s_eng; /* 1 = enganchado */
 static uint16_t s_pos_pal;      /* la posicion del anillo donde empieza */
 static uint16_t s_hasta;        /* simbolos que faltan para la siguiente */
 
 /* Salida: una palabra pendiente basta - salen a 2,5 por segundo. */
-static uint32_t s_pal;
-static uint8_t  s_pal_cal;
-static uint8_t  s_pal_hay;
+static volatile uint32_t s_pal;
+static volatile uint8_t  s_pal_cal;
+static volatile uint8_t  s_pal_hay;
 
-static ale_rx_info_t s_info;
+static volatile ale_rx_info_t s_info;
 static float    s_nivel;
 
 /* ==========================================================================
@@ -165,7 +178,10 @@ void ale_rx_start(float fs_hz)
     memset(s_bits, 0, sizeof s_bits);
     memset(s_fase_e, 0, sizeof s_fase_e);
     memset(s_sim_f, 0, sizeof s_sim_f);
-    memset(&s_info, 0, sizeof s_info);
+    /* El cast quita el volatile para memset: ver el comentario de la
+     * declaracion. Aqui no hay interrupcion de por medio -esto corre al
+     * arrancar el modo, antes de que entre audio-. */
+    memset((void *)&s_info, 0, sizeof s_info);
     s_hi = 0U; s_lleno = 0U; s_cuenta = 0U; s_fase = 0U;
     s_pos = 0U; s_eng = 0U; s_pos_pal = 0U; s_hasta = 0U;
     s_pal_hay = 0U; s_nivel = 0.0f;

@@ -29,6 +29,7 @@ static volatile uint8_t s_pending;         /* 1 = s_accum has a full window read
 
 static float s_mag[RTTY_SCOPE_BINS];       /* main-loop-owned output, written by rtty_scope_poll() */
 static uint8_t s_frame_ready;
+static uint32_t s_frame_n;     /* cuadros promediados desde el arranque */
 
 /* --- multi-window averaging accumulator, see RTTY_SCOPE_AVG_FRAMES's
  * comment in rtty_scope.h --- */
@@ -196,6 +197,7 @@ void rtty_scope_poll(void)
         }
         s_avg_count = 0U;
         s_frame_ready = 1U;
+        s_frame_n++;
     }
     /* else: not enough raw windows yet - s_frame_ready stays as it
      * was (0, unless a previous ready frame is still waiting to be
@@ -213,6 +215,39 @@ const float *rtty_scope_get_frame(void)
 {
     s_frame_ready = 0U;
     return s_mag;
+}
+
+/*
+ * MIRAR EL CUADRO SIN QUITARSELO A NADIE - 06/10/2026.
+ *
+ * *** El dueño: "el modo auto del rtty no saca nada". ***
+ *
+ * rtty_scope_get_frame() CONSUME: baja la bandera de "hay cuadro nuevo".
+ * Eso esta bien cuando el que mira es uno solo -el dibujo del
+ * osciloscopio- y mal en cuanto hay dos. Y hay dos desde que el ajuste
+ * automatico promedia el espectro para encontrar la PAREJA de tonos.
+ *
+ * Lo que pasaba: el dibujo corre antes en la vuelta, coge el cuadro y baja
+ * la bandera; despues rtty_auto llamaba otra vez y se llevaba EL MISMO
+ * cuadro, vuelta tras vuelta. Su media exponencial de ocho cuadros estaba
+ * promediando ocho copias de uno, o sea que no promediaba nada - y el
+ * sentido de esa media es justo que en 43 ms solo suena UNO de los dos
+ * tonos y hacen falta varios cuadros para que suenen los dos. Encontraba
+ * un tono, no una pareja, y sin pareja no hay desplazamiento que medir.
+ * Es el mismo fallo que el modulo documenta en su propia cabecera, pero
+ * por el otro lado.
+ *
+ * Asi que quien solo quiere MIRAR usa esto, y cuenta los cuadros el mismo
+ * con rtty_scope_frame_n() para no promediar dos veces el mismo.
+ */
+const float *rtty_scope_frame_peek(void)
+{
+    return s_mag;
+}
+
+uint32_t rtty_scope_frame_n(void)
+{
+    return s_frame_n;
 }
 
 float rtty_scope_hz_per_bin(void)

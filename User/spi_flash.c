@@ -1,5 +1,6 @@
 #include "spi_flash.h"
 #include "idioma.h"
+#include "zona_alta.h"
 #include "gd32f4xx.h"
 #include "debug_uart.h"
 
@@ -134,11 +135,41 @@ static inline void f_cs(uint8_t level)
  * debajo de los 50 MHz que admite el W25Q16 leyendo con el comando 0x03.
  * Un sector pasa de 8,2 ms a 0,34.
  */
+/*
+ * CON TOPE, Y AQUI IMPORTA MAS QUE EN NINGUN SITIO - 08/10/2026.
+ *
+ * Las dos esperas de abajo no tenian salida. Este camino lo recorre el
+ * CARGADOR en TODOS los arranques -busca update.bin en la flash SPI-, asi
+ * que si SPI0 no contesta -no quedo habilitado, un chip que no responde, un
+ * cable- la radio no se reinicia ni avisa: se queda con la pantalla negra
+ * para siempre, antes de pintar nada. Es el peor sitio posible para un
+ * bucle sin salida, porque no deja ni rastro.
+ *
+ * Con tope, un byte perdido se convierte en un 0xFF, la cabecera de
+ * update.bin no cuadra, y el cargador sigue su camino y ARRANCA LA
+ * APLICACION, que es infinitamente mejor que no arrancar.
+ *
+ * Mismo numero y mismo razonamiento que BATTERY_EOC_VUELTAS.
+ */
+#define SPI_FLAG_VUELTAS  100000UL
+
 static uint8_t spi_xfer_byte(uint8_t out)
 {
-    while (RESET == spi_i2s_flag_get(SPI0, SPI_FLAG_TBE)) { }
+    uint32_t guard = SPI_FLAG_VUELTAS;
+
+    while ((RESET == spi_i2s_flag_get(SPI0, SPI_FLAG_TBE)) && (guard != 0U)) {
+        guard--;
+    }
+    if (guard == 0U) { return 0xFFU; }
+
     spi_i2s_data_transmit(SPI0, (uint16_t)out);
-    while (RESET == spi_i2s_flag_get(SPI0, SPI_FLAG_RBNE)) { }
+
+    guard = SPI_FLAG_VUELTAS;
+    while ((RESET == spi_i2s_flag_get(SPI0, SPI_FLAG_RBNE)) && (guard != 0U)) {
+        guard--;
+    }
+    if (guard == 0U) { return 0xFFU; }
+
     return (uint8_t)spi_i2s_data_receive(SPI0);
 }
 #else
@@ -1067,7 +1098,8 @@ enum {
     GEO_COPIAS,       /* no son dos copias de la FAT */
     GEO_FAT_GRANDE,   /* mas clusters de los que cabe una FAT12 */
     GEO_FAT_CORTA,    /* la FAT declarada no da para los clusters que hay */
-    GEO_DESALINEADO   /* ningun cluster cae en frontera de bloque de borrado */
+    GEO_DESALINEADO,  /* ningun cluster cae en frontera de bloque de borrado */
+    GEO_MAS_GRANDE    /* el BPB declara mas sectores de los que tiene el disco */
 };
 
 /* Las constantes de antes, ahora mirando a lo que se leyo. Se mantienen los
@@ -1178,7 +1210,29 @@ uint8_t spi_flash_spc(void)
 {
     const fat_geo_t *g = geo();
 
-    if (g == (const fat_geo_t *)0 || !g->vale) { return 0U; }
+    /*
+     * `lee` Y NO `vale` - 08/10/2026, de la revision a fondo de ese dia.
+     *
+     * Esto se vio arreglando lo de que el BPB puede declarar mas sectores
+     * de los que tiene el disco (ver GEO_MAS_GRANDE en geo_lee()): esa
+     * comprobacion va del lado de ESCRIBIR, o sea que deja vale=0 y lee=1
+     * ... y aun asi el cargador se quedaba sin poder leer el volumen.
+     *
+     * El motivo es este `vale`. Es un resto del dia que se partio geo_lee()
+     * en dos preguntas (06/10/2026, ver su comentario gordo): se cambio
+     * spi_flash_geometria_lectura() para mirar `lee` y esta se quedo
+     * mirando `vale`. Y como User/cargador.c llama a las DOS y se queda con
+     * la peor -"if (s_spc == 0U) { s_geo_ok = 0U; }"-, la mas estricta
+     * manda: el cargador seguia exigiendo que el volumen fuera ESCRIBIBLE
+     * para leerlo. O sea la misma pescadilla que se creia muerta, viva en
+     * una funcion de tres lineas.
+     *
+     * Y el que la use es justo el que SOLO LEE: esta funcion existe para
+     * cargador.c, que recorre la cadena de clusters por su cuenta y
+     * necesita saber cuantos sectores tiene cada uno. Para eso basta con
+     * que el volumen se pueda leer, que es lo que dice `lee`.
+     */
+    if (g == (const fat_geo_t *)0 || !g->lee) { return 0U; }
     return g->spc;
 }
 
@@ -1438,6 +1492,57 @@ static uint8_t geo_lee(void)
      */
     s_geo.lee = 1U;
 
+    /*
+     * Y QUE EL VOLUMEN QUEPA DE VERDAD EN EL DISCO - 08/10/2026, de la
+     * revision a fondo de ese dia.
+     *
+     * Lo que estaba mal: de `s_geo.sectores` solo se comprobaba que no
+     * pasara de 1<<24, que son 8 GB. Eso no acota NADA aqui: es el techo
+     * de lo que cabe en el campo del BPB, no el tamaño del disco que este
+     * driver gobierna. Y `sectores` lo escribe el PC: puede venir de haber
+     * formateado el volumen en un chip mas grande, de un apagon mientras
+     * se formateaba, o directamente de ruido en el sector 0.
+     *
+     * Con `sectores` de mas, TODO lo que sale de el crece con el:
+     * clusters = (sectores - datos_lba) / spc, y de los clusters salen
+     * las direcciones de SECTOR_DE_CLUSTER(). O sea direcciones POR
+     * ENCIMA del final del disco USB, que es exactamente donde vive la
+     * zona alta - las bases de datos de aviones y emisoras-. Y los
+     * caminos de escritura de este fichero no leen esas direcciones: les
+     * BORRAN el bloque de 4 kB y lo regraban. Un BPB con el numero
+     * inflado se lleva por delante BD.BIN sin que nada se queje.
+     *
+     * POR QUE ESTA DEL LADO DE ESCRIBIR Y NO DEL DE LEER, que es lo
+     * primero que hice y estaba mal: mirese la regla que parte esta
+     * funcion en dos (el comentario gordo de arriba, del 06/10/2026). "El
+     * volumen dice medir mas que el chip" NO es una condicion del formato
+     * -una FAT12 asi es perfectamente legal, solo que describe otro
+     * disco-: es una condicion de ESTE driver y de ESTE chip, igual que
+     * las dos copias de la FAT o el bloque de borrado de 4 kB. Y del lado
+     * de leer hace daño: el cargador, que SOLO LEE, se quedaria otra vez
+     * sin poder sacar un update.bin de un disco al que no le pasa nada
+     * -la pescadilla que se arreglo ese dia-, y leer de mas en una flash
+     * SPI NOR no destruye nada: las direcciones dan la vuelta y se lee
+     * basura, que es lo que las sumas de comprobacion de la zona alta
+     * pillan.
+     *
+     * El tope es el mismo numero que el disco USB anuncia por USB: lo que
+     * mide el chip menos el ultimo mega que se reserva la zona alta. Se
+     * calcula aqui en vez de llamar a disco_bloques() de disco.c -que es
+     * esta misma cuenta- a proposito: disco.c no se enlaza en los bancos
+     * de host que prueban ESTE fichero (sim/fatanade.c,
+     * sim/fat_troceado.c), y la cuenta es una division. Ver
+     * ZA_BYTES_REGION en zona_alta.h, que es de donde sale el mega.
+     *
+     * Un volumen que declare EXACTAMENTE lo que mide el disco pasa, que
+     * es lo que hace un formateo normal - y como estan dimensionados los
+     * .img de los bancos.
+     */
+    if (s_geo.sectores >
+        ((spi_flash_capacidad() - ZA_BYTES_REGION) / SECTOR_BYTES)) {
+        s_geo.porque = GEO_MAS_GRANDE;      return 0U;
+    }
+
     /* Y a partir de aqui, lo de escribir. Dos copias de la FAT: al
      * escribir hay que actualizar las dos, y un volumen con una sola -o
      * con tres- no es algo que este driver sepa mantener coherente. Para
@@ -1532,6 +1637,7 @@ const char *spi_flash_geo_txt(void)
     case GEO_FAT_GRANDE:  return tr("FAT demasiado grande", "FAT too large");
     case GEO_FAT_CORTA:   return tr("la FAT se queda corta", "FAT too short");
     case GEO_DESALINEADO: return tr("datos sin alinear", "data not aligned");
+    case GEO_MAS_GRANDE:  return tr("volumen mas grande que el disco", "volume larger than the disk");
     default:              return tr("sin mirar", "not checked");
     }
 }
@@ -1641,8 +1747,35 @@ static void probe_fat_scan_interno(spi_flash_fat_scan_t *out)
      * CLUSTER_ALI, y a partir de el uno de cada CLUSTERS_PER_BLOCK, igual
      * que siempre. Ver el comentario de CLUSTER_ALI.
      */
+    /*
+     * Y LA RESTA NO PUEDE DAR LA VUELTA - 08/10/2026, de la revision a
+     * fondo de ese dia.
+     *
+     * (DATA_CLUSTER_COUNT + 2 - CLUSTER_ALI) es una resta de uint32_t, y
+     * no hay nada que garantice que el minuendo sea el mayor: CLUSTER_ALI
+     * vale entre 2 y 2 + CLUSTERS_PER_BLOCK - 1 -o sea hasta 9 con
+     * clusters de 512-, y DATA_CLUSTER_COUNT solo tiene que ser distinto
+     * de cero para que geo_lee() acepte el volumen. Un volumen diminuto
+     * -pocos clusters y el area de datos desalineada, que es la que empuja
+     * CLUSTER_ALI hacia arriba- hace que 2 + clusters sea MENOR que
+     * CLUSTER_ALI.
+     *
+     * Y entonces la resta no da un numero negativo: da 4.294.967.2xx. El
+     * bucle se pone a dar 536 millones de vueltas indexando fat12_entry()
+     * sobre s_fat[], que mide 6.144 bytes, o sea leyendo .bss entero y
+     * mas alla. De ahi sale un "bloque libre" en cualquier parte, y a ese
+     * bloque se le escribe.
+     *
+     * No se arregla con un tope dentro del bucle: lo que esta mal es la
+     * resta, asi que se comprueba ANTES de hacerla. Si 2 + clusters no
+     * pasa de CLUSTER_ALI es que no hay ni un grupo alineado entero, o
+     * sea cero bloques, y el bucle no debe dar ninguna vuelta -que es lo
+     * que dice la condicion-. found_free_block se queda a 0 y abajo ya se
+     * cuenta ese caso.
+     */
     for (block_idx = 0U;
-         block_idx < ((DATA_CLUSTER_COUNT + 2U - CLUSTER_ALI) / CLUSTERS_PER_BLOCK);
+         ((DATA_CLUSTER_COUNT + 2U) > CLUSTER_ALI) &&
+         (block_idx < ((DATA_CLUSTER_COUNT + 2U - CLUSTER_ALI) / CLUSTERS_PER_BLOCK));
          block_idx++) {
         uint32_t first_cluster = CLUSTER_ALI + (block_idx * CLUSTERS_PER_BLOCK);
         uint8_t all_free = 1U;
@@ -2122,7 +2255,47 @@ int spi_flash_write_or_update_file(const char name8[8], const char ext3[3],
             uint32_t ultimo = 0U, cuantos = 0U, saltos = 0U;
             uint8_t  buena = cadena_ultimo((uint32_t)old_cluster, &ultimo, &cuantos, &saltos);
 
-            if (!buena || (cuantos != old_num_clusters)) {
+            /*
+             * Y SEGUIDA, NO SOLO DE LA LONGITUD BUENA - 08/10/2026, de la
+             * revision a fondo de ese dia.
+             *
+             * Lo que faltaba: aqui se contaban los eslabones y se daba por
+             * bueno el camino rapido si salian los de la entrada. Pero el
+             * camino rapido de abajo NO sigue la cadena al escribir: coge
+             * la direccion del PRIMER cluster y escribe `len` bytes
+             * SEGUIDOS a partir de ahi. Eso solo vale si los clusters del
+             * fichero son contiguos, y de eso no se comprobaba nada.
+             *
+             * Con el fichero fragmentado -que es lo normal en un volumen
+             * con historia: un PC reutiliza los huecos que dejaron otros-
+             * la cuenta de eslabones cuadra perfectamente y los bytes se
+             * escriben encima de los clusters que hay fisicamente detras
+             * del primero, QUE SON DE OTRO FICHERO. Corrupcion de un
+             * fichero ajeno cada vez que se guardan los ajustes, y sin un
+             * solo mensaje de error: desde aqui el guardado "ha ido bien".
+             *
+             * cadena_ultimo() ya devolvia `saltos` y `ultimo` y nadie los
+             * miraba. Los dos juntos dicen exactamente "contigua":
+             *
+             *   saltos == 0                 ningun eslabon va hacia atras,
+             *                               o sea todos hacia delante;
+             *   ultimo == primero + n - 1   y como cada paso hacia delante
+             *                               suma al menos 1, la igualdad
+             *                               solo se da si TODOS suman
+             *                               exactamente 1.
+             *
+             * Hacen falta las dos: `saltos` solo cuenta los saltos hacia
+             * atras (ver cadena_ultimo_interno(), y es lo que promete
+             * spi_flash.h), asi que por si sola dejaria pasar una cadena
+             * como 5 -> 9 -> 10, que va toda hacia delante y no es
+             * seguida.
+             *
+             * Si no es seguida, el camino rapido no vale y se cae al lento
+             * de abajo, que si reconstruye la cadena. Que es lo que ya
+             * pasaba con la cadena rota, y por el mismo motivo.
+             */
+            if (!buena || (cuantos != old_num_clusters) || (saltos != 0U) ||
+                (ultimo != ((uint32_t)old_cluster + cuantos - 1U))) {
                 debug_print("spi_flash_write_or_update_file: la cadena de la entrada no cuadra - se reconstruye en vez de usar el camino rapido\n");
                 /* Y NO se libera la vieja: si la cadena no se entiende, no
                  * se sabe que clusters son suyos, y liberar a ciegas es
@@ -2305,7 +2478,36 @@ static uint32_t read_file_by_name_interno(const char name8[8], const char ext3[3
             uint32_t written = 0U;
 
             spi_flash_read(FAT1_LBA * ROOT_DIR_SECTOR_BYTES, fat, FAT_UTIL);
-            while ((cluster >= 2U) && (cluster < 0xFF8U) && (remaining > 0U)) {
+            /*
+             * 0xFF8 NO ES EL TOPE DEL VOLUMEN - 08/10/2026, de la revision
+             * a fondo de ese dia.
+             *
+             * 0xFF8 es el valor a partir del cual una entrada de FAT12
+             * significa "fin de cadena" -lo dice el FORMATO-. Lo que NO
+             * dice es que el numero sea un cluster que exista: un volumen
+             * de 200 clusters tiene clusters del 2 al 201, y los 3.886
+             * numeros que quedan por debajo de 0xFF8 no son ninguno.
+             *
+             * Con la FAT sana da igual, porque las cadenas solo llevan a
+             * clusters de verdad. Pero la FAT la escribe el PC, y una FAT
+             * a medias -apagon mientras Windows la actualiza- o un volumen
+             * que ya no es el que se formateo llevan a cualquier numero. Y
+             * entonces SECTOR_DE_CLUSTER() da una direccion por encima del
+             * final del disco, o sea LA ZONA ALTA, que es donde viven las
+             * bases de datos. Aqui solo se leeria basura; en
+             * vol_lee_fichero() -mismo fallo, mismo dia- esa basura se
+             * COPIA.
+             *
+             * El arreglo es acotar tambien por arriba, con la misma cota
+             * que ya usan cadena_ultimo_interno() y fichero_busca_interno()
+             * para el PRIMER cluster: 2 + DATA_CLUSTER_COUNT. Una cadena
+             * que se sale se corta ahi, y lo que se haya leido hasta
+             * entonces es lo que se devuelve - que es lo que ya pasaba con
+             * una cadena que acababa antes de tiempo.
+             */
+            while ((cluster >= 2U) && (cluster < 0xFF8U)
+                   && ((uint32_t)cluster < (2U + DATA_CLUSTER_COUNT))
+                   && (remaining > 0U)) {
                 uint32_t data_sector = SECTOR_DE_CLUSTER(cluster);
                 uint32_t chunk = (remaining < CLUSTER_BYTES) ? remaining : CLUSTER_BYTES;
 
@@ -2464,6 +2666,44 @@ uint8_t spi_flash_async_save_start(const char name8[8], const char ext3[3],
     }
 
     /*
+     * LA CADENA, QUE AQUI NO SE MIRABA EN ABSOLUTO - 08/10/2026, de la
+     * revision a fondo de ese dia.
+     *
+     * Este camino escribe `len` bytes SEGUIDOS a partir de la direccion
+     * del primer cluster (ver el bloque de abajo: lee el bloque de 4 kB,
+     * empalma los datos y lo regraba). O sea que da por hecho dos cosas:
+     * que la cadena del fichero sigue siendo la de la vez anterior y que
+     * sus clusters son CONTIGUOS. De la primera se enteraba por las malas
+     * -lo mismo que le paso al camino bloqueante el 25/09/2026: guardado
+     * "correcto" y cero claves al arrancar, porque la lectura si sigue la
+     * cadena-; de la segunda, ni eso: con el fichero fragmentado los
+     * bytes van encima de los clusters que hay fisicamente detras del
+     * primero, que son DE OTRO FICHERO.
+     *
+     * Y aqui no habia ni una llamada a cadena_ultimo(), mientras que
+     * spi_flash_write_or_update_file() -que hace lo MISMO, solo que
+     * bloqueando- si la tenia desde el 25/09/2026. Se pone la misma
+     * comprobacion, con las dos condiciones de contiguidad explicadas
+     * alli: saltos == 0 y ultimo == primero + n - 1.
+     *
+     * Decir que no es barato: devolver 0 manda a quien llama al camino
+     * bloqueante (ver settings_poll()), que sabe reconstruir la cadena.
+     * Lo unico que se pierde es el guardado suave de esa vez. Cuesta leer
+     * la FAT, que al lado de los dos borrados de 4 kB que viene detras no
+     * es nada.
+     */
+    {
+        uint32_t ultimo = 0U, cuantos = 0U, saltos = 0U;
+
+        if (!cadena_ultimo((uint32_t)old_cluster, &ultimo, &cuantos, &saltos) ||
+            (cuantos != old_num_clusters) || (saltos != 0U) ||
+            (ultimo != ((uint32_t)old_cluster + cuantos - 1U))) {
+            debug_print("spi_flash_async_save_start: la cadena de la entrada no cuadra o no es seguida - que lo haga el camino bloqueante\n");
+            return 0U;
+        }
+    }
+
+    /*
      * EL CAMINO ASINCRONO, CON LAS DOS MISMAS CORRECCIONES - 30/09/2026.
      * Ver el comentario de escribe_datos_fichero(): aqui habia exactamente
      * la misma linea, y por tanto los mismos dos fallos.
@@ -2524,10 +2764,62 @@ spi_flash_async_status_t spi_flash_async_save_poll(void)
          * write_file_data_and_entry() sets), and kick off the entry
          * block's async write. */
         {
-            uint32_t dir_block_addr = (ROOT_DIR_LBA * ROOT_DIR_SECTOR_BYTES) & ~(uint32_t)(FLASH_SECTOR_SIZE - 1U);
-            uint32_t off_in_block = (ROOT_DIR_LBA * ROOT_DIR_SECTOR_BYTES) - dir_block_addr + s_async_dir_off;
-            uint8_t *e = &s_async_scratch[off_in_block];
+            /*
+             * EL BLOQUE DE LA ENTRADA, NO EL PRIMERO DEL RAIZ - 08/10/2026,
+             * de la revision a fondo de ese dia.
+             *
+             * Aqui habia DOS fallos en las mismas dos lineas, y los dos
+             * salen de la misma frase dada por hecha: "la entrada esta en
+             * el primer bloque de 4 kB del directorio raiz".
+             *
+             *   1) `dir_block_addr` se calculaba como RAIZ_ABS redondeado
+             *      hacia abajo, o sea SIEMPRE el primer bloque del raiz.
+             *      Pero el raiz mide hasta 32 sectores -16 kB, ocho
+             *      bloques de borrado- desde que se arreglo lo de recorrer
+             *      la raiz entera (05/10/2026, ver ROOT_DIR_SECTORS), asi
+             *      que la entrada de CONFIG.CSV puede vivir en cualquiera
+             *      de esos ocho. Con la entrada en el segundo bloque esto
+             *      borraba y regrababa el PRIMERO: la entrada que se
+             *      queria actualizar se quedaba como estaba y, de paso, se
+             *      regrababa un bloque con el contenido de otro sitio.
+             *
+             *   2) `off_in_block` salia de s_async_dir_off, que es el
+             *      desplazamiento desde el principio del directorio raiz
+             *      ENTERO -hasta 16.384-, y luego se indexaba
+             *      s_async_scratch[], que mide 4.096. O sea 32 bytes
+             *      escritos FUERA del array, en .bss, justo encima de
+             *      s_async_block_op, s_async_dir_off, s_async_cluster y
+             *      compania: la propia maquina de estados que esta
+             *      corriendo. Corrupcion silenciosa de variables, con la
+             *      direccion de borrado entre ellas.
+             *
+             * El arreglo es dejar de suponer donde esta la entrada y
+             * calcularlo de su posicion REAL: RAIZ_ABS + s_async_dir_off,
+             * redondeado hacia abajo a frontera de 4 kB para el bloque, y
+             * lo que sobra para el desplazamiento dentro de el. Asi las
+             * dos cuentas describen el mismo sitio y el indice no puede
+             * pasar de 4.095 por construccion.
+             *
+             * Y aun asi se comprueba que la entrada de 32 bytes cabe
+             * entera en el bloque, porque el precio de equivocarse es
+             * escribir en .bss: si no cuadrara -no puede, con la
+             * geometria que geo_lee() admite, pero el if es gratis- se
+             * abandona el camino asincrono y se devuelve ERROR, que es
+             * como se le dice a quien llama que este guardado hay que
+             * hacerlo por el camino bloqueante.
+             */
+            uint32_t entrada_abs = RAIZ_ABS + s_async_dir_off;
+            uint32_t dir_block_addr = entrada_abs & ~(uint32_t)(FLASH_SECTOR_SIZE - 1U);
+            uint32_t off_in_block = entrada_abs - dir_block_addr;
+            uint8_t *e;
             uint32_t i;
+
+            if ((off_in_block + 32U) > (uint32_t)FLASH_SECTOR_SIZE) {
+                debug_print("spi_flash_async_save: la entrada de directorio no cabe en su bloque - se abandona el camino asincrono, hay que guardar por el bloqueante\n");
+                s_async_phase = (uint8_t)ASAVE_IDLE;
+                return SPI_FLASH_ASYNC_ERROR;
+            }
+            e = &s_async_scratch[off_in_block];
 
             spi_flash_read(dir_block_addr, s_async_scratch, FLASH_SECTOR_SIZE);
             for (i = 0U; i < 8U; i++) { e[i] = (uint8_t)s_async_name8[i]; }
@@ -2838,7 +3130,8 @@ void spi_flash_mira_alta(spi_flash_alta_t *out)
  * saber cual de los cuatro era sin adivinar.
  *
  * Es el mismo fallo que se corrigio en el almacen de imagenes dos etapas
- * antes -ver imgs_veredicto()- y aqui estaba repetido. Un "no" que no
+ * antes -lo decia el almacen de imagenes, que ya no esta- y aqui estaba
+ * repetido. Un "no" que no
  * dice de que es un "no" cuesta mas caro que el problema que tapa.
  */
 static uint8_t s_vol_porque = SPI_VOL_NADA;
@@ -2983,6 +3276,7 @@ static uint8_t fichero_busca_interno(const char name8[8], const char ext3[3],
 {
     uint8_t sector[ROOT_DIR_SECTOR_BYTES];
     uint32_t i, sec;
+    uint32_t nsec = ROOT_DIR_SECTORS;
 
     s_vol_porque = SPI_VOL_NO_ESTA;
 
@@ -2992,8 +3286,31 @@ static uint8_t fichero_busca_interno(const char name8[8], const char ext3[3],
      * CONFIG.CSV, que lo crea esta misma radio en las primeras
      * posiciones; un fichero copiado desde Windows puede caer mas
      * adelante, sobre todo si ademas lleva entrada de nombre largo.
+     *
+     * LOS SECTORES QUE TIENE, NO TREINTA Y DOS - 08/10/2026, de la
+     * revision a fondo de ese dia.
+     *
+     * Aqui habia un 32 escrito a mano. Treinta y dos es lo que pone
+     * Windows con 512 entradas, pero el sector de arranque dice cuantas
+     * hay y con 224 son CATORCE sectores: a partir del catorce ya no se
+     * esta leyendo el directorio, se esta leyendo LA ZONA DE DATOS como si
+     * fueran entradas de 32 bytes. Y entonces basta con que los bytes de
+     * un fichero cualquiera se parezcan a una entrada para que esto
+     * conteste "si, esta ahi" senalando datos de otro.
+     *
+     * Lo caro no es leer de mas: es lo que se hace con el resultado.
+     * fichero_borra_interno() escribe 0xE5 en la "entrada" que se
+     * encuentre -o sea encima de los DATOS de otro fichero- y libera los
+     * clusters que lea de sus bytes 26 y 27, que son clusters de otro.
+     * Con eso, borrar un fichero que no existe se lleva por delante uno
+     * que si.
+     *
+     * El resto del fichero ya usa ROOT_DIR_SECTORS, que sale de las
+     * entradas que declara el sector de arranque (ver su comentario, del
+     * 05/10/2026, que es cuando se arreglo lo contrario: mirar UN sector
+     * y creer que ahi se acaba la raiz). Aqui faltaba.
      */
-    for (sec = 0U; sec < 32U; sec++) {
+    for (sec = 0U; sec < nsec; sec++) {
         spi_flash_read((ROOT_DIR_LBA + sec) * ROOT_DIR_SECTOR_BYTES,
                        sector, sizeof(sector));
 
@@ -3037,7 +3354,23 @@ static uint8_t fichero_busca_interno(const char name8[8], const char ext3[3],
                  */
                 spi_flash_read(FAT1_LBA * ROOT_DIR_SECTOR_BYTES, fat, FAT_UTIL);
                 c = c0; esperado = c0;
-                while ((c >= 2U) && (c < 0xFF8U)) {
+                /* Y la cota de arriba, que faltaba - 08/10/2026, de la
+                 * revision a fondo de ese dia. Del PRIMER cluster si se
+                 * comprobaba que estuviera en el volumen (la linea de
+                 * `c0 >= (2U + DATA_CLUSTER_COUNT)` de arriba); de los
+                 * siguientes, no: solo se miraba 0xFF8, que es el fin de
+                 * cadena del FORMATO y no el ultimo cluster que EXISTE.
+                 * Con una FAT corrupta la cadena se iba a numeros que no
+                 * son clusters del volumen y se contaban como si lo
+                 * fueran, de donde salia un "si, cabe y esta entero" sobre
+                 * direcciones de fuera del disco - la zona alta, donde
+                 * estan las bases de datos. Cortando ahi, el reparo de
+                 * abajo (`n * CLUSTER_BYTES < size`) ve que la cadena no
+                 * da para el tamaño y contesta SPI_VOL_CORTO, que es la
+                 * verdad. Ver el comentario entero en
+                 * read_file_by_name_interno(). */
+                while ((c >= 2U) && (c < 0xFF8U)
+                       && ((uint32_t)c < (2U + DATA_CLUSTER_COUNT))) {
                     if (!troceado_ok && (c != esperado)) {
                         s_vol_porque = SPI_VOL_TROCEADO;
                         return 0U;
@@ -3390,12 +3723,25 @@ static void vol_lee_fichero(uint32_t off, uint8_t *dst, uint32_t n)
     while (n > 0UL) {
         uint32_t dentro, m;
 
+        /* La cota de arriba, que faltaba, y AQUI es la que mas duele -
+         * 08/10/2026, de la revision a fondo de ese dia. Se miraba 0xFF8,
+         * que es el fin de cadena del FORMATO, y no que el numero fuera un
+         * cluster que EXISTE en el volumen. Esta funcion es la que alimenta
+         * la copia de un fichero del disco A LA ZONA ALTA, asi que con una
+         * FAT corrupta no se leia basura y se tiraba: se leian sectores de
+         * fuera del volumen -o sea de la propia zona alta- y se COPIABAN
+         * encima de las bases de datos. Con la cota, una cadena que se sale
+         * se trata igual que una que se acaba antes de tiempo: ceros, que
+         * es lo que dice el comentario de abajo que se queria hacer. Ver el
+         * comentario entero en read_file_by_name_interno(). */
         while ((off >= s_vol_cl_off + CLUSTER_BYTES)
-               && (s_vol_cl >= 2U) && (s_vol_cl < 0xFF8U)) {
+               && (s_vol_cl >= 2U) && (s_vol_cl < 0xFF8U)
+               && ((uint32_t)s_vol_cl < (2U + DATA_CLUSTER_COUNT))) {
             s_vol_cl = fat12_del_chip(s_vol_cl);
             s_vol_cl_off += CLUSTER_BYTES;
         }
-        if ((s_vol_cl < 2U) || (s_vol_cl >= 0xFF8U)) {
+        if ((s_vol_cl < 2U) || (s_vol_cl >= 0xFF8U)
+            || ((uint32_t)s_vol_cl >= (2U + DATA_CLUSTER_COUNT))) {
             /* Se acabo la cadena antes que el fichero. No deberia pasar
              * -fichero_busca_interno() comprueba que da- pero leer
              * cualquier cosa seria peor que dejar ceros. */
@@ -3926,7 +4272,18 @@ static void sitio_mira(const uint8_t *fatbuf, uint32_t pide,
     uint32_t seguidos = 0U, n_total = 0U, n_mayor = 0U, ini = 0U;
     uint8_t  ok = 0U;
 
-    for (b = 0U; b < ((DATA_CLUSTER_COUNT + 2U - CLUSTER_ALI) / CLUSTERS_PER_BLOCK); b++) {
+    /*
+     * La misma resta que podia dar la vuelta que en probe_fat_scan_interno
+     * -ver alli el comentario entero- 08/10/2026, de la revision a fondo
+     * de ese dia. Con 2 + clusters por debajo de CLUSTER_ALI la resta de
+     * uint32_t se envuelve y este bucle recorre 536 millones de "bloques"
+     * leyendo s_fat[] -6.144 bytes- muy fuera de rango; y lo que sale de
+     * aqui es DONDE SE ESCRIBE, porque `primero` lo usa quien reserva. Si
+     * no hay ni un grupo alineado entero, no hay bloques y no se da ni una
+     * vuelta.
+     */
+    for (b = 0U; ((DATA_CLUSTER_COUNT + 2U) > CLUSTER_ALI) &&
+                 (b < ((DATA_CLUSTER_COUNT + 2U - CLUSTER_ALI) / CLUSTERS_PER_BLOCK)); b++) {
         uint32_t c0 = CLUSTER_ALI + (b * CLUSTERS_PER_BLOCK);
         uint8_t  libre = 1U;
 
@@ -4145,8 +4502,16 @@ static uint8_t dir_busca_todo(const char name8[8], const char ext3[3],
 {
     uint8_t sector[ROOT_DIR_SECTOR_BYTES];
     uint32_t i, sec;
+    /* Los sectores que la raiz TIENE, no un 32 a mano - 08/10/2026, de la
+     * revision a fondo de ese dia. Ver el comentario entero en
+     * fichero_busca_interno(), que tenia el mismo 32: con una raiz de 14 o
+     * 16 sectores, los de detras son ZONA DE DATOS, y lo que se devuelve
+     * de aqui es el desplazamiento donde ESCRIBIR -quien llama le mete el
+     * nuevo tamaño, o un 0xE5-. O sea escribir encima de los datos de otro
+     * fichero creyendo que es una entrada de directorio. */
+    uint32_t nsec = ROOT_DIR_SECTORS;
 
-    for (sec = 0U; sec < 32U; sec++) {
+    for (sec = 0U; sec < nsec; sec++) {
         uint32_t base = (ROOT_DIR_LBA + sec) * ROOT_DIR_SECTOR_BYTES;
 
         spi_flash_read(base, sector, sizeof(sector));
@@ -4282,6 +4647,30 @@ static uint8_t recorta_interno(const char name8[8], const char ext3[3], uint32_t
     if (bloques == 0UL) { bloques = 1UL; }
     quedan = bloques * CLUSTERS_PER_BLOCK;
     tenia  = (viejo + CLUSTER_BYTES - 1UL) / CLUSTER_BYTES;
+    /*
+     * Y QUE ESOS CLUSTERS EXISTAN - 08/10/2026, de la revision a fondo de
+     * ese dia.
+     *
+     * `tenia` sale de `viejo`, que es el campo de tamaño de la entrada de
+     * directorio: un dato que escribe el PC y del que aqui no se habia
+     * comprobado nada. Del primer cluster si -la linea de arriba exige
+     * que este en el volumen-, pero del NUMERO de clusters no, y es el que
+     * manda en el bucle de abajo.
+     *
+     * Con una entrada que diga, por ejemplo, 0x00400000 bytes en un
+     * volumen de 2.000 clusters, `tenia` sale 8.192 y el bucle llama a
+     * fat12_pack_entry() con clusters que no existen. Esa funcion escribe
+     * en s_fat[], que mide 6.144 bytes, en el desplazamiento c + c/2: con
+     * c por las nubes se escribe MUY fuera del array, y encima del
+     * borrador vive el resto del .bss del fichero. Y lo que se vuelca
+     * detras a las dos copias de la FAT es ese borrador.
+     *
+     * Basta con exigir que el ultimo cluster que la entrada dice tener
+     * siga siendo un cluster del volumen. Si no lo es, la entrada no
+     * cuadra con el volumen y no hay recorte posible que tenga sentido:
+     * se dice que no y no se toca la FAT.
+     */
+    if (primero + tenia > 2U + DATA_CLUSTER_COUNT) { return 0U; }
     if (quedan >= tenia) { return 1U; }   /* no sobra nada: nada que hacer */
 
     spi_flash_read(FAT1_OFF, fat, FAT_UTIL);

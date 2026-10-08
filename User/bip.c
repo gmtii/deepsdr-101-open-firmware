@@ -14,15 +14,30 @@ typedef struct {
     uint16_t ms;
 } tramo_t;
 
+/*
+ * REVISION A FONDO DEL 08/10/2026: LOS TRES QUE CRUZAN CON LA
+ * INTERRUPCION DE AUDIO, VOLATILE.
+ *
+ * s_n lo escribe el bucle principal (bip_pide) y lo lee la interrupcion
+ * (bip_mete); s_i y s_abierto los escribe la interrupcion y los lee el
+ * bucle principal (bip_sonando, y el propio bip_pide para decidir si
+ * vaciar la cola). Sin volatile el compilador puede quedarse cualquiera
+ * de los tres en un registro -el atajo del principio de bip_mete() y el
+ * bucle de muestras los leen varias veces seguidas- y entonces el cambio
+ * del otro lado no se ve: el pitido no suena, o la cola no se vacia y se
+ * queda muda para siempre, que es EXACTAMENTE el sintoma que ya se pago
+ * el 05/10/2026 y que el comentario de abajo cuenta. Un sintoma asi no
+ * apunta a su causa ni de lejos.
+ */
 static tramo_t  s_cola[BIP_TRAMOS];
-static uint8_t  s_n;            /* cuantos tramos hay encolados */
-static uint8_t  s_i;            /* cual suena */
+static volatile uint8_t  s_n;   /* cuantos tramos hay encolados */
+static volatile uint8_t  s_i;   /* cual suena */
 static uint32_t s_quedan;       /* marcos que le quedan al tramo de ahora */
 static uint32_t s_total;        /* los que tenia al empezar, para la rampa */
 static uint32_t s_rampa;        /* marcos de subida/bajada */
 static uint32_t s_fase;         /* acumulador del oscilador, vuelta = 2^32 */
 static uint32_t s_inc;
-static uint8_t  s_abierto;      /* hay un tramo cargado */
+static volatile uint8_t  s_abierto;  /* hay un tramo cargado */
 
 /*
  * LA COLA SE VACIA AQUI, NO EN LA INTERRUPCION - 05/10/2026.
@@ -62,6 +77,12 @@ void bip_pide(uint16_t hz, uint16_t ms)
      */
     s_cola[s_n].hz = hz;
     s_cola[s_n].ms = ms;
+    /* Y el orden hay que EXIGIRLO, no solo escribirlo en este orden: sin
+     * la barrera el compilador puede adelantar la subida de s_n por
+     * delante del relleno del tramo, que es justo lo que el parrafo de
+     * aqui arriba dice que no puede pasar. (Revision a fondo del
+     * 08/10/2026.) */
+    __asm volatile ("" ::: "memory");
     s_n = (uint8_t)(s_n + 1U);
 }
 

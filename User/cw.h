@@ -127,6 +127,22 @@ float cw_get_pitch_hz(void);
  * mover el mando para que el pitido suene como a uno le gusta - que
  * ahora es una comodidad y no un requisito.
  */
+/*
+ * EL APRENDIZAJE. Apagado, la radio lee suponiendo que la raya dura tres
+ * puntos, que es la norma y lo que manda casi todo el mundo. Encendido,
+ * mide como teclea ESA estacion y pone la frontera punto/raya donde de
+ * verdad esta, dure lo que dure la raya.
+ *
+ * Va apagado por omision y lo enciende el dueño con un boton, porque
+ * medir en vez de suponer cuesta precision con el Morse normal. El
+ * porque, con numeros, en la cabecera de cw.c.
+ */
+void     cw_set_aprende(uint8_t on);
+uint8_t  cw_get_aprende(void);
+/* La relacion raya/punto medida, x10. 0 = no esta midiendo. Sale en la
+ * chapa del panel cuando el aprendizaje esta encendido. */
+uint16_t cw_get_ratio10(void);
+
 float cw_get_detect_hz(void);
 float cw_get_offset_hz(void);
 

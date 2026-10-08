@@ -51,9 +51,44 @@
  * comprobacion. */
 #define AX25_TRAMA_MIN 17U
 
+/*
+ * LOS DOS PAQUETES, QUE SON LA MISMA TRAMA POR DOS CAMINOS - 07/10/2026.
+ *
+ * Todo lo que hay detras del detector de tonos -NRZI, relleno de bits,
+ * banderas, comprobacion y troceado de la trama- no sabe ni le importa a
+ * que velocidad ha llegado. Asi que el paquete de onda corta no es un
+ * decodificador nuevo: es este mismo con otros tres numeros.
+ *
+ *   APRS en VHF     1200 baudios, AFSK Bell 202 (1200 y 2200 Hz), y el
+ *                   audio sale del discriminador de FM, o sea a la tasa de
+ *                   radiofrecuencia (48 o 96 kHz segun el ajuste).
+ *   Paquete de HF    300 baudios, FSK de 200 Hz de desplazamiento, y el
+ *                   audio sale del camino de banda lateral, a 12 kHz.
+ *
+ * LA BANDA LATERAL DA IGUAL, y conviene saberlo antes de perder una tarde
+ * probando las dos. El NRZI codifica el cero como un CAMBIO de tono y el
+ * uno como ausencia de cambio, asi que intercambiar marca y espacio deja
+ * los cambios exactamente donde estaban y los bits salen identicos. En USB
+ * y en LSB se decodifica lo mismo.
+ *
+ * LO QUE NO ES IGUAL, y por eso hay un banco que lo mide: en Bell 202 el
+ * desplazamiento (1000 Hz) es casi la velocidad (1200), asi que los dos
+ * tonos caen casi ortogonales y cada correlador ve poco del otro. A 300
+ * baudios con 200 Hz NO lo son -harian falta 300- y los dos correladores
+ * se pisan. Eso cuesta sensibilidad, y cuanta cuesta es una medida, no una
+ * opinion: ver sim/pkttest.c.
+ */
 #define AX25_MARCA_HZ   1200.0f
 #define AX25_ESPACIO_HZ 2200.0f
 #define AX25_BAUD       1200.0f
+
+/* Paquete de HF. El desplazamiento de 200 Hz es lo que fija el modo; que
+ * los tonos caigan en 1600 y 1800 es convenio del dial y de los TNC, no
+ * del estandar. */
+#define PKT_HF_MARCA_HZ   1600.0f
+#define PKT_HF_ESPACIO_HZ 1800.0f
+#define PKT_HF_BAUD        300.0f
+#define PKT_HF_FS_HZ     12000.0f   /* la tasa del audio de banda lateral */
 
 typedef struct {
     uint8_t  enganchado;   /* 1 = se han visto banderas hace poco */
@@ -63,7 +98,10 @@ typedef struct {
     float    nivel;
 } ax25_info_t;
 
+/* El de siempre: 1200 baudios y los tonos de Bell 202. */
 void ax25_start(float fs_hz);
+/* Y el general, para el de HF. Ver el comentario de los dos de arriba. */
+void ax25_start_fsk(float fs_hz, float baud, float marca_hz, float espacio_hz);
 void ax25_stop(void);
 uint8_t ax25_activo(void);
 

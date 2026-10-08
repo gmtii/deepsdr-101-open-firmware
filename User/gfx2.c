@@ -128,6 +128,24 @@ static inline uint16_t blend(uint16_t dst, gfx2_rgba_t c, uint16_t cov)
     return gfx2_to565((uint8_t)dr, (uint8_t)dg, (uint8_t)db);
 }
 
+/* --- la ventana de recorte en X (ver gfx2.h) ----------------------------
+ * Limites en coordenadas de PANTALLA, x1 exclusivo. Arrancan abiertos de par
+ * en par, asi que quien no la use no paga nada mas que dos comparaciones. */
+static int16_t s_rec_x0 = (int16_t)-30000;
+static int16_t s_rec_x1 = (int16_t) 30000;
+
+void gfx2_recorte_x(int16_t x0, int16_t x1)
+{
+    s_rec_x0 = x0;
+    s_rec_x1 = x1;
+}
+
+void gfx2_recorte_quita(void)
+{
+    s_rec_x0 = (int16_t)-30000;
+    s_rec_x1 = (int16_t) 30000;
+}
+
 static inline void px_blend(gfx2_surf_t *s, int16_t x, int16_t y,
                             gfx2_rgba_t c, uint16_t cov)
 {
@@ -135,6 +153,7 @@ static inline void px_blend(gfx2_surf_t *s, int16_t x, int16_t y,
     int16_t ly = (int16_t)(y - s->y);
     uint16_t *p;
 
+    if (x < s_rec_x0 || x >= s_rec_x1) return;
     if (lx < 0 || ly < 0 || lx >= s->w || ly >= s->h) return;
 
     p = &s->px[(int32_t)ly * s->w + lx];
@@ -244,6 +263,15 @@ void gfx2_fill(gfx2_surf_t *s, int16_t x, int16_t y, int16_t w, int16_t h,
     if (y0 < 0) y0 = 0;
     if (x1 > s->w) x1 = s->w;
     if (y1 > s->h) y1 = s->h;
+
+    /* y contra la ventana de recorte, traida a coordenadas locales */
+    {
+        int16_t r0 = (int16_t)(s_rec_x0 - s->x);
+        int16_t r1 = (int16_t)(s_rec_x1 - s->x);
+        if (x0 < r0) x0 = r0;
+        if (x1 > r1) x1 = r1;
+        if (x1 <= x0) return;
+    }
 
     if (c.a >= 255) {
         uint16_t v = gfx2_to565(c.r, c.g, c.b);
@@ -372,6 +400,7 @@ void gfx2_vgrad(gfx2_surf_t *s, int16_t x, int16_t y, int16_t w, int16_t h,
             int32_t d = (int32_t)k_dither[sy & 3][(x + ix) & 3] - 8;
 
             if (lx < 0 || lx >= s->w) continue;
+            if ((x + ix) < s_rec_x0 || (x + ix) >= s_rec_x1) continue;
 
             c.r = (uint8_t)((c0.r * (255u - t) + c1.r * t) / 255u);
             c.g = (uint8_t)((c0.g * (255u - t) + c1.g * t) / 255u);

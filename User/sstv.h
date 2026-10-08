@@ -90,6 +90,11 @@ typedef struct {
     uint32_t    imagenes;     /* imagenes empezadas desde el arranque */
     uint16_t    sincs_malos;  /* pulsos de sincronismo descartados */
     float       nivel;
+    /* Las lineas que tiene ESTE modo, que no son siempre SSTV_ALTO: los
+     * Robot son de 240 y los Martin y PD de 256. La pantalla enseñaba
+     * "000/256" con un Robot 72 puesto - 06/10/2026, visto en un video del
+     * dueño. Pequeño, pero es un numero que miente. */
+    uint16_t    alto;
 } sstv_info_t;
 
 void sstv_start(float fs_hz);
@@ -132,5 +137,10 @@ void sstv_vis_dbg(uint8_t *est, uint32_t *lider, uint32_t *c1200, float *hz);
 /* La frecuencia de audio que le toca a un brillo, con la misma escala que usa
  * el decodificador. El banco fabrica la señal con esto. */
 float sstv_hz_de_nivel(uint8_t v);
+
+/* Cuanto se ha desviado la sintonia, en hercios, medido sobre el lider de la
+ * cabecera (ver s_off_hz en sstv.c). Negativo = la señal llega baja. Util
+ * para la pantalla y para el banco; cero mientras no se haya medido. */
+float sstv_desvio_hz(void);
 
 #endif /* SSTV_H */

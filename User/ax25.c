@@ -11,7 +11,9 @@
 #define TCMRAM_BSS
 #endif
 
-/* Muestras por bit, como mucho. A 96 kHz y 1200 baudios son 80. */
+/* Muestras por bit, como mucho. A 96 kHz y 1200 baudios son 80; a 12 kHz
+ * y 300 baudios (paquete de HF) son 40, asi que el mismo buffer sirve para
+ * los dos y no hace falta RAM nueva. */
 #define SPB_MAX 96U
 
 /* ==========================================================================
@@ -52,6 +54,7 @@ uint16_t ax25_fcs(const uint8_t *d, uint16_t n)
  * ========================================================================== */
 static uint8_t  s_on;
 static float    s_fs;
+static float    s_baud, s_marca_hz, s_espacio_hz;
 
 /* --- 1. los dos tonos --- */
 static nco_t    s_nco_m, s_nco_e;
@@ -113,12 +116,18 @@ static ax25_info_t s_info;
  * ========================================================================== */
 void ax25_start(float fs_hz)
 {
+    ax25_start_fsk(fs_hz, AX25_BAUD, AX25_MARCA_HZ, AX25_ESPACIO_HZ);
+}
+
+void ax25_start_fsk(float fs_hz, float baud, float marca_hz, float espacio_hz)
+{
     uint32_t spb;
 
-    if (fs_hz <= 0.0f) { return; }
+    if (fs_hz <= 0.0f || baud <= 0.0f) { return; }
     s_fs = fs_hz;
+    s_baud = baud; s_marca_hz = marca_hz; s_espacio_hz = espacio_hz;
 
-    spb = (uint32_t)(fs_hz / AX25_BAUD + 0.5f);
+    spb = (uint32_t)(fs_hz / s_baud + 0.5f);
     if (spb < 8U)      { spb = 8U; }
     if (spb > SPB_MAX) { spb = SPB_MAX; }
     s_spb = (uint16_t)spb;
@@ -126,8 +135,8 @@ void ax25_start(float fs_hz)
     nco_init();
     nco_fase_cero(&s_nco_m);
     nco_fase_cero(&s_nco_e);
-    nco_freq(&s_nco_m, AX25_MARCA_HZ, fs_hz);
-    nco_freq(&s_nco_e, AX25_ESPACIO_HZ, fs_hz);
+    nco_freq(&s_nco_m, s_marca_hz, fs_hz);
+    nco_freq(&s_nco_e, s_espacio_hz, fs_hz);
 
     memset(s_mi, 0, sizeof s_mi); memset(s_mq, 0, sizeof s_mq);
     memset(s_ei, 0, sizeof s_ei); memset(s_eq, 0, sizeof s_eq);
@@ -136,7 +145,7 @@ void ax25_start(float fs_hz)
     s_nivel = 1e-6f;
 
     s_fase = 0U;
-    s_inc = (uint32_t)((double)AX25_BAUD / (double)fs_hz * 4294967296.0 + 0.5);
+    s_inc = (uint32_t)((double)s_baud / (double)fs_hz * 4294967296.0 + 0.5);
     s_sig_ant = 0U;
 
     s_nrzi_ant = 0U; s_hay_ant = 0U;

@@ -51,7 +51,30 @@ INCLUDES += -ICMSIS/DSP/PrivateInclude
 
 # --- Sources ---
 C_SOURCES   = $(wildcard User/*.c)
-C_SOURCES  += $(wildcard Firmware/Source/*.c)
+#
+# LA ETHERNET FUERA DEL BUILD, Y NO AHORRA NI UN BYTE - 07/10/2026.
+#
+# AVISO, PARA QUE NADIE SE LO CREA OTRA VEZ: esta linea NO libera memoria.
+# Medido compilando con ella y sin ella:
+#
+#   con enet:  text 381900  data 412  bss 259292
+#   sin enet:  text 381900  data 412  bss 259292
+#
+# Identicos. El --gc-sections del enlazador ya tiraba gd32f4xx_enet.c entero
+# desde siempre, porque en todo el proyecto no hay ni una llamada a enet_*.
+#
+# La primera version de este comentario decia que se recuperaban 15 kB de
+# RAM. Era mentira, y de la peor clase: salia de leer el .map con un grep a
+# mano, y el mapa lista TAMBIEN las secciones descartadas. tx_buff y rx_buff
+# aparecian con sus 7.620 bytes cada uno y no estaban dentro de nada. La
+# prueba de que era falso estaba delante -se saco el enet, se volvio a
+# enlazar y seguian faltando los mismos 28 bytes- y no se leyo.
+#
+# Se queda porque no hace daño y compila un fichero menos. Para medir RAM,
+# tools/ram_mapa.py, que si sabe distinguir lo descartado de lo que entra.
+#
+FW_EXCLUIR  = Firmware/Source/gd32f4xx_enet.c
+C_SOURCES  += $(filter-out $(FW_EXCLUIR),$(wildcard Firmware/Source/*.c))
 C_SOURCES  += CMSIS/GD/GD32F4xx/Source/system_gd32f4xx.c
 # CMSIS-DSP: only the specific functions demod_am.c uses (biquad
 # cascade DF1 float32 + complex magnitude float32), not the whole
@@ -132,7 +155,7 @@ clean:
 #
 # IMPORTANT: no address at the end of the program command. The .elf
 # already carries the load address embedded in each section
-# (0x08020000, set by the linker script). Passing an extra address
+# (0x0800C000 in this branch, set by the linker script). Passing an extra address
 # here makes OpenOCD treat it as a "relocation offset" that gets ADDED
 # to each section's address in the .elf (a feature meant for .bin
 # files, which carry no address of their own) - that's what used to
@@ -147,20 +170,33 @@ erase:
 	openocd -f interface/stlink.cfg -f openocd/gd32f450.cfg \
 		-c "init; reset halt; stm32f2x mass_erase 0; reset; exit"
 
-# --- Generate update4.bin for the real bootloader ---
-# The bootloader requires a fixed 8-byte signature at offset 0x40000
-# (256KB) of the file, or it hangs with "APP not Programmed". This
-# signature is constant (the same across any valid vendor firmware,
-# independent of content), extracted by analyzing the bootloader. This
-# target pads our .bin to 256KB and appends it.
-UPDATE4_MAGIC := 8f25c865599c5531
-update4: $(BUILD_DIR)/$(TARGET).bin
-	python3 -c "\
-firmware = open('$(BUILD_DIR)/$(TARGET).bin','rb').read(); \
-magic = bytes.fromhex('$(UPDATE4_MAGIC)'); \
-padded = firmware + b'\x00' * (0x40000 - len(firmware)) + magic; \
-open('update4.bin','wb').write(padded); \
-print('update4.bin generated:', len(padded), 'bytes')"
+# --- update.bin para nuestro cargador (rama "reload") ---
+# Aqui habia un one-liner de python que rellenaba el .bin con ceros hasta
+# 0x40000 y pegaba ocho bytes constantes al final, que era lo unico que
+# miraba el gestor de fabrica. Nuestro cargador comprueba cabecera,
+# longitud y CRC32, y eso ya no cabe en una linea: lo hace tools/cabecera.py,
+# que ademas se para con un mensaje distinto por cada cosa que puede ir mal
+# en vez de generar un fichero que la radio rechaza sin decir por que.
+#
+# EL NOMBRE ES update.bin DESDE EL 02/10/2026, por el dueño. El "4" lo
+# ponia el gestor de fabrica y en esta rama ya no heredamos nada suyo. El
+# target se sigue llamando "update4" ademas de "update" para que un
+# "make update4" de la memoria muscular no falle en silencio sin hacer
+# nada; hace lo mismo y avisa.
+update: $(BUILD_DIR)/$(TARGET).bin
+	@python3 tools/cabecera.py $(BUILD_DIR)/$(TARGET).bin update.bin
+	@python3 tools/ram_mapa.py $(BUILD_DIR)/firmware.map
+
+# El reparto de la RAM, sin compilar nada. Ver tools/ram_mapa.py: la RAM no se
+# decide en un .c, se decide en el enlazado, y el mapa es el unico sitio donde
+# pone que acaba de verdad en los 192 kB.
+.PHONY: ram
+ram:
+	@python3 tools/ram_mapa.py $(BUILD_DIR)/firmware.map
+
+.PHONY: update4
+update4: update
+	@echo "   (ojo: ahora se llama 'make update', y el fichero update.bin)"
 
 # Opciones extra de compilacion, en un fichero aparte (23/09/2026). El "-"
 # de "-include" significa "si no esta, no pasa nada", asi que el proyecto

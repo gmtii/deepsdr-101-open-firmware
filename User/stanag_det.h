@@ -201,6 +201,77 @@ typedef struct {
     uint16_t simb_x10;    /* velocidad de simbolo en decimas de baudio. 0 = no */
     uint8_t  tonos;       /* ancho / velocidad, si fuera ortogonal (tope 60) */
     uint8_t  simb_q;      /* 0..100, cuanto destaca el simbolo */
+
+    /*
+     * --- LA RELACION CONSTANTE DE 7 BITS - 08/10/2026 ---
+     *
+     * *** El dueño, con una grabacion de 16.911 kHz: "que es y porque rtty
+     * en auto no lo pilla, ni el ident". ***
+     *
+     * Era una FSK de 50,00 baudios y 201 Hz de salto, y la fila que le
+     * corresponde -"FSK 50 Bd / 200 Hz (cifrada)", ver ident.c- YA ESTABA
+     * puesta y comprobada en antena. No cuadro por la segunda condicion:
+     * pedia velocidad de simbolo de 46,0 a 55,0 Bd y simb_x10 midio 25,0.
+     * La mitad exacta, y no por casualidad: en una FSK de DOS tonos con
+     * bits al azar el tono cambia cada dos bits de media, asi que ese
+     * medidor cuenta CAMBIOS DE TONO, no simbolos. Es el mismo error que
+     * ya estaba escrito en ident.c sobre baudios_x10, repetido con el otro
+     * medidor. Y al caerse la fila ganaba "MFSK multitono (Olivia)", que
+     * es peor que no decir nada.
+     *
+     * Asi que la segunda condicion pasa a ser una que SI esta en la señal:
+     * el alfabeto. El NAVTEX, el SITOR y esta cifrada usan el CCIR 476,
+     * que es un codigo de SIETE bits con EXACTAMENTE CUATRO UNOS -de ahi
+     * "relacion constante"-: de los 128 patrones solo 35 son validos. Si
+     * se trocea el flujo en grupos de siete por el sitio bueno, casi todos
+     * los grupos tienen cuatro unos; por cualquier otro sitio, o con otro
+     * alfabeto, no.
+     *
+     * cr7_pc es ese porcentaje, con el mejor de los siete desplazamientos.
+     * MEDIDO CON ESTE MOTOR, que es el numero que vale. Fuera de la radio,
+     * con recuperacion de reloj de verdad, los mismos casos dan veinte
+     * puntos mas (99, 100, 93); esos numeros no sirven para poner un
+     * umbral aqui, por la misma razon por la que un banco que mide una
+     * copia no vale: lo que decide es lo que mide quien va a decidir.
+     *
+     *   grabaciones de verdad          sinteticas (ver sim/cr7_test.c)
+     *   SITOR-B            86 %        CCIR 100 Bd / 170 Hz     87 %
+     *   16911 del dueño    79 %        CCIR  75 Bd / 850 Hz     84 %
+     *   NAVTEX 8424        78 %        CCIR  50 Bd / 200 Hz     78 %
+     *   RTTY 3712 Baudot   36 %        CCIR  50 Bd / 200 a 6 dB 75 %
+     *   STANAG 4481 FSK    27 %        Baudot 50 Bd             40 %
+     *                                  al azar 75 Bd / 850 Hz   37 %
+     *                                  al azar 100 Bd / 170 Hz  36 %
+     *                                  al azar 50 Bd / 200 a 6dB 33 %
+     *                                  al azar 50 Bd / 200 Hz   31 %
+     *
+     * Con bits al azar el valor esperado es 35/128 = 27%, y ahi se queda
+     * todo lo que no es CCIR 476. El umbral de la tabla es 60%: quince
+     * puntos por debajo del peor que si y veinte por encima del mejor que
+     * no. El par que de verdad manda son las dos lineas de 50 Bd / 200 Hz:
+     * mismo salto, misma velocidad, mismos dos tonos, 78 contra 31. Eso no
+     * lo separa el espectro, solo lo separa el alfabeto.
+     *
+     * cr7_bd_x10 solo significa algo cuando cr7_pc es alto: cuando no hay
+     * alfabeto que encontrar, el candidato ganador entre tres casillas que
+     * rondan el azar es el que toque.
+     *
+     * Y EL BAUDIO SALE DE LA PROPIA MEDIDA, que es la otra mitad del
+     * arreglo. Trocear al baudio equivocado deshace la relacion constante
+     * -mirar la columna de 100 del 16911, o la de 50 del SITOR-, asi que
+     * cr7_bd_x10 es el candidato que la maximiza y es un numero mas fiable
+     * que los dos medidores de velocidad: no estima, PRUEBA, igual que
+     * rtty_auto.c hace con la velocidad por la misma clase de motivo.
+     *
+     * ALCANCE: 50, 75 y 100 baudios, que a 3 kHz son 60, 40 y 30 muestras
+     * por bit EXACTAS. Por eso son esos tres y no una rejilla: con enteros
+     * no hay deriva de fase que corregir.
+     *
+     * cr7_pc = 0 significa "todavia no hay bastantes grupos", no "no es".
+     * Hacen falta unos 3 s de señal con dos tonos.
+     */
+    uint8_t  cr7_pc;      /* % de grupos de 7 bits con 4 unos. 0 = sin medir */
+    uint16_t cr7_bd_x10;  /* el baudio que da ese %, en decimas. 500/750/1000 */
 } stanag_det_t;
 
 /*

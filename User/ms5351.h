@@ -189,6 +189,48 @@ uint8_t ms5351_tune_captured(void);
 uint8_t ms5351_set_lo_freq(uint32_t freq_hz);
 
 /*
+ * LA FILA DE DIAGNOSTICO DE LA CUADRATURA - 06/10/2026.
+ *
+ * *** El dueno, bajando con el mando por los 90 metros: "me salen señales
+ * tanto por la izquierda como por la derecha". *** Son imagenes: cada
+ * emisora aparece ademas espejada al otro lado del oscilador, que es lo
+ * que pasa cuando los 90 grados entre CLK0 y CLK1 no son 90.
+ *
+ * Lo que NO se sabia es POR QUE, y habia dos explicaciones que piden
+ * arreglos opuestos:
+ *
+ *   a) el enganche sale mal unas veces y bien otras, o
+ *   b) el enganche sale bien y se PIERDE segun el LO se aleja de donde
+ *      se hizo.
+ *
+ * La maniobra de los 90 grados (ver ms5351.c) solo se rehace al CAMBIAR
+ * DE ZONA, y la zona 10 va de 3,17 a 4,8 MHz entera: dentro de ella el
+ * fVCO se mueve de 600 a 900 MHz con un enganche hecho una sola vez. En
+ * el video del dueno la imagen de la emisora de 3.289 ESTA con el LO en
+ * 3.317 y NO esta con el LO en 3.269, sin haber salido de la zona.
+ *
+ * Esto no se separa discutiendolo: se separa rehaciendo el enganche SIN
+ * MOVER NADA MAS y mirando si la imagen cambia. Si cambia de un toque a
+ * otro es (a); si se queda clavada es (b). De ahi esta funcion, que es un
+ * boton en Informacion y no un ajuste: no cambia ningun comportamiento
+ * por defecto, asi que no puede estropear nada.
+ *
+ * ms5351_lowband_zona() devuelve 0 cuando el LO no esta en la banda baja
+ * -o sea cuando manda el registro de fase, por encima de 4,8 MHz-, y
+ * 1..10 con la zona en la que esta.
+ */
+/*
+ * Donde empieza la banda baja de ESTE chip. Lo usa main.c para atarlo con
+ * un aserto a LO_GEN_CROSSOVER_HZ: los dos generadores se tienen que
+ * tocar sin hueco. Ver LOWF_FLOOR_HZ en ms5351.c.
+ */
+#define MS5351_LOWBAND_FLOOR_HZ 300000UL
+
+uint8_t  ms5351_lowband_zona(void);
+uint32_t ms5351_lowband_fvco_khz(void);
+void     ms5351_lowband_reengancha(void);
+
+/*
  * Puts CLK0/CLK1 (the quadrature LO pair feeding the QSD) into Hi-Z:
  * both output-enable-masked (reg3, same "1=disabled" mask
  * ms5351_init()/ms5351_clk2_8mhz() already use) AND powered down at

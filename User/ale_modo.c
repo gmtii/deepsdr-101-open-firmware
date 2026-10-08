@@ -302,7 +302,7 @@ static void monta(void)
         char *l = s_lin[k];
         uint8_t p = 0U, c;
 
-        for (c = 0U; (e->ind[c] != '\0') && (c < 15U); c++) { l[p++] = e->ind[c]; }
+        for (c = 0U; (c < 15U) && (e->ind[c] != '\0'); c++) { l[p++] = e->ind[c]; }
         l[p++] = '\t';
 
         for (c = 0U; k_tipo[e->tipo & 7U][c] != '\0'; c++) {

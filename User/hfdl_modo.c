@@ -83,14 +83,30 @@ typedef struct {
 
 static uint8_t  s_activo;
 static uint32_t s_total;
-static uint8_t  s_estado;
+/*
+ * REVISION A FONDO DEL 08/10/2026: TODO LO QUE CRUZA CON LA INTERRUPCION
+ * DE AUDIO VA MARCADO VOLATILE, Y AQUI FALTABA CASI TODO.
+ *
+ * hfdl_modo_mete() corre en la INTERRUPCION DE AUDIO y escribe el estado
+ * del embudo -s_estado, s_n_a1/a2/m1, s_simbolos_datos, s_no_cupo,
+ * s_gs_ultima, s_polaridad_ultima/hubo- y el del portero -s_suelo,
+ * s_razon y los cuatro s_sq_*-; el bucle principal los lee desde
+ * hfdl_modo_poll() y desde la docena larga de funciones de consulta que
+ * usa el panel. s_finish_pendiente ya estaba marcado -es el unico que se
+ * mira en un bucle de espera-, pero los demas no, y el compilador puede
+ * cachear cualquiera de ellos en un registro durante una funcion entera.
+ * El sintoma de eso es un panel que se queda con numeros viejos o que
+ * ensena un portero cerrado con la senal entrando, y ninguno de los dos
+ * apunta a la causa: se buscaria en el demodulador, que es donde no esta.
+ */
+static volatile uint8_t  s_estado;
 static volatile uint8_t s_finish_pendiente;   /* ver hfdl_modo_poll() */
 
 /* Cuantos simbolos se le han metido al decodificador en la rafaga en curso.
  * Tiene que salir data_segment_cnt * 30 exactos; el banco lo comprueba, que
  * es como se caza un desfase de un simbolo antes de que llegue a la antena.
  * Ver hfdl_modo_simbolos_datos(). */
-static uint32_t s_simbolos_datos;
+static volatile uint32_t s_simbolos_datos;
 
 /* La polaridad DE LA ULTIMA RAFAGA, que sobrevive al cierre.
  *
@@ -102,8 +118,8 @@ static uint32_t s_simbolos_datos;
 /*
  * EL EMBUDO DEL SINCRONISMO. 25/09/2026.
  *
- * *** Idea sacada de la pantalla del Kleos, que el dueno mando de
- * referencia: abajo del todo lleva "START 25 > CONFIRM 20 > MODE 20 >
+ * *** Idea sacada de la pantalla de la radio comercial que el dueno
+ * mando de referencia: abajo del todo lleva "START 25 > CONFIRM 20 > MODE 20 >
  * FRAME 11". ***
  *
  * Es lo mas util de toda su pantalla y no ocupa una columna. Cuenta cuantas
@@ -118,7 +134,8 @@ static uint32_t s_simbolos_datos;
  * Cuatro numeros que contestan a "que hago ahora", que es la pregunta de
  * verdad cuando estas barriendo una banda.
  */
-static uint32_t s_n_a1, s_n_a2, s_n_m1, s_buenas;
+static volatile uint32_t s_n_a1, s_n_a2, s_n_m1;
+static uint32_t s_buenas;
 
 /*
  * TRAMAS QUE NO CUPIERON. 25/09/2026.
@@ -176,12 +193,12 @@ static const char *estacion_nombre(uint8_t id)
     return (const char *)0;
 }
 
-static uint32_t s_no_cupo;
+static volatile uint32_t s_no_cupo;
 
 /* La ultima estacion de tierra oida. Su pantalla la pone arriba ("GS 3
  * REYKJAVIK") y no en cada fila, y tiene razon: estas en una frecuencia, o
  * sea en una estacion. Repetirla catorce veces era gastar una columna. */
-static uint8_t s_gs_ultima = 0xFFU;
+static volatile uint8_t s_gs_ultima = 0xFFU;
 
 /*
  * EL PORTERO: NO BUSCAR PREAMBULO CUANDO NO HAY NADA QUE BUSCAR.
@@ -222,12 +239,12 @@ static uint8_t s_gs_ultima = 0xFFU;
 #define HFDL_SQ_CEBADO    200U    /* bloques mirando antes de fiarse del suelo */
 #define HFDL_SQ_HARTO   20000U    /* bloques cerrado seguidos -> abre solo */
 
-static float    s_suelo;
-static float    s_razon;
-static uint32_t s_sq_visto;
-static uint32_t s_sq_cerrado;
-static uint8_t  s_sq_abierto;
-static uint8_t  s_sq_forzado;   /* 1 = se abrio por hartazgo, no por senal */
+static volatile float    s_suelo;
+static volatile float    s_razon;
+static volatile uint32_t s_sq_visto;
+static volatile uint32_t s_sq_cerrado;
+static volatile uint8_t  s_sq_abierto;
+static volatile uint8_t  s_sq_forzado;  /* 1 = se abrio por hartazgo, no por senal */
 
 /* Devuelve 1 si hay que dejar pasar el bloque al sincronismo. */
 static uint8_t porton(float p)
@@ -266,8 +283,8 @@ static uint8_t porton(float p)
     }
     return s_sq_abierto;
 }        /* rafagas con el CRC bueno - ver hfdl_modo_poll() */
-static uint8_t s_polaridad_ultima;
-static uint8_t s_polaridad_hubo;
+static volatile uint8_t s_polaridad_ultima;
+static volatile uint8_t s_polaridad_hubo;
 
 static hfdl_estado_t *estado(void)
 {

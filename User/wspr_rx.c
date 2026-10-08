@@ -96,8 +96,22 @@ typedef struct {
      * sea que llega con veinte veces de margen.
      */
     uint16_t pend_pos[WSPR_RX_PEND];
-    uint8_t  pend_cab, pend_col;
-    uint16_t perdidos;        /* pasos que no dio tiempo a procesar */
+    /*
+     * REVISION A FONDO DEL 08/10/2026: LOS TRES QUE CRUZAN CON LA
+     * INTERRUPCION DE AUDIO, VOLATILE.
+     *
+     * pend_cab y perdidos los escribe wspr_rx_mete(), que corre en la
+     * interrupcion; pend_col lo escribe el bucle principal en
+     * wspr_rx_paso() y lo lee la interrupcion para ver si la cola esta
+     * llena, y perdidos lo lee el panel. Sin volatile el compilador puede
+     * quedarse con pend_cab o pend_col en un registro -el while de
+     * wspr_rx_paso() los compara en cada vuelta- y entonces, o se procesa
+     * de menos, o la interrupcion cree que hay sitio cuando no lo hay y
+     * se pisa un apunte. El sintoma seria "a veces se pierde una emision"
+     * una vez cada muchos minutos, que es de lo que peor se diagnostica.
+     */
+    volatile uint8_t  pend_cab, pend_col;
+    volatile uint16_t perdidos;   /* pasos que no dio tiempo a procesar */
 } wspr_rx_t;
 
 static wspr_rx_t s_rx;

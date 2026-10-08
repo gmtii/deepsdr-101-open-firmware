@@ -170,6 +170,12 @@ typedef enum {
      * leeria entero al reves.
      */
     SET_X_NR_ON,        /* reduccion de ruido encendida, 0/1 */
+    /*
+     * AJUSTE AUTOMATICO DEL RTTY - 06/10/2026. Al final, como las dos de
+     * aqui arriba y por lo mismo: un CONFIG.CSV de una version anterior no
+     * la trae, su bit queda a 0 y arranca con el valor compilado (encendido).
+     */
+    SET_X_RTTY_AUTO,    /* el RTTY se ajusta solo, 0/1 */
     SET_X_N
 } settings_extra_id_t;
 
@@ -218,6 +224,29 @@ typedef struct {
     uint8_t      att_rin_level;       /* 0=10k/1=20k/2=40k - aic3204_rin_t, see main.c's s_rf_agc_rin_level */
     uint8_t      have_tema_idx;
     uint8_t      tema_idx;            /* indice en k_temas[] de main.c: paleta de la interfaz + paleta del waterfall */
+    /*
+     * LA PALETA DE LA CASCADA, Y POR QUE YA NO SE APLICA SOLA - 07/10/2026,
+     * de un issue.
+     *
+     * Esto se aplicaba DIRECTAMENTE dentro de settings_load(), con un
+     * comentario que decia que no habia dependencia de orden. Era verdad el
+     * 08/09/2026 y dejo de serlo el 23/09/2026, cuando los temas pasaron a
+     * llevar su propia paleta de cascada: desde ese dia tema_aplicar() llama
+     * a spectrum_set_palette(), y en el arranque corre DESPUES de leer el
+     * fichero. O sea que la paleta guardada se leia bien, se ponia bien, y
+     * acto seguido el tema la pisaba.
+     *
+     * Quien abrio el issue lo vio asi: tema "Oliva" -que propone SMOKE- con
+     * la paleta puesta a TURBO, y al reiniciar salia SMOKE "aunque en el
+     * fichero pone Turbo". El fichero no se estaba ignorando: se leia y se
+     * machacaba.
+     *
+     * Asi que ahora tiene su par have_/valor como todos los que dependen del
+     * orden, y main.c la aplica DESPUES del tema. El tema propone; lo que
+     * guardaste manda.
+     */
+    uint8_t      have_spectrum_palette;
+    uint8_t      spectrum_palette;    /* indice en la tabla de spectrum.c */
     settings_extra_t extra;           /* los de tabla, ver settings_extra_id_t */
 } settings_loaded_t;
 

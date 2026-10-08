@@ -72,9 +72,22 @@ static uint8_t s_zoom = (uint8_t)ANALIZ_300;
 static uint8_t s_activo;
 
 /* El buffer de analisis. Se llena a la salida de la etapa elegida. */
+/*
+ * REVISION A FONDO DEL 08/10/2026: LOS DOS QUE CRUZAN CON LA INTERRUPCION
+ * DE AUDIO, VOLATILE.
+ *
+ * s_llenado y s_listo los escribe analiz_mete(), que corre en la
+ * interrupcion de audio, y los lee el bucle principal por analiz_listo()
+ * y analiz_suelta(); s_listo ademas lo vuelve a escribir el bucle
+ * principal al recoger. Sin volatile el compilador puede guardarse
+ * s_listo en un registro en el bucle que espera y no volver a mirar la
+ * memoria -o dar por buena su copia de s_llenado y pisar el buffer-, y
+ * el sintoma seria "el analizador se queda congelado", que no apunta a
+ * esto ni de lejos.
+ */
 static int16_t  s_buf[FFT_SIZE];
-static uint16_t s_llenado;
-static uint8_t  s_listo;
+static volatile uint16_t s_llenado;
+static volatile uint8_t  s_listo;
 
 /* Cuantas etapas se usan en cada zoom. 2400 Hz de tope con audio a 96 kHz
  * salen de cuatro etapas: 96000/16 = 6000, Nyquist 3000, util 2400. */

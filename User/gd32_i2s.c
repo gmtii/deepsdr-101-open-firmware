@@ -8,6 +8,41 @@
                       * flag - temporary coupling, see the note below where
                       * it's used. */
 
+/*
+ * ESPERAR A QUE EL CANAL DE DMA SUELTE CHEN, CON TOPE - 08/10/2026.
+ *
+ * Los dos sitios de este fichero esperaban ese bit con un while sin salida.
+ * El razonamiento es correcto -un apagado tarda unos pocos ciclos- pero
+ * describe lo que pasa cuando el hardware contesta. Si no contesta -DMA0 sin
+ * reloj, el canal a medias con el periferico todavia pidiendo- la radio se
+ * queda COLGADA: aqui no hay perro guardian y el HardFault_Handler es un
+ * bucle infinito, asi que no se reinicia, se congela la pantalla con el
+ * audio todavia sonando, que va por DMA.
+ *
+ * Y uno de los dos (stream_arm_dma) se recorre en el arranque en frio: si se
+ * quedara ahi, la radio no llegaria nunca a pintar nada.
+ *
+ * Mismo tope y mismo razonamiento que BATTERY_EOC_VUELTAS en battery.c: cien
+ * mil vueltas de unos pocos ciclos son dos ordenes de magnitud mas de lo que
+ * puede tardar. Si se agota se sigue, porque lo que viene detras es un
+ * dma_deinit() entero, que es mas fuerte que este apagado.
+ */
+#define DMA_CHEN_VUELTAS  100000UL
+
+static void espera_chen(const char *quien)
+{
+    uint32_t guard = DMA_CHEN_VUELTAS;
+
+    while (((DMA_CHCTL(DMA0, DMA_CH4) & DMA_CHXCTL_CHEN) != 0U)
+           && (guard != 0U)) {
+        guard--;
+    }
+    if (guard == 0U) {
+        debug_print(quien);
+        debug_print(": DMA0/CH4 no suelta CHEN, sigo\n");
+    }
+}
+
 static void tone_buf_fill_1khz(void);
 static float sinf_approx(float x);
 
@@ -553,9 +588,7 @@ static void stream_arm_dma(void)
     rcu_periph_clock_enable(RCU_DMA0);
 
     dma_channel_disable(DMA0, DMA_CH4);
-    while ((DMA_CHCTL(DMA0, DMA_CH4) & DMA_CHXCTL_CHEN) != 0U) {
-        /* a disable request can take a few cycles to complete */
-    }
+    espera_chen("stream_arm_dma");
     dma_deinit(DMA0, DMA_CH4);
 
     dma_single_data_para_struct_init(&dma_init_struct);
@@ -603,6 +636,27 @@ void gd32_i2s_dma_start_stream(void)
  */
 void gd32_i2s_stream_arm(uint32_t frames_per_half)
 {
+    /*
+     * REVISION A FONDO DEL 08/10/2026: Y RECORTADO AL TAMAÑO DEL BUFFER.
+     *
+     * El comentario largo de mas arriba cuenta con todo detalle el fallo
+     * que YA SE PAGO una vez: la geometria del stream no cuadraba con el
+     * buffer, el DMA leia memoria que no era suya y lo que salia por el
+     * altavoz era ruido con un patron repetido. Y aun asi esta funcion
+     * -que es la que FIJA esa geometria, y la llaman desde fuera con el
+     * numero de tramas del modo nuevo en cada cambio de velocidad- se
+     * creia el parametro sin mirarlo contra STREAM_FRAMES_PER_HALF_MAX,
+     * que es el tamaño real de s_stream_buf. Un modo futuro con un
+     * bloque mas grande que 512 vuelve a poner el DMA a pasear por la
+     * memoria de al lado, con el mismo sintoma y sin ninguna pista.
+     *
+     * Se recorta. Sonara mas corto de lo que pedia quien llamo -eso se
+     * oye y se investiga- en vez de sonar a ruido leyendo lo que no es.
+     */
+    if (frames_per_half > STREAM_FRAMES_PER_HALF_MAX) {
+        frames_per_half = STREAM_FRAMES_PER_HALF_MAX;
+    }
+
     s_stream_frames_per_half = frames_per_half;
     s_stream_words_per_half  = frames_per_half * 2U;
     s_stream_total_words     = frames_per_half * 4U;
@@ -638,9 +692,7 @@ void gd32_i2s_stream_stop(void)
      */
     spi_dma_disable(I2S1_ADD, SPI_DMA_TRANSMIT);
     dma_channel_disable(DMA0, DMA_CH4);
-    while ((DMA_CHCTL(DMA0, DMA_CH4) & DMA_CHXCTL_CHEN) != 0U) {
-        /* a disable request can take a few cycles to complete */
-    }
+    espera_chen("gd32_i2s_stream_stop");
 }
 
 /*

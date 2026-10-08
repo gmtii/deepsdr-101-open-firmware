@@ -264,13 +264,31 @@ void usb_timer_irq(void)
     \param[out] none
     \retval     none
 */
+/*
+ * CON TOPE - 08/10/2026. delay_time solo la baja la interrupcion de TIMER2
+ * (ver TIMER2_IRQHandler mas abajo). Si TIMER2 no arranca, su interrupcion
+ * no esta habilitada en el NVIC, o la prioridad la deja tapada, el contador
+ * no baja NUNCA y el modo actualizacion se queda colgado en "USB:
+ * conectando..." para siempre. No hay perro guardian que lo saque de ahi.
+ *
+ * El tope es generoso a proposito: un retardo de USB puede ser de varios
+ * milisegundos de verdad, asi que esto no es un plazo fino, es un seguro
+ * contra que el contador este muerto. Diez millones de vueltas de unos
+ * pocos ciclos a 192 MHz son del orden de un segundo: mas de lo que
+ * cualquier retardo legitimo de aqui necesita, y finito.
+ */
+#define HW_DELAY_VUELTAS  10000000UL
+
 static void hw_delay(uint32_t ntime, uint8_t unit)
 {
+    uint32_t guard = HW_DELAY_VUELTAS;
+
     delay_time = ntime;
 
     hw_time_set(unit);
 
-    while(0U != delay_time) {
+    while ((0U != delay_time) && (guard != 0U)) {
+        guard--;
     }
 
     timer_disable(TIMER2);

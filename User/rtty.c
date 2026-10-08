@@ -464,6 +464,31 @@ void rtty_init(void)
 
     s_baud = CONFIG_RTTY_BAUD;
     s_bit_period_samples = (uint32_t)(RTTY_FS_HZ / s_baud + 0.5f);
+    /*
+     * Y LA VENTANA DEL GOERTZEL, QUE SE QUEDABA A CERO - revision del
+     * 08/10/2026.
+     *
+     * s_vent -la ventana de MEDIO BIT, que es "la diferencia entre
+     * decodificar y no decodificar" segun el comentario de su
+     * declaracion- se calculaba SOLO en rtty_set_baud(). Aqui no, asi
+     * que en el primer arranque valia 0, y rtty_process() lo recorta a
+     * RTTY_VENT_MIN = 32: exactamente la ventana vieja de 375 Hz de
+     * resolucion que el comentario dice que no engancha.
+     *
+     * Se daba en cuanto CONFIG.CSV no trajera la clave de velocidad -un
+     * primer arranque, o un fichero de una version anterior-, porque
+     * extras_aplicar() solo llama a rtty_set_baud() si la clave venia.
+     * Sintoma: el RTTY funciona con señal fuerte y no engancha con señal
+     * floja, y se arregla solo en cuanto se toca una vez la chapa de
+     * velocidad. O sea indistinguible de "hoy la banda esta mala".
+     */
+    {
+        uint32_t v = s_bit_period_samples / 2U;
+        v = (v / RTTY_BLOCK_SAMPLES) * RTTY_BLOCK_SAMPLES;
+        if (v < RTTY_VENT_MIN) { v = RTTY_VENT_MIN; }
+        if (v > RTTY_VENT_MAX) { v = RTTY_VENT_MAX; }
+        s_vent = (uint16_t)v;
+    }
 
     s_state = RTTY_ST_IDLE;
     s_samples_since_edge = 0U;

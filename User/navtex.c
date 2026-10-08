@@ -193,6 +193,7 @@ static uint8_t  s_figuras;
 static navtex_info_t s_info;
 static uint8_t  s_zczc;        /* cuantas letras de "ZCZC" llevamos vistas */
 static uint8_t  s_cab_n;       /* cuantas de la cabecera llevamos capturadas */
+static uint8_t  s_cab_plazo;   /* caracteres que lleva esperando esa cabecera */
 static uint8_t  s_nnnn;
 static uint8_t  s_en_mensaje;
 
@@ -362,7 +363,7 @@ void navtex_start(float fs_hz)
 
     s_ring_cab = s_ring_col = 0U;
     s_figuras = 0U;
-    s_zczc = 0U; s_cab_n = 0U; s_nnnn = 0U; s_en_mensaje = 0U;
+    s_zczc = 0U; s_cab_n = 0U; s_cab_plazo = 0U; s_nnnn = 0U; s_en_mensaje = 0U;
 
     memset(&s_info, 0, sizeof s_info);
     s_on = 1U;
@@ -417,6 +418,23 @@ static void mira_cabecera(char c)
 {
     static const char zc[4] = { 'Z', 'C', 'Z', 'C' };
 
+    /*
+     * REVISION A FONDO DEL 08/10/2026: LA CABECERA, CON PLAZO.
+     *
+     * Mientras s_cab_n estaba entre 1 y 4 esta funcion RETORNABA SIEMPRE,
+     * y los espacios no consumian nada. O sea que un ZCZC seguido de
+     * espacios -o de nada, porque la señal se fuera justo ahi- dejaba el
+     * reconocedor atascado en este trozo para siempre: no se veian nuevos
+     * ZCZC, no se veia el NNNN de cierre y s_en_mensaje se quedaba en 1
+     * hasta que alguien apagara y encendiera el modo. Y en NAVTEX eso es
+     * lo normal, no lo raro: las emisoras se turnan por horas y el final
+     * de la emision llega en medio de cualquier cosa.
+     *
+     * La cabecera son CUATRO caracteres seguidos detras del ZCZC, asi que
+     * si en doce no han llegado los cuatro es que no va a llegar ninguno.
+     * Se suelta el trozo, se deja la cabecera sin marcar -que es la
+     * verdad- y se vuelve a mirar ZCZC y NNNN como siempre.
+     */
     if (s_cab_n > 0U && s_cab_n <= 4U) {
         if (c != ' ') {
             s_info.cab[s_cab_n - 1U] = c;
@@ -426,14 +444,19 @@ static void mira_cabecera(char c)
                 s_info.tiene_cab = 1U;
                 s_cab_n = 0U;
             }
+            return;
         }
-        return;
+        s_cab_plazo++;
+        if (s_cab_plazo < 12U) { return; }
+        s_cab_n = 0U;          /* se acabo el plazo: esto no es cabecera */
     }
+    s_cab_plazo = 0U;
 
     s_zczc = (c == zc[s_zczc]) ? (uint8_t)(s_zczc + 1U) : (uint8_t)(c == 'Z' ? 1U : 0U);
     if (s_zczc >= 4U) {
         s_zczc = 0U;
         s_cab_n = 1U;
+        s_cab_plazo = 0U;
         s_en_mensaje = 1U;
         return;
     }

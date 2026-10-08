@@ -204,7 +204,8 @@ static const char *const k_extra_claves[] = {
     "wefax_guardar",    /* SET_X_WFX_GUARDA  */
     "idioma",           /* SET_X_IDIOMA      */
     "encoder_inv",      /* SET_X_ENC_INV     */
-    "nr_on"             /* SET_X_NR_ON       */
+    "nr_on",            /* SET_X_NR_ON       */
+    "rtty_auto"         /* SET_X_RTTY_AUTO   */
 };
 _Static_assert(sizeof(k_extra_claves) / sizeof(k_extra_claves[0]) == (size_t)SET_X_N,
                "k_extra_claves[] y settings_extra_id_t se han desincronizado");
@@ -443,6 +444,7 @@ uint8_t settings_load(settings_loaded_t *out)
     out->have_backlight_pct = 0U;
     out->have_att_rin_level = 0U;
     out->have_tema_idx = 0U;
+    out->have_spectrum_palette = 0U;
 
     n = spi_flash_read_file_by_name(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3, buf, sizeof(buf));
     if (n == 0U) {
@@ -552,19 +554,18 @@ uint8_t settings_load(settings_loaded_t *out)
                 else if ((val_len >= 7U) && mem_eq(val, (const uint8_t *)"HEATMAP", 7U)) { spectrum_set_style(SPECTRUM_STYLE_HEATMAP); got_any = 1U; }
                 /* else: unrecognized value - leave the current style alone */
             }
-            /* spectrum_palette (08/09/2026): applied DIRECTLY here,
-             * same shape/reasoning as spectrum_style just above - see
-             * this file's build_csv() comment for why there's no
-             * ordering hazard. Unrecognized value: silently ignored,
-             * leaves whatever build_lut()/the s_palette initializer
-             * already set (SPECTRUM_PALETTE_CLASSIC). Checked longest-
-             * name-first - REQUIRED for CLASSIC_GREEN/CLASSIC (the
-             * former genuinely starts with the latter) and
-             * TEMPER_COLORS (same length as CLASSIC_GREEN, no actual
-             * collision with anything, kept in the same length-order
-             * position for consistency). Every other name is checked
-             * longest-first too, purely as a defensive habit - none
-             * of the rest actually collide. */
+            /*
+             * spectrum_palette: YA NO SE APLICA AQUI - 07/10/2026, de un
+             * issue. Se guarda con su par have_/valor y lo aplica main.c
+             * DESPUES del tema. El porque entero esta en settings.h, encima
+             * del campo; en corto: desde que los temas llevan su propia
+             * paleta de cascada, aplicarla aqui era aplicarla antes de que
+             * el tema la pisara.
+             *
+             * El comentario que habia aqui decia "there is no ordering
+             * hazard". Era CIERTO el dia que se escribio y dejo de serlo
+             * dos semanas despues, sin que nadie volviera a leerlo.
+             */
             else if (key_is(key, key_len, "spectrum_palette")) {
                 /* 22/09/2026: antes eran quince ramas ordenadas de clave
                  * mas larga a mas corta a mano, porque comparaban PREFIJOS
@@ -572,7 +573,11 @@ uint8_t settings_load(settings_loaded_t *out)
                  * ido primero. spectrum_palette_de_clave() compara la clave
                  * entera, asi que el orden ya no puede morder. */
                 int16_t i = spectrum_palette_de_clave((const char *)val, val_len);
-                if (i >= 0) { spectrum_set_palette((spectrum_palette_t)i); got_any = 1U; }
+                if (i >= 0) {
+                    out->spectrum_palette = (uint8_t)i;
+                    out->have_spectrum_palette = 1U;
+                    got_any = 1U;
+                }
                 /* else: valor desconocido - se deja la paleta que haya */
             }
             /* spec_trace_white (08/09/2026): applied DIRECTLY here,

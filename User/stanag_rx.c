@@ -80,6 +80,23 @@
 #define VIT_SALEN   256U
 #define VIT_VENT    (VIT_SALEN + (2U * VIT_MARGEN))
 
+/*
+ * Y UNA VENTANA MAS CORTA MIENTRAS LA BUSQUEDA PRUEBA CANDIDATOS.
+ *
+ * Buscando no se pinta texto: lo unico que se quiere de cada candidato
+ * es su ber. Y el ber no necesita 320 bits de informacion para separar
+ * un 0 % de un 13 %. Lo que si cuesta son los grupos: una ventana se
+ * come 20 grupos POR CADA REPETICION, o sea 160 grupos a 75 bps, y hay
+ * cuatro velocidades de BPSK que probar. Con la ventana entera el ramal
+ * de entrelazado corto costaba 16 s el solo.
+ *
+ * El numero de abajo esta medido, no elegido: ver sim/stanag_busca.c.
+ * Los 32 bits de margen de cada punta se pagan igual, asi que bajar de
+ * ahi deja la ventana siendo casi toda margen y el ber del candidato
+ * BUENO empieza a subir tambien, que es justo lo que no puede pasar.
+ */
+#define VIT_BUSCA   160U      /* bits de informacion por ventana buscando */
+
 /* --- las dos secuencias de la norma, generadas una vez ---------------- */
 static int8_t  s_pre[SIM_PRE];          /* +1 / -1 */
 static uint8_t s_scr[176];              /* indice 8PSK 0..7 */
@@ -199,7 +216,8 @@ static uint8_t  s_mitad;          /* que mitad de la trama toca barrer */
 /* El barrido va a trozos; esto es por donde iba. Ver busca_todo(). */
 static uint8_t  s_sw_k;        /* por que portadora va */
 static float    s_sw_v = -1.0f;/* lo mejor visto en esta pasada */
-static uint32_t s_sw_m;
+static uint32_t s_sw_m;        /* DESPLAZAMIENTO desde s_leido, no muestra
+                                * absoluta: ver busca_todo() */
 static float    s_sw_dw;
 /* Lo mejor que ha visto el barrido, para enseñarlo aunque no le sirva.
  * Ver el comentario de corr/corr_hz en stanag_rx.h. */
@@ -233,25 +251,176 @@ static uint8_t  s_j;           /* incremento: 12 largo, 1 corto */
 static uint8_t s_vel = STANAG_RX_600;
 static uint8_t s_largo = 1U;
 
+/*
+ * LA BUSQUEDA AUTOMATICA DE VELOCIDAD Y ENTRELAZADO - 08/10/2026.
+ *
+ * *** El dueño, 07/10/2026: "por alguna extraña razon tengo una
+ * corazonada con los stanag, y es que ninguno de todos los que pruebo
+ * decodifica nada en claro, y eso me parece rarisimo porque me he
+ * encontra muuuuuchos". ***
+ *
+ * La corazonada era correcta y la causa no era el demodulador. La
+ * velocidad y el entrelazado NO VAN EN LA SEÑAL: el preambulo de 80
+ * simbolos es identico a 75 y a 2400 bps, y el entrelazado no se anuncia
+ * en ningun sitio. Son once combinaciones que caben en la memoria, y
+ * hasta hoy habia que acertarlas a mano con dos botones. Diez de cada
+ * once veces se escuchaba un 4285 perfectamente demodulado del que no
+ * salia una letra.
+ *
+ * LO QUE LAS SEPARA. Medido sobre sim/muestras/stanag4481_psk.wav, que
+ * es 300 bps con entrelazado largo, barriendo las once:
+ *
+ *     300/largo        ber  0 %   <- y sale "This is a Stanag4481 test message"
+ *     1200/corto       ber 10 %
+ *     1200/largo       ber 11 %
+ *     600/corto        ber 14 %
+ *     600/largo        ber 14 %
+ *     75/corto         ber 18 %
+ *     150/corto        ber 18 %
+ *     300/corto        ber 20 %
+ *     75/largo         ber 20 %
+ *     150/largo        ber 22 %
+ *     2400/corto       ber 26 %
+ *
+ * Cero frente a diez. No hay ninguna duda y no hace falta nada mas:
+ * `ber` es el porcentaje de bits que NO cuadran al volver a codificar lo
+ * que el Viterbi ha decidido, o sea que se mide contra la propia señal y
+ * no contra una constante.
+ *
+ * LO QUE PROBE Y NO VALE, PARA QUE NADIE LO REPITA. Las repeticiones van
+ * por parejas, asi que el flujo desentrelazado tiene que correlar
+ * consigo mismo a retardo 2. Se mide sin Viterbi y es casi gratis.
+ * Medido: 79,1 % con el entrelazado bueno y 59,1 % con el malo. Separa,
+ * pero con una decima parte del margen de ber, y encima no distingue
+ * entre las cuatro velocidades de BPSK porque el flujo es el mismo. No
+ * compensa.
+ *
+ * EL ORDEN DE LA LISTA, QUE ES LO UNICO QUE HACE QUE ESTO SEA USABLE.
+ * Lo caro no es decidir: es LLENAR el desentrelazador antes de poder
+ * decidir, y eso son j*31 grupos. Con entrelazado corto es menos de un
+ * segundo; con el largo son diez. Asi que:
+ *
+ *   - primero las seis de entrelazado corto, luego las cinco de largo;
+ *   - dentro de cada grupo, las que comparten incremento SEGUIDAS, y de
+ *     menos repeticion a mas.
+ *
+ * Lo segundo es la clave: 75, 150, 300 y 600 usan el MISMO
+ * desentrelazador (incremento 12 largo, 1 corto) y solo se diferencian
+ * en como se suman las repeticiones, que pasa despues. Asi que las
+ * cuatro se prueban sobre un unico relleno. Sin eso, el entrelazado
+ * largo costaria cuatro rellenos de diez segundos; con eso, uno.
+ *
+ * Peor caso medido en el banco: ver sim/stanag_busca.c.
+ */
+#define AUTO_N       11U
+#define AUTO_VENT     2U   /* ventanas validas seguidas para dar por bueno */
+#define AUTO_MIRA     3U   /* ventanas miradas sin ninguna valida: descartado */
+#define AUTO_BIEN     4U   /* ber por debajo de esto es que ha acertado */
+#define AUTO_MAL     30U   /* y por encima de esto, ya enganchado, es que se perdio */
+#define AUTO_SUELTA   40U  /* ventanas malas seguidas antes de volver a buscar */
+
+typedef struct { uint8_t vel; uint8_t largo; } auto_cand_t;
+static const auto_cand_t k_auto[AUTO_N] = {
+    /* corto: el desentrelazador se llena en menos de un segundo */
+    { STANAG_RX_600,  0U },   /* \ incremento 1, un solo relleno */
+    { STANAG_RX_300,  0U },   /* |  */
+    { STANAG_RX_150,  0U },   /* |  */
+    { STANAG_RX_75,   0U },   /* /  */
+    { STANAG_RX_1200, 0U },   /* incremento 2 */
+    { STANAG_RX_2400, 0U },   /* incremento 4 */
+    /* largo: diez segundos de relleno por cada incremento distinto */
+    { STANAG_RX_600,  1U },   /* \ incremento 12, un solo relleno */
+    { STANAG_RX_300,  1U },   /* |  */
+    { STANAG_RX_150,  1U },   /* |  */
+    { STANAG_RX_75,   1U },   /* /  */
+    { STANAG_RX_1200, 1U }    /* incremento 24 */
+    /* 2400 con entrelazado largo pide 23840 bytes y no cabe: ver _init() */
+};
+/*
+ * EL MAYOR INCREMENTO QUE RECORRE LA LISTA. Con la busqueda encendida el
+ * desentrelazador se reserva para este, no para el de la velocidad
+ * puesta, y asi cambiar de candidato NO mueve el resto del reparto -ni
+ * la cola de audio, que perderia lo que lleva dentro-. Cuesta bajar el
+ * margen de la cola de 510 a 262 ms mientras se busca; en cuanto engancha
+ * se podria volver a reservar lo justo, pero eso tiraria el relleno que
+ * acaba de costar diez segundos, asi que no se hace.
+ */
+#define AUTO_J_MAX   24U
+
+static uint8_t  s_auto;         /* el dueño ha pedido que busque */
+static uint8_t  s_auto_i;       /* candidato en curso, 0..AUTO_N-1 */
+static uint8_t  s_auto_fijo;    /* ya ha acertado y esta soltando texto */
+static uint8_t  s_auto_vent;    /* ventanas validas vistas con este candidato */
+/*
+ * REVISION A FONDO DEL 08/10/2026: AQUI HABIA DOS ESCRITURAS MUERTAS.
+ *
+ * s_auto_gr0 -"grupos que habia al empezar el candidato"- se escribia en
+ * cuatro sitios y no se leia en ninguno, y s_auto_mejor_i -"de que
+ * candidato era el mejor ber"- se escribia en dos y tampoco se leia. Las
+ * dos daban a entender que el plazo se contaba en grupos y que el
+ * ganador de la pasada se recordaba, y ni una cosa ni la otra: el plazo
+ * va en VENTANAS (s_auto_n0, ver auto_paso) y el ganador se reconoce por
+ * su ber, no por su indice. Fuera las dos, que un campo muerto miente
+ * mas que un comentario viejo.
+ */
+static uint8_t  s_auto_mejor;   /* el mejor ber de la pasada entera */
+static uint8_t  s_auto_este;    /* el mejor ber de ESTE candidato */
+static uint16_t s_auto_vista;   /* ultima ventana de ber ya contada */
+static uint16_t s_auto_n0;      /* ventanas que habia cuando el candidato
+                                 * empezo a poder ser juzgado */
+static uint8_t  s_auto_n0_hay;  /* y si ya se ha tomado ese origen */
+static uint8_t  s_auto_malas;   /* ventanas malas seguidas ya enganchado */
+static uint16_t s_auto_vueltas; /* listas recorridas enteras */
+/*
+ * EL MEJOR BER DE CADA CANDIDATO, LOS ONCE. Once bytes.
+ *
+ * No lo necesita la radio para funcionar: lo necesita el banco para
+ * medir el MARGEN. Que la busqueda acierte una vez no dice nada si el
+ * ganador saca 3 y el segundo 4; dice mucho si saca 1 y el segundo 13.
+ * Sin este array el banco solo puede comprobar el resultado, y un
+ * resultado correcto por los pelos se rompe en cuanto alguien toque la
+ * ventana del Viterbi.
+ */
+static uint8_t  s_auto_ber[AUTO_N];
+
 /* acumulador de bits blandos hacia el Viterbi */
 static uint16_t s_nblandos;   /* OJO: 2*VIT_VENT son 640, no cabe en uint8_t */
+static int8_t   s_resto[16];  /* las repeticiones sin promediar todavia */
+static uint8_t  s_nresto;
 static uint8_t  s_ber;
 static uint8_t  s_ber_vale;   /* 0 = el numero de arriba no mide nada */
 static uint8_t  s_ber_equi;   /* la ventana de ahora estaba equilibrada */
 static uint8_t  s_ber_mudo;   /* ventanas seguidas sin poder medir */
+static uint16_t s_ber_n;      /* ventanas evaluadas: la busqueda cuenta estas,
+                               * no las llamadas, que son una por trama */
+
+/* la fase de byte: ver el comentario largo mas abajo */
+#define SOM_4285    0x03873C3CUL   /* la norma: delante de cada mensaje */
+#define EOM_4285    0x4B65A5B2UL   /* y detras */
+#define FASE_BITS   256U            /* lo que se mira para puntuar: 32 bytes */
+#define FASE_CADA    64U            /* cada cuantos bits se vuelve a puntuar */
+#define FASE_MINIMO  80U            /* % de imprimibles para que una fase valga */
+#define FASE_MINBYTES 8U            /* y sobre cuantos bytes con algo dentro */
+#define FASE_GANA    25U            /* y cuanto tiene que mejorar a la de ahora */
+#define FASE_FRESCA 20000U          /* bits que una marca manda sobre la cuenta */
+
+static uint8_t  s_fase;             /* 0..7, en que bit empieza el byte */
+static uint32_t s_cnt;              /* bits sueltos por el Viterbi */
+static uint32_t s_marca;            /* los ultimos 32, para SOM y EOM */
+static uint32_t s_marca_cnt;        /* bits desde la ultima marca */
+static uint8_t  s_fase_vista;       /* ya ha habido alguna marca */
+static uint8_t  s_fase_anillo[FASE_BITS / 8U];
+static uint16_t s_fase_n;
+static uint8_t  s_fase_pc;          /* % de imprimibles de la fase puesta */
 
 /* acumuladores de los formatos de salida */
 static uint8_t  s_bitacum;
 static uint8_t  s_nbitacum;
 static uint16_t s_ita2reg;
 static uint8_t  s_ita2n;
-static uint8_t  s_ita2fase;
 static uint8_t  s_ita2cif;
 static uint8_t  s_ita2mal;
 static uint8_t  s_ita2cnt;
-
-static int8_t  s_resto[16];
-static uint8_t s_nresto;
 
 /* texto */
 static char    s_lin[STANAG_RX_LINEAS][STANAG_RX_LARGO];
@@ -303,6 +472,40 @@ static uint8_t incremento(void)
 
 static uint8_t perfora(void) { return (uint8_t)((s_vel == STANAG_RX_2400) ? 1U : 0U); }
 
+/*
+ * Lo que OCUPA el desentrelazador ahora mismo y lo que se le RESERVO.
+ * Son distintos solo mientras la busqueda esta encendida: entonces se
+ * reserva para el mayor incremento de la lista para que cambiar de
+ * candidato no mueva el reparto de memoria. Ver k_auto[].
+ */
+static uint32_t dein_usa(void) { return DEIN_LARGO(s_j); }
+static uint32_t dein_res(void)
+{
+    uint8_t j = s_j;
+    if (s_auto && (j < AUTO_J_MAX)) { j = AUTO_J_MAX; }
+    return DEIN_LARGO(j);
+}
+
+/* Re-reparte las 32 lineas del desentrelazador para el incremento de
+ * ahora, DENTRO del bloque que ya estaba reservado, y lo vacia. No mueve
+ * ni un puntero: por eso la cola de audio sobrevive al cambio. */
+static void dein_coloca(void)
+{
+    uint32_t i, off = 0U;
+    s_j = incremento();
+    for (i = 0U; i < dein_usa(); i++) { s_dein[i] = 0; }
+    for (i = 0U; i < FILAS; i++) {
+        uint16_t l = (uint16_t)(((uint32_t)s_j * (31U - i)) + 1U);
+        s_dein_ini[i] = (uint16_t)off;
+        s_dein_len[i] = l;
+        s_dein_pos[i] = 0U;
+        off += l;
+    }
+    s_grupos = 0U;
+    s_nblandos = 0U;
+    s_nresto = 0U;
+}
+
 static const char *s_porque = "";
 const char *stanag_rx_porque(void) { return s_porque; }
 
@@ -353,6 +556,14 @@ uint8_t stanag_rx_init(float *trabajo, uint32_t n_floats)
      * 11936 a 1200 y 23840 a 2400, siempre con entrelazado largo. El
      * ultimo no cabe y se rechaza mas abajo diciendo por que.
      */
+    /*
+     * Con la busqueda encendida se arranca SIEMPRE por el primer
+     * candidato, y el reparto se calcula sobre ese. Si se dejara la
+     * velocidad que hubiera puesta, entrar en busqueda con 2400 largo
+     * seleccionado no arrancaria -su desentrelazador no cabe- cuando esa
+     * combinacion ni siquiera esta en la lista.
+     */
+    if (s_auto) { s_vel = k_auto[0].vel; s_largo = k_auto[0].largo; }
     s_j = incremento();
     s_anillo = (int16_t *)trabajo;
     s_simR   = &trabajo[ANILLO];                      /* el anillo ocupa la mitad */
@@ -382,7 +593,7 @@ uint8_t stanag_rx_init(float *trabajo, uint32_t n_floats)
      */
     #define ALINEA4(p)  ((p) = (uint8_t *)((((uintptr_t)(p)) + 3U) & ~(uintptr_t)3U))
     ALINEA4(b);
-    s_dein    = (int8_t *)b;   b += DEIN_LARGO(s_j);   ALINEA4(b);
+    s_dein    = (int8_t *)b;   b += dein_res();        ALINEA4(b);
     s_blandos = b;             b += 2U * VIT_VENT;     ALINEA4(b);
     s_salida  = b;             b += (VIT_VENT / 8U) + 1U;  ALINEA4(b);
     s_metricas = b;            b += 2U * sizeof(hfdl_viterbi_metric_t);  ALINEA4(b);
@@ -416,17 +627,10 @@ uint8_t stanag_rx_init(float *trabajo, uint32_t n_floats)
 
     rrc_haz();            /* ya hay sitio donde dejar los coeficientes */
     for (i = 0U; i < (2U * ANILLO); i++) { s_anillo[i] = 0; }
-    for (i = 0U; i < DEIN_LARGO(s_j); i++) { s_dein[i] = 0; }
     for (i = 0U; i < RRC_TAPS; i++) { s_colaI[i] = 0.0f; s_colaQ[i] = 0.0f; }
 
-    off = 0U;
-    for (i = 0U; i < FILAS; i++) {
-        uint16_t l = (uint16_t)(((uint32_t)s_j * (31U - i)) + 1U);
-        s_dein_ini[i] = (uint16_t)off;
-        s_dein_len[i] = l;
-        s_dein_pos[i] = 0U;
-        off += l;
-    }
+    dein_coloca();        /* vacia el desentrelazador y reparte sus 32 lineas */
+    (void)off;
 
     s_escrito = 0U; s_leido = 0U; s_cola_n = 0U;
     s_crudo_w = 0U; s_crudo_r = 0U; s_perdidas = 0U; s_nivel = 0.0f;
@@ -440,7 +644,22 @@ uint8_t stanag_rx_init(float *trabajo, uint32_t n_floats)
     s_tramas = 0U; s_sondeos = 0U; s_grupos = 0U;
     s_nblandos = 0U; s_nlin = 0U; s_col = 0U; s_ber = 0U; s_ber_vale = 0U; s_ber_equi = 0U; s_ber_mudo = 0U;
     s_bitacum = 0U; s_nbitacum = 0U; s_nresto = 0U;
-    s_ita2reg = 0U; s_ita2n = 0U; s_ita2fase = 0U;
+    s_fase = 0U; s_cnt = 0UL; s_marca = 0UL; s_marca_cnt = 0xFFFFFFFFUL;
+    s_fase_vista = 0U; s_fase_n = 0U; s_fase_pc = 0U;
+    for (i = 0U; i < (FASE_BITS / 8U); i++) { s_fase_anillo[i] = 0U; }
+    /*
+     * La busqueda arranca SIEMPRE por el principio de la lista. Seguir
+     * donde se quedo seria mas rapido cuando se vuelve a entrar en el
+     * modo, pero tambien significa que el candidato que acerto en 8 MHz
+     * se da por bueno en 12 MHz sin haberlo probado.
+     */
+    s_auto_i = 0U; s_auto_fijo = 0U; s_auto_vent = 0U;
+    s_auto_este = 100U; s_auto_mejor = 100U;
+    s_auto_vista = 0U; s_auto_n0 = 0U; s_auto_n0_hay = 0U; s_ber_n = 0U;
+    for (i = 0U; i < AUTO_N; i++) { s_auto_ber[i] = 100U; }
+    s_auto_malas = 0U; s_auto_vueltas = 0U;
+    if (s_auto) { dein_coloca(); }
+    s_ita2reg = 0U; s_ita2n = 0U;
     s_ita2cif = 0U; s_ita2mal = 0U; s_ita2cnt = 0U;
     for (i = 0U; i < STANAG_RX_LINEAS; i++) { s_lin[i][0] = '\0'; }
     s_arrancado = 1U;
@@ -478,11 +697,34 @@ uint8_t stanag_rx_largo(void) { return s_largo; }
  */
 void stanag_rx_mete(const float *audio, uint32_t n)
 {
-    uint32_t k, w;
+    uint32_t k, w, p;
 
     if (!s_arrancado || audio == 0) { return; }
 
     w = s_crudo_w;
+    /*
+     * REVISION A FONDO DEL 08/10/2026: EL RESTO, UNA VEZ POR BLOQUE Y NO
+     * UNA POR MUESTRA.
+     *
+     * La cabecera de aqui arriba promete "cuatro cuentas por muestra,
+     * nada al lado de lo que ya hace la interrupcion", y la promesa no se
+     * cumplia: el indice se calculaba con s_crudo[w % s_crudo_n], y
+     * s_crudo_n no es potencia de dos -se queda con lo que sobre del
+     * reparto, 3144 muestras en el caso peor-, asi que ESO es una
+     * DIVISION ENTERA POR MUESTRA dentro de la interrupcion de
+     * audio: en el Cortex-M4 son una docena de ciclos ella sola, mas que
+     * todo lo demas de la funcion junto, y en el sitio donde menos se
+     * puede gastar.
+     *
+     * Se saca la division del bucle: una sola al entrar para situar el
+     * indice y, dentro, un incremento con una comparacion. El tamaño de
+     * la cola no se toca a proposito -redondearlo hacia abajo a potencia
+     * de dos para poder usar un and dejaria el caso peor en 2048
+     * muestras, 170 ms, por debajo del cuarto de segundo que hace falta
+     * para que el barrido de portadora no se coma su propia entrada; ver
+     * el comentario de la cola y el banco que lo vigila-.
+     */
+    p = w % s_crudo_n;
     for (k = 0U; k < n; k++) {
         /*
          * La ganancia va aqui porque la cola es de enteros y hay que
@@ -498,7 +740,8 @@ void stanag_rx_mete(const float *audio, uint32_t n)
                                : (x * ANILLO_ESC);
         if (v >  32767.0f) { v =  32767.0f; }
         if (v < -32767.0f) { v = -32767.0f; }
-        s_crudo[w % s_crudo_n] = (int16_t)v;
+        s_crudo[p] = (int16_t)v;
+        p++; if (p >= s_crudo_n) { p = 0U; }
         w++;
     }
     s_crudo_w = w;
@@ -543,7 +786,7 @@ static void muele(void)
         s_grupos = 0U;
         s_nblandos = 0U;
         s_nresto = 0U;
-        for (z = 0U; z < DEIN_LARGO(s_j); z++) { s_dein[z] = 0; }
+        for (z = 0U; z < dein_usa(); z++) { s_dein[z] = 0; }
     }
 
     while (s_crudo_r != w) {
@@ -892,15 +1135,34 @@ static uint8_t busca_todo(uint32_t desde, uint32_t cuantos,
         }
     }
     /* lo mejor de esta vuelta se guarda y se sigue en la siguiente */
-    if (v > s_sw_v) { s_sw_v = v; s_sw_m = m; s_sw_dw = bdw; }
+    /*
+     * REVISION A FONDO DEL 08/10/2026: EL CANDIDATO SE GUARDA RELATIVO AL
+     * PUNTERO DE LECTURA, NO COMO INDICE ABSOLUTO DE MUESTRA.
+     *
+     * Antes se guardaba `m` tal cual, y entre una vuelta del barrido y la
+     * siguiente pasan 3840 muestras o mas (ver el racionado de
+     * stanag_rx_paso) sobre un anillo de solo 2048. Si el mejor caia en
+     * un trozo que no era el ultimo, ese indice absoluto apuntaba a
+     * muestras YA PISADAS: el afinado de abajo se hacia sobre basura y,
+     * al devolverlo como enganche, s_leido podia irse HACIA ATRAS -el
+     * bucle de stanag_rx_paso() daba entonces decenas de vueltas con
+     * trama_saca() dentro y al final se perdia el enganche igual-.
+     *
+     * Guardado relativo a s_leido el problema desaparece sin perder la
+     * acumulacion entre trozos, y encima por el mejor motivo: s_leido
+     * avanza de trama en trama, el preambulo SE REPITE CADA TRAMA, asi
+     * que el mismo desplazamiento sobre el nuevo s_leido apunta a la
+     * misma fase del preambulo pero sobre muestras frescas.
+     */
+    if (v > s_sw_v) { s_sw_v = v; s_sw_m = m - s_leido; s_sw_dw = bdw; }
     s_sw_k = hasta;
     if (s_sw_k < pasos) {
         /* todavia faltan portadoras por mirar: ni se decide ni se ensancha */
-        *mejor = s_sw_m; *mejor_dw = s_sw_dw; *q = s_sw_v;
+        *mejor = s_leido + s_sw_m; *mejor_dw = s_sw_dw; *q = s_sw_v;
         anota(s_sw_v, s_sw_dw);
         return 0U;
     }
-    v = s_sw_v; m = s_sw_m; bdw = s_sw_dw;
+    v = s_sw_v; m = s_leido + s_sw_m; bdw = s_sw_dw;
     s_sw_k = 0U; s_sw_v = -1.0f;
     /* Se cuenta el BARRIDO ENTERO, no cada trozo: es la medida del coste
      * y tiene que seguir significando lo mismo que cuando se escribio el
@@ -930,6 +1192,40 @@ static uint8_t busca_todo(uint32_t desde, uint32_t cuantos,
     if (v > UMBRAL) { s_ancho = 2U; return 1U; }
     if (s_ancho < ((BUSCA_PASOS - 1U) / 2U)) { s_ancho++; }
     return 0U;
+}
+
+/*
+ * REVISION A FONDO DEL 08/10/2026: HASTA DONDE SE PUEDE BARRER DE VERDAD.
+ *
+ * La guarda de la adquisicion de stanag_rx_paso() exige 1280 + 400 + 64
+ * muestras disponibles, y esa cuenta solo cubre lo que lee la
+ * CORRELACION: 400 muestras por cada desplazamiento que se prueba. Pero
+ * detras del enganche viene trama_saca(), que demodula una TRAMA ENTERA
+ * a partir del candidato, y el desplazamiento podia llegar a 1279: se
+ * acababa leyendo hasta s_leido+2556 habiendo exigido 1744.
+ *
+ * O sea que se demodulaban muestras que la interrupcion todavia no habia
+ * escrito -y lo que hay bajo esas posiciones del anillo son las de hace
+ * una vuelta- y, peor todavia, el s_leido = ini + MUE_TRAMA de despues
+ * se quedaba POR DELANTE de s_escrito: la resta sin signo del principio
+ * de stanag_rx_paso() se daba la vuelta, pasaba de ANILLO-64 y se tiraba
+ * el enganche. Un enganche BUENO que cayera en la mitad tardia de la
+ * ventana se perdia siempre, y encima despues de haber metido una trama
+ * de basura en el desentrelazador.
+ *
+ * Asi que el barrido se recorta a los desplazamientos que de verdad se
+ * pueden leer: los que dejan la trama entera ya escrita por detras, mas
+ * las cuatro muestras que el afinado de busca_todo()/busca_rapida() se
+ * puede correr. Lo que no quepa en esta vuelta cabe en la siguiente -el
+ * preambulo se repite cada trama-, que es exactamente lo que lleva
+ * haciendo el reparto por mitades desde que existe.
+ */
+static uint32_t cabe_barrer(uint32_t desde, uint32_t cuantos)
+{
+    uint32_t tope = MUE_TRAMA + 4U;
+    uint32_t sitio = (s_escrito > (desde + tope)) ? ((s_escrito - tope) - desde)
+                                                  : 0U;
+    return (cuantos > sitio) ? sitio : cuantos;
 }
 
 /* --- una trama: del audio a 128 bits blandos ------------------------- */
@@ -1137,6 +1433,17 @@ static void trama_saca(uint32_t ini, int8_t *blandos, uint8_t *sondeos_pc)
  * cabeza, la cabeza retrocede uno y se lee ahi. Para L=1 eso es retardo
  * cero, que es justo lo que le toca a la fila 31.
  */
+/* La ventana del Viterbi de ahora mismo: la entera cuando se esta
+ * sacando texto, la corta mientras la busqueda prueba candidatos. */
+static uint16_t vent_ahora(void)
+{
+    return (uint16_t)((s_auto && !s_auto_fijo) ? VIT_BUSCA : VIT_VENT);
+}
+static uint16_t salen_ahora(void)
+{
+    return (uint16_t)(vent_ahora() - (2U * VIT_MARGEN));
+}
+
 static void dein_pasa(const int8_t *ent, int8_t *sal)
 {
     uint32_t r, i;
@@ -1180,7 +1487,7 @@ static void mete_blandos(const int8_t *g)
             a /= (int32_t)rep; b2 /= (int32_t)rep;
             /* hfdl_viterbi quiere 0..255 con 255 = "seguro que es 1", y
              * aqui un blando POSITIVO es el bit 0 (fase 0 del BPSK). */
-            if (s_nblandos < (2U * VIT_VENT)) {
+            if (s_nblandos < (2U * vent_ahora())) {
                 int32_t u = 128 - a; if (u < 0) { u = 0; } if (u > 255) { u = 255; }
                 s_blandos[s_nblandos++] = (uint8_t)u;
                 u = 128 - b2; if (u < 0) { u = 0; } if (u > 255) { u = 255; }
@@ -1188,6 +1495,124 @@ static void mete_blandos(const int8_t *g)
             }
             s_nresto = 0U;
         }
+    }
+}
+
+/* --- la fase de byte -------------------------------------------------- */
+/*
+ * POR QUE HACE FALTA ESTO, Y POR QUE ES EL FALLO MAS GORDO QUE HA TENIDO
+ * ESTE MODULO - 08/10/2026.
+ *
+ * *** El dueño, 07/10/2026: "ninguno de todos los que pruebo decodifica
+ * nada en claro, y eso me parece rarisimo porque me he encontra
+ * muuuuuchos". ***
+ *
+ * El Viterbi suelta BITS, uno detras de otro, sin principio. Partirlos
+ * en bytes de ocho empezando por donde toco es acertar una de ocho. Y
+ * hasta hoy eso es exactamente lo que se hacia: el acumulador contaba de
+ * ocho en ocho desde el primer bit que salio, y donde cayera.
+ *
+ * Medido con el transmisor nuevo (sim/stanag_tx.h), sintetizando las
+ * once combinaciones y mirando las ocho fases de cada una: la señal se
+ * demodulaba PERFECTA -ber 0 o 1 %- y el texto salia ilegible en siete
+ * de cada ocho. Asi, en 75 y 150 bps con entrelazado corto:
+ *
+ *     fase 0:  .\.Y....ii...................p8...Z..H..H...].[...
+ *     fase 6:  sage. ...M....................<<This is a Stanag4481
+ *
+ * Es la misma frase. Solo estaba cortada seis bits antes. Juntando esto
+ * con las once combinaciones de velocidad y entrelazado salen OCHENTA Y
+ * OCHO maneras de mirar un 4285 de las que UNA da texto. La corazonada
+ * del dueño no era una corazonada.
+ *
+ * LO QUE NO SIRVE: la marca de principio. La norma pone SOM = 03873C3C
+ * delante de cada mensaje justo para esto, y lo primero que escribi fue
+ * buscarla. Pero la grabacion del aire que tenemos NO LA TRAE -el
+ * enganche llega cuando el mensaje ya habia empezado; se ve el EOM al
+ * final y ningun SOM-, y una radio que solo lee mensajes que empiezan
+ * despues de sintonizar no sirve de nada. Las marcas se usan cuando
+ * estan, porque son exactas, pero no se puede depender de ellas.
+ *
+ * LO QUE SI SIRVE: contar cuantos caracteres imprimibles sale en cada
+ * una de las ocho fases y quedarse con la mejor. Con la fase buena casi
+ * todos lo son; con las otras siete, casi ninguno. No es adivinar: es
+ * medir contra la propia señal, que es la regla de la casa.
+ *
+ * Y SI EL TRAFICO NO ES TEXTO -un 4285 cifrado, que son casi todos- no
+ * habra ninguna fase que puntue, y entonces no se cambia: se deja la que
+ * hubiera. Para eso esta el formato HEX.
+ */
+
+static uint8_t imprimible(uint8_t c)
+{
+    return (uint8_t)(((c >= 32U && c <= 126U) || c == 10U || c == 13U || c == 9U)
+                     ? 1U : 0U);
+}
+
+/* el bit numero k de los ultimos FASE_BITS, 0 = el mas viejo */
+static uint8_t fase_bit(uint16_t k)
+{
+    uint16_t p = (uint16_t)((s_fase_n + k) % FASE_BITS);
+    return (uint8_t)((s_fase_anillo[p >> 3] >> (p & 7U)) & 1U);
+}
+
+/* % de imprimibles leyendo los ultimos FASE_BITS con la fase f */
+static uint8_t fase_puntua(uint8_t f)
+{
+    uint16_t k;
+    uint16_t n = 0U, bien = 0U;
+
+    for (k = f; (uint16_t)(k + 8U) <= FASE_BITS; k = (uint16_t)(k + 8U)) {
+        uint8_t c = 0U, b;
+        for (b = 0U; b < 8U; b++) {
+            c = (uint8_t)((c >> 1) | (fase_bit((uint16_t)(k + b)) ? 0x80U : 0U));
+        }
+        /*
+         * EL BYTE CERO NO CUENTA, NI A FAVOR NI EN CONTRA.
+         *
+         * Entre mensaje y mensaje el 4285 manda 144 bits de cola de
+         * ceros para vaciar el registro del codificador, y una emision
+         * en reposo manda ceros y nada mas. Un corrido de ceros se lee
+         * igual en las ocho fases: no dice nada de cual es la buena,
+         * pero si se cuenta como "no imprimible" hunde a la fase BUENA
+         * por debajo del umbral. Medido: con la cola de 144 bits la fase
+         * correcta sacaba un 66 % y se quedaba fuera, y el texto no
+         * salia en 75 ni en 150 bps con entrelazado corto.
+         *
+         * Asi que se puntua solo sobre los bytes que llevan algo. Y hace
+         * falta un minimo de ellos para que el porcentaje signifique
+         * algo: cuatro bytes buenos de cuatro es un 100 % que no vale.
+         */
+        if (c == 0U) { continue; }
+        n++;
+        if (imprimible(c)) { bien++; }
+    }
+    if (n < FASE_MINBYTES) { return 0U; }
+    return (uint8_t)((bien * 100U) / n);
+}
+
+static void fase_mira(void)
+{
+    uint8_t f, mejor = 0U, mejorpc = 0U, ahora;
+
+    ahora = fase_puntua((uint8_t)(s_fase % 8U));
+    s_fase_pc = ahora;
+    /* Mientras una marca siga fresca manda ella: es exacta y la cuenta
+     * de imprimibles no lo es. */
+    if (s_fase_vista && (s_marca_cnt < FASE_FRESCA)) { return; }
+    for (f = 0U; f < 8U; f++) {
+        uint8_t pc = fase_puntua(f);
+        if (pc > mejorpc) { mejorpc = pc; mejor = f; }
+    }
+    if ((mejorpc >= FASE_MINIMO) && (mejorpc >= (uint8_t)(ahora + FASE_GANA))) {
+        /*
+         * La fase se cuenta sobre s_cnt, y el anillo guarda los ultimos
+         * FASE_BITS, que es multiplo de 8: asi la posicion f del anillo
+         * y el resto de s_cnt entre 8 son la misma cosa.
+         */
+        s_fase = (uint8_t)((s_cnt + (uint32_t)mejor) % 8U);
+        s_nbitacum = 0U;
+        s_fase_pc = mejorpc;
     }
 }
 
@@ -1267,9 +1692,14 @@ static void pon_bit(uint8_t b)
             if (arranque != 0U || parada == 0U) {
                 s_ita2mal++;
                 if (s_ita2mal > 4U) {
-                    /* fase mala: se corre un bit y se vuelve a contar */
+                    /* fase mala: se corre un bit y se vuelve a contar.
+                     * Revision a fondo del 08/10/2026: aqui se llevaba
+                     * tambien un contador s_ita2fase con la fase de bit
+                     * probada, y no lo leia NADIE -ni el panel ni la
+                     * decision de arriba, que solo mira s_ita2n-. Una
+                     * escritura muerta que hacia creer que la fase se
+                     * vigilaba desde algun sitio. Fuera. */
                     s_ita2n = 1U; s_ita2mal = 0U; s_ita2cnt = 0U;
-                    s_ita2fase = (uint8_t)((s_ita2fase + 1U) % 7U);
                 }
                 return;
             }
@@ -1281,12 +1711,48 @@ static void pon_bit(uint8_t b)
         return;
     }
 
+    /*
+     * EL ANILLO DE LOS ULTIMOS BITS Y LAS DOS MARCAS, antes de partir
+     * nada: la fase de byte se decide mirando atras. Ver arriba.
+     */
+    {
+        uint16_t p = s_fase_n;
+        if (b) { s_fase_anillo[p >> 3] = (uint8_t)(s_fase_anillo[p >> 3] | (1U << (p & 7U))); }
+        else   { s_fase_anillo[p >> 3] = (uint8_t)(s_fase_anillo[p >> 3] & ~(1U << (p & 7U))); }
+        s_fase_n = (uint16_t)((p + 1U) % FASE_BITS);
+    }
+    s_marca = (s_marca << 1) | (uint32_t)(b ? 1U : 0U);
+    s_cnt++;
+    if (s_marca_cnt < 0xFFFFFFFFUL) { s_marca_cnt++; }
+    if ((s_marca == SOM_4285) || (s_marca == EOM_4285)) {
+        /* Exacta: el bit que acaba de entrar cierra la marca, asi que el
+         * byte siguiente empieza justo aqui. */
+        s_fase = (uint8_t)(s_cnt % 8U);
+        s_nbitacum = 0U;
+        s_marca_cnt = 0U; s_fase_vista = 1U;
+        if (s_marca == EOM_4285) { pon_char('\n'); }
+        return;
+    }
+    if ((s_cnt % FASE_CADA) == 0U) { fase_mira(); }
+
+    /*
+     * Y AQUI SE PARTE, CONTANDO EN ABSOLUTO Y NO DE OCHO EN OCHO DESDE
+     * EL ULTIMO CORTE.
+     *
+     * s_fase es el numero de bit, modulo 8, en el que EMPIEZA un byte.
+     * El bit que acaba de entrar lleva el indice s_cnt-1, asi que el
+     * byte que empezo en s_fase se cierra justo cuando s_cnt vuelve a
+     * ser s_fase modulo 8. Contado asi, cambiar de fase es cambiar un
+     * numero y ya esta; con el contador relativo de antes habia que
+     * acertar ademas cuantos bits llevaba a medias, y ahi se me fue un
+     * desfase de uno que dejaba el texto ilegible en las dos
+     * velocidades mas lentas.
+     */
     s_bitacum = (uint8_t)((s_bitacum >> 1) | (b ? 0x80U : 0U));
-    s_nbitacum++;
-    if (s_nbitacum >= 8U) {
+    if (s_nbitacum < 8U) { s_nbitacum++; }
+    if (((s_cnt % 8U) == (uint32_t)s_fase) && (s_nbitacum >= 8U)) {
         if (s_fmt == STANAG_RX_HEX) { pon_hex(s_bitacum); }
         else                        { pon_char((char)s_bitacum); }
-        s_nbitacum = 0U; s_bitacum = 0U;
     }
 }
 
@@ -1296,23 +1762,26 @@ static uint8_t decodifica(void)
     uint32_t i;
     uint32_t errores = 0U;
 
-    if (s_nblandos < (2U * VIT_VENT)) { return 0U; }
+    uint16_t vent  = vent_ahora();
+    uint16_t salen = salen_ahora();
+
+    if (s_nblandos < (2U * vent)) { return 0U; }
 
     if (!hfdl_viterbi_init(&v,
             (hfdl_viterbi_metric_t *)s_metricas,
             (hfdl_viterbi_metric_t *)(s_metricas + sizeof(hfdl_viterbi_metric_t)),
             (hfdl_viterbi_decision_t *)s_vitbuf,
-            VIT_VENT + 6U, 0U)) {
+            vent + 6U, 0U)) {
         return 0U;
     }
-    if (!hfdl_viterbi_update_block(&v, s_blandos, VIT_VENT)) { return 0U; }
+    if (!hfdl_viterbi_update_block(&v, s_blandos, vent)) { return 0U; }
     {
         uint32_t mejor = 0U, m = 0xFFFFFFFFUL;
         for (i = 0U; i < HFDL_VITERBI_NUM_STATES; i++) {
             uint32_t x = hfdl_viterbi_get_final_metric(&v, i);
             if (x < m) { m = x; mejor = i; }
         }
-        hfdl_viterbi_chainback(&v, s_salida, VIT_VENT, mejor);
+        hfdl_viterbi_chainback(&v, s_salida, vent, mejor);
     }
 
     /*
@@ -1334,7 +1803,7 @@ static uint8_t decodifica(void)
     {
         uint32_t reg = 0U;
         uint32_t unos = 0U;
-        for (i = 0U; i < (2U * VIT_VENT); i++) {
+        for (i = 0U; i < (2U * vent); i++) {
             if (s_blandos[i] > 128U) { unos++; }
         }
         /*
@@ -1345,9 +1814,9 @@ static uint8_t decodifica(void)
          * que la estacion calla un momento. Se da por caducado a las ocho
          * ventanas seguidas sin poder medir, que es un segundo largo.
          */
-        s_ber_equi = (uint8_t)(((unos > ((2U * VIT_VENT) / 4U))
-                             && (unos < (((2U * VIT_VENT) * 3U) / 4U))) ? 1U : 0U);
-        for (i = 0U; i < VIT_VENT; i++) {
+        s_ber_equi = (uint8_t)(((unos > ((2U * vent) / 4U))
+                             && (unos < (((2U * vent) * 3U) / 4U))) ? 1U : 0U);
+        for (i = 0U; i < vent; i++) {
             uint32_t bit = (s_salida[i >> 3] >> (7U - (i & 7U))) & 1U;
             uint32_t r7 = ((reg << 1) | bit) & 0x7FU;
             uint32_t pa = r7 & HFDL_VITERBI_POLYA, pb = r7 & HFDL_VITERBI_POLYB;
@@ -1358,8 +1827,9 @@ static uint8_t decodifica(void)
             if ((s_blandos[(2U * i) + 1U] > 128U ? 1U : 0U) != eb) { errores++; }
             reg = r7 & 0x3FU;
         }
+        s_ber_n++;
         if (s_ber_equi) {
-            s_ber = (uint8_t)((errores * 100U) / (2U * VIT_VENT));
+            s_ber = (uint8_t)((errores * 100U) / (2U * vent));
             s_ber_vale = 1U;
             s_ber_mudo = 0U;
         } else if (s_ber_mudo < 255U) {
@@ -1391,26 +1861,244 @@ static uint8_t decodifica(void)
     {
         uint32_t hacen = ((uint32_t)s_j * 31UL) + (20UL * (uint32_t)repeticiones());
         if (s_grupos < hacen) {
-            uint32_t quedan = (uint32_t)s_nblandos - (2U * VIT_SALEN);
+            uint32_t quedan = (uint32_t)s_nblandos - (2U * salen);
             for (i = 0U; i < quedan; i++) {
-                s_blandos[i] = s_blandos[i + (2U * VIT_SALEN)];
+                s_blandos[i] = s_blandos[i + (2U * salen)];
             }
             s_nblandos = (uint16_t)quedan;
             return 0U;
         }
     }
-    for (i = VIT_MARGEN; i < (VIT_MARGEN + VIT_SALEN); i++) {
+    /*
+     * NI UNA LETRA MIENTRAS LA BUSQUEDA ESTA PROBANDO.
+     *
+     * Diez de las once combinaciones son falsas y el Viterbi devuelve
+     * bits igual de convencidos con todas. Si se pintaran, la pantalla
+     * escupiria basura durante los veinte segundos del barrido y el
+     * texto bueno quedaria enterrado debajo. El contador de grupos y el
+     * ber siguen corriendo: lo unico que se corta es la salida.
+     */
+    if (s_auto && !s_auto_fijo) {
+        uint32_t quedan0 = (uint32_t)s_nblandos - (2U * salen);
+        for (i = 0U; i < quedan0; i++) { s_blandos[i] = s_blandos[i + (2U * salen)]; }
+        s_nblandos = (uint16_t)quedan0;
+        return 0U;
+    }
+    for (i = VIT_MARGEN; i < (VIT_MARGEN + salen); i++) {
         pon_bit((uint8_t)((s_salida[i >> 3] >> (7U - (i & 7U))) & 1U));
     }
 
     /* la ventana avanza VIT_SALEN bits de informacion = 2*VIT_SALEN blandos */
     {
-        uint32_t quedan = (uint32_t)s_nblandos - (2U * VIT_SALEN);
-        for (i = 0U; i < quedan; i++) { s_blandos[i] = s_blandos[i + (2U * VIT_SALEN)]; }
+        uint32_t quedan = (uint32_t)s_nblandos - (2U * salen);
+        for (i = 0U; i < quedan; i++) { s_blandos[i] = s_blandos[i + (2U * salen)]; }
         s_nblandos = (uint16_t)quedan;
     }
     return 1U;
 }
+
+
+/* --- la busqueda automatica ------------------------------------------- */
+
+/*
+ * TODO LO QUE AQUI SE MIDE SE MIDE EN GRUPOS DE 32 BITS, NO EN TRAMAS NI
+ * EN SEGUNDOS. Una trama suelta 4 grupos en BPSK, 8 en QPSK y 12 en
+ * 8PSK, y una ventana del Viterbi se come 20 grupos por cada repeticion.
+ * Contar tramas haria que el mismo plazo fuese tres veces mas corto a
+ * 2400 que a 600, y ocho veces mas corto a 75 bps que a 600. El grupo es
+ * la unidad en la que el trabajo es el mismo.
+ */
+
+/* Grupos que hacen falta antes de que el ber signifique algo: llenar el
+ * desentrelazador mas una ventana entera. La misma cuenta que usa
+ * decodifica() para decidir si suelta texto. */
+static uint32_t auto_hacen(void)
+{
+    return ((uint32_t)s_j * 31UL)
+         + (((uint32_t)vent_ahora() / 16UL) * (uint32_t)repeticiones());
+}
+
+/*
+ * Y HASTA CUANDO SE LE AGUANTA A UN CANDIDATO QUE NO DA UNA VENTANA
+ * MEDIBLE. En VENTANAS MIRADAS, no en grupos ni en segundos, y eso es lo
+ * importante:
+ *
+ * *** La primera version contaba grupos, el banco salia verde, y los
+ * cuatro candidatos de entrelazado corto ponian "sin medir": no se
+ * habian juzgado NUNCA. Pasaban el plazo mientras el demodulador todavia
+ * estaba enganchando, antes de que hubiera una sola ventana que mirar.
+ * Con una señal de entrelazado corto de verdad, la busqueda habria
+ * pasado de largo por la combinacion buena y no la habria encontrado
+ * hasta la segunda vuelta, veinte segundos despues. El verde escondia el
+ * fallo porque la grabacion del banco es de entrelazado LARGO. ***
+ *
+ * Contado en ventanas eso no puede pasar: cada candidato recibe el mismo
+ * numero de oportunidades tarde el tiempo que tarde en llegar, y si el
+ * enganche se cae el contador vuelve a empezar (ver stanag_rx_paso).
+ *
+ * Y que un candidato no se pueda medir NO es neutral: significa que ese
+ * reparto de repeticiones promedia el flujo a cero, que es justo lo que
+ * hace una hipotesis equivocada. Ver el comentario del equilibrio en
+ * decodifica().
+ */
+/*
+ * Pasa al candidato que toque.
+ *
+ * Si cambia el incremento hay que vaciar y volver a repartir el
+ * desentrelazador, y eso cuesta otro relleno -diez segundos con el
+ * entrelazado largo-. Si no cambia, el relleno que ya hay SIRVE y solo
+ * se tira la ventana del Viterbi, que es medio segundo. Por eso la lista
+ * lleva seguidas las que comparten incremento: las cuatro velocidades de
+ * BPSK salen por el precio de un relleno.
+ */
+static void auto_pon(uint8_t i)
+{
+    uint8_t j_antes = s_j;
+
+    s_auto_i = i;
+    s_vel   = k_auto[i].vel;
+    s_largo = k_auto[i].largo;
+    s_auto_vent = 0U;
+    s_auto_este = 100U;
+    s_ber = 0U; s_ber_vale = 0U; s_ber_equi = 0U; s_ber_mudo = 0U;
+    s_auto_vista = s_ber_n;
+    /*
+     * REVISION A FONDO DEL 08/10/2026: el origen del plazo NO se toma
+     * aqui. Ver auto_paso(): tomarlo al entrar el candidato dejaba el
+     * plazo de AUTO_MIRA ventanas gastado antes de que hubiera una sola
+     * ventana que mirar.
+     */
+    s_auto_n0 = s_ber_n;
+    s_auto_n0_hay = 0U;
+    if (incremento() != j_antes) {
+        dein_coloca();        /* otro incremento: s_grupos vuelve a cero */
+    } else {
+        s_nblandos = 0U;      /* el mismo: solo la ventana del Viterbi */
+        s_nresto = 0U;
+    }
+}
+
+static void auto_siguiente(void)
+{
+    uint8_t i = (uint8_t)((s_auto_i + 1U) % AUTO_N);
+    if (i == 0U) { s_auto_vueltas++; }
+    auto_pon(i);
+}
+
+/*
+ * Una trama ya demodulada. Devuelve 1 si acaba de enganchar, que es lo
+ * unico que obliga al panel a repintar en el acto.
+ *
+ * NO SE JUZGA UN CANDIDATO HASTA QUE PUEDE SER JUZGADO. Con el
+ * desentrelazador a medio llenar sus lineas largas sueltan los ceros del
+ * arranque; el Viterbi decide igual y el ber que sale no mide la señal,
+ * mide el relleno. Por eso lo primero de todo es la cuenta de grupos.
+ */
+static uint8_t auto_paso(void)
+{
+    if (!s_auto) { return 0U; }
+
+    if (s_auto_fijo) {
+        /*
+         * Ya enganchado, pero no para siempre. Si el ber se pone feo
+         * muchas ventanas seguidas es que la emision ha cambiado de
+         * velocidad, ha callado para siempre o nos hemos ido de
+         * frecuencia. Volver a buscar es mejor que seguir pintando
+         * basura con cara de texto.
+         */
+        if (s_ber_n != s_auto_vista) {
+            s_auto_vista = s_ber_n;
+            if (s_ber_vale) {
+                if (s_ber > AUTO_MAL) {
+                    if (s_auto_malas < 255U) { s_auto_malas++; }
+                    if (s_auto_malas >= AUTO_SUELTA) {
+                        s_auto_fijo = 0U;
+                        s_auto_mejor = 100U;
+                        s_auto_vueltas = 0U;
+                        auto_pon(0U);
+                    }
+                } else {
+                    s_auto_malas = 0U;
+                }
+            }
+        }
+        return 0U;
+    }
+
+    if (s_grupos < auto_hacen()) { return 0U; }
+
+    /*
+     * REVISION A FONDO DEL 08/10/2026: EL PLAZO SE CUENTA DESDE QUE HAY
+     * ALGO QUE MIRAR.
+     *
+     * auto_pon() tomaba s_auto_n0 = s_ber_n al ENTRAR el candidato, pero
+     * s_ber_n lleva subiendo desde mucho antes -el ber se evalua en cada
+     * ventana del Viterbi, tambien mientras el desentrelazador se
+     * llena- y la guarda de grupos de arriba tarda un relleno entero en
+     * pasar. Cuando por fin pasaba, s_ber_n - s_auto_n0 ya valia unas
+     * 120 ventanas, muy por encima de AUTO_MIRA: la gracia de dar tres
+     * ventanas de cortesia no existia y el candidato BUENO se descartaba
+     * en la primera ventana que saliera sin equilibrio. Se vuelve a tomar
+     * el origen justo aqui, que es el instante en que el candidato
+     * empieza a poder ser juzgado.
+     */
+    if (!s_auto_n0_hay) {
+        s_auto_n0_hay = 1U;
+        s_auto_n0 = s_ber_n;
+    }
+
+    /* Una ventana nueva, o ninguna. Esto se llama una vez por trama y
+     * una ventana tarda de 10 a 80 grupos: sin esta guarda la misma
+     * ventana se contaria docenas de veces. */
+    if (s_ber_n == s_auto_vista) { return 0U; }
+    s_auto_vista = s_ber_n;
+
+    if (!s_ber_equi) {
+        /* Mirada y sin poder medir. A la tercera, fuera. */
+        if ((uint16_t)(s_ber_n - s_auto_n0) >= AUTO_MIRA) { auto_siguiente(); }
+        return 0U;
+    }
+
+    if (s_ber < s_auto_este) { s_auto_este = s_ber; }
+    if (s_auto_este < s_auto_ber[s_auto_i]) { s_auto_ber[s_auto_i] = s_auto_este; }
+    if (s_auto_vent < 255U) { s_auto_vent++; }
+    if (s_auto_este < s_auto_mejor) {
+        s_auto_mejor = s_auto_este;
+    }
+
+    /*
+     * UNA VENTANA MALA BASTA PARA DESCARTAR; PARA ACEPTAR HACEN FALTA
+     * DOS, Y LA ASIMETRIA ES A PROPOSITO.
+     *
+     * Descartar de mas cuesta otra vuelta a la lista. Aceptar de menos
+     * deja la pantalla escupiendo basura con cara de texto, que es
+     * exactamente el fallo que esta busqueda viene a quitar. Y como diez
+     * de los once candidatos son falsos, lo que hay que saber hacer
+     * deprisa es descartar: esperar la segunda ventana de cada uno
+     * duplicaba el tiempo del barrido entero.
+     */
+    if (s_ber >= AUTO_BIEN) { auto_siguiente(); return 0U; }
+    if (s_auto_vent < AUTO_VENT) { return 0U; }
+
+    /*
+     * Acertado. La velocidad y el entrelazado se quedan puestos -los
+     * botones del panel ya enseñan los de verdad- y se abre el grifo del
+     * texto. El desentrelazador NO se toca: esta lleno, y volverlo a
+     * repartir costaria los diez segundos otra vez.
+     */
+    s_auto_fijo = 1U;
+    s_auto_malas = 0U;
+    return 1U;
+}
+
+void stanag_rx_auto_pon(uint8_t on) { s_auto = (uint8_t)(on ? 1U : 0U); }
+uint8_t stanag_rx_auto(void)      { return s_auto; }
+uint8_t stanag_rx_auto_fijo(void) { return (uint8_t)(s_auto && s_auto_fijo); }
+
+uint8_t stanag_rx_auto_cuantos(void) { return AUTO_N; }
+uint8_t stanag_rx_auto_ber(uint8_t i) { return (i < AUTO_N) ? s_auto_ber[i] : 100U; }
+uint8_t stanag_rx_auto_vel(uint8_t i) { return (i < AUTO_N) ? k_auto[i].vel : 0U; }
+uint8_t stanag_rx_auto_largo(uint8_t i) { return (i < AUTO_N) ? k_auto[i].largo : 0U; }
 
 uint8_t stanag_rx_paso(void)
 {
@@ -1451,7 +2139,8 @@ uint8_t stanag_rx_paso(void)
              * Si ya se tuvo portadora, el reenganche barato primero.
              */
             if (s_hay_portadora) {
-                if (busca_rapida(s_leido, MUE_TRAMA, &ini, &q)) {
+                if (busca_rapida(s_leido, cabe_barrer(s_leido, MUE_TRAMA),
+                                &ini, &q)) {
                     s_engancha = 1U;
                     s_fallos_rapidos = 0U;
                     goto enganchado;
@@ -1506,7 +2195,13 @@ uint8_t stanag_rx_paso(void)
             {
                 float dwg = 0.0f;
                 uint32_t desde = s_leido + (s_mitad ? (MUE_TRAMA / 2U) : 0U);
-                if (!busca_todo(desde, MUE_TRAMA / 2U, &ini, &dwg, &q)) {
+                /* y solo donde se va a poder demodular: ver cabe_barrer() */
+                uint32_t cuantos = cabe_barrer(desde, MUE_TRAMA / 2U);
+                if (cuantos == 0U) {
+                    s_leido += MUE_TRAMA;
+                    continue;
+                }
+                if (!busca_todo(desde, cuantos, &ini, &dwg, &q)) {
                     s_leido += MUE_TRAMA;
                     continue;
                 }
@@ -1527,6 +2222,28 @@ uint8_t stanag_rx_paso(void)
             }
         }
 enganchado:
+
+        /*
+         * Y LA MISMA CUENTA, COMPROBADA JUSTO ANTES DE DEMODULAR.
+         *
+         * cabe_barrer() recorta el barrido con el s_escrito del momento,
+         * pero el barrido va a trozos y el candidato que gana puede venir
+         * de un trozo anterior: si entonces habia mas muestras por delante
+         * que ahora -el retraso del bucle principal varia entre 1744 y
+         * 1984 muestras- el candidato bueno de entonces puede quedarse sin
+         * su trama entera. Antes eso acababa en s_leido = ini + MUE_TRAMA
+         * POR DELANTE de s_escrito, la resta sin signo de mas arriba se
+         * daba la vuelta y se tiraba el enganche; ahora se espera: el
+         * enganche se queda puesto, s_leido se pone en el candidato y en
+         * la vuelta siguiente el seguimiento lo vuelve a coger -son tres
+         * muestras de ventana- con la trama ya completa. (Revision a
+         * fondo del 08/10/2026.)
+         */
+        if ((s_escrito - ini) < MUE_TRAMA) {
+            s_prox  = ini;
+            s_leido = ini;
+            break;
+        }
 
         trama_saca(ini, bl, &s_sondeos);
         s_tramas++;
@@ -1577,10 +2294,20 @@ enganchado:
             s_grupos = 0U;
             s_nblandos = 0U;
             s_nresto = 0U;
-            for (z = 0U; z < DEIN_LARGO(s_j); z++) { s_dein[z] = 0; }
+            /* Y el candidato que la busqueda estuviera juzgando vuelve a
+             * empezar: el relleno que iba a juzgar ya no existe, y las
+             * ventanas que haya mirado no valen para nada. */
+            s_auto_n0 = s_ber_n;
+            s_auto_n0_hay = 0U;   /* y el plazo se volvera a tomar cuando
+                                   * el relleno vuelva a dar la cara */
+            s_auto_vista = s_ber_n;
+            s_auto_vent = 0U;
+            s_auto_este = 100U;
+            for (z = 0U; z < dein_usa(); z++) { s_dein[z] = 0; }
             continue;
         }
         if (decodifica()) { hay = 1U; }
+        if (auto_paso())  { hay = 1U; }
     }
     return hay;
 }
@@ -1615,6 +2342,16 @@ void stanag_rx_estado(stanag_rx_est_t *out)
     out->ancho_hz = (uint16_t)((float)s_ancho * BUSCA_PASO_HZ);
     out->corr_hz = s_corr_hz;
     out->cola_ms = (uint16_t)((s_crudo_n * 1000UL) / 12000UL);
+    out->busca        = s_auto;
+    out->busca_fijo   = (uint8_t)(s_auto && s_auto_fijo);
+    out->busca_cual   = (uint8_t)(s_auto_i + 1U);
+    out->busca_de     = AUTO_N;
+    out->busca_mejor  = s_auto_mejor;
+    out->busca_vueltas = (uint8_t)((s_auto_vueltas > 255U) ? 255U : s_auto_vueltas);
+    {
+        uint32_t h = auto_hacen();
+        out->busca_falta = (uint16_t)((s_grupos < h) ? (h - s_grupos) : 0UL);
+    }
     {
         /* j*31 grupos para llenar el entrelazador, mas 20*repeticiones
          * para juntar la primera ventana del Viterbi. */
@@ -1651,7 +2388,7 @@ void stanag_rx_borra(void)
     for (i = 0U; i < STANAG_RX_LINEAS; i++) { s_lin[i][0] = '\0'; }
     s_nlin = 0U; s_col = 0U;
     s_bitacum = 0U; s_nbitacum = 0U;
-    s_ita2reg = 0U; s_ita2n = 0U; s_ita2fase = 0U;
+    s_ita2reg = 0U; s_ita2n = 0U;
     s_ita2cif = 0U; s_ita2mal = 0U; s_ita2cnt = 0U;
     s_corr_max = 0U; s_sondeos_max = 0U; s_tramas_bien = 0U;
     s_perdidas = 0U; s_busquedas = 0U;

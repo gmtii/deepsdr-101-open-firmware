@@ -246,6 +246,59 @@ static carga_r_t copia(const carga_fmc_t *fmc, uint32_t tam, uint32_t cluster)
     uint32_t quedan = tam;
     uint32_t s;
 
+    /*
+     * LA CADENA SE COMPRUEBA ANTES DE BORRAR NADA - 08/10/2026, de la
+     * revision a fondo de ese dia.
+     *
+     * Lo que estaba mal, y lo decia el comentario de arriba de esta misma
+     * funcion sin ser verdad: "Que el fichero quepa se decide ANTES de
+     * borrar nada: si no cabe, la flash no se toca y la imagen que hubiera
+     * dentro sigue entera". Eso valia para el TAMAÑO, que lo mira quien
+     * llama, pero no para la CADENA: los cinco sectores de la aplicacion
+     * se borraban aqui mismo, en las tres lineas de debajo, y el estado de
+     * la cadena no se descubria hasta el bucle de copia, ya con la flash
+     * vacia.
+     *
+     * O sea: un update.bin cuya cadena de clusters este rota -y para eso
+     * basta un apagon mientras el PC la escribia, o sacar el disco sin
+     * expulsarlo- se llevaba por delante LA APLICACION QUE FUNCIONABA.
+     * Devolvia CARGA_FICHERO_ROTO, que es cierto, y dejaba la radio sin
+     * imagen y sin forma de recibir la siguiente mas que por SWD. Que es
+     * exactamente lo que este cargador existe para evitar.
+     *
+     * El arreglo es recorrer la cadena entera ANTES del primer borra(),
+     * con las mismas comprobaciones que hace el bucle de copia -cada
+     * eslabon tiene que ser un cluster del volumen- y contando eslabones
+     * hasta cubrir `tam`. El tope de vueltas es por si la cadena tiene un
+     * bucle: mas eslabones que clusters hay en el volumen es imposible, y
+     * sin el tope esto se quedaria dando vueltas para siempre en el
+     * arranque, que desde fuera es un ladrillo igual.
+     *
+     * Cuesta recorrer la FAT una vez -dos bytes por eslabon, ver
+     * fat_siguiente()-, o sea el doble de lecturas de FAT por grabado. Al
+     * lado de cinco borrados de sector de flash interna y 320 kB de
+     * copia, nada.
+     */
+    {
+        uint32_t c = cluster;
+        uint32_t por_cluster = (uint32_t)s_spc * SECTOR_BYTES;
+        uint32_t cubierto = 0U;
+        uint32_t vueltas = 0U;
+
+        if (por_cluster == 0U) { return CARGA_FICHERO_ROTO; }
+        while (cubierto < tam) {
+            /* El mismo rango que exige el bucle de copia. Es mas estricto
+             * que el 0x0FF8 del formato, y eso es lo que se quiere: lo que
+             * no pasara la copia tiene que no pasar aqui. */
+            if (c < 2U || c >= (s_nclus + 2U)) { return CARGA_FICHERO_ROTO; }
+            cubierto += por_cluster;
+            vueltas++;
+            if (vueltas > s_nclus) { return CARGA_FICHERO_ROTO; }  /* bucle */
+            if (cubierto >= tam) { break; }
+            c = fat_siguiente(c);
+        }
+    }
+
     for (s = 0U; s < N_SECTORES; s++) {
         if (!fmc->borra(k_sectores[s])) { return CARGA_ERROR_BORRAR; }
     }

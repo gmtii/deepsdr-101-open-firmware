@@ -90,12 +90,27 @@ static const float k_salto[AUTO_NSALTO] = { 170.0f, 425.0f, 450.0f, 850.0f };
 static uint16_t s_prom[AUTO_PROM_N];
 static uint8_t  s_prom_hay;
 
+static uint32_t s_prom_visto;   /* ultimo cuadro promediado */
+
 static void prom_mete(void)
 {
-    const float *m = rtty_scope_get_frame();
+    const float *m;
+    uint32_t n = rtty_scope_frame_n();
     uint16_t i;
     float mx = 0.0f;
 
+    /*
+     * UNA VENTANA SE PROMEDIA UNA VEZ, y antes no era asi: se cogia el
+     * cuadro en cada vuelta del bucle aunque fuera el mismo de antes, con
+     * lo que la media de ocho cuadros era la media de ocho copias de uno.
+     * Y la gracia de promediar es que en 43 ms solo suena uno de los dos
+     * tonos: sin cuadros DISTINTOS no aparece la pareja. Ver
+     * rtty_scope_frame_peek().
+     */
+    if (n == s_prom_visto) { return; }
+    s_prom_visto = n;
+
+    m = rtty_scope_frame_peek();
     if (m == 0) { return; }
     for (i = 0U; i < AUTO_PROM_N; i++) {
         float v = m[AUTO_PROM_B0 + i];
@@ -251,6 +266,7 @@ void rtty_auto_reset(void)
     memset(s_punt, 0, sizeof s_punt);
     memset(s_prom, 0, sizeof s_prom);
     s_prom_hay = 0U;
+    s_prom_visto = rtty_scope_frame_n();   /* empezar a contar desde ahora */
     memset(s_racha, 0, sizeof s_racha);
     s_racha_tot = 0U; s_racha_cur = 0U; s_racha_ant = 1U;
 }

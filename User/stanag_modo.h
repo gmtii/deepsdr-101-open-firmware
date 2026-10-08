@@ -36,6 +36,7 @@ enum {
     STANAG_4529,
     STANAG_4481,
     STANAG_4538,
+    STANAG_4415,
     STANAG_FORMAS
 };
 
@@ -115,8 +116,25 @@ uint8_t     stanag_modo_encaja(void);
  */
 uint8_t     stanag_modo_demod(void);
 
+/*
+ * Y EL 4415, QUE ES EL TERCER OFICIO DEL MISMO BOTON.
+ *
+ * Puesta la forma en "S4415" corre s4415.c: 75 bps, el unico modo de 110A
+ * que ensancha cada dibit en 32 simbolos y pasa por donde no pasa nadie.
+ * Pide 39 kB del mismo prestamo que los otros dos, asi que tampoco puede
+ * correr a la vez.
+ */
+uint8_t     stanag_modo_4415(void);
+
+/*
+ * El boton de velocidad tiene una posicion MAS que velocidades: la
+ * ultima es AUTO, que recorre las once combinaciones sola. Por eso el
+ * que lo rueda tiene que usar stanag_modo_vel_n() y no
+ * STANAG_RX_VELOCIDADES.
+ */
 void        stanag_modo_vel_pon(uint8_t v);
 uint8_t     stanag_modo_vel(void);
+uint8_t     stanag_modo_vel_n(void);
 const char *stanag_modo_vel_txt(void);
 
 void        stanag_modo_entre_pon(uint8_t largo);
@@ -129,3 +147,4 @@ void        stanag_modo_llenado(uint16_t *hechos, uint16_t *hacen);
 void        stanag_modo_fmt_pon(uint8_t f);
 uint8_t     stanag_modo_fmt(void);
 const char *stanag_modo_fmt_txt(void);
+uint8_t     stanag_modo_fmt_n(void);

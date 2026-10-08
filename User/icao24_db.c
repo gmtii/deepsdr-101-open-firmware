@@ -47,7 +47,8 @@
  * sitio donde quiza escribe alguien a quien no conocemos" y pasa a ser
  * sitio nuestro. ZA_TOPE (User/zona_alta.h) sube a 0x200000.
  *
- * Y NO, LAS IMAGENES NO VIVEN AHI. Lo parecia -img_store.h habla de "la
+ * Y NO, LAS IMAGENES NO VIVEN AHI. Lo parecia -el desaparecido
+ * img_store.h hablaba de "la
  * cola de bloques borrados por encima del sistema de ficheros"- y por eso
  * casi no lo tocamos. Pero las fotos de SSTV y WEFAX se guardan como BMP en
  * el VOLUMEN FAT, el disco que se ve por USB (gsv_abre(), en main.c). De la

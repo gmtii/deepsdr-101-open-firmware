@@ -206,7 +206,40 @@ typedef struct {
     uint8_t  corr_max;       /* la mejor correlacion desde que se arranco */
     uint8_t  sondeos_max;    /* los mejores sondeos desde que se arranco */
     uint16_t tramas_bien;    /* tramas con los sondeos por encima del minimo */
+    /*
+     * LA BUSQUEDA AUTOMATICA DE VELOCIDAD Y ENTRELAZADO.
+     *
+     * *** El dueño, 07/10/2026: "ninguno de todos los que pruebo
+     * decodifica nada en claro, y eso me parece rarisimo porque me he
+     * encontra muuuuuchos". ***
+     *
+     * Ni la velocidad ni el entrelazado van en la señal, y son once
+     * combinaciones. Esto las recorre solo. Ver stanag_rx.c.
+     */
+    uint8_t  busca;          /* 1 = la busqueda esta encendida */
+    uint8_t  busca_fijo;     /* 1 = ya ha acertado y esta soltando texto */
+    uint8_t  busca_cual;     /* candidato en curso, 1..busca_de */
+    uint8_t  busca_de;       /* cuantos candidatos tiene la lista */
+    uint8_t  busca_mejor;    /* el mejor ber de la pasada, 100 = ninguno todavia */
+    uint8_t  busca_vueltas;  /* listas recorridas enteras sin acertar */
+    uint16_t busca_falta;    /* grupos que faltan para poder juzgar este */
 } stanag_rx_est_t;
+
+/*
+ * La busqueda automatica. Encenderla o apagarla cambia cuanto
+ * desentrelazador hay que reservar, asi que el modo tiene que volver a
+ * llamar a _init() detras; stanag_modo.c lo hace con recoloca().
+ */
+void     stanag_rx_auto_pon(uint8_t on);
+uint8_t  stanag_rx_auto(void);
+uint8_t  stanag_rx_auto_fijo(void);
+/* La lista de candidatos y el mejor ber que ha sacado cada uno en la
+ * pasada de ahora. Es lo que mide el MARGEN, y sin margen el acierto es
+ * casualidad. 100 = todavia no se ha podido medir. */
+uint8_t  stanag_rx_auto_cuantos(void);
+uint8_t  stanag_rx_auto_ber(uint8_t i);
+uint8_t  stanag_rx_auto_vel(uint8_t i);
+uint8_t  stanag_rx_auto_largo(uint8_t i);
 
 uint8_t  stanag_rx_init(float *trabajo, uint32_t n_floats);
 void     stanag_rx_fin(void);

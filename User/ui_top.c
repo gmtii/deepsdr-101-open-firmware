@@ -148,6 +148,8 @@ static const char *knob_name(ui_knob_t k)
     case UI_KNOB_NR:         return tr("Reducción", "Noise red.");
     case UI_KNOB_RTTY_SHIFT: return "RTTY";
     case UI_KNOB_CW_TONE:    return tr("Tono CW", "CW pitch");
+    case UI_KNOB_FILTRO_LO:  return tr("Filtro mín.", "Filter min.");
+    case UI_KNOB_FILTRO_HI:  return tr("Filtro máx.", "Filter max.");
     default:                 return "?";
     }
 }
@@ -763,7 +765,7 @@ void ui_top_draw_rds(const ui_top_state_t *st)
  * pantalla.
  *
  * El orden es el mismo que el de ui_top_draw(): cabecera, marquesina encima
- * -que se recorta a su hueco por construccion- y franja de estado.
+ * -recortada a su hueco a mano, ver abajo- y franja de estado.
  */
 void ui_top_pinta_en(gfx2_surf_t *s, const ui_top_state_t *st)
 {
@@ -777,7 +779,30 @@ void ui_top_pinta_en(gfx2_surf_t *s, const ui_top_state_t *st)
      */
     {
         gfx2_surf_t sub = gfx2_sub_y(s, UI_TOP_RDS_Y, UI_TOP_RDS_H);
-        if (sub.h > 0) { rds_franja(&sub, (void *)st); }
+        if (sub.h > 0) {
+            /*
+             * Y SOLO EN SU HUECO TAMBIEN A LO ANCHO - 07/10/2026.
+             *
+             * *** El dueño, con cuatro capturas: "en alguna se ve un fallo de
+             * la marquesina, en la radio ese fallo no se ve en directo, asi
+             * que supongo que es por la forma de hacer las screens". ***
+             *
+             * Era eso exactamente. Aqui arriba ponia que la marquesina "se
+             * recorta a su hueco por construccion", y era mentira a medias:
+             * se recortaba en Y -gfx2_sub_y- y en X no se recortaba nada. En
+             * la pantalla de verdad el recorte en X lo da la ventana que pide
+             * ui_top_draw_rds() a gfx2_render(); aqui no hay ventana.
+             *
+             * Con un nombre corto -"RADIO EUROPA"- no se nota, y por eso
+             * sim/captura.c llevaba desde el 05/10 diciendo que todo iba
+             * bien: el texto que usaba cabia. Con "XSQ Guangzhou Meteo Fax"
+             * el nombre se salia por la derecha y pisaba el reloj y los
+             * voltios de la bateria. Ahora el banco usa el nombre largo.
+             */
+            gfx2_recorte_x(rds_x1(), UI_TOP_RDS_X2);
+            rds_franja(&sub, (void *)st);
+            gfx2_recorte_quita();
+        }
     }
     draw_status(s, (void *)st);
 }

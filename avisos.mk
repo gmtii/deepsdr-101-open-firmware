@@ -250,6 +250,27 @@ $(OBJECTS): avisos.mk
 # se puede llegar al interruptor de la ventana de informacion. Ver el
 # comentario de LCD_DMA_ON_DEF en User/lcd_dma.c.
 DMA ?= 1
+#
+# COMPILACION DE DIAGNOSTICO: SIN EL CORRECTOR DE I/Q - 08/10/2026.
+#
+# *** El dueño: "va lento desde el ultimo stanag". ***
+#
+# Tres hipotesis medidas y arregladas, y la averia sigue. Lo que la V3.88
+# metio DENTRO de la interrupcion del DMA -iqbal_bloque() y iqa_bloque(), que
+# pasan por TODAS las muestras, en TODOS los modos- y en cada cuadro del
+# espectro -iqbal_mira_espectro() y iqbal_ab_paso()- es lo unico de aquellas
+# fechas que corre siempre y que no se puede apagar: iqbal_set_on() no lo
+# llama nadie.
+#
+#   make SINIQ=1
+#
+# lo deja fuera. Si con eso la radio vuelve a ir fina, ya sabemos donde
+# mirar; si no, queda descartado y se busca en otro lado. Un flasheo y una
+# respuesta, en vez de otra hipotesis.
+ifeq ($(SINIQ),1)
+CFLAGS += -DSIN_IQ
+endif
+
 CFLAGS += -DLCD_DMA_ON_DEF=$(DMA)U
 
 # ---------------------------------------------------------------------

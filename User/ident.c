@@ -28,7 +28,7 @@ static const ident_firma_t k_firmas[] = {
 /* --- portadoras y silencio ------------------------------------------- */
 {
     "Portadora sola (heterodino)", IDENT_POR_PICO,
-    0U,0U, 0U,0U, 0U,0U, 0U,120U, 81U,100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    0U,0U, 0U,0U, 0U,0U, 0U,120U, 81U,100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
     "No lleva datos. Medida: 57% de la potencia en +-8 Hz.",
     "Lone carrier (heterodyne)",
     "Carries no data. Measured: 57% of the power within +-8 Hz."
@@ -56,7 +56,7 @@ static const ident_firma_t k_firmas[] = {
  */
 {
     "CW (Morse)", IDENT_POR_PICO,
-    0U,0U, 0U,0U, 0U,0U, 0U,200U, 15U,80U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    0U,0U, 0U,0U, 0U,0U, 0U,200U, 15U,80U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
     "Un tono que se enciende y se apaga. Ponlo en CW.",
     "CW (Morse)",
     "A tone switching on and off. Put it in CW."
@@ -74,14 +74,14 @@ static const ident_firma_t k_firmas[] = {
  */
 {
     "SITOR-B / NAVTEX / telex", IDENT_POR_TONOS,
-    150U,190U, 950U,1050U, 0U,0U, 0U,0U, 70U,100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    150U,190U, 950U,1050U, 0U,0U, 0U,0U, 70U,100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
     "Emite seguido. Ponlo en NAVTEX: sale texto en claro.",
     "SITOR-B / NAVTEX / telex",
     "Transmits continuously. Put it in NAVTEX: plain text comes out."
 },
 {
     "SITOR-A o DSC (a rafagas)", IDENT_POR_TONOS,
-    150U,190U, 950U,1050U, 0U,0U, 0U,0U, 0U,69U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    150U,190U, 950U,1050U, 0U,0U, 0U,0U, 0U,69U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
     "Misma modulacion que el NAVTEX pero a rafagas. La radio no lo decodifica.",
     "SITOR-A or DSC (bursts)",
     "Same modulation as NAVTEX but in bursts. This radio does not decode it."
@@ -126,7 +126,7 @@ static const ident_firma_t k_firmas[] = {
  */
 {
     "STANAG 4481 FSK (KG-84)", IDENT_POR_TONOS,
-    780U,920U, 700U,800U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    780U,920U, 700U,800U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
     "Cifrado con KG-84. Se demodula, no se lee.",
     "STANAG 4481 FSK (KG-84)",
     "Encrypted with KG-84. It demodulates, it does not read."
@@ -161,14 +161,125 @@ static const ident_firma_t k_firmas[] = {
  */
 {
     "FSK 50 Bd / 850 Hz (naval)", IDENT_POR_TONOS,
-    780U,920U, 480U,520U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    780U,920U, 480U,520U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
     "Ponlo en RTTY. Suele ir cifrada: salen letras sin sentido.",
     "FSK 50 Bd / 850 Hz (naval)",
     "Put it in RTTY. Usually encrypted: letters come out meaningless."
 },
+/*
+ * COMPROBADA EN ANTENA - 06/10/2026, en 14.118 kHz. Dos grabaciones del
+ * dueño, separadas 18 minutos, medidas por separado:
+ *
+ *     15:09   tonos 711,00 / 910,95   salto 199,95 Hz   50,00 Bd
+ *     15:27   tonos 708,98 / 909,12   salto 200,13 Hz   50,00 Bd
+ *
+ * La velocidad no es una estimacion: barriendo de 40 a 130 baudios y mirando
+ * cuanto se concentran las transiciones en una rejilla, 50,00 da 0,52 y lo
+ * siguiente se queda en 0,16.
+ *
+ * Y NO ES BAUDOT, que es lo que hacia falta saber. Troceando el flujo en
+ * grupos de siete bits:
+ *
+ *     unos por grupo:   3 -> 12%    4 -> 73%    5 -> 11%
+ *     al azar seria:    3 -> 27%    4 -> 27%    5 -> 16%
+ *
+ * Setenta y tres por ciento con EXACTAMENTE cuatro unos es un codigo de
+ * relacion constante de 7 bits, o sea el mismo alfabeto CCIR 476 del NAVTEX
+ * (ver navtex.c). El 12 y el 11 de tres y cinco son caracteres con un bit
+ * mal: el canal iba justo.
+ *
+ * PERO NO ES SITOR-B, y por eso el NAVTEX de la radio se queda en "buscando"
+ * por mucho que el alfabeto cuadre. Tres cosas no encajan, y cualquiera de
+ * las tres basta:
+ *
+ *   - NAVTEX_BAUD son 100 y esto va a 50: el reloj muestrea cada bit dos
+ *     veces y los grupos de siete se deshacen.
+ *   - NAVTEX_SHIFT_HZ son 170 y esto tiene 200.
+ *   - El NAVTEX declara enganche POR LA REPETICION -en SITOR-B cada caracter
+ *     se manda dos veces-, y aqui no hay ninguna: buscando caracteres
+ *     iguales a distancia de 1 a 12 sale entre el 2% y el 9%, que es el azar.
+ *
+ * Y EL CONTENIDO VA CIFRADO. Esto se demostro de una forma que no depende de
+ * acertar con la tabla, que es lo que lo hace valido: contando cuantas veces
+ * sale cada uno de los 35 codigos posibles.
+ *
+ *     esta señal                 entropia 4,97   el mas comun 5,3%
+ *     reparto perfectamente plano         5,13                2,9%
+ *     texto llano en el mismo alfabeto    4,34               20,5%  <- el espacio
+ *
+ * En cualquier idioma el espacio y la E se llevan la quinta parte ellos
+ * solos. Aqui los 35 salen casi igual de veces. Y cambiar la tabla es barajar
+ * las etiquetas, que no mueve el reparto: NINGUNA tabla, orden de bits ni
+ * polaridad puede convertir un reparto plano en idioma.
+ *
+ * O sea que la fila no dice "no se decodifica": dice que ya esta decodificado
+ * y que dentro no hay texto. Que es justo lo que el dueño necesitaba oir
+ * despues de media tarde mirando letras sueltas en la pantalla.
+ */
+/*
+ * POR SEPARACION Y POR VELOCIDAD DE SIMBOLO, NO POR LA DE DOS TONOS.
+ *
+ * *** El dueño, con la radio delante y la fila recien puesta: "el modo ident
+ * me dice sin estructura medible jajaja". ***
+ *
+ * Y la fila estaba bien; lo que no servia era el numero que le estaba
+ * pidiendo. Metiendo sus dos grabaciones por el motor de verdad
+ * (sim/identaire.c):
+ *
+ *            salto    velocidad de dos tonos    velocidad de simbolo
+ *   15:09    200 Hz          594,0 Bd                  50,5 Bd
+ *   15:27    200 Hz           53,2 Bd                  50,4 Bd
+ *
+ * El salto sale clavado las dos veces. La velocidad de dos tonos se va a
+ * 594 en una de ellas -doce veces la buena- y a 53,2 en la otra: con ese
+ * numero no hay rango que valga. La de SIMBOLO acierta las dos veces.
+ *
+ * Asi que esta fila va por separacion, como la de APRS y por la misma clase
+ * de motivo: no se le pide a un medidor el numero que no da. Y la velocidad
+ * no se tira, se pide por el otro camino: sim_min/sim_max, 46,0 a 55,0 Bd,
+ * que es una segunda condicion independiente del salto.
+ */
+/*
+ * Y EL MEDIDOR DE SIMBOLO TAMPOCO DABA EL NUMERO - 08/10/2026.
+ *
+ * *** El dueño, con una grabacion de 16.911 kHz: "que es y porque rtty en
+ * auto no lo pilla, ni el ident". ***
+ *
+ * Era esta misma señal otra vez: 50,00 Bd, 201 Hz de salto, tonos 935 y
+ * 1137. El motor la midio bien de salto y de velocidad y la fila NO cuadro,
+ * porque simb_x10 dio 25,0 Bd contra un rango de 46,0 a 55,0. La mitad
+ * exacta, y por una razon que estaba delante: en una FSK de DOS tonos con
+ * bits al azar el tono cambia cada dos bits de media, asi que ese medidor
+ * cuenta CAMBIOS DE TONO. Es el mismo error del parrafo de arriba -pedirle
+ * a un medidor un numero que no da-, repetido con el otro medidor, dos dias
+ * despues de escribirlo. Y al caerse la fila ganaba "MFSK multitono
+ * (Olivia)", que es peor que no decir nada.
+ *
+ * Un rango que no entra NO se arregla ensanchandolo: 25,0 y 50,0 no caben
+ * en el mismo rango sin tragarse medio catalogo. Se cambia por una medida
+ * que distinga de verdad, y la que distingue es el ALFABETO: ver cr7_pc en
+ * stanag_det.h. De cada grupo de siete bits, cuantos tienen exactamente
+ * cuatro unos. El 78% aqui y el 31% en una FSK con bits al azar al MISMO
+ * salto y la MISMA velocidad -medido, sim/cr7_test.c-, que es el par que
+ * ninguna medida del espectro puede separar.
+ *
+ * Y el baudio sale de la propia medida (cr7_bd): trocear al baudio
+ * equivocado deshace la relacion constante, asi que el que la maximiza es
+ * el bueno. Se PRUEBA en vez de estimarse, igual que rtty_auto.c hace con
+ * la velocidad, y por el mismo motivo.
+ *
+ * sim_min/sim_max vuelven a 0,0: la fila va por separacion y alfabeto.
+ */
+{
+    "FSK 50 Bd / 200 Hz (cifrada)", IDENT_POR_SEP,
+    192U,215U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 60U,500U, 1U,
+    "Alfabeto del NAVTEX pero no es SITOR-B. Cifrada: no sale texto.",
+    "FSK 50 Bd / 200 Hz (encrypted)",
+    "NAVTEX alphabet but not SITOR-B. Encrypted: no text comes out."
+},
 {
     "RTTY de aficionado", IDENT_POR_TONOS,
-    150U,190U, 440U,470U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    150U,190U, 440U,470U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
     "45,45 baudios. Ponlo en RTTY-L o RTTY-U.",
     "Amateur RTTY",
     "45.45 baud. Put it in RTTY-L or RTTY-U."
@@ -215,7 +326,7 @@ static const ident_firma_t k_firmas[] = {
  */
 {
     "RTTY comercial 50 Bd", IDENT_POR_TONOS,
-    400U,500U, 480U,520U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    400U,500U, 480U,520U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
     "50 baudios, 450 Hz. Ponlo en RTTY.",
     "Commercial RTTY 50 Bd",
     "50 baud, 450 Hz. Put it in RTTY."
@@ -232,7 +343,7 @@ static const ident_firma_t k_firmas[] = {
  */
 {
     "APRS / paquete AFSK 1200", IDENT_POR_SEP,
-    900U,1100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    900U,1100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
     "Tonos de 1200 y 2200 Hz. Ponlo en APRS.",
     "APRS / AFSK 1200 packet",
     "Tones of 1200 and 2200 Hz. Put it in APRS."
@@ -246,35 +357,80 @@ static const ident_firma_t k_firmas[] = {
  */
 {
     "STANAG 4285 o 4481 PSK", IDENT_POR_TRAMA,
-    0U,0U, 0U,0U, 10560U,10774U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    0U,0U, 0U,0U, 10560U,10774U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
     "106,67 ms. Ponlo en STANAG: a 600 bps y entrelazado largo hay texto.",
     "STANAG 4285 or 4481 PSK",
     "106.67 ms. Put it in STANAG: at 600 bps with long interleave there is text."
 },
 {
     "STANAG 4529", IDENT_POR_TRAMA,
-    0U,0U, 0U,0U, 20957U,21381U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    0U,0U, 0U,0U, 20957U,21381U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
     "211,69 ms. Es media banda: 1,24 kHz. No se demodula todavia.",
     "STANAG 4529",
     "211.69 ms. Half bandwidth: 1.24 kHz. Not demodulated yet."
 },
 {
     "STANAG 4415", IDENT_POR_TRAMA,
-    0U,0U, 0U,0U, 6613U,6749U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    0U,0U, 0U,0U, 6613U,6749U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
     "66,81 ms. Para canales muy malos. No se demodula todavia.",
     "STANAG 4415",
     "66.81 ms. For very bad channels. Not demodulated yet."
 },
+/*
+ * EL MARGEN DE ESTA FILA ERA DEMASIADO ANCHO - 06/10/2026.
+ *
+ * *** El dueño, en 7.135 kHz: la radio dijo "STANAG 4539 / MIL-188-110B,
+ * trama 120,02 ms, calidad 79%". Y no lo era. ***
+ *
+ * El margen de antes -11841 a 12081, o sea 118,41 a 120,81 ms- es el +-1%
+ * con el que nacio la fila. Parece prudente hasta que uno mira cuanto se
+ * separan las tramas que hay que distinguir:
+ *
+ *     287 simbolos a 2400 Bd = 119,583 ms    <- el anexo C
+ *     288 simbolos a 2400 Bd = 120,000 ms
+ *
+ * TRES DECIMAS DE PORCENTAJE. Un margen del 1% se las traga las dos, asi que
+ * la fila decia "STANAG 4539" ante cualquier cosa con una trama de 120 ms.
+ *
+ * La grabacion de referencia que ya estaba en el proyecto
+ * (sim/muestras/stanag4539_110b.mp3) mide 119,61 ms con calidad 100%. La
+ * señal del dueño mide 120,02. El medidor distingue de sobra -da centesimas
+ * de milisegundo-; lo que no distinguia era la TABLA.
+ *
+ * AQUI HABIA UN SEGUNDO ARGUMENTO Y ERA MALO. Decia que por el ancho
+ * tampoco podia ser 110B: sobre las grabaciones del dueño la señal media
+ * unos 1450 Hz, y 2400 Bd con raiz de coseno alzado ocupan 3240. Lo retiro,
+ * porque una captura de pantalla posterior de la propia radio, con la misma
+ * señal mejor centrada en el paso de audio, mide ANCHO 2900 con la trama al
+ * 100% de calidad. Y 2900 si cuadra con 2400 Bd.
+ *
+ * Lo que pasaba es que el ancho medido depende MUCHISIMO de donde caiga la
+ * señal dentro del paso de audio: con el dial alto, la mitad de abajo se sale
+ * por debajo de cero y lo que queda se mide estrecho. Tres medidas de la
+ * misma señal: 1450 Hz (grabacion a 7.134,45), 2197 (radio a 7.135,00) y
+ * 2900 (radio a 7.136,00). El numero no era de la señal, era de la sintonia.
+ *
+ * O sea que el ancho no descarta nada aqui, y presentarlo como prueba fue
+ * repetir el fallo del dia: afirmar mas de lo que la medida aguanta. Lo que
+ * separa las dos señales es SOLO el periodo de trama, y con eso basta porque
+ * el medidor da centesimas de milisegundo.
+ *
+ * Nuevo margen: 119,30 a 119,80 ms. Entra la referencia (119,61) con 0,3 ms
+ * de holgura por cada lado y se queda fuera la de 120,02 por 0,22. Es
+ * estrecho a proposito: esta fila nombra un protocolo con apellidos y un
+ * periodo de trama es TODO lo que mira. Cuando lo unico que se mide es un
+ * numero, ese numero tiene que cuadrar de verdad.
+ */
 {
     "STANAG 4539 / MIL-188-110B", IDENT_POR_TRAMA,
-    0U,0U, 0U,0U, 11841U,12081U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    0U,0U, 0U,0U, 11930U,11980U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
     "119,61 ms, que son 287 simbolos. No se demodula todavia.",
     "STANAG 4539 / MIL-188-110B",
     "119.61 ms, which is 287 symbols. Not demodulated yet."
 },
 {
     "STANAG 4538 / MIL-188-141B", IDENT_POR_TRAMA,
-    0U,0U, 0U,0U, 1320U,1347U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    0U,0U, 0U,0U, 1320U,1347U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
     "13,33 ms y a rafagas: es el 3G ALE, busca enlace.",
     "STANAG 4538 / MIL-188-141B",
     "13.33 ms and in bursts: this is 3G ALE looking for a link."
@@ -308,14 +464,14 @@ static const ident_firma_t k_firmas[] = {
  */
 {
     "WSPR", IDENT_POR_ANCHO,
-    0U,0U, 0U,0U, 0U,0U, 1U,14U, 80U,100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    0U,0U, 0U,0U, 0U,0U, 1U,14U, 80U,100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
     "4-FSK de 6 Hz. Ponlo en WSPR: tarda dos minutos por ciclo.",
     "WSPR",
     "4-FSK of 6 Hz. Put it in WSPR: two minutes per cycle."
 },
 {
     "PSK31", IDENT_POR_ANCHO,
-    0U,0U, 0U,0U, 0U,0U, 15U,40U, 30U,100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    0U,0U, 0U,0U, 0U,0U, 15U,40U, 30U,100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
     "31,25 baudios en BPSK. Ponlo en PSK31.",
     "PSK31",
     "31.25 baud in BPSK. Put it in PSK31."
@@ -329,7 +485,7 @@ static const ident_firma_t k_firmas[] = {
  */
 {
     "FT8 (una sola)", IDENT_POR_ANCHO,
-    0U,0U, 0U,0U, 0U,0U, 41U,80U, 50U,100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    0U,0U, 0U,0U, 0U,0U, 41U,80U, 50U,100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
     "8-FSK de 50 Hz. Ponlo en FT8: emite 12,6 s de cada 15.",
     "FT8 (a single one)",
     "8-FSK of 50 Hz. Put it in FT8: 12.6 s out of every 15."
@@ -367,21 +523,21 @@ static const ident_firma_t k_firmas[] = {
  */
 {
     "FT8 (o JS8 de 15 s)", IDENT_POR_CADENCIA,
-    0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 140U,160U, 60U,95U, 0U,0U, 0U,0U, 1U,
+    0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 140U,160U, 60U,95U, 0U,0U, 0U,0U, 0U,0U, 1U,
     "Todas empiezan a la vez cada 15 s. Ponlo en FT8.",
     "FT8 (or 15 s JS8)",
     "They all start together every 15 s. Put it in FT8."
 },
 {
     "FT4", IDENT_POR_CADENCIA,
-    0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 68U,82U, 40U,80U, 0U,0U, 0U,0U, 0U,
+    0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 68U,82U, 40U,80U, 0U,0U, 0U,0U, 0U,0U, 0U,
     "Ciclo de 7,5 s. Esta radio no lo decodifica todavia.",
     "FT4",
     "7.5 s cycle. This radio does not decode it yet."
 },
 {
     "WSPR", IDENT_POR_CADENCIA,
-    0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1150U,1250U, 80U,98U, 0U,0U, 0U,0U, 0U,
+    0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1150U,1250U, 80U,98U, 0U,0U, 0U,0U, 0U,0U, 0U,
     "Ciclo de dos minutos. Ponlo en WSPR.",
     "WSPR",
     "Two-minute cycle. Put it in WSPR."
@@ -404,21 +560,21 @@ static const ident_firma_t k_firmas[] = {
  */
 {
     "MFSK multitono (Olivia y parecidos)", IDENT_POR_SIMBOLO,
-    0U,0U, 0U,0U, 0U,0U, 150U,2600U, 0U,0U, 0U,0U, 0U,0U, 150U,400U, 4U,60U, 0U,
+    0U,0U, 0U,0U, 0U,0U, 150U,2600U, 0U,0U, 0U,0U, 0U,0U, 150U,400U, 4U,60U, 0U,0U, 0U,
     "Separacion = velocidad. Divide el ancho entre ella y salen los tonos.",
     "Multitone MFSK (Olivia and the like)",
     "Spacing = speed. Divide the bandwidth by it to get the tones."
 },
 {
     "ALE 2G (MIL-188-141)", IDENT_POR_SIMBOLO,
-    0U,0U, 0U,0U, 0U,0U, 1400U,2400U, 0U,0U, 0U,0U, 0U,0U, 1150U,1350U, 0U,0U, 0U,
+    0U,0U, 0U,0U, 0U,0U, 1400U,2400U, 0U,0U, 0U,0U, 0U,0U, 1150U,1350U, 0U,0U, 0U,0U, 0U,
     "125 baudios, 8 tonos de 750 a 2500 Hz. Ponlo en ALE.",
     "ALE 2G (MIL-188-141)",
     "125 baud, 8 tones from 750 to 2500 Hz. Put it in ALE."
 },
 {
     "Teletipo de 100 Bd sin dos tonos claros", IDENT_POR_SIMBOLO,
-    0U,0U, 0U,0U, 0U,0U, 100U,900U, 0U,0U, 0U,0U, 0U,0U, 950U,1050U, 0U,0U, 0U,
+    0U,0U, 0U,0U, 0U,0U, 100U,900U, 0U,0U, 0U,0U, 0U,0U, 950U,1050U, 0U,0U, 0U,0U, 0U,
     "100 baudios. Si fuera SITOR saldria arriba; prueba NAVTEX igual.",
     "100 Bd teletype without two clear tones",
     "100 baud. A SITOR would show up above; try NAVTEX anyway."
@@ -441,7 +597,7 @@ static const ident_firma_t k_firmas[] = {
  */
 {
     "SSTV o fax meteorologico", IDENT_POR_ANCHO,
-    0U,0U, 0U,0U, 0U,0U, 600U,1300U, 85U,100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    0U,0U, 0U,0U, 0U,0U, 600U,1300U, 85U,100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
     "Imagen en FM, 1500-2300 Hz. Prueba SSTV y luego WEFAX.",
     "SSTV or weather fax",
     "Image in FM, 1500-2300 Hz. Try SSTV and then WEFAX."
@@ -458,21 +614,21 @@ static const ident_firma_t k_firmas[] = {
  */
 {
     "Modem estrecho sin identificar", IDENT_POR_ANCHO,
-    0U,0U, 0U,0U, 0U,0U, 81U,599U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    0U,0U, 0U,0U, 0U,0U, 81U,599U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
     "Entre 0,1 y 0,6 kHz. Teletipo o ARQ: hay decenas.",
     "Unidentified narrow modem",
     "Between 0.1 and 0.6 kHz. Teletype or ARQ: there are dozens."
 },
 {
     "Podria ser ALE 2G", IDENT_POR_ANCHO,
-    0U,0U, 0U,0U, 0U,0U, 1400U,2200U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    0U,0U, 0U,0U, 0U,0U, 1400U,2200U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
     "8-FSK de 750 a 2500 Hz a rafagas cortas. Prueba ALE.",
     "Could be ALE 2G",
     "8-FSK from 750 to 2500 Hz in short bursts. Try ALE."
 },
 {
     "Podria ser HFDL, o un modem de fase", IDENT_POR_ANCHO,
-    0U,0U, 0U,0U, 0U,0U, 2201U,3200U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    0U,0U, 0U,0U, 0U,0U, 2201U,3200U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
     "Ocupa el canal entero. Prueba HFDL y mira el periodo de abajo.",
     "Could be HFDL, or a phase modem",
     "Takes the whole channel. Try HFDL and look at the period below."
@@ -622,6 +778,13 @@ uint16_t ident_casa(const stanag_det_t *m, const ident_cad_t *c,
         if (!dentro((uint16_t)m->tonos, (uint16_t)f->ton_min,
                     (uint16_t)f->ton_max)) { continue; }
 
+        /* El alfabeto. Ver cr7_min en ident.h y cr7_pc en stanag_det.h.
+         * cr7_bd es exacto porque solo hay tres valores posibles. */
+        if (f->cr7_min != 0U) {
+            if (m->cr7_pc < f->cr7_min) { continue; }
+            if (f->cr7_bd != 0U && m->cr7_bd_x10 != f->cr7_bd) { continue; }
+        }
+
         salen[n++] = (uint8_t)i;
         if (n >= max) { break; }
     }
@@ -682,7 +845,32 @@ uint16_t ident_casa(const stanag_det_t *m, const ident_cad_t *c,
  * ==========================================================================
  */
 static uint8_t  s_activo;
-static char     s_lin[IDENT_LINEAS][IDENT_LARGO];
+/*
+ * LAS LINEAS DEL PANEL: PUNTEROS, NO COPIAS - 06/10/2026.
+ *
+ * Esto era `char s_lin[9][IDENT_LARGO]`, o sea NUEVE COPIAS. Y casi todo lo
+ * que se mete son cadenas que YA ESTAN en la flash: los nombres y las notas
+ * de k_firmas[] y las frases fijas de tr(). Copiarlas era pagar RAM por
+ * tener dos veces lo mismo, y encima con un tope -48 bytes- que cortaba las
+ * notas largas a mitad de palabra.
+ *
+ * Subir el tope a 80 arreglaba el corte y costaba 288 bytes mas de RAM...
+ * que no habia: el enlazador se planto con "region RAM overflowed by 192
+ * bytes". Lo cual estuvo bien, porque el arreglo era otro.
+ *
+ * Ahora cada linea es UN PUNTERO. Las que son const no se copian: se
+ * apuntan, y se pintan enteras midan lo que midan, sin tope ninguno.
+ *
+ * Los buffers solo hacen falta para lo que NO vive en flash: las lineas que
+ * se arman con numeros -ponf()- y la del nombre con su "(?)" pegado, que se
+ * monta en una variable local de escribe() y desaparece al salir. Para esas
+ * hay un buffer por linea, del tamaño de antes, que de sobra les llega.
+ *
+ * Sale ganando por los dos lados: 252 bytes MENOS que el array de 80 que no
+ * cabia, y las notas ya no se cortan.
+ */
+static const char *s_lin[IDENT_LINEAS];
+static char        s_buf[IDENT_LINEAS][IDENT_LARGO];
 static uint8_t  s_nlin;
 static stanag_det_t s_m;
 static uint32_t s_medidas;
@@ -721,12 +909,27 @@ static uint32_t s_medidas;
 #define CAD_MIN      16U        /* lo minimo para intentar medir: 8 s */
 #define CAD_HUECOS   16U        /* huecos entre subidas que se guardan */
 
+/*
+ * REVISION A FONDO DEL 08/10/2026: LOS DOS QUE CRUZAN CON LA INTERRUPCION
+ * DE AUDIO, VOLATILE.
+ *
+ * cad_mete() corre en la interrupcion de audio y es quien sube s_cad_n y
+ * s_cad_desde; los lee el bucle principal -s_cad_n para saber cuantas
+ * anotaciones hay que mirar, s_cad_desde para decidir si toca volver a
+ * calcular la cadencia-. Los otros cuatro no cruzan: s_cad_w, s_cad_acu
+ * y s_cad_acu_n solo los toca la interrupcion, y s_cad es el puntero al
+ * prestamo, que se fija al arrancar el modo. Sin volatile el compilador
+ * puede dar por bueno el valor que leyo hace un momento y entonces, o la
+ * cadencia no se recalcula nunca -se queda en la de hace diez minutos-,
+ * o se mide sobre menos anotaciones de las que hay. Un sintoma que se
+ * buscaria en la tabla de firmas, que es donde no esta.
+ */
 static float   *s_cad;          /* CAD_N energias, en el prestamo */
-static uint16_t s_cad_n;        /* cuantas hay escritas, tope CAD_N */
+static volatile uint16_t s_cad_n;   /* cuantas hay escritas, tope CAD_N */
 static uint16_t s_cad_w;        /* donde va la siguiente */
 static uint32_t s_cad_acu_n;    /* muestras acumuladas en la de ahora */
 static float    s_cad_acu;      /* y su suma de cuadrados */
-static uint16_t s_cad_desde;    /* anotaciones desde el ultimo calculo */
+static volatile uint16_t s_cad_desde; /* anotaciones desde el ultimo calculo */
 static ident_cad_t s_cad_r;
 
 /* Una anotacion cada CAD_MUESTRAS muestras. Corre en la interrupcion de
@@ -896,10 +1099,21 @@ static void cad_calcula(void)
     }
 }
 
+/* Para cadenas que viven en flash y no se mueven: se apunta. Sin tope. */
 static void pon(const char *t)
 {
     if (s_nlin >= IDENT_LINEAS) { return; }
-    (void)snprintf(s_lin[s_nlin], IDENT_LARGO, "%s", t);
+    s_lin[s_nlin] = t;
+    s_nlin++;
+}
+
+/* Para lo que esta en una variable que va a desaparecer -el nombre con su
+ * "(?)" pegado, que se monta en el marco de escribe()-: hay que copiarlo. */
+static void pon_copia(const char *t)
+{
+    if (s_nlin >= IDENT_LINEAS) { return; }
+    (void)snprintf(s_buf[s_nlin], IDENT_LARGO, "%s", t);
+    s_lin[s_nlin] = s_buf[s_nlin];
     s_nlin++;
 }
 
@@ -919,7 +1133,8 @@ static uint8_t solo_pistas(const uint8_t *cand, uint16_t n)
 static void ponf(const char *fmt, int a, int b, int c)
 {
     if (s_nlin >= IDENT_LINEAS) { return; }
-    (void)snprintf(s_lin[s_nlin], IDENT_LARGO, fmt, a, b, c);
+    (void)snprintf(s_buf[s_nlin], IDENT_LARGO, fmt, a, b, c);
+    s_lin[s_nlin] = s_buf[s_nlin];
     s_nlin++;
 }
 
@@ -1183,18 +1398,44 @@ static void escribe(void)
          * anchura ha caido - en ese orden, porque el orden es el que
          * decide que se queda en la cabeza de quien lee.
          */
-        pon(tr("Sin estructura medible", "No measurable structure"));
-        pon(tr("ni tonos, ni ritmo, ni ciclo", "no tones, no rhythm, no cycle"));
+        /*
+         * Y ESTE RENGLON NO PUEDE DECIR "NI TONOS" CUANDO HAY TONOS -
+         * 06/10/2026.
+         *
+         * *** El dueño: "el modo ident me dice sin estructura medible
+         * jajaja", con la pantalla enseñando DEBAJO "tonos 709 y 910 Hz,
+         * salto 200 Hz". ***
+         *
+         * Se reia con razon: la cabecera decia que no se habia podido medir
+         * nada y tres renglones mas abajo estaban los numeros medidos. Una
+         * pantalla que se contradice consigo misma es peor que una que no
+         * dice nada, porque la de abajo era verdad.
+         *
+         * Lo que pasaba de verdad no es que no hubiera medidas, es que
+         * ninguna FIRMA cuadraba con ellas. Son dos cosas distintas y para
+         * quien mira son muy distintas: una dice "esta señal no tiene forma"
+         * y la otra dice "no la tengo en la tabla". La segunda invita a
+         * apuntar los numeros; la primera invita a cambiar de frecuencia.
+         */
+        if (s_m.hay_tonos || s_m.simb_x10 != 0U || s_cad_r.vale) {
+            pon(tr("No cuadra con ninguna firma",
+                   "Matches no signature"));
+            pon(tr("los numeros estan medidos, la tabla no los tiene",
+                   "the numbers are measured, the table lacks them"));
+        } else {
+            pon(tr("Sin estructura medible", "No measurable structure"));
+            pon(tr("ni tonos, ni ritmo, ni ciclo", "no tones, no rhythm, no cycle"));
+        }
         (void)snprintf(fila, IDENT_LARGO, tr("por el ancho: %s", "by bandwidth: %s"),
                        ident_nombre(&k_firmas[cand[0]]));
-        pon(fila);
+        pon_copia(fila);
         pon(ident_nota(&k_firmas[cand[0]]));
     } else {
         for (i = 0U; i < n && s_nlin < 3U; i++) {
             const ident_firma_t *f = &k_firmas[cand[i]];
             (void)snprintf(fila, IDENT_LARGO, "%s%s",
                            ident_nombre(f), f->probada ? "" : " (?)");
-            pon(fila);
+            pon_copia(fila);
         }
         /* La nota de la PRIMERA, que es la que mas probabilidades tiene de
          * ser la buena: las demas son el aviso de que no esta cerrado. */
@@ -1213,7 +1454,7 @@ static void escribe(void)
             if (otra != IDENT_ALT_NADIE) {
                 (void)snprintf(fila, IDENT_LARGO, tr("y a ratos: %s", "and now and then: %s"),
                                ident_nombre(&k_firmas[otra]));
-                pon(fila);
+                pon_copia(fila);
             }
         }
     }
@@ -1345,13 +1586,13 @@ uint8_t     ident_modo_lineas(void) { return s_nlin; }
 const char *ident_modo_linea(uint8_t i)
 {
     if (i >= IDENT_LINEAS) { return ""; }
-    return s_lin[i];
+    return s_lin[i] ? s_lin[i] : "";
 }
 
 void ident_modo_borra(void)
 {
     uint8_t i;
-    for (i = 0U; i < IDENT_LINEAS; i++) { s_lin[i][0] = '\0'; }
+    for (i = 0U; i < IDENT_LINEAS; i++) { s_lin[i] = ""; s_buf[i][0] = '\0'; }
     s_nlin = 0U;
     s_medidas = 0UL;
     memset(s_alt, 0, sizeof s_alt);

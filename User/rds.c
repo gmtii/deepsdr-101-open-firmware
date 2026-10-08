@@ -366,7 +366,11 @@ static void grupo_decodifica(void)
             }
         } else {
             /* 2B: solo dos, en D, y el texto es de 32 */
-            if (s_blq_ok[3] && seg < 16U) {
+            /* Revision a fondo del 08/10/2026: aqui habia un "&& seg < 16U"
+             * que siempre era cierto -seg sale de un & 0x0F, o sea 0..15- y
+             * hacia creer que el indice se estaba comprobando contra el
+             * tamano del texto de 32. No comprobaba nada; fuera. */
+            if (s_blq_ok[3]) {
                 s_info.rt[seg * 2U]      = rds_car((uint8_t)(s_blq[3] >> 8));
                 s_info.rt[seg * 2U + 1U] = rds_car((uint8_t)(s_blq[3] & 0xFFU));
                 s_info.tiene_rt = 1U;

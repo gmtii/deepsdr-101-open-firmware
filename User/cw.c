@@ -171,7 +171,29 @@ _Static_assert(CW_BLOCK_SAMPLES == 32U, "cw.c da por supuesto bloques de 32 mues
  * de 31 Hz del centro de alguna. A esa distancia la perdida por caer
  * entre dos bins es de decimas de dB, o sea nada.
  */
-#define CW_PROBES        9U
+/*
+ * TRECE SONDAS, NO NUEVE - 07/10/2026.
+ *
+ * *** El dueno tenia en la lista: "el autoenganche de CW solo cubre
+ * +-250 Hz". *** Y el comentario de este fichero decia eso, pero era
+ * FALSO EN LAS DOS DIRECCIONES, cosa que solo se vio al medirlo:
+ *
+ *     sondas   peine     desvio real que decodifica
+ *        9    +-250 Hz        +-350 Hz
+ *       13    +-375 Hz        +-500 Hz
+ *       17    +-500 Hz        +-500 Hz (a 700 ya falla el 55%)
+ *
+ * El peine no es el limite porque cada sonda es un Goertzel de 32
+ * muestras a 12 kHz, o sea un bin de 375 Hz de ancho: la sonda del
+ * extremo sigue viendo un tono que cae bastante mas alla de su centro.
+ * Por eso nueve sondas llegaban a 350 y no a 250.
+ *
+ * Trece duplican el alcance util por 112 bytes de RAM (siete tablas de
+ * float por cuatro sondas mas). Diecisiete no compran casi nada -el
+ * limite deja de ser el peine y pasa a ser otra cosa- y cuestan el doble.
+ * El numero sale de la tabla, no de redondear.
+ */
+#define CW_PROBES        13U
 #define CW_PROBE_STEP    62.5f
 
 /*
@@ -384,7 +406,75 @@ _Static_assert(CW_BLOCK_SAMPLES == 32U, "cw.c da por supuesto bloques de 32 mues
  */
 #define CW_WARM_HOPS       64U
 #define CW_THR_ON     0.60f /* fraccion del recorrido bajo->alto para bajar la tecla */
+/*
+ * Y CON EL APRENDIZAJE ENCENDIDO, LAS DOS MAS ABAJO - 08/10/2026.
+ *
+ * *** El dueño: "no decodifica ni la mitad de letras". ***
+ *
+ * Esta era la pieza que me faltaba y la tenia delante desde el primer
+ * dia: cuando decodifique la grabacion a mano, mi cortador no estaba en
+ * 0,60 del recorrido sino mas abajo. Con el umbral alto cada elemento
+ * pierde unos milisegundos por cada punta, y eso no lo mide "un poco
+ * corto": hace que los puntos LARGOS de una estacion como 4XZ crucen la
+ * frontera y se vuelvan rayas.
+ *
+ * Y LAS DOS, NO SOLO LA DE ATAQUE. La primera version de esto bajo el
+ * ataque a 0,35 y se dejo la suelta en 0,40, o sea que se soltaba con
+ * MAS señal de la que hacia falta para bajar la tecla: histeresis al
+ * reves, y la banda entre 0,35 y 0,40 del recorrido convertida en una
+ * zona donde la tecla parpadea en saltos alternos. Lo cazo la revision a
+ * fondo del 08/10. Cada rebote de un salto entra en el filtro de tramos,
+ * no llega al suelo, y marca el tramo SUCIO; un tramo sucio no cuenta
+ * como prueba, asi que la racha de ocho buenos no se completaba NUNCA y
+ * la puerta no abria. Se oian pitidos y no se pintaba una letra.
+ *
+ * Barrido de las dos a la vez, sobre las dos grabaciones de 4XZ y sobre
+ * 90 s de ruido de banda. La cifra son los indicativos recuperados
+ * (fuerte + debil); el ruido da cero caracteres en TODAS las casillas:
+ *
+ *     sube \ baja    0,30    0,25    0,20    0,15
+ *       0,60         0+3     0+2     1+1     1+0
+ *       0,50         1+6     1+2     1+0     1+0     <- aqui
+ *       0,45         1+5     1+4     1+0     1+0
+ *       0,40         1+4     1+2     1+0     1+0
+ *       0,35         1+2     1+1     1+0     0+0
+ *
+ * Bajar la suelta de 0,30 estropea: la tecla se queda bajada y los
+ * elementos se fusionan. Y subir el ataque a 0,60 -el de siempre- pierde
+ * el indicativo de la grabacion fuerte. El par 0,50/0,30 mantiene la
+ * misma separacion relativa que el camino normal (un tercio por debajo
+ * del ataque) y es el que mas saca.
+ *
+ * Va SOLO en el aprendizaje: con el boton apagado el cortador es el de
+ * siempre, 0,60/0,40, y el banco lo comprueba letra por letra.
+ */
+#define CW_THR_ON_AP  0.50f
 #define CW_THR_OFF    0.40f /* ...y para soltarla. La diferencia es la histeresis */
+/*
+ * Y LA DE SUELTA DEL APRENDIZAJE, QUE SE ME QUEDO SIN BAJAR.
+ *
+ * *** Revision del 08/10/2026. ***
+ *
+ * Al bajar el umbral de ATAQUE a 0,35 para el aprendizaje me deje el de
+ * SUELTA en 0,40. O sea que se soltaba con MAS señal de la que hacia
+ * falta para bajar la tecla: eso no es histeresis, es histeresis al
+ * reves, y la banda entre 0,35 y 0,40 del recorrido se convierte en una
+ * zona donde la tecla se enciende y se apaga en saltos alternos.
+ *
+ * Lo que eso hace es peor que un ruido: cada rebote de un salto entra en
+ * el filtro de tramos, no llega al suelo, y el tramo se marca SUCIO. Un
+ * tramo sucio no cuenta como prueba (ver el comentario de cw_mark), asi
+ * que la racha de ocho buenos no se completa NUNCA y la puerta de
+ * calidad no abre. Se oyen pitidos y no se pinta una letra, que es
+ * exactamente lo que el dueño describio.
+ *
+ * Con ruido de banda basta un 5 % de recorrido de temblor para que
+ * rebote sin parar; con el umbral normal hace falta un 20 %.
+ *
+ * Se mantiene la misma separacion que el camino de siempre -0,60/0,40,
+ * o sea un tercio por debajo del ataque- y sale 0,23.
+ */
+#define CW_THR_OFF_AP 0.30f
 
 /* --- adaptacion de la velocidad ------------------------------------ */
 #define CW_ADAPT_FAST     0.35f  /* primeros elementos tras un silencio */
@@ -524,6 +614,38 @@ _Static_assert(CW_BLOCK_SAMPLES == 32U, "cw.c da por supuesto bloques de 32 mues
  */
 #define CW_GOOD_N        8U
 #define CW_ERR_GOOD      0.35f
+/*
+ * Y PARA CERRAR, LO MISMO AL REVES - 06/10/2026.
+ *
+ * *** El dueño, con SVO (Olympia Radio) en 8.423,5 kHz: "lleva 40 minutos
+ * ahi y solo ha sacado un svo". *** Y en la foto se veia el problema entero:
+ * "DE SVO" de verdad, rodeado de T, E e I sueltas durante toda la pantalla.
+ *
+ * La puerta abria bien -ocho elementos seguidos que encajan, que es lo que
+ * el ruido no sabe hacer- pero cerraba MAL, y la asimetria era el fallo:
+ *
+ *     abre:    forma && s_q < 0,30 && ocho buenos seguidos
+ *     cerraba: forma && s_q < 0,48
+ *
+ * s_q es una media exponencial lenta, asi que despues de enganchar con una
+ * transmision de verdad hace falta muchisimo ruido para subirla de 0,48. O
+ * sea que la puerta se quedaba ABIERTA entre identificacion e
+ * identificacion, y como entre ellas solo hay ruido, el decodificador se
+ * pasaba cuarenta minutos escribiendo las letras de una sola raya o un solo
+ * punto -T, E, I- que es justo lo que el ruido fabrica.
+ *
+ * El arreglo es hacer el cierre simetrico de la apertura: se cuentan los
+ * elementos seguidos que NO encajan, y con ocho se cierra. Mismo numero y
+ * mismo argumento: un elemento suelto puede fallar por casualidad, ocho
+ * seguidos no. Una transmision de verdad con desvanecimiento pierde
+ * elementos sueltos, no ocho de corrido.
+ *
+ * NO es un silenciador de nivel, que es lo que este fichero descarta mas
+ * arriba con datos (el ruido y una señal debil se solapan en nivel). Aqui no
+ * se mira cuanta señal hay: se mira si lo que llega tiene forma, que es la
+ * misma vara con la que se abrio.
+ */
+#define CW_BAD_N         8U
 
 /* --- ancla: el elemento mas corto ----------------------------------- */
 /*
@@ -651,8 +773,13 @@ static float   s_wpm_hint = 20.0f;
 static uint8_t s_autotune = 1U;
 
 /* Un juego de coeficientes por sonda, calculados al cambiar el tono. */
-static float   s_coeff[CW_PROBES], s_cos[CW_PROBES], s_sin[CW_PROBES];
-static float   s_probe_hz[CW_PROBES];
+static float   s_coeff[CW_PROBES];
+/*
+ * Aqui habia tambien s_cos[], s_sin[] y s_probe_hz[]: tres tablas mas de
+ * CW_PROBES floats. Las tres sobraban, y quitarlas es lo que dejo sitio
+ * para pasar de nueve sondas a trece (el enlazado se pasaba por 108
+ * bytes). Ver goertzel_pow() y probe_hz().
+ */
 static float   s_probe_avg[CW_PROBES];  /* media lenta de la magnitud */
 static float   s_probe_env[CW_PROBES];  /* magnitud suavizada, ver CW_PROBE_SUAVE */
 static float   s_probe_dev[CW_PROBES];  /* y su desviacion media: la puntuacion */
@@ -670,6 +797,15 @@ static float    s_warm_sum;
 /* --- temporizacion --------------------------------------------------- */
 static uint8_t  s_key;        /* estado de la tecla tras la histeresis */
 static uint16_t s_run;        /* saltos que lleva la tecla en este estado */
+/*
+ * Filtro de tramos. Los tres testigos van en bits del mismo byte porque
+ * la RAM esta a cero: sueltos, el enlazado se pasaba por 4 bytes.
+ */
+#define F_HAY   0x01U         /* hay un tramo acumulandose */
+#define F_KEY   0x02U         /* su polaridad */
+#define F_SUCIO 0x04U         /* ha tenido que tragarse algun tramo corto */
+static uint8_t  s_f;
+static uint16_t s_f_len;      /* saltos ya cerrados que le pertenecen */
 static uint8_t  s_inhibit;    /* tras una suelta forzada, ver cw_process() */
 static uint16_t s_inhibit_n;
 static float    s_dot_hops;   /* estimacion viva de la duracion del punto */
@@ -680,12 +816,71 @@ static float    s_len_dot;    /* media de los elementos clasificados como punto 
 static float    s_len_dash;   /* ...y como raya */
 static float    s_len_gap;    /* media de los huecos cortos, que deberian medir un punto */
 static float    s_anchor;                  /* minimo de los ultimos elementos; ver CW_ANCHOR_* */
-static float    s_anchor_ring[CW_ANCHOR_N];
+/*
+ * Las longitudes son cuentas ENTERAS de saltos -cw_mark() recibe un
+ * uint16_t- asi que guardarlas en float no anadia ni un bit de
+ * informacion y costaba 24 bytes de RAM, que es justo lo que hacia
+ * falta para el filtro de tramos de V3.77.
+ */
+static uint16_t s_anchor_ring[CW_ANCHOR_N];
 static uint8_t  s_anchor_idx;
 static float    s_q;          /* error de ajuste medio; 0 es perfecto */
 static float    s_frac_dash;  /* fraccion reciente de rayas */
 static uint8_t  s_gate;       /* 1 = lo que llega tiene forma de Morse */
+/*
+ * EL APRENDIZAJE: DOS MANERAS DE LEER, Y LA ELIGE EL DUEÑO - 08/10/2026.
+ *
+ * *** El dueño, viendo 4XZ en 4.330 kHz: "osea que hay 2 formas de leer,
+ * la buena y la mala" ... "pon un boton al lado de borrar que sea
+ * aprendizaje o algo asi y que solo cuando este activo aprenda como de
+ * mal telegrafia la radio". ***
+ *
+ * Y es la salida correcta, porque no hay una buena y una mala: hay dos
+ * suposiciones distintas sobre quien teclea, y cada una acierta con unas
+ * estaciones y falla con otras.
+ *
+ *   APAGADO (lo de siempre): la raya dura TRES puntos, que es lo que
+ *       dice la norma y lo que manda el 99 % de lo que se oye. La
+ *       frontera punto/raya va en 2,0 puntos estimados y cada elemento
+ *       tiene que caer cerca de 1 o de 3.
+ *
+ *   ENCENDIDO: no se supone nada. Se mide donde caen los cortos y donde
+ *       los largos y la frontera se pone ENTRE los dos montones, dure lo
+ *       que dure la raya. El error de cada elemento se mide contra su
+ *       propio monton, no contra 1 o 3.
+ *
+ * POR QUE NO VA ENCENDIDO SIEMPRE. Porque sale caro. Medido sobre el
+ * banco sintetico de sim/cwtest.c, con el aprendizaje puesto a la fuerza:
+ *
+ *     10 PPM, sin ruido      8 % de error  ->  22 %
+ *     40 PPM, 8 dB          13 %           ->  68 %
+ *     40 PPM, sin ruido     56 %           -> 100 %
+ *
+ * Suponer la relacion 3 a 1 no es pereza: es informacion de verdad sobre
+ * la señal, y renunciar a ella cuesta precision. Con Morse normal el que
+ * supone gana al que mide, y por eso lo de siempre es lo de siempre.
+ *
+ * LO QUE GANA. La estacion naval israeli 4XZ, grabada por el dueño en
+ * 4.330 kHz (sim/muestras/cw4xz_4330b.wav), manda esto:
+ *
+ *     marcas:  40 ms (91 veces)  80 ms (62)  160 ms (55)  200 ms (13)
+ *     huecos:  40 ms (116)       80 ms (59)
+ *
+ * Cuatro montones y no dos, en escalones enteros de 40 ms: puntos de 1 y
+ * de 2 unidades y rayas de 4 y de 5. No es ruido ni es el microfono -un
+ * deterioro aleatorio sale continuo y esto sale cuantizado-: es como
+ * teclea. Con la frontera en 2,0 puntos cae en 88 ms, que es el borde de
+ * arriba del monton de los puntos, y los puntos largos se vuelven rayas.
+ * El valle de verdad esta entre 90 y 150.
+ *
+ * Con el aprendizaje encendido, de esa grabacion sale "VVV DE 4XZ"
+ * limpio; sin el, no sale una letra.
+ */
+static uint8_t s_aprende;     /* el boton del panel */
+static float   s_cl_dot;      /* centro del monton de los puntos */
+static float   s_cl_dash;     /* centro del monton de las rayas  */
 static uint8_t  s_good_run;   /* elementos seguidos que encajan; ver CW_GOOD_N */
+static uint8_t  s_bad_run;    /* y los seguidos que NO; ver CW_BAD_N */
 static uint16_t s_quiet_hops; /* saltos desde el ultimo elemento medido */
 
 /* --- letra en curso -------------------------------------------------- */
@@ -704,11 +899,19 @@ static uint8_t  s_hist_w;           /* proxima escritura */
  * exactamente lo mismo que recorrer la ventana entera. Devuelve
  * potencia, no amplitud.
  */
+/* El centro de la sonda k. Era una tabla; es una cuenta de dos
+ * operaciones y la tabla valia CW_PROBES floats de RAM. Da el mismo
+ * numero porque es la MISMA formula con la que se reparten las sondas,
+ * ver cw_reparte_sondas(). */
+static float probe_hz(uint8_t k)
+{
+    return s_pitch_hz + ((float)k - (float)(CW_PROBES / 2U)) * CW_PROBE_STEP;
+}
+
 static float goertzel_pow(const float *a, const float *b, uint32_t n_each, uint8_t k)
 {
     float s0, s1 = 0.0f, s2 = 0.0f;
     float coeff = s_coeff[k];
-    float real, imag;
     uint32_t i;
 
     for (i = 0; i < n_each; i++) {
@@ -721,9 +924,21 @@ static float goertzel_pow(const float *a, const float *b, uint32_t n_each, uint8
         s2 = s1;
         s1 = s0;
     }
-    real = s1 - s2 * s_cos[k];
-    imag = s2 * s_sin[k];
-    return real * real + imag * imag;
+    /*
+     * |X|^2 = s1^2 + s2^2 - coeff*s1*s2.
+     *
+     * Es una IDENTIDAD EXACTA, no una aproximacion. Con coeff = 2cos(w):
+     *
+     *   (s1 - s2 cos)^2 + (s2 sin)^2
+     *     = s1^2 - 2 s1 s2 cos + s2^2 (cos^2 + sin^2)
+     *     = s1^2 + s2^2 - coeff s1 s2
+     *
+     * Lo que se gana no es la velocidad -que tambien, dos multiplicaciones
+     * menos por sonda y por bloque- sino las DOS TABLAS de cosenos y
+     * senos: 104 bytes de RAM con trece sondas, que es justo lo que hacia
+     * falta para poder tener trece.
+     */
+    return s1 * s1 + s2 * s2 - coeff * s1 * s2;
 }
 
 /* Reparte las sondas alrededor del tono ajustado y calcula sus
@@ -739,11 +954,9 @@ static void cw_coeffs(void)
         float w;
 
         if (hz < 100.0f) { hz = 100.0f; }
-        s_probe_hz[k] = hz;
+
         w = 2.0f * 3.14159265358979f * (hz / CW_FS_HZ);
-        s_cos[k]   = cosf(w);
-        s_sin[k]   = sinf(w);
-        s_coeff[k] = 2.0f * s_cos[k];
+        s_coeff[k] = 2.0f * cosf(w);
     }
 }
 
@@ -769,7 +982,9 @@ static void cw_seed_speed(void)
     s_anchor    = s_dot_hops;
     {
         uint8_t i;
-        for (i = 0U; i < CW_ANCHOR_N; i++) { s_anchor_ring[i] = s_dot_hops; }
+        for (i = 0U; i < CW_ANCHOR_N; i++) {
+            s_anchor_ring[i] = (uint16_t)s_dot_hops;
+        }
     }
     s_anchor_idx = 0U;
     s_adapt_n    = 0U;
@@ -803,6 +1018,8 @@ static void cw_reset_state(void)
 
     s_key     = 0U;
     s_run     = 0U;
+    s_f       = 0U;
+    s_f_len   = 0U;
     s_inhibit   = 0U;
     s_inhibit_n = 0U;
     cw_seed_speed();
@@ -811,6 +1028,9 @@ static void cw_reset_state(void)
     s_frac_dash = 0.5f;
     s_gate       = 0U;
     s_good_run   = 0U;
+    s_cl_dot     = 0.0f;
+    s_cl_dash    = 0.0f;
+    s_bad_run    = 0U;
     s_quiet_hops = 0U;
 
     s_clave      = 1U;
@@ -860,6 +1080,8 @@ static int16_t cw_hist_at(uint8_t k)
  * MISMO, que el camino normal ya tiene a medias en s_clave y va a
  * emitir el solo. Sacarla aqui tambien la sacaria dos veces.
  */
+static float cw_frontera(void);   /* se define mas abajo; la usa la relectura */
+
 static void cw_replay(void)
 {
     uint8_t  k, ini = 0U;
@@ -877,10 +1099,34 @@ static void cw_replay(void)
         acc += (uint32_t)l;
         if (acc > CW_HIST_MAX_HOPS) { ini = k; break; }
         if (v > 0) {
-            float d = l / s_dot_hops;
-            float e = (d >= CW_DASH_BOUNDARY)
-                    ? ((d > 3.0f ? d - 3.0f : 3.0f - d) / 3.0f)
-                    : (d > 1.0f ? d - 1.0f : 1.0f - d);
+            /*
+             * LA RELECTURA CLASIFICA COMO EL CAMINO VIVO - 08/10/2026, de
+             * la revision a fondo de ese dia.
+             *
+             * Esto media el error contra el modelo de 1 o 3 puntos y
+             * partia con la frontera fija de 2,0, mientras cw_mark() usa
+             * cw_frontera() y, con el aprendizaje encendido, mide contra
+             * los dos montones. O sea que la cuarentena se volcaba con un
+             * criterio DISTINTO al que acababa de abrir la puerta:
+             * justamente los puntos largos que el boton viene a salvar
+             * salian convertidos en rayas, y si las dos fronteras
+             * discrepaban bastante, el filtro de "esto sigue pareciendo
+             * Morse" cortaba la relectura casi al principio y se perdia el
+             * preambulo del indicativo, que es lo unico que de verdad se
+             * quiere recuperar de la cuarentena.
+             */
+            float fr = cw_frontera();
+            uint8_t es_raya = (uint8_t)(l >= fr);
+            float e;
+            if (s_aprende && s_cl_dot > 0.5f && s_cl_dash > 0.5f) {
+                float c = es_raya ? s_cl_dash : s_cl_dot;
+                float d = l / c;
+                e = (d > 1.0f) ? (d - 1.0f) : (1.0f - d);
+            } else {
+                float d = l / s_dot_hops;
+                e = es_raya ? ((d > 3.0f ? d - 3.0f : 3.0f - d) / 3.0f)
+                            : (d > 1.0f ? d - 1.0f : 1.0f - d);
+            }
             if (e > CW_HIST_ERR_MAX) { ini = k; break; }
         }
     }
@@ -899,7 +1145,7 @@ static void cw_replay(void)
 
         if (v > 0) {
             if (n_elem < 6U) {
-                clave = (uint8_t)(clave * 2U + (l >= CW_DASH_BOUNDARY * s_dot_hops));
+                clave = (uint8_t)(clave * 2U + (l >= cw_frontera()));
                 n_elem++;
             } else {
                 desb = 1U;
@@ -945,7 +1191,11 @@ static void cw_gate_update(void)
             cw_replay();
         }
     } else {
-        s_gate = (uint8_t)(forma && s_q < CW_Q_CLOSE);
+        /* Cierra por error medio alto O por ocho seguidos que no encajan.
+         * Lo segundo es lo que corta la chachara del ruido entre dos
+         * transmisiones sin tocar nada del nivel. */
+        s_gate = (uint8_t)(forma && s_q < CW_Q_CLOSE && s_bad_run < CW_BAD_N);
+        if (!s_gate) { s_good_run = 0U; }
     }
 }
 
@@ -977,7 +1227,30 @@ static void cw_flush_letter(void)
 
 /* Un elemento acaba de terminar: clasificarlo, aprender de el si se
  * puede, y anadirlo a la letra en curso. */
-static void cw_mark(uint16_t len)
+/*
+ * La frontera punto/raya. Con el aprendizaje apagado es la de siempre,
+ * un multiplo fijo del punto estimado. Encendido, la media GEOMETRICA de
+ * los dos montones: geometrica y no aritmetica porque las duraciones se
+ * comparan por cociente -una raya es tres veces un punto, no tres puntos
+ * mas-.
+ *
+ * Y hay una red: si los dos montones no estan separados lo suficiente,
+ * no hay dos montones que separar y se vuelve a lo de siempre. Sin eso,
+ * al arrancar -cuando las dos medias todavia estan pegadas- la frontera
+ * caeria en cualquier sitio.
+ */
+#define CW_CL_ALPHA    0.12f
+#define CW_CL_RATIO    2.20f
+
+static float cw_frontera(void)
+{
+    if (!s_aprende)                          { return CW_DASH_BOUNDARY * s_dot_hops; }
+    if (s_cl_dot < 0.5f || s_cl_dash < 0.5f) { return CW_DASH_BOUNDARY * s_dot_hops; }
+    if (s_cl_dash < CW_CL_RATIO * s_cl_dot)  { return CW_DASH_BOUNDARY * s_dot_hops; }
+    return sqrtf(s_cl_dot * s_cl_dash);
+}
+
+static void cw_mark(uint16_t len, uint8_t sucio)
 {
     float l = (float)len;
     float d, err;
@@ -1002,11 +1275,13 @@ static void cw_mark(uint16_t len)
     /* ancla: minimo exacto de los ultimos CW_ANCHOR_N elementos */
     {
         uint8_t i;
-        s_anchor_ring[s_anchor_idx] = l;
+        s_anchor_ring[s_anchor_idx] = len;
         s_anchor_idx = (uint8_t)((s_anchor_idx + 1U) % CW_ANCHOR_N);
-        s_anchor = s_anchor_ring[0];
+        s_anchor = (float)s_anchor_ring[0];
         for (i = 1U; i < CW_ANCHOR_N; i++) {
-            if (s_anchor_ring[i] < s_anchor) { s_anchor = s_anchor_ring[i]; }
+            if ((float)s_anchor_ring[i] < s_anchor) {
+                s_anchor = (float)s_anchor_ring[i];
+            }
         }
         if (s_anchor < CW_DOT_HOPS_MIN) { s_anchor = CW_DOT_HOPS_MIN; }
         if (s_anchor > CW_DOT_HOPS_MAX) { s_anchor = CW_DOT_HOPS_MAX; }
@@ -1027,21 +1302,80 @@ static void cw_mark(uint16_t len)
 
     s_quiet_hops = 0U;
     cw_hist_push((int16_t)((len > 30000U) ? 30000 : len));
-    raya = (uint8_t)(l >= CW_DASH_BOUNDARY * s_dot_hops);
+    raya = (uint8_t)(l >= cw_frontera());
+
+    /*
+     * Los dos montones aprenden de TODOS los elementos, cada uno del que
+     * le toca. Sin zona muerta, y eso importa: la zona muerta -no
+     * aprender de lo que cae en medio- era justo lo que dejaba al monton
+     * de los puntos sin ver los puntos largos, y con eso la frontera se
+     * quedaba pegada a ellos y no servia de nada.
+     */
+    if (s_aprende) {
+        if (s_cl_dot < 0.5f || s_cl_dash < 0.5f) {
+            s_cl_dot  = s_dot_hops;
+            s_cl_dash = s_dot_hops * 3.0f;
+        }
+        if (raya) { s_cl_dash += (l - s_cl_dash) * CW_CL_ALPHA; }
+        else      { s_cl_dot  += (l - s_cl_dot)  * CW_CL_ALPHA; }
+        if (s_cl_dot  < CW_DOT_HOPS_MIN)  { s_cl_dot  = CW_DOT_HOPS_MIN; }
+        if (s_cl_dash < s_cl_dot * 1.2f)  { s_cl_dash = s_cl_dot * 1.2f; }
+    }
 
     /*
      * Error de ajuste, en unidades relativas para que un punto y una
      * raya pesen lo mismo: la raya se compara con 3 puntos y se divide
      * por 3.
      */
-    d   = l / s_dot_hops;
-    err = raya ? ((d > 3.0f ? d - 3.0f : 3.0f - d) / 3.0f)
-               : (d > 1.0f ? d - 1.0f : 1.0f - d);
+    if (s_aprende && s_cl_dot > 0.5f && s_cl_dash > 0.5f) {
+        /*
+         * Contra su propio monton. Aqui esta la mitad del arreglo: aunque
+         * la frontera clasifique bien un punto largo, el modelo de "cerca
+         * de 1 o de 3" lo sigue dando por malo -err 0,8-, la racha de
+         * ocho buenos no se completa nunca y la puerta de calidad no
+         * abre. Medido con 4XZ: clasificaba bien y no escribia nada.
+         *
+         * Lo que defiende del ruido NO se pierde: sigue haciendo falta
+         * que los dos montones esten separados -la condicion de forma
+         * pide la relacion entre 2,15 y 4,20- y el ruido, cuyas
+         * duraciones son exponenciales de un solo monton, no sabe
+         * separarlos. Lo que se quita es exigir que la separacion sea
+         * exactamente 3. El banco lo comprueba: un minuto de ruido con el
+         * aprendizaje encendido sigue soltando cero caracteres.
+         */
+        float c = raya ? s_cl_dash : s_cl_dot;
+        d   = l / c;
+        err = (d > 1.0f) ? (d - 1.0f) : (1.0f - d);
+    } else {
+        d   = l / s_dot_hops;
+        err = raya ? ((d > 3.0f ? d - 3.0f : 3.0f - d) / 3.0f)
+                   : (d > 1.0f ? d - 1.0f : 1.0f - d);
+    }
     if (err > 2.0f) { err = 2.0f; }
     s_q += (err - s_q) * CW_Q_ALPHA;
-    if (err < CW_ERR_GOOD) {
+    /*
+     * Una reparacion no cuenta como prueba. Si para que este elemento
+     * tuviera forma de punto o de raya ha habido que tragarse un tramo
+     * sub-suelo, su longitud ya no es una medida: es una suposicion. Se
+     * decodifica con ella -mejor eso que partirlo en dos-, pero NO se
+     * admite como evidencia de que lo que llega sea Morse.
+     *
+     * Es la misma regla que ya aplica una racha rota, y es la que
+     * impide que el filtro de fusion se convierta en una fabrica de
+     * estructura: fusionando, el ruido blanco tambien acaba pareciendo
+     * codigo. Medido sobre fichero, la fraccion de tramos sub-suelo es
+     * 0,0% en la señal limpia de SVO y sigue por debajo del 3,3% con
+     * ella hundida a 0 dB de relacion señal/ruido, mientras que vale
+     * 39% en ruido blanco, 21% en la FSK de 8.565 kHz y 27-41% en las
+     * otras grabaciones. O sea que exigir elementos SIN reparar para
+     * abrir la puerta no le cuesta nada al CW de verdad y le cuesta
+     * casi todo a lo que no lo es, sin un umbral nuevo que afinar.
+     */
+    if (err < CW_ERR_GOOD && !sucio) {
         if (s_good_run < CW_GOOD_N) { s_good_run++; }
+        s_bad_run = 0U;
     } else {
+        if (s_bad_run < CW_BAD_N) { s_bad_run++; }
         /*
          * Un elemento que no encaja rompe la racha, y con ella tira la
          * cuarentena. Es la misma idea que la justifica: lo que se
@@ -1103,6 +1437,37 @@ static void cw_gap(uint16_t len)
     }
 }
 
+/*
+ * Suelo por debajo del cual un tramo -marca o hueco- no puede ser un
+ * elemento del codigo. No es un numero nuevo: son exactamente las dos
+ * reglas que ya vivian dentro de cw_mark(), sacadas de ahi para que
+ * valgan tambien para los huecos. Buscando enganche solo se sabe el
+ * limite fisico del modo mas rapido admitido; con la puerta abierta se
+ * conoce la velocidad y se puede exigir medio punto, que no es un valor
+ * afinado sino la frontera entre "nada" y "un punto".
+ */
+static uint16_t cw_suelo(void)
+{
+    uint16_t s = CW_MARK_MIN_HOPS;
+    if (s_gate) {
+        float f = CW_MARK_MIN_LOCK * s_dot_hops;
+        if (f > (float)s) { s = (uint16_t)f; }
+    }
+    return s;
+}
+
+static void cw_tramo_suelta(void)
+{
+    if (!(s_f & F_HAY)) { return; }
+    if (s_f & F_KEY) {
+        cw_mark(s_f_len, (uint8_t)((s_f & F_SUCIO) != 0U));
+    } else {
+        cw_gap(s_f_len);
+        s_word_done = 0U;   /* ha empezado una marca de verdad */
+    }
+    s_f = 0U;
+}
+
 void cw_process(const float *audio, uint32_t n)
 {
     float pot, mag, span, thr;
@@ -1158,6 +1523,7 @@ void cw_process(const float *audio, uint32_t n)
                 s_lock_hops = 0U;
                 s_q         = 1.0f;
                 s_good_run  = 0U;
+                s_bad_run   = 0U;
                 s_gate      = 0U;
                 s_hist_n    = 0U;
                 s_hist_w    = 0U;
@@ -1217,7 +1583,11 @@ void cw_process(const float *audio, uint32_t n)
     /* --- 4: umbral con histeresis --- */
     span = s_km_hi - s_km_lo;
     if (span < 0.0f) { span = 0.0f; }
-    thr = s_km_lo + span * (s_key ? CW_THR_OFF : CW_THR_ON);
+    {
+        float sube  = s_aprende ? CW_THR_ON_AP  : CW_THR_ON;
+        float baja  = s_aprende ? CW_THR_OFF_AP : CW_THR_OFF;
+        thr = s_km_lo + span * (s_key ? baja : sube);
+    }
     key_new = (uint8_t)(s_env > thr);
 
     if (s_km_hi < s_km_lo * CW_SPAN_MIN) {
@@ -1242,6 +1612,7 @@ void cw_process(const float *audio, uint32_t n)
     if (s_key && s_run >= CW_MARK_MAX_HOPS) {
         s_key       = 0U;
         s_run       = 0U;
+        s_f         = 0U;
         s_inhibit   = 1U;
         s_inhibit_n = 0U;
         s_clave     = 1U;
@@ -1256,7 +1627,8 @@ void cw_process(const float *audio, uint32_t n)
          * deja de darse, y entonces el decodificador se queda mudo sin
          * que nada lo diga. */
         s_inhibit_n++;
-        if (s_env <= s_km_lo + span * CW_THR_OFF || s_inhibit_n >= CW_WARM_HOPS) {
+        if (s_env <= s_km_lo + span * (s_aprende ? CW_THR_OFF_AP : CW_THR_OFF)
+            || s_inhibit_n >= CW_WARM_HOPS) {
             s_inhibit   = 0U;
             s_inhibit_n = 0U;
         } else {
@@ -1265,38 +1637,84 @@ void cw_process(const float *audio, uint32_t n)
     }
 
     /* --- 5: duraciones --- */
+    /*
+     * Filtro de tramos. Un tramo mas corto que el suelo no es un
+     * elemento, pero TAMPOCO es nada: es un agujero dentro de otra
+     * cosa. Antes se tiraba, y tirarlo deja separados a sus dos
+     * vecinos. Un bache de ruido dentro de una raya la partia en dos
+     * marcas de media raya que se clasificaban como dos puntos: donde
+     * ponia "T" salia "I", y la velocidad estimada se iba al doble.
+     * Esa es la "T/E/I" de la pantalla y el 25 PPM sobre una señal de
+     * 12. Un chasquido entre dos huecos hacia lo mismo con la pausa de
+     * letra, partiendola y juntando dos letras en una.
+     *
+     * Ahora el tramo corto se absorbe: el, y sus dos vecinos, se suman
+     * en un solo tramo. La diferencia es descartar contra fusionar, y
+     * no hay ningun numero nuevo en ella.
+     *
+     * El tramo acumulado se suelta en cuanto el contrario lleva ya el
+     * suelo cumplido, no cuando termina, para no retrasar nada: la
+     * pausa de letra se sigue resolviendo mientras dura.
+     */
     if (key_new != s_key) {
-        if (s_key) {
-            cw_mark(s_run);        /* acaba de terminar un elemento */
+        /* se cierra un tramo crudo: o continua el acumulado, o se lo
+         * traga por corto; en los dos casos se suma */
+        if (!(s_f & F_HAY)) {
+            s_f     = (uint8_t)(F_HAY | (s_key ? F_KEY : 0U));
+            s_f_len = s_run;
         } else {
-            cw_gap(s_run);         /* ...o un hueco */
-            s_word_done = 0U;
+            if (s_key != (uint8_t)((s_f & F_KEY) != 0U)) { s_f |= F_SUCIO; }
+            s_f_len = (uint16_t)((s_run > (uint16_t)(30000U - s_f_len))
+                                 ? 30000U : (s_f_len + s_run));
         }
         s_key = key_new;
         s_run = 0U;
     }
     if (s_run < 30000U) { s_run++; }
 
-    if (!s_key) {
-        /*
-         * Las pausas se resuelven MIENTRAS duran, no cuando acaban. Si
-         * se esperase al siguiente elemento, la ultima letra de una
-         * transmision no saldria nunca, que es exactamente el momento
-         * en que uno la esta esperando.
-         */
-        if (s_n_elem > 0U && (float)s_run >= CW_GAP_LETTER * s_dot_hops) {
-            cw_flush_letter();
+    if ((s_f & F_HAY) && s_key != (uint8_t)((s_f & F_KEY) != 0U) &&
+        s_run >= cw_suelo()) {
+        cw_tramo_suelta();       /* el contrario ya es creible: cierra */
+        s_f     = (uint8_t)(F_HAY | (s_key ? F_KEY : 0U));
+        s_f_len = 0U;            /* s_run se sumara al cerrarse */
+    }
+
+    /*
+     * Las pausas se resuelven MIENTRAS duran, no cuando acaban. Si se
+     * esperase al siguiente elemento, la ultima letra de una
+     * transmision no saldria nunca, que es exactamente el momento en
+     * que uno la esta esperando.
+     *
+     * Se miden sobre el hueco FILTRADO, no sobre el crudo. Un
+     * chasquido en mitad de una pausa de letra pone la tecla abajo un
+     * instante y reinicia el contador crudo; con el crudo, esa pausa
+     * no llegaba nunca a las dos unidades y las dos letras salian
+     * pegadas, con la frontera corrida: donde ponia "IZ" salia "E IM",
+     * los mismos elementos repartidos mal. El hueco filtrado se traga
+     * el chasquido igual que se lo traga el elemento.
+     */
+    {
+        uint32_t hueco = 0U;
+        if ((s_f & F_HAY) && !(s_f & F_KEY)) {
+            hueco = (uint32_t)s_f_len + (uint32_t)(s_key ? 0U : s_run);
+        } else if (!s_key && !(s_f & F_HAY)) {
+            hueco = s_run;
         }
-        if (!s_word_done && s_any_output &&
-            (float)s_run >= CW_GAP_WORD * s_dot_hops) {
-            cw_emit(' ');
-            s_word_done = 1U;
-        }
-        if (s_run >= CW_IDLE_RESET_HOPS) {
-            /* silencio largo: la proxima transmision empieza limpia, sin
-             * heredar un espacio ni la prisa por adaptarse */
-            s_any_output = 0U;
-            s_adapt_n    = 0U;
+        if (hueco > 0U) {
+            if (s_n_elem > 0U && (float)hueco >= CW_GAP_LETTER * s_dot_hops) {
+                cw_flush_letter();
+            }
+            if (!s_word_done && s_any_output &&
+                (float)hueco >= CW_GAP_WORD * s_dot_hops) {
+                cw_emit(' ');
+                s_word_done = 1U;
+            }
+            if (hueco >= CW_IDLE_RESET_HOPS) {
+                /* silencio largo: la proxima transmision empieza limpia,
+                 * sin heredar un espacio ni la prisa por adaptarse */
+                s_any_output = 0U;
+                s_adapt_n    = 0U;
+            }
         }
     }
 
@@ -1348,12 +1766,85 @@ float cw_get_pitch_hz(void) { return s_pitch_hz; }
  * enganchada, no el tono ajustado. Si marcase el ajustado volveria a
  * pedirle al operador que cuadre a mano algo que la maquina ya ha
  * cuadrado sola. */
-float cw_get_detect_hz(void) { return s_probe_hz[s_lock]; }
+float cw_get_detect_hz(void) { return probe_hz(s_lock); }
+
+/*
+ * Encender o apagar el aprendizaje tira los dos montones: lo aprendido de
+ * una estacion no vale para la siguiente, y dejarlo puesto al volver a
+ * encenderlo haria que la primera media docena de letras se leyeran con
+ * la frontera de la emision anterior.
+ */
+void    cw_set_aprende(uint8_t on)
+{
+    uint8_t antes = s_aprende;
+
+    s_aprende = (uint8_t)(on ? 1U : 0U);
+    s_cl_dot  = 0.0f;
+    s_cl_dash = 0.0f;
+    /*
+     * Y TIRAR LA CONFIANZA, NO SOLO LOS DOS MONTONES - 08/10/2026, de la
+     * revision a fondo de ese dia.
+     *
+     * Tocar el boton cambia la frontera punto/raya Y los dos umbrales del
+     * cortador en el acto. Dejando la puerta abierta y la racha de buenos
+     * como estaban, la media docena de elementos siguientes se clasifican
+     * con un criterio distinto al de los que sostienen esa puerta, y salen
+     * mal escritos en pantalla antes de que la racha de malos la cierre.
+     *
+     * Es exactamente la misma regla que ya aplica el cambio de sonda unas
+     * lineas mas abajo, y con el mismo argumento: lo que dejo de ser una
+     * medida coherente no puede seguir contando como prueba. Solo se hace
+     * si el boton CAMBIA de verdad, para que una llamada redundante no
+     * tire una recepcion que va bien.
+     */
+    if (antes != s_aprende) {
+        s_gate     = 0U;
+        s_good_run = 0U;
+        s_bad_run  = 0U;
+        s_q        = 1.0f;
+    }
+}
+uint8_t cw_get_aprende(void) { return s_aprende; }
+
+/*
+ * LA RELACION RAYA/PUNTO QUE HA MEDIDO, x10. Cero si todavia no hay dos
+ * montones que medir.
+ *
+ * *** El dueño, estrenando el aprendizaje: "con el boton encendido pasa
+ * lo mismo que antes, oigo pitidos y nunca se pintan letras". ***
+ *
+ * Y yo no tengo forma de saber por que: la grabacion que me paso se lee
+ * bien en el banco, asi que lo que le pasa a su radio en el aire no lo
+ * veo. Esto es el instrumento que faltaba, y es la misma leccion que la
+ * del renglon BUCLE del STANAG: cuando no puedo ver lo que ve la radio,
+ * el numero tiene que estar en la pantalla.
+ *
+ * Que dice cada valor:
+ *
+ *   0          no esta midiendo: o el boton esta apagado, o todavia no
+ *              han entrado suficientes elementos
+ *   cerca de 30  teclea segun la norma. El aprendizaje no hace falta y
+ *              no va a cambiar nada
+ *   38 o mas   teclea con la raya larga, como 4XZ. Aqui es donde el
+ *              aprendizaje sirve
+ *   menos de 22  los dos montones se han juntado: no hay estructura que
+ *              aprender y la frontera vuelve sola a la de siempre
+ */
+uint16_t cw_get_ratio10(void)
+{
+    if (!s_aprende || s_cl_dot < 0.5f || s_cl_dash < 0.5f) { return 0U; }
+    {
+        float r = (s_cl_dash / s_cl_dot) * 10.0f;
+        if (r < 0.0f)   { r = 0.0f; }
+        if (r > 999.0f) { r = 999.0f; }
+        return (uint16_t)(r + 0.5f);
+    }
+}
 
 /* Desviacion entre lo que se oye y lo que se pidio oir, en Hz. Con el
  * banco enganchado esto dice cuanto hay que mover el mando para que el
  * pitido suene al tono preferido: util, pero ya no obligatorio. */
-float cw_get_offset_hz(void) { return s_probe_hz[s_lock] - s_pitch_hz; }
+float cw_get_offset_hz(void) { return probe_hz(s_lock) - s_pitch_hz; }
 
 void    cw_set_autotune(uint8_t on) { s_autotune = (uint8_t)(on ? 1U : 0U);
                                       if (!on) { s_lock = CW_PROBES / 2U; } }

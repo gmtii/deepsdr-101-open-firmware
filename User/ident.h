@@ -72,6 +72,26 @@
  */
 
 #define IDENT_LINEAS   9U
+/*
+ * EL TOPE DE LOS RENGLONES QUE SE ARMAN - 06/10/2026.
+ *
+ * Esto NO es el ancho de lo que se puede enseñar. Desde que las lineas del
+ * panel son punteros (ver s_lin en ident.c), los nombres y las notas de
+ * k_firmas[] se pintan ENTEROS midan lo que midan, porque no se copian.
+ *
+ * Este tope es solo para las lineas que hay que ARMAR: las de numeros, y la
+ * del nombre con su "(?)" pegado. Esas si necesitan un buffer, y 48 les
+ * sobra: la mas larga que sale de ponf() no pasa de 40.
+ *
+ * COMO SE LLEGO AQUI. Valia 48 y las lineas se COPIABAN, asi que la nota de
+ * 73 caracteres del STANAG 4285 salia cortada: "...a 600 bps y entrela". El
+ * primer arreglo fue subirlo a 80, y el enlazador contesto "region RAM
+ * overflowed by 192 bytes" - lo cual vino bien, porque el arreglo era otro:
+ * no ampliar nueve copias, sino dejar de copiar.
+ *
+ * sim/identancho.c mide las 27 firmas, en los dos idiomas, contra lo unico
+ * que las puede cortar ahora: el ancho del panel en pixeles.
+ */
 #define IDENT_LARGO   48U
 
 /* Por que criterio se reconoce una firma. */
@@ -147,6 +167,27 @@ typedef struct {
     uint8_t  ocup_min,  ocup_max;     /* y que parte del ciclo ocupa, en % */
     uint16_t sim_min,   sim_max;      /* velocidad de simbolo, en decimas de Bd */
     uint8_t  ton_min,   ton_max;      /* tonos contados (ancho/velocidad) */
+
+    /*
+     * EL ALFABETO, PARA CUANDO LA VELOCIDAD NO SE DEJA MEDIR - 08/10/2026.
+     *
+     * Ver stanag_det.h (cr7_pc). Una fila que ponga cr7_min pide que el
+     * flujo de bits sea un codigo de siete bits con cuatro unos -el CCIR
+     * 476 del NAVTEX, el SITOR y la cifrada de 200 Hz- y, si pone cr7_bd,
+     * que salga a ese baudio y no a otro.
+     *
+     * Existe porque la fila de la cifrada de 50 Bd / 200 Hz pedia velocidad
+     * de simbolo y el medidor le daba la mitad. Un rango no se arregla
+     * ensanchandolo hasta que entre: se cambia por una medida que SI
+     * distinga. Y esta distingue porque mira lo que lleva dentro la señal,
+     * no lo rapido que va.
+     *
+     * cr7_bd es un valor EXACTO, no un rango: solo hay tres (500, 750 y
+     * 1000 decimas) y son los tres que caben a 3 kHz con un numero entero
+     * de muestras por bit.
+     */
+    uint8_t  cr7_min;      /* % minimo de grupos con 4 unos. 0 = no se mira */
+    uint16_t cr7_bd;       /* y a que baudio, en decimas. 0 = da igual */
     uint8_t  probada;      /* 1 = comprobada contra una señal de VERDAD: una
                             * grabacion del banco o una medida en antena. El
                             * comentario de la fila dice cual de las dos y

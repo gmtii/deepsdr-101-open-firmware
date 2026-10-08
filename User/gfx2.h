@@ -175,6 +175,33 @@ typedef struct {
  * entera. Ver gfx2_sub_y() en gfx2.c. */
 gfx2_surf_t gfx2_sub_y(const gfx2_surf_t *s, int16_t y, int16_t h);
 
+/*
+ * LA VENTANA DE RECORTE EN X - 07/10/2026.
+ *
+ * *** El dueño, con cuatro capturas de la radio: "en alguna se ve un fallo
+ * de la marquesina, en la radio ese fallo no se ve en directo, asi que
+ * supongo que es por la forma de hacer las screens". ***
+ *
+ * Tenia razon y el sitio exacto es este. gfx2_sub_y() recorta SOLO en Y
+ * -lo dice su nombre- porque una banda tiene el ancho entero de la pantalla
+ * y no hay "zancada" en gfx2_surf_t con la que estrecharla: las filas van
+ * seguidas de w en w. En la pantalla de verdad eso no se nota, porque la
+ * marquesina se pinta con gfx2_render() pidiendo SU rectangulo, y esa banda
+ * ya nace estrecha. En la captura se pinta sobre la banda de 800 de ancho,
+ * y el nombre largo de una emisora -"XSQ Guangzhou Meteo Fax"- se salia por
+ * la derecha y se comia el reloj y los voltios.
+ *
+ * Esto es la pieza que faltaba: un limite en X, en coordenadas de PANTALLA,
+ * que respetan las primitivas que escriben pixeles. Es global y no de la
+ * superficie a proposito: asi ninguna de las doce superficies que se montan
+ * a mano por ahi se queda sin inicializar un campo nuevo y pintando donde no
+ * debe. Quien lo pone lo quita en la misma funcion.
+ *
+ * gfx2_recorte_x(x0, x1) - x1 es EXCLUSIVO. gfx2_recorte_quita() lo suelta.
+ */
+void gfx2_recorte_x(int16_t x0, int16_t x1);
+void gfx2_recorte_quita(void);
+
 /* Color en formato de trabajo: RGB888 + alpha, para poder mezclar bien.
  * Se convierte a RGB565 solo al escribir en la banda. */
 typedef struct { uint8_t r, g, b, a; } gfx2_rgba_t;

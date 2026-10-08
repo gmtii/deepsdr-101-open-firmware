@@ -283,6 +283,21 @@ uint8_t emisoras_busca(uint32_t hz, uint32_t tol_hz,
     s_lee(s_base + s_off_frec + FREC_LEN * i, b, FREC_LEN);
     pri = (uint32_t)u16(&b[4]);
     n   = (uint32_t)u16(&b[6]);
+    /*
+     * REVISION A FONDO DEL 08/10/2026: Y EL REGISTRO SE COMPRUEBA CONTRA
+     * EL TAMAÑO DE VERDAD DE LA LISTA.
+     *
+     * pri y n salen del fichero y se usaban tal cual para leer entradas,
+     * sin mirarlos contra s_n_ent. La cabecera si se comprueba al cargar
+     * -los tres offsets tienen que cuadrar-, pero los registros de
+     * frecuencia uno por uno no, y uno a medio escribir -el fichero pasa
+     * por el USB, por el volumen FAT y por 52 bloques de borrado- hacia
+     * leer MUY por encima del final de la lista de entradas y pintar en
+     * pantalla lo que hubiera ahi como si fueran horarios y paises. La
+     * resta se hace al reves a proposito -n > s_n_ent - pri- para que no
+     * se de la vuelta cuando pri ya este fuera.
+     */
+    if (pri >= s_n_ent || n > s_n_ent - pri) { return 0U; }
 
     /*
      * DOS PASADAS: primero los que emiten AHORA y despues los demas. Asi
@@ -398,6 +413,19 @@ uint8_t emisoras_dia_semana(uint16_t anno, uint8_t mes, uint8_t dia)
     if (mes < 1U || mes > 12U || dia < 1U || dia > 31U) {
         return EMISORAS_DIA_CUALQUIERA;
     }
+    /*
+     * REVISION A FONDO DEL 08/10/2026: Y EL AÑO TIENE QUE SER CREIBLE.
+     *
+     * El "a -= 1UL" de abajo es sobre un uint32_t, asi que con anno == 0
+     * -que es lo que devuelve el RTC cuando el cristal no ha arrancado,
+     * el caso que la cabecera de aqui arriba dice tener en cuenta- se
+     * daba la vuelta a 4294967295 y de ahi salia un dia de la semana
+     * cualquiera, con cara de bueno. Y un dia equivocado FILTRA: las
+     * entradas de lunes a viernes desaparecen, y eso es peor que no
+     * filtrar. Con el año fuera de rango se contesta lo mismo que con el
+     * mes imposible, que es lo honrado.
+     */
+    if (anno < 1900U) { return EMISORAS_DIA_CUALQUIERA; }
     if (mes < 3U) { a -= 1UL; }
     d = (a + a / 4UL - a / 100UL + a / 400UL
          + (uint32_t)k_t[mes - 1U] + (uint32_t)dia) % 7UL;   /* 0 = domingo */

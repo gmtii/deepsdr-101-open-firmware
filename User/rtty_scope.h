@@ -138,6 +138,13 @@ uint8_t rtty_scope_frame_ready(void);
  */
 const float *rtty_scope_get_frame(void);
 
+/* Lo mismo pero SIN consumir la bandera de cuadro nuevo, para un segundo
+ * lector -el ajuste automatico- que no debe quitarselo al dibujo. Ver su
+ * comentario en rtty_scope.c. rtty_scope_frame_n() sube una vez por cuadro
+ * nuevo y sirve para no promediar dos veces el mismo. */
+const float *rtty_scope_frame_peek(void);
+uint32_t     rtty_scope_frame_n(void);
+
 /* Hz per bin (12000.0f / RTTY_SCOPE_FFT_SIZE) - for the UI's Hz -> x
  * pixel mapping (e.g. drawing CONFIG_RTTY_MARK_HZ/SPACE_HZ markers). */
 float rtty_scope_hz_per_bin(void);

@@ -191,9 +191,23 @@ static void apunta(const wspr_msg_t *m, int16_t hz, uint8_t q,
     l[p++] = (char)('0' + ((mm / 10U) % 10U)); l[p++] = (char)('0' + (mm % 10U));
     l[p++] = '\t';
 
-    for (i = 0U; m->indicativo[i] != '\0' && i < 7U; i++) { l[p++] = m->indicativo[i]; }
+    /*
+     * EL LIMITE SE COMPRUEBA ANTES DE INDEXAR - 07/10/2026, encontrado
+     * por cppcheck en cuatro sitios (aqui, el locutor de abajo, el nombre
+     * del AIS y el indicativo del ALE).
+     *
+     * Escrito al reves -`s[i] != 0 && i < N`- el array se lee ANTES de
+     * saber si i cabe. En tres de los cuatro no pasaba nada porque el
+     * array tiene un byte de mas para el cero, pero en el locutor de
+     * abajo NO: `locutor[5]` con `i < 5U` lee el indice 5 de un array de
+     * cinco. Un byte fuera, de la propia estructura, que en la placa no
+     * se nota y por eso llevaba ahi desde siempre.
+     *
+     * Asi vale siempre, haya o no cero, y no cuesta nada.
+     */
+    for (i = 0U; i < 7U && m->indicativo[i] != '\0'; i++) { l[p++] = m->indicativo[i]; }
     l[p++] = '\t';
-    for (i = 0U; m->locutor[i] != '\0' && i < 5U; i++) { l[p++] = m->locutor[i]; }
+    for (i = 0U; i < 4U && m->locutor[i] != '\0'; i++) { l[p++] = m->locutor[i]; }
     l[p++] = '\t';
 
     p += pon_u(&l[p], m->dbm);

@@ -10,6 +10,34 @@
 #define BATTERY_EMPTY_MV 3000U
 #define BATTERY_FULL_MV  4200U
 
+/*
+ * REVISION A FONDO DEL 08/10/2026: LAS DOS ESPERAS DEL ADC, CON PLAZO.
+ *
+ * Las dos conversiones de este fichero esperaban el fin de conversion
+ * con un "while (SET != adc_flag_get(...)) { }" SIN SALIDA. El
+ * razonamiento escrito era correcto -una conversion de 480 ciclos de
+ * muestreo mas doce de aproximacion no llega al milisegundo- pero
+ * describe lo que pasa cuando el ADC contesta, y si no contesta -reloj
+ * del periferico apagado por un cambio en el arbol de relojes, la
+ * calibracion del arranque que se quedo a medias, un hardfault en otro
+ * sitio que dejo ADC0 a medio configurar- la radio se queda COLGADA con
+ * el audio sonando -va por DMA- y la pantalla congelada. Es exactamente
+ * el cuadro que ya costo una tarde con el reparto de memoria del 4285,
+ * y encima lo dispara un medidor de bateria, que es lo ultimo por lo que
+ * uno miraria.
+ *
+ * Con el tope la conversion sale igual -una vuelta del bucle son unos
+ * pocos ciclos de nucleo y los 20 us de la conversion a 200 MHz son
+ * cuatro mil, asi que cien mil vueltas son dos ordenes de magnitud de
+ * sobra- y, si el ADC no contesta, se devuelve un valor de "no medido"
+ * y el bucle principal sigue vivo.
+ */
+#define BATTERY_EOC_VUELTAS   100000UL
+
+/* Lo que se devuelve cuando el ADC no contesta: el mismo tope de abajo
+ * que ya se usa para "algo va mal, mejor un tope que un absurdo". */
+#define BATTERY_TEMP_NO_MEDIDA  ((int16_t)-40)
+
 void battery_init(void)
 {
     rcu_periph_clock_enable(RCU_ADC0);
@@ -66,12 +94,17 @@ uint16_t battery_get_millivolts(void)
     uint32_t vbat_pin_mv;
 
     adc_software_trigger_enable(ADC0, ADC_REGULAR_CHANNEL);
-    while (SET != adc_flag_get(ADC0, ADC_FLAG_EOC)) {
-        /* Blocking - one conversion at 480 sample cycles + 12
-         * successive-approximation cycles is well under a millisecond
-         * even at this ADC clock, and battery_get_millivolts() is only
-         * ever called from the main loop (see battery.h), never the
-         * demod ISR - spinning here is fine. */
+    {
+        uint32_t vueltas = BATTERY_EOC_VUELTAS;
+        while (SET != adc_flag_get(ADC0, ADC_FLAG_EOC)) {
+            /* Blocking - one conversion at 480 sample cycles + 12
+             * successive-approximation cycles is well under a millisecond
+             * even at this ADC clock, and battery_get_millivolts() is only
+             * ever called from the main loop (see battery.h), never the
+             * demod ISR - spinning here is fine. */
+            /* ...pero con plazo. Ver BATTERY_EOC_VUELTAS. */
+            if (--vueltas == 0U) { return 0U; }
+        }
     }
     raw = adc_regular_data_read(ADC0);
     adc_flag_clear(ADC0, ADC_FLAG_EOC);
@@ -109,8 +142,25 @@ int16_t battery_get_chip_temp_c(void)
     adc_regular_channel_config(ADC0, 0U, ADC_CHANNEL_16, ADC_SAMPLETIME_480);
 
     adc_software_trigger_enable(ADC0, ADC_REGULAR_CHANNEL);
-    while (SET != adc_flag_get(ADC0, ADC_FLAG_EOC)) {
-        /* bloqueante y corto, mismo razonamiento que la bateria */
+    {
+        uint32_t vueltas = BATTERY_EOC_VUELTAS;
+        uint8_t  hubo = 1U;
+        while (SET != adc_flag_get(ADC0, ADC_FLAG_EOC)) {
+            /* bloqueante y corto, mismo razonamiento que la bateria...
+             * y con el mismo plazo, ver BATTERY_EOC_VUELTAS */
+            if (--vueltas == 0U) { hubo = 0U; break; }
+        }
+        if (!hubo) {
+            /* El canal hay que devolverlo a VBAT PASE LO QUE PASE: si se
+             * sale de aqui con el sensor de temperatura puesto, la
+             * siguiente medida de bateria lee el sensor y da un voltaje
+             * absurdo, que es justo la averia lejana que el comentario de
+             * arriba dice querer evitar. */
+            adc_channel_16_to_18(ADC_TEMP_VREF_CHANNEL_SWITCH, DISABLE);
+            adc_channel_16_to_18(ADC_VBAT_CHANNEL_SWITCH, ENABLE);
+            adc_regular_channel_config(ADC0, 0U, ADC_CHANNEL_18, ADC_SAMPLETIME_480);
+            return BATTERY_TEMP_NO_MEDIDA;
+        }
     }
     raw = adc_regular_data_read(ADC0);
     adc_flag_clear(ADC0, ADC_FLAG_EOC);

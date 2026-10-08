@@ -38,8 +38,9 @@
  * entre las dos pasaran de medio megabyte, y eso el cargador lo comprueba
  * antes de escribir nada.
  *
- * NO DEPENDE DEL GD32. Lee por un puntero a funcion, igual que
- * img_store.c, y por eso el banco del simulador puede darle el
+ * NO DEPENDE DEL GD32. Lee por un puntero a funcion -como lo hacia el
+ * desaparecido img_store.c, ver CAMBIOS.md del 08/10/2026-, y por eso el
+ * banco del simulador puede darle el
  * EMISORAS.BIN de verdad -el de los 206 kB- y comprobar las busquedas
  * contra un recorrido completo del fichero.
  */

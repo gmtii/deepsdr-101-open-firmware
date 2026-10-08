@@ -203,7 +203,79 @@ static float *s_cos;        /* NFFT/2 */
 static float *s_coh;        /* STANAG_DET_N: la coherencia muestra a muestra */
 static float *s_simbac;     /* SIMB_LMAX+1: su autocorrelacion PROMEDIADA */
 
+/*
+ * LA RELACION CONSTANTE DE 7 BITS. El porque, con los numeros medidos,
+ * esta en stanag_det.h; aqui solo esta el como.
+ *
+ * Tres candidatos, y son estos tres porque a 3 kHz dan un numero ENTERO de
+ * muestras por bit: 60, 40 y 30. Con eso el indice de bit es una division
+ * entera del indice absoluto de muestra, o sea una FUNCION PURA de donde
+ * esta la muestra, sin acumulador y sin deriva.
+ *
+ * Y tiene que ser una funcion pura del indice ABSOLUTO, no de la posicion
+ * en el anillo, y esto es el unico punto fino de todo esto: el anillo
+ * avanza CADA = 256 muestras entre medida y medida, y un bit a 50 baudios
+ * son 60. 256/60 = 4,27, o sea que si el desplazamiento de grupo se cuenta
+ * desde el principio del anillo, cada pasada lo cuenta desde un origen
+ * distinto y los siete desplazamientos se embarran unos con otros. Que es
+ * exactamente perder el metodo: todo esto vale porque UNO de los siete
+ * gana y los otros seis se quedan en el 27% del azar.
+ *
+ * Las ventanas se solapan cuatro veces (1024 de anillo, 256 nuevas), asi
+ * que cada bit se cuenta cuatro veces. No molesta: se cuenta cuatro veces
+ * arriba y cuatro veces abajo, y lo que se publica es el cociente. Lo que
+ * si cambia es cuanto tarda en haber bastante, y de ahi sale CR7_MINIMO.
+ */
+#define CR7_N       3U
+static const uint32_t k_cr7_T[CR7_N]      = { 60U, 40U, 30U };
+static const uint16_t k_cr7_bd_x10[CR7_N] = { 500U, 750U, 1000U };
+#define CR7_OLVIDO  0.97f   /* memoria 1/(1-0,97) = 33 ventanas = 2,8 s */
+#define CR7_MINIMO  40.0f   /* peso acumulado por casilla antes de publicar */
+
+/* Unos que tiene cada patron de 7 bits. Tabla y no bucle porque esto se
+ * llama una vez por bit y por candidato. */
+static const uint8_t k_popc7[128] = {
+    0,1,1,2,1,2,2,3, 1,2,2,3,2,3,3,4, 1,2,2,3,2,3,3,4, 2,3,3,4,3,4,4,5,
+    1,2,2,3,2,3,3,4, 2,3,3,4,3,4,4,5, 2,3,3,4,3,4,4,5, 3,4,4,5,4,5,5,6,
+    1,2,2,3,2,3,3,4, 2,3,3,4,3,4,4,5, 2,3,3,4,3,4,4,5, 3,4,4,5,4,5,5,6,
+    2,3,3,4,3,4,4,5, 3,4,4,5,4,5,5,6, 3,4,4,5,4,5,5,6, 4,5,5,6,5,6,6,7
+};
+
+/*
+ * Y CUATRO FASES DE MUESTREO POR BIT, QUE NO SOBRAN - 08/10/2026.
+ *
+ * La primera version muestreaba a UNA fase, la del centro del bit
+ * contado desde el indice absoluto. Pero ese indice no sabe nada del
+ * reloj del transmisor, asi que el punto de muestreo cae donde cae
+ * dentro del bit. Medido con el motor de verdad sobre cinco
+ * grabaciones, con una sola fase:
+ *
+ *   16911   75%    SITOR-B  85%    NAVTEX  75%    Baudot 34%   4481 20%
+ *
+ * Separa, pero el 75 contra un umbral de 70 son CINCO PUNTOS, y en este
+ * mismo fichero esta escrito lo que vale un margen del seis por ciento:
+ * lo decide el desvanecimiento de turno. Fuera de la radio, con
+ * recuperacion de reloj de verdad, los mismos tres daban 99, 100 y 93.
+ * Lo que faltaba era el reloj, no el metodo.
+ *
+ * En vez de recuperarlo se PRUEBA, que es lo que hace este fichero con
+ * todo lo demas: cuatro puntos de muestreo repartidos por el bit -a
+ * 1/8, 3/8, 5/8 y 7/8- y gana el que mejor sale. El peor caso deja el
+ * punto bueno a T/8 del centro, que a 50 baudios son 7 muestras de 60,
+ * menos de lo que ya alisa el propio discriminador.
+ *
+ * Cuesta 1008 bytes de .bss y unas 200 cuentas mas por ventana.
+ */
+#define CR7_F       4U
+static float   s_cr7_t[CR7_N][CR7_F][7];  /* grupos vistos, con olvido */
+static float   s_cr7_4[CR7_N][CR7_F][7];  /* ... los que tenian cuatro unos */
+static float   s_cr7_3[CR7_N][CR7_F][7];  /* ... y tres: la otra polaridad */
+static uint8_t s_cr7_reg[CR7_N][CR7_F];   /* los ultimos 7 bits */
+static uint8_t s_cr7_hay[CR7_N][CR7_F];   /* cuantos lleva, hasta 7 */
+
 static uint32_t s_w, s_desde, s_llenas;
+static uint32_t s_rtot;     /* muestras ESCRITAS en el anillo, desde el init.
+                             * Es el indice absoluto que necesita la CR7. */
 static uint32_t s_simbn;    /* ventanas acumuladas en s_simbac */
 static uint32_t s_dec;      /* cuantas van acumuladas del diezmado */
 static float    s_dr, s_di; /* el acumulador del diezmado */
@@ -250,13 +322,25 @@ uint8_t stanag_det_init(float *trabajo, uint32_t n_floats)
         s_cos[i] = cosf((2.0f * 3.14159265358979f * (float)i) / (float)NFFT);
     }
 
-    s_w = 0U; s_desde = 0U; s_llenas = 0U;
+    s_w = 0U; s_desde = 0U; s_llenas = 0U; s_rtot = 0U;
+    for (i = 0U; i < CR7_N; i++) {
+        uint8_t f, o;
+        for (f = 0U; f < CR7_F; f++) {
+            for (o = 0U; o < 7U; o++) {
+                s_cr7_t[i][f][o] = 0.0f;
+                s_cr7_4[i][f][o] = 0.0f;
+                s_cr7_3[i][f][o] = 0.0f;
+            }
+            s_cr7_reg[i][f] = 0U; s_cr7_hay[i][f] = 0U;
+        }
+    }
     s_dec = 0U; s_dr = 0.0f; s_di = 0.0f; s_osc = 0U;
     s_promedios = 0U; s_listo = 0U; s_metidas = 0UL; s_pasos = 0UL;
     s_r.vale = 0U; s_r.periodo_us = 0U; s_r.retardo = 0U;
     s_r.picos = 0U; s_r.calidad = 0U;
     s_r.hay_esp = 0U; s_r.hay_tonos = 0U; s_r.baudios_x10 = 0U; s_r.ciclo_pc = 0U;
     s_r.simb_x10 = 0U; s_r.tonos = 0U; s_r.simb_q = 0U;
+    s_r.cr7_pc = 0U; s_r.cr7_bd_x10 = 0U;
     for (i = 0U; i <= SIMB_LMAX; i++) { s_simbac[i] = 0.0f; }
     s_simbn = 0U;
     s_vale = 1U;
@@ -287,6 +371,7 @@ void stanag_det_mete(const float *audio, uint32_t n)
         s_dr = 0.0f; s_di = 0.0f; s_dec = 0U;
 
         s_w++; if (s_w == STANAG_DET_N) { s_w = 0U; }
+        s_rtot++;
         if (s_llenas < STANAG_DET_N) { s_llenas++; }
         s_desde++;
         if (s_desde >= CADA && s_llenas >= STANAG_DET_N) {
@@ -377,12 +462,65 @@ static void fft(float *z, uint8_t inv)
  * llevan exactamente la misma modulacion y se distinguen en que uno emite
  * seguido y el otro a rafagas de un segundo.
  */
+/*
+ * EL OLVIDO Y LA PUBLICACION DE LA CR7, Y VAN LOS DOS ANTES DE CUALQUIER
+ * RETORNO DE mide_rachas().
+ *
+ * Si el olvido viviera dentro -donde esta el del histograma de rachas-,
+ * una señal que se va dejaria los contadores QUIETOS: sin dos tonos no
+ * se llega hasta alli, y el porcentaje se quedaria colgado diciendo que
+ * si para siempre. Es el mismo fallo que la fila de texto del panel que
+ * no se borraba sola, y ese ya costo una foto y un cabreo.
+ *
+ * Asi, cuando la señal desaparece los pesos bajan solos y en cuanto uno
+ * cae por debajo de CR7_MINIMO se publica 0, que es "no lo se".
+ */
+static void cr7_pasada(void)
+{
+    uint8_t c, f, o, mejor_c = 0U;
+    float mejor = 0.0f;
+
+    s_r.cr7_pc = 0U; s_r.cr7_bd_x10 = 0U;
+
+    for (c = 0U; c < CR7_N; c++) {
+        for (f = 0U; f < CR7_F; f++) {
+            for (o = 0U; o < 7U; o++) {
+                float t = s_cr7_t[c][f][o];
+
+                s_cr7_t[c][f][o] = t * CR7_OLVIDO;
+                s_cr7_4[c][f][o] *= CR7_OLVIDO;
+                s_cr7_3[c][f][o] *= CR7_OLVIDO;
+
+                if (t < CR7_MINIMO) { continue; }
+                {
+                    /* Las dos polaridades: cuatro unos por un lado son
+                     * tres por el otro, y cual sea depende de que tono
+                     * mando el transmisor arriba, que no se sabe. */
+                    float a4 = s_cr7_4[c][f][o] / t;
+                    float a3 = s_cr7_3[c][f][o] / t;
+                    float v  = (a4 > a3) ? a4 : a3;
+                    if (v > mejor) { mejor = v; mejor_c = c; }
+                }
+            }
+        }
+    }
+
+    if (mejor > 0.0f) {
+        float pc = mejor * 100.0f + 0.5f;
+        if (pc > 100.0f) { pc = 100.0f; }
+        s_r.cr7_pc     = (uint8_t)pc;
+        s_r.cr7_bd_x10 = k_cr7_bd_x10[mejor_c];
+    }
+}
+
 static void mide_rachas(void)
 {
     uint32_t i, n = 0U, mejor_b = 0U;
     float env_mx = 0.0f, umbral;
     float ur, ui;
     uint32_t con = 0U;
+
+    cr7_pasada();
 
     s_r.baudios_x10 = 0U;
     s_r.ciclo_pc = 0U;
@@ -470,6 +608,7 @@ static void mide_rachas(void)
      */
     for (i = 0U; i < HIST_N; i++) { s_acf[HIST_BASE + i] *= 0.94f; }
 
+
     {
         uint8_t ant = 2U;          /* 2 = todavia no hay anterior */
         uint32_t racha = 0U;
@@ -520,6 +659,37 @@ static void mide_rachas(void)
             suave += 0.12f * (q - suave);
             if (i < 16U) { continue; }       /* que la media se asiente */
             bit = (suave > 0.0f) ? 1U : 0U;
+
+            /*
+             * LA CR7, en el mismo cortador de bits y no en otro. Si se
+             * escribiera un segundo discriminador acabaria habiendo dos
+             * verdades sobre que bit es este, y la de abajo -alisada y
+             * normalizada por el modulo- costo nueve grabaciones.
+             */
+            {
+                uint32_t abso = (s_rtot - STANAG_DET_N) + i;
+                uint8_t c, f;
+                for (c = 0U; c < CR7_N; c++) {
+                    uint32_t T = k_cr7_T[c];
+                    uint32_t d = abso % T;
+                    for (f = 0U; f < CR7_F; f++) {
+                        uint8_t off, u;
+                        /* las cuatro fases: 1/8, 3/8, 5/8 y 7/8 del bit */
+                        if (d != ((((uint32_t)f * 2U) + 1U) * T) / 8U) {
+                            continue;
+                        }
+                        s_cr7_reg[c][f] =
+                            (uint8_t)(((uint8_t)(s_cr7_reg[c][f] << 1U)
+                                       | bit) & 0x7FU);
+                        if (s_cr7_hay[c][f] < 7U) { s_cr7_hay[c][f]++; continue; }
+                        off = (uint8_t)((abso / T) % 7U);
+                        u   = k_popc7[s_cr7_reg[c][f]];
+                        s_cr7_t[c][f][off] += 1.0f;
+                        if      (u == 4U) { s_cr7_4[c][f][off] += 1.0f; }
+                        else if (u == 3U) { s_cr7_3[c][f][off] += 1.0f; }
+                    }
+                }
+            }
 
             if (ant == 2U) { ant = bit; racha = 1U; continue; }
             if (bit == ant) { racha++; continue; }

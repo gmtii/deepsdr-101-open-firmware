@@ -2,6 +2,7 @@
 #include "disco.h"
 #include "spi_flash.h"
 #include "debug_uart.h"
+#include "idioma.h"
 #include <string.h>
 
 #define SEC            512U
@@ -193,12 +194,15 @@ formato_r_t formato_comprueba(void)
 const char *formato_porque_txt(formato_r_t r)
 {
     switch (r) {
-    case FORMATO_OK:              return "formateado";
-    case FORMATO_NO_LEE:          return "escrito, pero no lo reconozco";
-    case FORMATO_NO_GRABA:        return "lo leo pero no lo puedo grabar";
-    case FORMATO_PRUEBA_MAL:      return "el fichero de prueba no cuadra";
-    case FORMATO_SIN_CHIP:        return "no se ve la flash";
-    case FORMATO_MUY_PEQUENO:     return "el disco no da para un volumen";
+    case FORMATO_OK:              return tr("formateado", "formatted");
+    case FORMATO_NO_LEE:          return tr("escrito, no lo reconozco",
+                                          "written, not recognised");
+    case FORMATO_NO_GRABA:        return tr("lo leo, no lo grabo",
+                                          "reads but cannot write");
+    case FORMATO_PRUEBA_MAL:      return tr("la prueba no cuadra",
+                                          "test file does not match");
+    case FORMATO_SIN_CHIP:        return tr("no se ve la flash", "no flash found");
+    case FORMATO_MUY_PEQUENO:     return tr("el disco es pequeño", "disk too small");
     case FORMATO_ERROR_ESCRITURA: return "no se pudo escribir";
     default:                      return "?";
     }

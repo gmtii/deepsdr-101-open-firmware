@@ -1,5 +1,6 @@
 #include "stanag_modo.h"
 #include "stanag_det.h"
+#include "s4415.h"
 #include "stanag_rx.h"
 #include "idioma.h"
 #include "hfdl_ram.h"
@@ -85,7 +86,7 @@ static const conocida_t k_conocidas[] = {
     {  2000U, 0U,           "TETRAPOL (VHF/UHF)",    "TETRAPOL (VHF/UHF)"    },
     {  2661U, STANAG_4481,  "S4481 FSK / POCSAG",    "S4481 FSK / POCSAG"    },
     {  5666U, 0U,           "TETRA (VHF/UHF)",       "TETRA (VHF/UHF)"       },
-    {  6681U, 0U,           "STANAG 4415",           "STANAG 4415"           },
+    {  6681U, STANAG_4415,  "STANAG 4415 (75 bps)",  "STANAG 4415 (75 bps)"  },
     {  9600U, 0U,           "DAB (VHF)",             "DAB (VHF)"             },
     { 10667U, STANAG_4285,  "S4285 / S4481 PSK",     "S4285 / S4481 PSK"     },
     { 11961U, 0U,           "STANAG 4539 (M110B)",   "STANAG 4539 (M110B)"   },
@@ -100,6 +101,7 @@ static const texto_t k_formas[STANAG_FORMAS] = {
     T("S4529",     "S4529"),
     T("S4481",     "S4481"),
     T("S4538",     "S4538"),
+    T("S4415",     "S4415"),
 };
 
 /*
@@ -116,6 +118,7 @@ static uint8_t  s_encaja;
 static uint8_t  s_calidad;
 static uint8_t  s_picos;
 static uint32_t s_medidas;
+static uint32_t s_nuevas;   /* renglones nuevos: ver stanag_modo_latido() */
 static uint32_t s_vueltas;   /* llamadas a poll; ver el estado */
 
 /*
@@ -157,10 +160,41 @@ static uint8_t pon_ms(char *b, uint8_t i, uint16_t decenas_us)
     return pon(b, i, " ms");
 }
 
+/*
+ * LO QUE TARDA LA VUELTA DEL BUCLE, DENTRO DEL PROPIO MODO - 08/10/2026.
+ *
+ * *** El dueño, despues de la V3.92: "se sigue tostando y no dejandome darle
+ * a los botones". ***
+ *
+ * La V3.92 bajo los repintados de 14,7 a 4,0 por segundo y no bastó. Asi que
+ * o el problema no era CUANTOS repintados sino CUANTO cuesta cada uno, o es
+ * otra cosa. Adivinarlo otra vez seria la cuarta: lo que hace falta es el
+ * numero, y la radio ya lo mide.
+ *
+ * Sale aqui y no solo en Informacion a proposito: con la radio a medio gas,
+ * navegar hasta Informacion es justamente lo que no se puede hacer.
+ *
+ *     "b 45/12  peor 180/95"
+ *
+ * vuelta del bucle y poll de los decodificadores, ahora y lo peor visto desde
+ * el arranque, en milisegundos. Y eso parte la pregunta en dos:
+ *
+ *   peor grande Y poll grande   -> se lo come un decodificador
+ *   peor grande y poll pequeño  -> es el dibujo o el tactil, no el decodificador
+ */
+uint16_t ui_bucle_peor_us(void);
+uint16_t ui_polls_peor_us(void);
+
 static void linea_nueva(const char *que, uint16_t periodo, uint8_t cal)
 {
     uint8_t i = 0U, k;
     char *b;
+
+    /* Un renglon nuevo SI es noticia: repinta al instante. Ver
+     * stanag_modo_latido(). Es lo unico que lo hace, y por eso el panel pasa
+     * de dieciseis repintados por segundo a cuatro mas los que de verdad
+     * traen algo que leer. */
+    s_nuevas++;
 
     /* Las mas nuevas arriba. Cinco renglones son pocos para andar con un
      * anillo y un indice: se corren, que cuesta menos que explicarlo. */
@@ -248,7 +282,12 @@ static uint8_t demod_toca(void)
 {
     return (uint8_t)(((s_forma == STANAG_4285) || (s_forma == STANAG_4481)) ? 1U : 0U);
 }
+static uint8_t s4415_toca(void)
+{
+    return (uint8_t)((s_forma == STANAG_4415) ? 1U : 0U);
+}
 uint8_t stanag_modo_demod(void) { return (uint8_t)(s_activo && demod_toca()); }
+uint8_t stanag_modo_4415(void)  { return (uint8_t)(s_activo && s4415_toca()); }
 
 uint8_t stanag_modo_start(void)
 {
@@ -256,9 +295,14 @@ uint8_t stanag_modo_start(void)
 
     if (s_activo) { return 1U; }
     stanag_modo_borra();
-    t = ram_coge(STANAG_DET_FLOATS);
+    t = ram_coge(s4415_toca() ? S4415_FLOATS : STANAG_DET_FLOATS);
     if (t == 0) { return 0U; }
-    if (demod_toca()) {
+    if (s4415_toca()) {
+        if (!s4415_init(t, S4415_FLOATS)) {
+            hfdl_ram_suelta();
+            return 0U;
+        }
+    } else if (demod_toca()) {
         if (!stanag_rx_init(t, STANAG_DET_FLOATS)) {
             hfdl_ram_suelta();
             return 0U;
@@ -276,6 +320,7 @@ void stanag_modo_stop(void)
     if (!s_activo) { return; }
     s_activo = 0U;        /* PRIMERO: calla a la interrupcion */
     stanag_rx_fin();
+    s4415_fin();
     hfdl_ram_suelta();
 }
 
@@ -293,8 +338,9 @@ uint8_t stanag_modo_activo(void) { return s_activo; }
 void stanag_modo_mete(const float *audio, uint16_t n)
 {
     if (!s_activo) { return; }
-    if (demod_toca()) { stanag_rx_mete(audio, (uint32_t)n); }
-    else              { stanag_det_mete(audio, (uint32_t)n); }
+    if (s4415_toca())      { s4415_mete(audio, (uint32_t)n); }
+    else if (demod_toca()) { stanag_rx_mete(audio, (uint32_t)n); }
+    else                   { stanag_det_mete(audio, (uint32_t)n); }
 }
 
 void stanag_modo_poll(void)
@@ -303,6 +349,14 @@ void stanag_modo_poll(void)
 
     if (!s_activo) { return; }
     s_vueltas++;
+    if (s4415_toca()) {
+        /* Igual que el 4285: la cuenta solo sube cuando hay noticia, que
+         * es lo que evita que mirar la pantalla rompa el enganche. Y desde
+         * el 07/10/2026 la que manda en el dibujo es s_nuevas, no s_medidas:
+         * ver stanag_modo_latido(). */
+        if (s4415_paso()) { s_medidas++; s_nuevas++; }
+        return;
+    }
     if (demod_toca()) {
         /*
          * SOLO SE CUENTA UNA MEDIDA CUANDO HAY NOTICIA, Y ESTO IMPORTA.
@@ -321,7 +375,7 @@ void stanag_modo_poll(void)
          * El latido ya lleva g_msticks/250, que repinta cuatro veces por
          * segundo pase lo que pase. Con eso sobra para ver la chapa.
          */
-        if (stanag_rx_paso()) { s_medidas++; }
+        if (stanag_rx_paso()) { s_medidas++; s_nuevas++; }
         return;
     }
     if (!stanag_det_paso(&d)) { return; }
@@ -381,7 +435,10 @@ void stanag_modo_forma_pon(uint8_t f)
     {
         uint8_t antes_demod = (uint8_t)(((antes == STANAG_4285)
                                       || (antes == STANAG_4481)) ? 1U : 0U);
-        if (demod_toca() != antes_demod) { (void)recoloca(); }
+        uint8_t antes_4415  = (uint8_t)((antes == STANAG_4415) ? 1U : 0U);
+        if ((demod_toca() != antes_demod) || (s4415_toca() != antes_4415)) {
+            (void)recoloca();
+        }
     }
 }
 
@@ -394,24 +451,76 @@ void stanag_modo_forma_pon(uint8_t f)
  * nadie lo diga. El boton parecera que no hace nada en esa posicion, y
  * eso es mejor que una pantalla muerta.
  */
+/*
+ * Y UNA POSICION MAS EN EL BOTON DE VELOCIDAD: AUTO.
+ *
+ * *** El dueño, 07/10/2026: "ninguno de todos los que pruebo decodifica
+ * nada en claro, y eso me parece rarisimo porque me he encontra
+ * muuuuuchos". ***
+ *
+ * Ni la velocidad ni el entrelazado van en la señal: son once
+ * combinaciones y hasta hoy habia que acertarlas con dos botones. En
+ * AUTO las recorre la radio sola (ver la cabecera de stanag_rx.c). El
+ * rotulo dice AUTO mientras busca y A300 -con la velocidad que sea- en
+ * cuanto acierta, para que se vea QUE ha encontrado y no solo que ha
+ * encontrado algo.
+ *
+ * Va en el boton que ya existe y no en un ajuste nuevo a proposito: es
+ * el boton que el dueño ya pulsa cuando no sale nada, y se topa con AUTO
+ * sin tener que ir a buscarlo.
+ */
 void stanag_modo_vel_pon(uint8_t v)
 {
-    uint8_t antes = stanag_rx_velocidad();
-    stanag_rx_velocidad_pon(v);
+    uint8_t antes_v = stanag_rx_velocidad();
+    uint8_t antes_a = stanag_rx_auto();
+
+    if (v >= STANAG_RX_VELOCIDADES) {
+        stanag_rx_auto_pon(1U);
+    } else {
+        stanag_rx_auto_pon(0U);
+        stanag_rx_velocidad_pon(v);
+    }
     if (s_activo && demod_toca() && !recoloca()) {
-        stanag_rx_velocidad_pon(antes);
+        stanag_rx_auto_pon(antes_a);
+        stanag_rx_velocidad_pon(antes_v);
         (void)stanag_modo_start();
     }
 }
-uint8_t     stanag_modo_vel(void) { return stanag_rx_velocidad(); }
-const char *stanag_modo_vel_txt(void)
-{ return stanag_rx_velocidad_txt(stanag_rx_velocidad()); }
+uint8_t stanag_modo_vel(void)
+{
+    return (uint8_t)(stanag_rx_auto() ? STANAG_RX_VELOCIDADES : stanag_rx_velocidad());
+}
+uint8_t stanag_modo_vel_n(void) { return (uint8_t)(STANAG_RX_VELOCIDADES + 1U); }
 
+const char *stanag_modo_vel_txt(void)
+{
+    static char b[8];
+    const char *v;
+    uint8_t i;
+
+    if (!stanag_rx_auto()) { return stanag_rx_velocidad_txt(stanag_rx_velocidad()); }
+    if (!stanag_rx_auto_fijo()) { return "AUTO"; }
+    v = stanag_rx_velocidad_txt(stanag_rx_velocidad());
+    b[0] = 'A';
+    for (i = 0U; (i < 6U) && (v[i] != '\0'); i++) { b[i + 1U] = v[i]; }
+    b[i + 1U] = '\0';
+    return b;
+}
+
+/*
+ * El boton del entrelazado, estando en AUTO, APAGA la busqueda y se
+ * queda con lo que hubiera encontrado. Es lo que uno espera al tocar un
+ * mando manual: que mande el de la mano.
+ */
 void stanag_modo_entre_pon(uint8_t largo)
 {
     uint8_t antes = stanag_rx_largo();
+    uint8_t antes_a = stanag_rx_auto();
+
+    stanag_rx_auto_pon(0U);
     stanag_rx_largo_pon(largo);
     if (s_activo && demod_toca() && !recoloca()) {
+        stanag_rx_auto_pon(antes_a);
         stanag_rx_largo_pon(antes);
         (void)stanag_modo_start();
     }
@@ -431,10 +540,29 @@ void stanag_modo_llenado(uint16_t *hechos, uint16_t *hacen)
     if (hacen  != 0) { *hacen  = e.grupos_hacen; }
 }
 
-void        stanag_modo_fmt_pon(uint8_t f) { stanag_rx_formato_pon(f); }
-uint8_t     stanag_modo_fmt(void)          { return stanag_rx_formato(); }
+void        stanag_modo_fmt_pon(uint8_t f)
+{
+    if (s4415_toca()) { s4415_formato(f); return; }
+    stanag_rx_formato_pon(f);
+}
+uint8_t     stanag_modo_fmt(void)
+{
+    if (s4415_toca()) { s4415_est_t e; s4415_estado(&e); return e.formato; }
+    return stanag_rx_formato();
+}
 const char *stanag_modo_fmt_txt(void)
-{ return stanag_rx_formato_txt(stanag_rx_formato()); }
+{
+    /* El 4415 no tiene ITA2: lo que lleva dentro no son costeras en claro.
+     * Dos formatos, ASCII y HEX, y el boton rueda entre esos dos. */
+    if (s4415_toca()) { return (stanag_modo_fmt() == S4415_HEX) ? "HEX" : "ASCII"; }
+    return stanag_rx_formato_txt(stanag_rx_formato());
+}
+
+/* Cuantas posiciones tiene el boton de formato en la forma de onda puesta. */
+uint8_t stanag_modo_fmt_n(void)
+{
+    return (uint8_t)(s4415_toca() ? S4415_FORMATOS : STANAG_RX_FORMATOS);
+}
 uint8_t stanag_modo_forma(void) { return s_forma; }
 
 const char *stanag_modo_forma_txt(uint8_t f)
@@ -449,7 +577,8 @@ void stanag_modo_borra(void)
     /* Si esta demodulando, el texto de la pantalla sale de stanag_rx,
      * no de aqui: hay que vaciar ESE. Sin esta linea el boton Borrar
      * no hacia nada visible en modo demodulador. */
-    if (demod_toca()) { stanag_rx_borra(); }
+    if (s4415_toca())      { s4415_borra(); }
+    else if (demod_toca()) { stanag_rx_borra(); }
     for (i = 0U; i < DET_LINEAS; i++) {
         for (j = 0U; j < STANAG_MODO_LARGO; j++) { s_lin[i][j] = '\0'; }
     }
@@ -638,9 +767,111 @@ static void avisos_haz(void)
  */
 #define TEXTO_FILAS 9U
 
+/*
+ * LOS RENGLONES DEL 4415. Arriba el texto que sale del Viterbi y abajo
+ * cuatro de diagnostico, con la misma regla que el 4285: el diagnostico NO
+ * desaparece en cuanto sale una letra, que es cuando mas falta hace saber si
+ * esa letra es de verdad.
+ *
+ * El renglon de los sets excepcionales es el que importa y por eso va
+ * entero: el estandar marca el ultimo set de cada bloque del entrelazador
+ * con un patron distinto, asi que si los desalineos estan a cero y los
+ * bloques se cierran con su marca, el alineamiento es bueno. Sin eso, un
+ * Viterbi siempre devuelve bits con buena cara.
+ */
+#define AV4415 4U
+static char s_a4[AV4415][STANAG_MODO_LARGO];
+
+static void avisos4415_haz(void)
+{
+    s4415_est_t e;
+    uint8_t j;
+
+    for (j = 0U; j < AV4415; j++) { s_a4[j][0] = '\0'; }
+    s4415_estado(&e);
+
+    j = pon(s_a4[0], 0U, tr("preambulo ", "preamble "));
+    j = pon_u(s_a4[0], j, e.segmentos);
+    j = pon(s_a4[0], j, tr(" seg, cuenta ", " seg, count "));
+    j = pon_u(s_a4[0], j, e.cuenta);
+    j = pon(s_a4[0], j, ", corr ");
+    j = pon_u(s_a4[0], j, e.corr);
+    j = pon(s_a4[0], j, "%");
+    s_a4[0][j] = '\0';
+
+    j = pon(s_a4[1], 0U, "D1 ");
+    j = pon_u(s_a4[1], j, e.d1);
+    j = pon(s_a4[1], j, " D2 ");
+    j = pon_u(s_a4[1], j, e.d2);
+    j = pon(s_a4[1], j, " -> ");
+    j = pon(s_a4[1], j, s4415_bps_txt(e.bps_idx));
+    j = pon(s_a4[1], j, tr(" bps, ", " bps, "));
+    j = pon(s_a4[1], j, e.largo ? tr("largo", "long") : tr("corto", "short"));
+    s_a4[1][j] = '\0';
+
+    /* Esta linea cabe en 48: "sets 99999 b3 s0 m0 tira 0" son 26. La
+     * primera version decia las cuatro cosas con todas sus letras y pasaba
+     * de 48, asi que pon() la cortaba por la mitad. */
+    j = pon(s_a4[2], 0U, tr("sets ", "sets "));
+    j = pon_u(s_a4[2], j, e.dibits);
+    j = pon(s_a4[2], j, " b");
+    j = pon_u(s_a4[2], j, e.excepcionales);
+    j = pon(s_a4[2], j, " s");
+    j = pon_u(s_a4[2], j, e.desalineos);
+    j = pon(s_a4[2], j, " m");
+    j = pon_u(s_a4[2], j, e.sin_marca);
+    j = pon(s_a4[2], j, tr(" tira ", " drop "));
+    j = pon_u(s_a4[2], j, s4415_tiradas());
+    s_a4[2][j] = '\0';
+
+    j = pon(s_a4[3], 0U, tr("bloques ", "blocks "));
+    j = pon_u(s_a4[3], j, e.bloques);
+    j = pon(s_a4[3], j, tr(", bits ", ", bits "));
+    j = pon_u(s_a4[3], j, e.bits);
+    j = pon(s_a4[3], j, ", EOM ");
+    j = pon_u(s_a4[3], j, e.eom);
+    if (e.fin_tx) { j = pon(s_a4[3], j, tr("  (fin)", "  (end)")); }
+    s_a4[3][j] = '\0';
+}
+
+/*
+ * *** El dueño, 08/10/2026: "donde coño esta lo de bucle". ***
+ *
+ * Y tenia toda la razon en no encontrarlo: lo meti como UN renglon de texto
+ * suelto dentro de una tabla de TRES COLUMNAS, y la primera columna mide 112
+ * pixeles (ui_digi_cols_ident va en 8, 120 y 680). "bucle 180/95 ms peor" son
+ * unos 140, asi que salia cortado por la mitad o no salia.
+ *
+ * Partido en las tres columnas, que es como se pinta esa tabla:
+ *
+ *     Periodo        Señal                 Calidad
+ *     BUCLE          180 ms la vuelta      95 ms los poll
+ *
+ * Los titulos no le pegan -son los del identificador- pero el renglon se ve,
+ * que es de lo que se trata. Es un instrumento, no un adorno.
+ */
+static const char *linea_bucle(void)
+{
+    static char b[STANAG_MODO_LARGO];
+    uint8_t i = 0U;
+
+    i = pon(b, i, "BUCLE\t");
+    i = pon_u(b, i, (uint32_t)(ui_bucle_peor_us() / 1000U));
+    i = pon(b, i, tr(" ms la vuelta\t", " ms the loop\t"));
+    i = pon_u(b, i, (uint32_t)(ui_polls_peor_us() / 1000U));
+    i = pon(b, i, tr(" ms los poll", " ms the polls"));
+    b[i] = '\0';
+    return b;
+}
+
 uint8_t stanag_modo_lineas(void)
 {
     if (!s_activo) { return 0U; }
+    if (stanag_modo_4415()) {
+        uint8_t n = s4415_nlineas();
+        if (n > TEXTO_FILAS) { n = TEXTO_FILAS; }
+        return (uint8_t)(n + AV4415);
+    }
     if (stanag_modo_demod()) {
         uint8_t n = stanag_rx_nlineas();
         uint8_t d = 0U;
@@ -649,12 +880,20 @@ uint8_t stanag_modo_lineas(void)
         while (d < AVISOS && s_av[d][0] != '\0') { d++; }
         return (uint8_t)(n + d);
     }
-    return (uint8_t)((s_nlin != 0U) ? s_nlin : 1U);
+    /* +1: el renglon del bucle, que es el instrumento del cuelgue */
+    return (uint8_t)(((s_nlin != 0U) ? s_nlin : 1U) + 1U);
 }
 
 const char *stanag_modo_linea(uint8_t i)
 {
     if (!s_activo) { return ""; }
+    if (stanag_modo_4415()) {
+        uint8_t n = s4415_nlineas();
+        if (n > TEXTO_FILAS) { n = TEXTO_FILAS; }
+        if (i < n) { return s4415_linea(i); }
+        avisos4415_haz();
+        return (((uint8_t)(i - n)) < AV4415) ? s_a4[i - n] : "";
+    }
     if (stanag_modo_demod()) {
         uint8_t n = stanag_rx_nlineas();
         if (n > TEXTO_FILAS) { n = TEXTO_FILAS; }
@@ -662,8 +901,22 @@ const char *stanag_modo_linea(uint8_t i)
         avisos_haz();
         return ((i - n) < AVISOS) ? s_av[i - n] : "";
     }
-    if (s_nlin == 0U) { avisos_haz(); return (i == 0U) ? s_av[0] : ""; }
-    return (i < s_nlin) ? s_lin[i] : "";
+    /*
+     * EL RENGLON DEL BUCLE VA PRIMERO - 08/10/2026.
+     *
+     * *** El dueño: "donde coño esta lo de bucle". ***
+     *
+     * Estaba el ultimo, en la primera columna de 112 pixeles, y con un texto
+     * de 140. O sea cortado y abajo. Ahora va ARRIBA y partido en las tres
+     * columnas de la tabla. Un instrumento que no se encuentra no es un
+     * instrumento.
+     */
+    if (i == 0U) { return linea_bucle(); }
+    if (s_nlin == 0U) {
+        if (i == 1U) { avisos_haz(); return s_av[0]; }
+        return "";
+    }
+    return ((i - 1U) < s_nlin) ? s_lin[i - 1U] : "";
 }
 
 /*
@@ -697,6 +950,26 @@ const char *stanag_modo_estado_txt(void)
     if ((s_forma == STANAG_4529) || (s_forma == STANAG_4538)) {
         return tr("solo ident.", "ident. only");
     }
+    if (s4415_toca()) {
+        s4415_est_t e;
+        s4415_estado(&e);
+        if (!e.engancha) { return tr("busca 4415", "hunt 4415"); }
+        if (e.bloques == 0U) {
+            i = pon(b, i, tr("pre ", "pre "));
+            i = pon_u(b, i, e.segmentos);
+            i = pon(b, i, "/");
+            i = pon_u(b, i, e.cuenta);
+            b[i] = '\0';
+            return b;
+        }
+        i = pon(b, i, "b");
+        i = pon_u(b, i, e.bloques);
+        i = pon(b, i, " e");
+        i = pon_u(b, i, e.eom);
+        if (e.fin_tx) { i = pon(b, i, tr(" fin", " end")); }
+        b[i] = '\0';
+        return b;
+    }
     if (demod_toca()) {
         stanag_rx_est_t e;
         int16_t hz;
@@ -705,6 +978,27 @@ const char *stanag_modo_estado_txt(void)
         if (!e.engancha) {
             i = pon(b, i, tr("busca ", "hunt "));
             i = pon_u(b, i, e.tramas);
+            b[i] = '\0';
+            return b;
+        }
+        /*
+         * BUSCANDO, LO QUE HAY QUE ENSEÑAR ES POR DONDE VA.
+         *
+         * Son once combinaciones y el entrelazado largo se lleva diez
+         * segundos de relleno en cada incremento nuevo, asi que la
+         * busqueda entera puede tardar veinticinco segundos. Sin un
+         * numero que se mueva eso es indistinguible de una radio
+         * colgada, que es exactamente la queja que trajo todo esto.
+         */
+        if (e.busca && !e.busca_fijo) {
+            i = pon(b, i, tr("prueba ", "trying "));
+            i = pon_u(b, i, e.busca_cual);
+            i = pon(b, i, "/");
+            i = pon_u(b, i, e.busca_de);
+            if (e.busca_falta != 0U) {
+                i = pon(b, i, tr(" llena ", " fill "));
+                i = pon_u(b, i, e.busca_falta);
+            }
             b[i] = '\0';
             return b;
         }
@@ -770,9 +1064,111 @@ uint32_t stanag_modo_medidas(void) { return s_medidas; }
 
 /* Ver el comentario de la cabecera. g_msticks lo lleva main.c. */
 extern volatile uint32_t g_msticks;
+/*
+ * *** EL DUEÑO, 07/10/2026: "el stanag me sigue dejando la radio frita, sobre
+ * todo si lleva un rato" y, preguntado, "es que le doy al boton de modo para
+ * salir del stanag y le tengo que dar varias veces para que reaccione". ***
+ *
+ * NO ESTABA COLGADA: EL BUCLE PRINCIPAL IBA TAN LENTO QUE SE PERDIA LAS
+ * PULSACIONES. Y la causa estaba AQUI, sumando s_medidas a este latido.
+ *
+ * Medido sobre el stanag_det.c del firmware, 300 segundos de audio:
+ *
+ *     llamadas que MIDEN:  11,7 por segundo
+ *     cada una:            259 us de mediana en el PC
+ *
+ * O sea que s_medidas sube ONCE VECES POR SEGUNDO, y main.c repinta el panel
+ * ENTERO cada vez que este numero cambia. Mas las cuatro del reloj: dieciseis
+ * repintados por segundo de una pantalla de texto sobre un bus SPI.
+ *
+ * Y LO PEOR: ESO YA ESTABA ESCRITO EN ESTE FICHERO. El comentario de
+ * stanag_modo_poll() lo cuenta de la vez anterior, con el 4285:
+ *
+ *   "Subiendola en CADA pasada, el panel se repintaba en cada vuelta del
+ *    bucle principal; el bucle se ponia lento; el audio se acumulaba... Un
+ *    circulo que yo mismo monte: cuanto mas miraba la pantalla, menos
+ *    enganchaba."
+ *
+ * Entonces se arreglo el camino del demodulador y se dejo el del
+ * identificador como estaba. Esta es la otra mitad del mismo fallo, y la
+ * acabo de volver a cometer en el 4415 tres dias despues, en la V3.89.
+ *
+ * Y EL "SI LLEVA UN RATO" TAMBIEN CUADRA: el panel del identificador va
+ * acumulando renglones -uno por cada cambio de periodo- hasta DET_LINEAS, asi
+ * que cada repintado dibuja mas texto que el anterior. Mas renglones por
+ * dieciseis repintados por segundo: empeora solo, sin que pase nada nuevo.
+ *
+ * COMO QUEDA. El reloj ya repinta CUATRO VECES POR SEGUNDO pase lo que pase,
+ * y el propio comentario de abajo dice que con eso sobra -"repintar la
+ * cabecera entera a la velocidad del bucle principal seria tirar ciclos en
+ * algo que nadie puede leer tan rapido"-. Asi que s_medidas sale del latido y
+ * en su sitio entra s_nuevas: sube SOLO cuando aparece un renglon nuevo, que
+ * es lo unico que hay que ver al instante.
+ *
+ * Resultado: cuatro repintados por segundo en reposo, mas uno inmediato
+ * cuando de verdad hay algo nuevo. s_medidas se sigue contando igual -lo
+ * mira el banco- pero ya no manda en el dibujo.
+ */
+/*
+ * Y AUN ASI NO BASTO - 08/10/2026.
+ *
+ * *** El dueño, con la V3.92 ya puesta: "se sigue tostando y no dejandome
+ * darle a los botones". ***
+ *
+ * Bajar de 14,7 a 4,0 repintados por segundo no arreglo el problema. O sea
+ * que no era solo CUANTOS: tambien CUANTO cuesta cada uno. Y cuatro
+ * repintados por segundo de un panel entero, por un bus SPI, se notan igual.
+ *
+ * LO QUE SOBRABA ES EL RELOJ. Los cuatro por segundo venian de g_msticks/250
+ * y se pintaban PASE LO QUE PASE, aunque en la pantalla no cambiara ni un
+ * pixel. En "Auto" con la señal quieta eso es exactamente lo que ocurre: los
+ * tres renglones son los mismos, la chapa es la misma, y se vuelve a dibujar
+ * todo cuatro veces por segundo para dejarlo igual.
+ *
+ * ASI QUE AHORA SE MIRA LO QUE SE VERIA. Cuatro veces por segundo se compone
+ * el texto -que es barato: son cadenas- y se le saca una firma. Si la firma
+ * no cambia, no se repinta. Si cambia, se repinta al instante.
+ *
+ * Queda un refresco de seguridad cada cuatro segundos, por si alguna vez algo
+ * se dibujara sin pasar por aqui: mas vale un repintado inutil cada cuatro
+ * segundos que una pantalla congelada para siempre.
+ *
+ * Y la razon de que esto sea correcto y no un apaño: componer el texto cuesta
+ * unas cadenas; dibujarlo cuesta empujar pixeles por SPI. Comparar antes de
+ * dibujar es cambiar lo caro por lo barato.
+ */
+static uint32_t s_firma;      /* huella de lo que se ve ahora mismo */
+static uint32_t s_cambios;    /* cuantas veces ha cambiado esa huella */
+static uint32_t s_firma_t;    /* el cuarto de segundo en que se miro */
+
+static uint32_t huella(uint32_t h, const char *t)
+{
+    while (*t != '\0') {
+        h ^= (uint32_t)(unsigned char)(*t);
+        h *= 16777619UL;
+        t++;
+    }
+    return h ^ 0x9EU;
+}
+
 uint32_t stanag_modo_latido(void)
 {
-    return s_medidas + (g_msticks / 250UL);
+    uint32_t t = g_msticks / 250UL;
+
+    if (t != s_firma_t) {
+        uint32_t h = 2166136261UL;
+        uint8_t n, k;
+        s_firma_t = t;
+        n = stanag_modo_lineas();
+        for (k = 0U; k < n; k++) { h = huella(h, stanag_modo_linea(k)); }
+        h = huella(h, stanag_modo_estado_txt());
+        if (h != s_firma) { s_firma = h; s_cambios++; }
+    }
+    /* s_nuevas: un renglon nuevo. s_cambios: el texto ha cambiado.
+     * El ultimo termino es el refresco de seguridad, uno cada cuatro
+     * segundos, y nada mas. */
+    return s_nuevas + s_cambios + (g_msticks / 4000UL);
 }
+
 uint16_t stanag_modo_periodo(void) { return s_periodo; }
 uint8_t  stanag_modo_encaja(void)  { return s_encaja; }

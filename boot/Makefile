@@ -1,5 +1,5 @@
 # El cargador de arranque. Se compila SOLO, con su propio linker script.
-#   make -C boot          -> boot/boot_nuestro.bin
+#   make -C boot          -> boot/customboot.bin
 FW      := ..
 CC      := arm-none-eabi-gcc
 OBJCOPY := arm-none-eabi-objcopy
@@ -15,7 +15,7 @@ CFLAGS  := -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
            -I$(FW)/usb/GD32F4xx_usb_library/ustd/class/msc \
            -Wall -Os -ffunction-sections -fdata-sections -g3
 LDFLAGS := -TGD32F450VE_BOOT.ld -Wl,--gc-sections -nostartfiles -specs=nano.specs \
-           -Wl,-Map=boot_nuestro.map
+           -Wl,-Map=customboot.map
 
 SRC := boot_main.c soporte.c usb_it.c atajo_dfu.c atajo_gesto.c panel_serie.c \
        disco_msc.c \
@@ -38,10 +38,14 @@ SRC := boot_main.c soporte.c usb_it.c atajo_dfu.c atajo_gesto.c panel_serie.c \
        $(FW)/Firmware/Source/gd32f4xx_misc.c $(FW)/Firmware/Source/gd32f4xx_spi.c $(FW)/Firmware/Source/gd32f4xx_pmu.c
 ASM := $(FW)/CMSIS/GD/GD32F4xx/Source/GCC/startup_gd32f450_470.S
 
-all: boot_nuestro.bin
-boot_nuestro.elf: $(SRC) $(ASM) GD32F450VE_BOOT.ld
+all: customboot.bin
+customboot.elf: $(SRC) $(ASM) GD32F450VE_BOOT.ld
 	$(CC) $(CFLAGS) $(LDFLAGS) $(SRC) $(ASM) -o $@
 	arm-none-eabi-size $@
-boot_nuestro.bin: boot_nuestro.elf
+customboot.bin: customboot.elf
 	$(OBJCOPY) -O binary $< $@
-clean: ; rm -f boot_nuestro.elf boot_nuestro.bin boot_nuestro.map
+# El sello: version, tamaño y CRC del contenido, mas el aviso si esa
+# version ya salio con otro contenido. Ver tools/bootsello.py - y el
+# comentario de CARGADOR_VERSION en boot_main.c, que es el porque.
+	@python3 ../tools/bootsello.py customboot.bin boot_main.c customboot.map
+clean: ; rm -f customboot.elf customboot.bin customboot.map

@@ -1,9 +1,11 @@
 /*
  * SSTV. Ver sstv.h para el porque de cada pieza.
  */
+#include "hfdl_ram.h"
 #include "sstv.h"
 #include "disc_fm.h"
 #include <string.h>
+#include <math.h>
 
 #ifdef __GNUC__
 #define TCMRAM_BSS __attribute__((section(".tcmram")))
@@ -231,15 +233,37 @@ uint8_t sstv_modo_tiempos(uint8_t i, float *linea_s, float *sync_s,
     return 1U;
 }
 
+/* El desvio de sintonia medido sobre el lider. Se declara aqui arriba porque
+ * nivel_de_hz(), que es de las primeras funciones del fichero, ya lo necesita;
+ * el porque entero esta donde se mide, en vis_paso(). */
+static float    s_off_hz;
+/*
+ * EL CANDIDATO. s_off_hz solo se toca cuando la cabecera ha llegado hasta el
+ * bit de arranque, o sea cuando ya hay DOS lideres y el corte entre ellos.
+ * Mientras tanto la medida vive aqui.
+ *
+ * Importa porque s_off_hz lo usa tambien el camino de la imagen -el
+ * sincronismo y el gris-, y un lider falso dejaba ahi un desvio inventado que
+ * estropeaba la foto que estuviera entrando.
+ */
+static float    s_off_cand;
+/* El seguidor de "tono quieto": media lenta de la frecuencia y cuanto se
+ * mueve alrededor de ella. De aqui sale el lider. Ver vis_paso(). */
+static float    s_lento, s_mov, s_lento_a;
+
+float sstv_desvio_hz(void) { return s_off_hz; }
+
 float sstv_hz_de_nivel(uint8_t v)
 {
     return SSTV_NEGRO_HZ
          + ((float)v / 255.0f) * (SSTV_BLANCO_HZ - SSTV_NEGRO_HZ);
 }
 
+/* Con el desvio restado, igual que todo lo demas: si no, una señal 200 Hz
+ * baja pinta la foto entera mas oscura de lo que es. */
 static uint8_t nivel_de_hz(float hz)
 {
-    float t = (hz - SSTV_NEGRO_HZ) / (SSTV_BLANCO_HZ - SSTV_NEGRO_HZ);
+    float t = ((hz - s_off_hz) - SSTV_NEGRO_HZ) / (SSTV_BLANCO_HZ - SSTV_NEGRO_HZ);
     if (t <= 0.0f) { return 0U; }
     if (t >= 1.0f) { return 255U; }
     return (uint8_t)(t * 255.0f + 0.5f);
@@ -308,13 +332,45 @@ static uint8_t   s_r36_hay;
  * mas rapido, que es margen de verdad y no de justito. Cuesta 7,7 kB de
  * los 30 que quedaban libres.
  */
+/*
+ * Y SE MUDA A LA RAM PRESTADA EL 07/10/2026.
+ *
+ * *** El dueño, despues de que le contara mal de donde salian 28 bytes:
+ * "quiero que revises todo a ver si encuentras mas fallos como el de
+ * gd32f4xx_enet.c" ... "basicamente quita todo lo que no se use". ***
+ *
+ * Y la respuesta honrada a eso es que lo que NO SE USA ya lo quita el
+ * enlazador solo: eso es lo que hace --gc-sections, y por eso sacar
+ * gd32f4xx_enet.c del build no cambio ni un byte. No quedan "enets".
+ *
+ * Lo que el enlazador NO puede quitar es esto: una cola de 11.520 bytes que
+ * se reserva SIEMPRE y que solo usa UN modo. El enlazador la ve referenciada
+ * desde codigo que se alcanza, y tiene razon; lo que no puede saber es que la
+ * radio solo esta en un modo a la vez, y que mientras no estas en SSTV estos
+ * once kilobytes y medio no son de nadie.
+ *
+ * Para eso esta el prestamo de hfdl_ram.h, que ya usan AIS, ALE, DSC, Hell,
+ * HFDL, IDENT, JTTY, STANAG y WSPR. SSTV no lo usaba y es de los que mas
+ * ocupa. Se coge en sstv_start() y se suelta en sstv_stop(), que es
+ * exactamente donde main.c entra y sale del modo.
+ *
+ * Si el prestamo no se puede coger, NO SE ARRANCA y se dice que no. Un
+ * puntero nulo aqui es una foto que se pinta en memoria ajena; preferible no
+ * pintar. Es la misma leccion de hell.c, que un dia arranco con capacidad
+ * cero y enseño "0 columnas de 105" sin que nada apuntara a la causa.
+ */
 #define SAL_N 12U
-static uint8_t   s_sal[SAL_N][SSTV_ANCHO * 3U];
-static uint16_t  s_sal_ys[SAL_N];
+#define SAL_ANCHO (SSTV_ANCHO * 3U)
+
+typedef struct {
+    uint8_t  px[SAL_N][SAL_ANCHO];
+    uint16_t ys[SAL_N];
+} sal_t;
+
+static sal_t    *s_sal_p;
 static uint8_t   s_sal_cab, s_sal_col;
 static uint16_t  s_y;
 
-typedef enum { T_OTRO = 0, T_1100, T_1200, T_1300, T_NEGRO, T_LIDER } tono_t;
 
 /* --- la cabecera VIS --- */
 /*
@@ -432,18 +488,45 @@ static void linea_limpia(void)
 
 void sstv_start(float fs_hz)
 {
+    uint8_t *b; uint32_t cap = 0U;
+
     if (fs_hz <= 0.0f) { return; }
+
+    /* El prestamo, antes que nada: si no hay, no se arranca. Ver el
+     * comentario de s_sal_p mas arriba. */
+    if (s_sal_p == 0) {
+        hfdl_ram_coge();
+        b = hfdl_ram_todo(&cap);
+        if (b == 0 || cap < (uint32_t)sizeof(sal_t)) {
+            hfdl_ram_suelta();
+            s_on = 0U;
+            s_estado = SSTV_PARADO;
+            return;
+        }
+        s_sal_p = (sal_t *)(void *)b;
+    }
+
     s_fs = fs_hz;
     disc_fm_init(&s_disc, SSTV_CENTRO_HZ, fs_hz);
 
     memset(&s_info, 0, sizeof s_info);
     linea_limpia();
-    memset(s_sal, 0, sizeof s_sal);
+    memset(s_sal_p, 0, sizeof *s_sal_p);
     s_sal_cab = s_sal_col = 0U;
     s_y = 0U;
     s_r36_hay = 0U; s_r36_es_cr = 0U;
 
     s_muestra = 0UL; s_bajo_n = 0UL; s_t0 = 0UL; s_hay_t0 = 0U;
+    /* Y el desvio de sintonia, que si no se arrastra de una imagen a la
+     * siguiente. Lo dijo el banco al encadenar varias pruebas con desvios
+     * distintos: la segunda empezaba con la correccion de la primera puesta
+     * y no enganchaba ni a cero. */
+    s_off_hz = 0.0f; s_off_cand = 0.0f;
+    /* El seguidor empieza "moviendose mucho" a proposito: si empezara quieto,
+     * los primeros milisegundos de cualquier cosa valdrian como lider. */
+    s_lento = SSTV_LIDER_HZ; s_mov = 1000.0f;
+    s_lento_a = 1.0f / (0.020f * s_fs);      /* 20 ms de constante de tiempo */
+    if (s_lento_a > 0.5f) { s_lento_a = 0.5f; }
     s_vis_est = (uint8_t)V_LIDER1;
     s_vis_t0 = 0UL; s_vis_bit = 0U; s_vis_val = 0U; s_vis_par = 0U;
     s_cnt_lider = 0UL; s_cnt_1200 = 0UL; s_ini_1200 = 0UL; s_vis_plazo = 0UL;
@@ -455,7 +538,19 @@ void sstv_start(float fs_hz)
     s_on = 1U;
 }
 
-void sstv_stop(void)      { s_on = 0U; s_estado = SSTV_PARADO; }
+void sstv_stop(void)
+{
+    if (s_sal_p != 0) {
+        /* El puntero se borra ANTES de soltar: sstv_linea() y la cola corren
+         * desde sitios distintos -el bucle principal y la interrupcion- y
+         * entre soltar y borrar habria una rendija por la que se escribe en
+         * memoria que ya es de otro. */
+        s_sal_p = 0;
+        hfdl_ram_suelta();
+    }
+    s_on = 0U;
+    s_estado = SSTV_PARADO;
+}
 uint8_t sstv_activo(void) { return s_on; }
 
 void sstv_fuerza(uint8_t indice_modo)
@@ -473,17 +568,18 @@ const uint8_t *sstv_linea(uint16_t *y)
 {
     uint8_t i;
 
-    if (s_sal_col == s_sal_cab) { return 0; }
+    if (s_sal_p == 0 || s_sal_col == s_sal_cab) { return 0; }
     i = s_sal_col;
     s_sal_col = (uint8_t)((s_sal_col + 1U) % SAL_N);
-    if (y) { *y = s_sal_ys[i]; }
-    return s_sal[i];
+    if (y) { *y = s_sal_p->ys[i]; }
+    return s_sal_p->px[i];
 }
 
 void sstv_info(sstv_info_t *out)
 {
     if (!out) { return; }
     *out = s_info;
+    out->alto = (uint16_t)s_pl.alto;
     out->estado = s_estado;
     out->linea = s_y;
     out->nivel = disc_fm_nivel(&s_disc);
@@ -539,10 +635,11 @@ static void mete_linea(const uint8_t *rgb, uint16_t y_img)
     y_img = (uint16_t)(y_img / s_pl.vdec);
     if (y_img >= SSTV_ALTO) { return; }
 
+    if (s_sal_p == 0) { return; }
     sig = (uint8_t)((s_sal_cab + 1U) % SAL_N);
     if (sig == s_sal_col) { return; }   /* la cola va llena: se tira */
-    memcpy(s_sal[s_sal_cab], rgb, SSTV_ANCHO * 3U);
-    s_sal_ys[s_sal_cab] = y_img;
+    memcpy(s_sal_p->px[s_sal_cab], rgb, SAL_ANCHO);
+    s_sal_p->ys[s_sal_cab] = y_img;
     s_sal_cab = sig;
 }
 
@@ -677,17 +774,115 @@ void sstv_vis_dbg(uint8_t *est, uint32_t *lider, uint32_t *c1200, float *hz)
     if (hz)    { *hz = s_hz_suave; }
 }
 
-static uint8_t clasifica(float hz)
-{
-    /* Bandas que se tocan entre si, sin huecos: asi la transicion de un tono
-     * al siguiente pasa por bandas intermedias en vez de caer en un "no se
-     * que es esto" que habria que interpretar aparte. */
-    if (hz < 1150.0f) { return (uint8_t)T_1100; }
-    if (hz < 1250.0f) { return (uint8_t)T_1200; }
-    if (hz < 1400.0f) { return (uint8_t)T_1300; }
-    if (hz < 1700.0f) { return (uint8_t)T_NEGRO; }
-    return (uint8_t)T_LIDER;
-}
+/*
+ * EL DESVIO DE SINTONIA, MEDIDO SOBRE EL PROPIO LIDER - 06/10/2026.
+ *
+ * *** El dueño, con una emision de Robot 72 en 14.230: "es sstv y no lo esta
+ * descodificando" ... "se queda en esperando una imagen" ... "no detecta nada
+ * y ya han emitido 3 veces". ***
+ *
+ * Y no era de la emisora. Midiendo su grabacion, los pulsos de sincronismo
+ * -que por norma estan en 1200 Hz- le llegaban a 1011: unos 190 Hz BAJOS, que
+ * sobre 14,23 MHz son 13 ppm, el error tipico de un cristal sin calibrar.
+ *
+ * LO QUE PASABA. clasifica() repartia en bandas FIJAS en hercios. Con -190:
+ *
+ *    el lider de 1900  ->  1710   cae en T_LIDER por los pelos (el borde
+ *                                 esta en 1700: diez hercios de margen)
+ *    el arranque 1200  ->  1010   cae en T_1100. NO SE VE NUNCA
+ *    el bit "0" 1300   ->  1110   cae en T_1100. TODO CERO SE LEE UNO
+ *
+ * O sea que la cabecera no podia completarse ni por casualidad, y la radio se
+ * quedaba en "Esperando una imagen" emision tras emision. El periodo de linea
+ * salia perfecto -un desvio de frecuencia no toca los tiempos- asi que desde
+ * fuera parecia que la señal estaba bien y la radio sorda.
+ *
+ * EL ARREGLO ES EL MISMO QUE EL DEL RTTY, y ya van tres veces en este
+ * proyecto: NO SE MIDE CONTRA UNA CONSTANTE, SE MIDE CONTRA LA PROPIA SEÑAL.
+ *
+ * El lider es el mejor patron que puede haber: 300 ms de un tono solo, de
+ * frecuencia conocida (1900), y llega JUSTO ANTES de los bits que hay que
+ * clasificar. Asi que mientras suena se promedia, y al acabar se sabe cuanto
+ * se ha desviado todo. A partir de ahi, las mismas bandas de siempre pero
+ * corridas.
+ *
+ * Se corrige tambien el sincronismo y el mapeo a gris: si no, la cabecera
+ * engancharia y la foto saldria lavada, que es cambiar un fallo por otro.
+ *
+ * TOPE DE +-300 Hz. Mas que eso no es desvio de sintonia, es que lo que hay
+ * delante no es SSTV, y seguirlo seria inventarse una señal.
+ */
+/*
+ * Y EL TOPE SUBE A 600 Hz - 06/10/2026, segunda vuelta.
+ *
+ * Con 300 bastaba para el caso medido, pero el dueño movio el dial buscando
+ * la señal y la segunda grabacion llegaba ~390 Hz baja. El tope esta para no
+ * seguir a cualquier cosa, no para castigar a quien ha movido el mando; 600
+ * Hz sigue siendo mucho menos que la distancia entre tonos (700).
+ */
+#define VIS_OFF_TOPE_HZ  600.0f
+
+/*
+ * EL LIDER SE RECONOCE POR ESTAR QUIETO, NO POR SER AGUDO - 06/10/2026,
+ * SEGUNDA VUELTA, y esta es la buena.
+ *
+ * La primera vuelta midio el desvio sobre el lider y corrio las bandas. Mejor
+ * que nada, pero seguia teniendo la pescadilla dentro: PARA MEDIR EL LIDER
+ * HAY QUE RECONOCERLO, y se reconocia por caer encima de 1600 Hz. Con -190
+ * aguantaba por poco (1710). Con -390 -la segunda grabacion del dueño, con el
+ * dial ya movido- el lider cae en 1510 y se clasifica como NEGRO: la cabecera
+ * no existe para el decodificador por mucho que la emisora la repita.
+ *
+ * Y hay algo peor, que es lo que de verdad lo mataba. Pasando la grabacion
+ * por el decodificador de verdad se ve esto:
+ *
+ *     banda 1600-1850 Hz ... 0,199 de la energia media   <- LA MAS ALTA
+ *
+ * Con la señal 190 Hz baja, LA IMAGEN ENTERA vive en la banda del lider. O
+ * sea que mientras entra una foto el detector cree estar oyendo lider todo el
+ * rato, el contador de presencia se queda arriba para siempre, y la maquina
+ * de estados se clava esperando un corte de 1200. Medido: 117 segundos
+ * seguidos en el paso "corte", con el primer paso pisado UNA vez.
+ *
+ * LO QUE DISTINGUE AL LIDER NO ES SU FRECUENCIA, ES QUE NO SE MUEVE. Son 300
+ * ms de un tono solo. La imagen, en cambio, cambia de frecuencia en cada
+ * punto. Asi que se lleva una media lenta de la frecuencia (s_lento) y una
+ * media de cuanto se separa de ella (s_mov): hay lider cuando lleva un rato
+ * quieto, SEA CUAL SEA su frecuencia. El desvio sale entonces de donde esta
+ * quieto, y no al reves.
+ *
+ * La ventana de 1400 a 2400 no es para reconocerlo sino para descartar
+ * disparates -un tono de 600 Hz quieto no es un lider de SSTV-: deja +-500 Hz
+ * de error de dial, muy por encima de los 13 ppm que tiene esta radio.
+ */
+#define LIDER_MOV_HZ   70.0f     /* cuanto se le permite temblar */
+#define LIDER_MIN_HZ  1400.0f
+#define LIDER_MAX_HZ  2400.0f
+
+/*
+ * EL CORTE DEL VIS ES UNA BAJADA, NO UNA BANDA ESTRECHA - 06/10/2026,
+ * tercera vuelta, y esto es lo que faltaba para que -190 entrara.
+ *
+ * Aqui habia bandas de cien hercios de ancho: 1150..1250 era "el 1200". Y el
+ * corte entre los dos lideres dura DIEZ MILISEGUNDOS. Midiendolo con el
+ * decodificador de verdad, un salto de 700 Hz en diez milisegundos no acaba
+ * de llegar: con la sintonia a -190 la frecuencia se quedaba en 1065 en vez
+ * de 1010, o sea 1255 ya corregida, CUATRO HERCIOS fuera de la banda. El
+ * contador se quedaba en 44 muestras de las 48 que hacen falta y la cabecera
+ * se perdia ahi. A -150 el mismo tramo se quedaba en 1224 y pasaba. La
+ * diferencia entre que funcione y que no eran cuatro hercios de un transitorio
+ * -no de la señal-, que es la definicion de medida fragil.
+ *
+ * Y la banda estrecha no aportaba nada: ENTRE LOS DOS LIDERES NO HAY NADA
+ * MAS. Lo unico que baja ahi es el corte, y despues el bit de arranque. Asi
+ * que la pregunta buena no es "¿esto es exactamente 1200?" sino "¿esto ha
+ * bajado claramente por debajo del lider?".
+ *
+ * 1550 ya corregidos: 350 Hz por debajo del lider y 350 por encima del sitio
+ * donde cae un corte que ni siquiera ha terminado de bajar. Ningun tramo de
+ * la cabecera vive ahi.
+ */
+#define VIS_BAJO_HZ  1550.0f
 
 /* Un contador de presencia: sube con el tono, baja sin el, suelo en cero, y
  * apunta desde cuando lleva subiendo. */
@@ -704,9 +899,32 @@ static void presencia(uint32_t *cnt, uint32_t *ini, uint8_t hay, uint32_t ahora)
     }
 }
 
+/*
+ * Fija el desvio con lo que lleve promediado del lider.
+ *
+ * SE LLAMA AL ACABAR EL PRIMER LIDER, no al acabar el segundo, y esa fue la
+ * primera version equivocada: el corte de 1200 Hz que separa los dos lideres
+ * va ANTES del segundo, asi que midiendo al final todavia se clasificaba con
+ * las bandas sin corregir y el corte no se veia nunca. El banco lo dijo tal
+ * cual: "el detector se quedo en corte, lider 312 ms, 1200 0 ms".
+ *
+ * Con 300 ms de lider hay medida de sobra. Al acabar el segundo se vuelve a
+ * llamar para afinar, que es gratis y no estorba.
+ */
+static void vis_cuadra_desvio(void)
+{
+    /* s_lento ES la frecuencia cruda del tono que esta sonando quieto, asi
+     * que esto es una ASIGNACION y no un acumulado: no hay que arrastrar
+     * nada de la imagen anterior. */
+    float d = s_lento - SSTV_LIDER_HZ;
+    if (d >  VIS_OFF_TOPE_HZ) { d =  VIS_OFF_TOPE_HZ; }
+    if (d < -VIS_OFF_TOPE_HZ) { d = -VIS_OFF_TOPE_HZ; }
+    s_off_cand = d;
+}
+
 static void vis_paso(float hz)
 {
-    uint8_t t = clasifica(hz);
+    uint8_t lider;
     /*
      * PRESENCIA NETA, no duracion. El lider dura 300 ms y aqui se piden 150:
      * es un contador que sube con el tono y baja sin el, asi que 150 de neto
@@ -724,23 +942,61 @@ static void vis_paso(float hz)
     uint32_t corto = (uint32_t)(0.004f * s_fs);     /* lo minimo de un 1200 */
     uint32_t ms30  = (uint32_t)(0.030f * s_fs + 0.5f);
 
-    presencia(&s_cnt_lider, 0, (uint8_t)(t == (uint8_t)T_LIDER), s_muestra);
-    presencia(&s_cnt_1200, &s_ini_1200, (uint8_t)(t == (uint8_t)T_1200), s_muestra);
+    /*
+     * El seguidor de tono quieto. Va con la frecuencia que entra, sin
+     * corregir: lo que mide es DONDE esta el tono, que es justo lo que no se
+     * sabe todavia.
+     */
+    s_lento += s_lento_a * (hz - s_lento);
+    s_mov   += s_lento_a * (fabsf(hz - s_lento) - s_mov);
+    lider = (uint8_t)(s_mov < LIDER_MOV_HZ
+                      && s_lento > LIDER_MIN_HZ && s_lento < LIDER_MAX_HZ
+                      && fabsf(hz - s_lento) < 2.0f * LIDER_MOV_HZ);
+
+    presencia(&s_cnt_lider, 0, lider, s_muestra);
+    /* El corte nunca es el lider: si el tono lleva un rato quieto, es el
+     * lider por muy bajo que haya caido el dial. Ver VIS_BAJO_HZ. */
+    presencia(&s_cnt_1200, &s_ini_1200,
+              (uint8_t)(!lider && (hz - s_off_cand) < VIS_BAJO_HZ), s_muestra);
 
     /* Plazo: si una cabecera empieza y no termina, se vuelve a empezar en vez
      * de quedarse esperando para siempre un tramo que ya no va a venir. */
+    /*
+     * REVISION A FONDO DEL 08/10/2026: Y V_BITS TAMBIEN TIENE PLAZO.
+     *
+     * Estaba EXCLUIDO de esta guarda, y era el unico paso que no podia
+     * salir solo: su unica salida es el "s_bit_n > 0" de abajo, y s_bit_n
+     * se queda en cero PARA SIEMPRE si al entrar en V_BITS la ventana del
+     * bit 0 ya ha pasado -s_vis_t0 cuelga de s_ini_1200, que es donde
+     * EMPEZO el pulso de arranque, asi que si el pulso se reconocio tarde
+     * la ventana del primer bit queda detras de s_muestra y ya no se
+     * vuelve a entrar en ella-. La maquina no salia nunca y el panel se
+     * quedaba en "Esperando una imagen" con la emision entrando. Los
+     * ocho bits son 240 ms; medio segundo de plazo, el mismo que los
+     * demas pasos, sobra y no estorba.
+     */
     if (s_vis_est != (uint8_t)V_LIDER1
-        && s_vis_est != (uint8_t)V_BITS
         && (int32_t)(s_muestra - s_vis_plazo) > 0) {
         s_vis_est = (uint8_t)V_LIDER1;
+        /*
+         * Y LOS DOS CONTADORES A CERO. Faltaba, y era la mitad del fallo:
+         * s_cnt_lider se quedaba por encima del umbral, asi que al volver a
+         * V_LIDER1 el primer paso se daba por bueno EN LA MISMA MUESTRA y la
+         * maquina volvia al corte sin haber oido nada. Vista desde fuera no
+         * se movia del paso 1 en dos minutos.
+         */
+        s_cnt_lider = 0UL; s_cnt_1200 = 0UL;
+        s_off_cand = 0.0f;                     /* cabecera nueva, medida nueva */
     }
 
     switch ((vis_est_t)s_vis_est) {
     case V_LIDER1:
         if (s_cnt_lider >= largo) {
+            vis_cuadra_desvio();   /* antes del corte de 1200, no despues */
             s_vis_est = (uint8_t)V_CORTE;
             s_vis_plazo = s_muestra + (uint32_t)(0.5f * s_fs);
             s_cnt_1200 = 0UL;
+            s_cnt_lider = 0UL;     /* el lider ya esta gastado */
         }
         break;
 
@@ -754,9 +1010,11 @@ static void vis_paso(float hz)
 
     case V_LIDER2:
         if (s_cnt_lider >= largo) {
+            vis_cuadra_desvio();
             s_vis_est = (uint8_t)V_ARRANQUE;
             s_vis_plazo = s_muestra + (uint32_t)(0.5f * s_fs);
             s_cnt_1200 = 0UL;
+            s_cnt_lider = 0UL;
         }
         break;
 
@@ -768,7 +1026,14 @@ static void vis_paso(float hz)
          * presencia guarda tambien su origen.
          */
         if (s_cnt_1200 >= corto) {
+            /*
+             * AQUI se acepta el desvio, y no antes: a estas alturas han
+             * sonado dos lideres de 300 ms con un corte de 700 Hz en medio.
+             * Eso ya no lo imita el ruido.
+             */
+            s_off_hz = s_off_cand;
             s_vis_est = (uint8_t)V_BITS;
+            s_vis_plazo = s_muestra + (uint32_t)(0.5f * s_fs);
             s_vis_t0 = s_ini_1200 + ms30;   /* el bit 0 empieza tras el arranque */
             s_vis_bit = 0U; s_vis_val = 0U; s_vis_par = 0U;
             s_bit_sum = 0.0f; s_bit_n = 0UL;
@@ -804,7 +1069,18 @@ static void vis_paso(float hz)
         }
 
         if ((int32_t)(s_muestra - fin) >= 0 && s_bit_n > 0UL) {
-            uint8_t b = (uint8_t)((s_bit_sum / (float)s_bit_n) < 1200.0f);
+            /*
+             * CON EL DESVIO RESTADO - 06/10/2026, y esta era LA linea.
+             *
+             * Comparaba el promedio crudo contra 1200 clavado, sin pasar por
+             * clasifica(), asi que la correccion del lider no la tocaba. Con
+             * -190 Hz el uno (1100 -> 910) daba 1 y el cero (1300 -> 1110)
+             * TAMBIEN daba 1: los ocho bits salian unos, VIS 127, y la radio
+             * no reconocia ningun modo por mucho que la cabecera engancharan
+             * los lideres. Lo vio un banco instrumentado, imprimiendo el
+             * desvio paso a paso: -189, -190, y aun asi VIS=127.
+             */
+            uint8_t b = (uint8_t)(((s_bit_sum / (float)s_bit_n) - s_off_hz) < 1200.0f);
             s_bit_sum = 0.0f; s_bit_n = 0UL;
 
             if (s_vis_bit < 7U) {
@@ -860,7 +1136,10 @@ void sstv_process(const float *audio, uint32_t n)
          * punto ya lleva su propio promedio de varias muestras. */
         s_hz_suave += SUAVE_A * (hz_cruda - s_hz_suave);
         hz = s_hz_suave;
-        bajo = (uint8_t)(hz < SYNC_UMBRAL_HZ);
+        /* Tambien con el desvio restado. Sin esto, la cabecera engancharia
+         * -ya la hemos arreglado- y luego la imagen no sincronizaria, que es
+         * cambiar un fallo por el siguiente. */
+        bajo = (uint8_t)((hz - s_off_hz) < SYNC_UMBRAL_HZ);
 
         s_muestra++;
 
@@ -944,6 +1223,22 @@ void sstv_process(const float *audio, uint32_t n)
             if (t > (s_n_linea * 6U) / 5U) {
                 linea_cierra();
                 s_t0 = s_muestra;
+                /*
+                 * REVISION A FONDO DEL 08/10/2026: Y EL CONTADOR DEL
+                 * PULSO, A CERO.
+                 *
+                 * Faltaba. Este cierre forzado mueve s_t0 a la muestra de
+                 * AHORA, pero si en ese momento venia un pulso de
+                 * sincronismo a medias -y viene, porque el cierre se
+                 * dispara en cualquier muestra- s_bajo_n se quedaba con
+                 * lo que llevara contado. Al soltarse el pulso, el
+                 * "ini = s_muestra - s_bajo_n - 1" de arriba apuntaba por
+                 * DEBAJO del nuevo s_t0 y la resta sin signo d = ini -
+                 * s_t0 se iba a 4,29e9: un pulso de sincronismo BUENO se
+                 * descartaba y encima se contaba como malo, justo en el
+                 * momento en que hacia falta para recolocar la imagen.
+                 */
+                s_bajo_n = 0UL;
                 s_info.sincs_malos++;
             }
         }

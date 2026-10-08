@@ -145,6 +145,50 @@ static float s_twiddle_sin[NR_SS_NSTFFT / 2U] TCMRAM_BSS;
 static uint16_t s_bitrev[NR_SS_NSTFFT] TCMRAM_BSS;
 static uint32_t s_pt_w;   /* ring buffer write pointer into s_sigt */
 static uint32_t s_pt_frm; /* which s_sigf[] row gets written next (mod NR_SS_NFRAME) */
+/*
+ * LA GANANCIA DE CADA BIN, SUAVIZADA EN EL TIEMPO - 07/10/2026.
+ *
+ * *** Victor, por el canal del proyecto: "¿Es el reductor de ruido el que
+ * produce ese burbujeo tan fuerte?... cuando la señal útil no supera mucho el
+ * nivel de ruido, se oye esa cosa rara". ***
+ *
+ * La version anterior decidia la ganancia de cada bin desde cero en cada
+ * cuadro. La FFT es de 128 con salto de 32 a 12 kHz, o sea TRESCIENTAS
+ * SETENTA Y CINCO decisiones por segundo y por bin, cada una independiente de
+ * la anterior. La magnitud de un bin que solo lleva ruido es Rayleigh y
+ * fluctua un 52 % alrededor de su media, asi que los bins de ruido cruzan el
+ * umbral arriba y abajo a cada cuadro: uno sobrevive a ganancia 1 durante 2,7
+ * ms y al siguiente lo matan. Eso son rafagas de tono cortas en frecuencias
+ * al azar, que es el ruido musical de toda la vida.
+ *
+ * NO SE HA PODIDO REPRODUCIR EL BURBUJEO FUERTE que describe Victor -ni en el
+ * banco ni en el video del dueño, y el porque esta en sim/nr_burbujeo.c-. Asi
+ * que esto NO entra por oido, entra porque las tres medidas salen mejores o
+ * iguales y ninguna peor:
+ *
+ *                       vaiven que añade   quita ruido   voz a 6 dB
+ *     antes                  +1,40 dB        -15,0 dB      -9,5 dB
+ *     con esto               +0,69 dB        -15,5 dB      -9,5 dB
+ *
+ * El vaiven se queda en la mitad, el ruido se quita incluso un poco MEJOR y
+ * la voz no se mueve ni una decima. No es un compromiso: es gratis. Si
+ * hubiera costado reduccion, no se habria puesto sin una grabacion del efecto.
+ *
+ * LOS DOS NUMEROS. El cuadro dura 2,67 ms. Subir con 0,35 es una constante de
+ * tiempo de ~6 ms -una silaba empieza en 10 ms, asi que no se pierde ningun
+ * arranque de voz- y bajar con 0,10 son ~25 ms, bastante para que una rafaga
+ * de ruido de un cuadro no se oiga como un pitido suelto. Probado tambien con
+ * 0,50/0,30/0,15 por separado: ver la tabla de sim/nr_burbujeo.c.
+ *
+ * LO QUE NO SE HA PUESTO, y es a proposito: un SUELO espectral. Baja el
+ * vaiven hasta +0,32 dB -la mitad otra vez- pero cuesta medio decibelio de
+ * reduccion de ruido. Eso ya es un cambalache, y un cambalache no se elige
+ * sin oido. Queda medido y escrito aqui para cuando haya una grabacion.
+ */
+#define NR_SS_SUBE 0.35f   /* ataque, ~6 ms */
+#define NR_SS_BAJA 0.10f   /* caida,  ~25 ms */
+static float s_g[NR_SS_NSTFFT] TCMRAM_BSS;
+
 static float s_inv_th = 1.0f; /* 1/threshold - see nr_ss_set_strength() */
 static uint8_t s_enabled; /* master on/off - see nr_ss_set_enabled()'s comment in nr_ss.h */
 
@@ -280,6 +324,10 @@ void nr_ss_init(void)
     s_enabled = 0U; /* off by default - matches nr_ss_set_strength(0)'s
                       * own default below, and the project owner's ask
                       * that OFF be a genuine, distinct switch. */
+    {   /* la ganancia arranca en 1: transparente hasta que haya medidas */
+        uint32_t q;
+        for (q = 0U; q < NR_SS_NSTFFT; q++) { s_g[q] = 1.0f; }
+    }
     nr_ss_set_strength(0U); /* see its own comment */
 }
 
@@ -368,6 +416,12 @@ void nr_ss_process(float *audio, uint32_t n)
 
         g = amp * s_inv_th;
         if (g > 1.0f) { g = 1.0f; }
+        /* ataque rapido para no comerse el arranque de una silaba, caida
+         * lenta para que una rafaga de ruido de un cuadro no suene como un
+         * pitido suelto. Ver el comentario de NR_SS_SUBE/BAJA. */
+        if (g > s_g[i]) { s_g[i] += NR_SS_SUBE * (g - s_g[i]); }
+        else            { s_g[i] += NR_SS_BAJA * (g - s_g[i]); }
+        g = s_g[i];
         s_dat_stfft[2U * i]      *= g;
         s_dat_stfft[2U * i + 1U] *= g;
     }

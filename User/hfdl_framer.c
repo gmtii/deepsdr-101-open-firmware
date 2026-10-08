@@ -233,9 +233,17 @@ float32_t hfdl_framer_get_last_score(const hfdl_framer_t *f)
 
 float32_t hfdl_framer_get_global_polarity(const hfdl_framer_t *f)
 {
-	/* Same "oldest sample among the last ref_len pushed" index math
-	 * framer_correlate() itself uses - see that function's comment. */
-	uint32_t start = (f->ring_head + HFDL_FRAMER_MAX_REF_LEN - f->ref_len) % HFDL_FRAMER_MAX_REF_LEN;
+	/* Revision a fondo del 08/10/2026: sus dos hermanas -
+	 * hfdl_framer_peek_score() y framer_correlate()- se protegen de
+	 * ref_len == 0 y esta no, y por dentro acaba dividiendo por ref_len:
+	 * con el framer recien creado y todavia sin referencia cargada
+	 * devolvia 0/0, o sea NaN, y un NaN se cuela por cualquier
+	 * comparacion sin que salte nada. Misma guarda que las otras. */
+	uint32_t start;
+	if (f->ref_len == 0u) {
+		return 0.0f;
+	}
+	start = (f->ring_head + HFDL_FRAMER_MAX_REF_LEN - f->ref_len) % HFDL_FRAMER_MAX_REF_LEN;
 	return framer_correlate_block(f, start, f->ref_bits, f->ref_len); /* n_blocks=1 style single
 	                                                                      coherent block, see this
 	                                                                      function's header comment */

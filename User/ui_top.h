@@ -48,7 +48,16 @@ typedef enum {
     UI_KNOB_PGA,
     UI_KNOB_NR,
     UI_KNOB_RTTY_SHIFT,
-    UI_KNOB_CW_TONE
+    UI_KNOB_CW_TONE,
+    /* Los dos cortes del filtro de audio - 06/10/2026.
+     *
+     * No los habia, y ENCODER_TARGET_FILTRO se mapeaba a UI_KNOB_SCALE_LO
+     * "porque habia que poner algo": ajustando el ancho del filtro, la
+     * pastilla naranja decia "Escala min.", que es OTRO ajuste. Lo enseño
+     * una captura del dueño, no un banco: en la pantalla se lee, en el
+     * codigo no se ve. */
+    UI_KNOB_FILTRO_LO,
+    UI_KNOB_FILTRO_HI
 } ui_knob_t;
 
 typedef struct {

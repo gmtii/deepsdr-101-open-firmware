@@ -66,8 +66,22 @@ def main(ruta):
     if 'k_demod_modes' not in limpio:
         fallos.append('ya no lee k_demod_modes[]: ha vuelto a ser una lista '
                       'a mano')
-    if 'MODO_FAM_DIG' not in limpio:
-        fallos.append('ya no decide por familia (MODO_FAM_DIG)')
+    # 06/10/2026: antes pedia MODO_FAM_DIG. El dia que nacieron las familias
+    # Imagenes y Aeronautica eso dejo de ser el criterio correcto -y esta
+    # comprobacion, que estaba para proteger la funcion, se convirtio en la
+    # que exigia el fallo-: WEFAX, SSTV y HFDL siguen necesitando que el
+    # espectro ceda su sitio y ya no son MODO_FAM_DIG.
+    #
+    # La pregunta de la funcion no es "¿es Digital?" sino "¿el espectro ha
+    # dejado su sitio?", y la respuesta es que si para todo lo que no sea
+    # analogico. Lo que esto vigila sigue siendo lo mismo: que la decision
+    # salga de la FAMILIA de la tabla y no de una lista de modos a mano.
+    if 'MODO_FAM_' not in limpio:
+        fallos.append('ya no decide por familia (MODO_FAM_*)')
+    if 'MODO_FAM_DIG' in limpio:
+        fallos.append('decide por "es Digital" y no por "no es analogico": '
+                      'con mas de dos familias eso deja sin panel a Imagenes '
+                      'y a Aeronautica')
 
     # Cualquier pregunta directa a un decodificador es la lista volviendo.
     sueltos = sorted(set(re.findall(

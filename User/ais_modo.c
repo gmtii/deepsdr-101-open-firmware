@@ -289,7 +289,7 @@ static void monta(void)
         p += pon_u(&l[p], b->mmsi);
         l[p++] = '\t';
 
-        for (c = 0U; (b->nombre[c] != '\0') && (c < 20U); c++) {
+        for (c = 0U; (c < 20U) && (b->nombre[c] != '\0'); c++) {
             l[p++] = b->nombre[c];
         }
         l[p++] = '\t';

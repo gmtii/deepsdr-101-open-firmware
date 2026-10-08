@@ -615,7 +615,12 @@ void wwv_feed(float envolvente)
         m = sqrtf(s_fi2[j] * s_fi2[j] + s_fq2[j] * s_fq2[j]);
         s_picos[j] *= s_caida;
         if (m > s_picos[j]) { s_picos[j] = m; }
-        if (j == s_sel) { mag = m; }
+        /* Revision a fondo del 08/10/2026: aqui habia un
+         * "if (j == s_sel) { mag = m; }" que no servia para nada: mag se
+         * vuelve a calcular sin condicion unas lineas mas abajo, y encima
+         * DESPUES de que la eleccion de subportadora haya podido cambiar
+         * s_sel, asi que lo que guardaba este almacenamiento era, cuando
+         * no se tiraba, el nivel de la subportadora EQUIVOCADA. Fuera. */
     }
 
     /*
