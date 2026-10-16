@@ -1,0 +1,174 @@
+# DONDE ESTA CADA PAIS DE LAS LISTAS - 05/10/2026.
+#
+# Lo usa emisoras_pack.py --qth para ordenar las emisoras de una frecuencia
+# por lo lejos que estan de ti. Formato: codigo,lat,lon,nombre
+#
+# POR QUE EXISTE. En 540 kHz hay diez emisoras y la radio pinta UNA. Hasta
+# hoy salia la primera por orden alfabetico de nombre, o sea "CNR 1 Voice of
+# China" para todo el mundo. Alguien que escucha desde Hungria espera
+# Kossuth, que emite desde Solt a 70 km, y le salia una de Mongolia Interior
+# a 6.700. Con este fichero y --qth sale Kossuth.
+#
+# SON LOS CODIGOS ITU QUE DE VERDAD APARECEN en eibi.txt y aoki.txt: 130
+# contando el vacio. No es la lista ITU entera y no pretende serlo. Si un
+# dia aparece un codigo que no esta aqui, emisoras_pack.py lo dice por
+# pantalla y lo manda al final en vez de callarse.
+#
+# LO QUE ESTO NO ES. No es la posicion del transmisor, es la del PAIS.
+#
+#   - Para un pais pequeño da casi igual: Hungria mide 300 km y el error de
+#     poner Solt o Budapest no cambia ningun orden.
+#   - Para Rusia, Estados Unidos, China, Canada, Australia o Brasil el
+#     centroide puede caer a MILES de kilometros del transmisor. Un
+#     escuchante de Alaska que mire a Rusia tiene Magadan a 2.000 km y
+#     Moscu a 6.500, y aqui pone Moscu.
+#
+# Por eso existe sitios_xy.csv, que manda sobre este fichero cuando el
+# centro emisor se conoce por su nombre. Lo suyo es ir llenandolo: aqui se
+# llena primero lo que mas se oye.
+#
+# Y UNA ADVERTENCIA MAS GORDA, que vale para onda corta y no para onda
+# media: cerca NO es lo mismo que se oye mejor. En onda corta un relé de
+# 500 kW apuntandote desde Issoudun te llega mucho mejor que uno local de
+# 1 kW, y la ionosfera tiene una zona de silencio donde lo cercano NO se
+# oye. Esto ordena por distancia porque es lo unico que se puede saber con
+# los datos que hay, no porque sea la verdad de la propagacion.
+#
+# CODIGOS SIN SITIO. Cuatro no tienen coordenadas a proposito, y dejarlos
+# vacios es lo honrado:
+#   CLA  emisoras clandestinas: el sitio es justo lo que no se publica
+#   XUU  estacion desconocida / varias
+#   UN   Naciones Unidas: produce el programa, lo emite otro
+#   (vacio)  filas de las listas sin codigo de pais
+# Esos se quedan al final de su frecuencia, detras de todo lo que si se sabe.
+#
+codigo,lat,lon,nombre
+AFS,-26.60,28.10,Sudafrica (Meyerton)
+ALG,31.00,2.00,Argelia
+ALS,61.20,-149.90,Alaska
+ARG,-34.60,-58.40,Argentina
+ARM,40.20,44.50,Armenia
+ARS,24.70,46.70,Arabia Saudi
+ASC,-7.95,-14.40,Isla Ascension
+ATA,-63.40,-57.00,Antartida (Base Esperanza)
+AUS,-25.00,134.00,Australia
+AZR,38.70,-27.20,Azores
+B,-15.80,-47.90,Brasil
+BEL,50.80,4.40,Belgica
+BEN,9.35,2.60,Benin (Parakou)
+BER,32.30,-64.80,Bermudas
+BGD,23.80,90.40,Banglades
+BHR,26.20,50.60,Barein
+BLR,53.90,27.60,Bielorrusia
+BOL,-16.50,-68.10,Bolivia
+BTN,27.50,89.60,Butan
+BUL,42.70,23.30,Bulgaria
+CAN,52.00,-95.00,Canada
+CHL,-33.50,-70.70,Chile
+CHN,35.00,105.00,China
+CLA,,,Clandestina (sitio no publicado)
+CLM,4.60,-74.10,Colombia
+CLN,8.60,81.20,Sri Lanka (Trincomalee)
+CNR,28.30,-16.50,Islas Canarias
+CTI,5.35,-4.00,Costa de Marfil
+CUB,23.00,-82.40,Cuba (Bauta)
+CVA,42.05,12.30,Vaticano (Santa Maria di Galeria)
+CYM,19.30,-81.20,Islas Caiman
+CYP,35.10,33.40,Chipre
+CZE,50.10,14.40,Chequia
+D,51.00,10.00,Alemania
+DNK,56.00,10.00,Dinamarca
+E,40.00,-3.70,España
+EGY,30.00,31.20,Egipto
+EQA,-0.20,-78.50,Ecuador
+EST,59.40,24.80,Estonia
+ETH,9.00,38.75,Etiopia
+F,46.90,2.00,Francia (Issoudun)
+FIN,62.00,25.00,Finlandia
+FJI,-18.10,178.40,Fiyi
+FRO,62.00,-6.80,Islas Feroe
+G,52.50,-1.50,Reino Unido
+GRC,38.40,23.60,Grecia (Avlis)
+GUI,9.50,-13.70,Guinea
+GUM,13.45,144.80,Guam
+HKG,22.30,114.20,Hong Kong
+HND,14.10,-87.20,Honduras
+HNG,46.80,19.00,Hungria (Solt)
+HOL,52.20,5.30,Paises Bajos
+HWA,21.30,-157.80,Hawai
+I,41.90,12.50,Italia
+IND,22.00,79.00,India
+INS,-6.20,106.80,Indonesia
+IRL,53.30,-6.30,Irlanda
+IRN,35.70,51.40,Iran
+ISL,64.10,-21.90,Islandia
+ISR,31.80,35.20,Israel
+J,36.00,138.00,Japon
+KEN,-1.30,36.80,Kenia
+KGZ,42.90,74.60,Kirguistan
+KOR,36.50,127.50,Corea del Sur
+KRE,39.00,125.75,Corea del Norte
+KWT,29.20,47.80,Kuwait
+LAO,18.00,102.60,Laos
+LBR,6.30,-10.80,Liberia
+LTU,55.05,23.80,Lituania (Sitkunai)
+LUX,49.60,6.10,Luxemburgo
+MCO,43.70,7.40,Monaco
+MDA,47.20,29.30,Moldavia (Grigoriopol)
+MDG,-18.80,47.75,Madagascar (Talata)
+MEX,19.40,-99.10,Mexico
+MLA,3.00,101.80,Malasia
+MLD,4.20,73.45,Maldivas (Thilafushi)
+MLI,12.65,-8.00,Mali
+MMR,19.75,96.10,Myanmar
+MNG,47.90,106.90,Mongolia
+MRC,35.05,-2.90,Marruecos (Nador)
+MRT,18.10,-16.00,Mauritania
+MYA,19.75,96.10,Myanmar
+NCG,12.10,-86.30,Nicaragua
+NIG,9.10,7.50,Nigeria
+NOR,60.00,9.00,Noruega
+NZL,-38.90,176.40,Nueva Zelanda (Rangitaiki)
+OCE,-17.60,-149.60,Polinesia Francesa (Tahiti)
+OMA,22.50,59.00,Oman
+PAK,33.70,73.10,Pakistan
+PHL,15.35,120.60,Filipinas (Tinang)
+PLW,7.45,134.50,Palaos (Medorm)
+PNR,9.00,-79.50,Panama
+POL,52.20,21.00,Polonia
+PRU,-12.05,-77.00,Peru
+PTR,18.40,-66.10,Puerto Rico
+QAT,25.30,51.50,Catar
+ROU,44.75,26.00,Rumania (Tiganesti)
+RUS,55.75,37.60,Rusia (Moscu - ver el aviso de arriba)
+S,55.85,13.70,Suecia (Horby)
+SEN,14.70,-17.40,Senegal
+SEY,-4.60,55.50,Seychelles
+SLM,-9.40,160.00,Islas Salomon
+SNG,1.40,103.73,Singapur (Kranji)
+SOM,2.05,45.30,Somalia
+SUI,46.90,8.20,Suiza
+SVK,48.15,17.10,Eslovaquia
+SVN,46.05,14.50,Eslovenia
+SWZ,-26.50,31.40,Esuatini (Manzini)
+SYR,33.50,36.30,Siria
+TCD,12.10,15.05,Chad
+THA,15.00,101.00,Tailandia
+TIB,29.65,91.10,Tibet (Lhasa)
+TJK,38.55,68.80,Tayikistan
+TKS,39.47,75.99,Turquestan Oriental / Xinjiang (Kashgar)
+TRD,10.65,-61.40,Trinidad y Tobago
+TUN,36.80,10.20,Tunez
+TUR,39.50,32.90,Turquia (Emirler)
+TWN,23.80,120.90,Taiwan
+UAE,24.20,54.30,Emiratos Arabes Unidos (Dhabbaya)
+UGA,0.30,32.60,Uganda
+UKR,50.45,30.50,Ucrania
+UN,,,Naciones Unidas (lo emite otro)
+URU,-34.90,-56.20,Uruguay
+USA,39.50,-98.35,Estados Unidos (ver el aviso de arriba)
+UZB,41.30,69.25,Uzbekistan
+VTN,21.00,105.85,Vietnam
+VUT,-17.75,168.30,Vanuatu
+XUU,,,Estacion desconocida
+ZMB,-15.40,28.30,Zambia

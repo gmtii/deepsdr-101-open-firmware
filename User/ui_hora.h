@@ -1,0 +1,84 @@
+#ifndef UI_HORA_H_INCLUDED
+#define UI_HORA_H_INCLUDED
+
+#include "gfx2.h"
+#include <stdint.h>
+
+/*
+ * PANTALLA DE SINCRONIZAR LA HORA POR DCF77 - 23/09/2026.
+ *
+ * Como el resto de gfx2, aqui no se sabe nada de DCF77: llegan textos ya
+ * redactados y dos numeros de 0 a 100 para las barras. Quien decide que pone
+ * es main.c, que es quien habla con el decodificador.
+ *
+ * LA DECISION DE DISENO QUE IMPORTA: las dos barras.
+ *
+ * Una pantalla que solo dijera "sincronizando..." y luego "no se ha podido"
+ * seria inutil, porque deja al usuario sin saber si el problema es que no
+ * llega señal -antena, hora del dia, sitio- o es que el firmware falla. Y
+ * son dos problemas que se arreglan en sitios muy distintos.
+ *
+ * Asi que se ensena lo que el decodificador esta VIENDO:
+ *
+ *   NIVEL     cuanta portadora hay en 77,5 kHz. Si esto esta pegado al
+ *             suelo, no hay señal y no hay nada que decodificar: es la
+ *             antena o la propagacion, no el programa.
+ *
+ *   MARCA     cuanto baja la portadora en cada segundo, que es donde vive
+ *             la informacion. Puede haber nivel de sobra y marca nula: eso
+ *             es ruido de banda ancha, o una portadora que no es la del
+ *             DCF77. Con la señal buena esta barra late una vez por segundo.
+ *
+ * Con esas dos, en diez segundos se sabe si merece la pena esperar los tres
+ * minutos que tarda una sincronizacion.
+ */
+
+#define UIH_Y      104
+#define UIH_H      318                  /* 104..421, igual que la rejilla */
+
+/*
+ * CUATRO BOTONES DESDE EL 10/10/2026, Y POR ESO 180 EN VEZ DE 240.
+ * El cuarto es "Huso", y esta aqui y no en Ajustes porque es donde se nota
+ * que hace falta: el que ve una hora que no es la suya la esta viendo en
+ * ESTA pantalla. 2*10 + 4*180 = 740, con 20 de hueco entre cada dos.
+ */
+#define UIH_BTN_H   56
+#define UIH_BTN_W  180
+#define UIH_BTN_Y  (UIH_Y + UIH_H - UIH_BTN_H - 12)
+
+#define UIH_HIT_NONE     (-1)
+#define UIH_HIT_EMISORA    0
+#define UIH_HIT_HUSO       1
+#define UIH_HIT_APLICAR    2
+#define UIH_HIT_SALIR      3
+#define UIH_BTN_N          4
+
+typedef struct {
+    const char *titulo;
+    const char *estado;    /* "Buscando la señal", "Leyendo 23/59"... */
+    const char *detalle;   /* segunda linea, mas pequena, o 0 */
+    const char *hora;      /* "20:33" cuando la haya, o 0 */
+    const char *fecha;     /* "lunes 15/06/26", o 0 */
+    uint8_t     nivel;     /* 0..100, barra de portadora */
+    uint8_t     marca;     /* 0..100, barra de profundidad de la marca */
+    uint8_t     latido;    /* 1 mientras la portadora esta caida: la barra
+                            * de marca se enciende, y eso es lo que se ve
+                            * latir una vez por segundo con señal buena */
+    const char *emisora;   /* rotulo del boton que cambia de emisora */
+    const char *huso;      /* rotulo del boton del huso: "Huso +2:00" */
+    uint8_t     puede_aplicar; /* 1 = el boton "Aplicar" esta vivo */
+    int8_t      pressed;   /* UIH_HIT_*, o -1 */
+} ui_hora_state_t;
+
+void   ui_hora_draw(const ui_hora_state_t *st);
+/* La misma capa en una banda que le dan: la captura de pantalla.
+ * Ver ui_hora.c. */
+void   ui_hora_pinta_en(gfx2_surf_t *s, const ui_hora_state_t *st);
+int8_t ui_hora_hit(uint16_t x, uint16_t y);
+
+/* La x del boton i, por la MISMA cuenta que usa el dibujo. Para el banco
+ * que comprueba que el rotulo de la emisora no sale cortado: ver
+ * sim/hora_btn.c. */
+int16_t ui_hora_btn_x_dbg(uint8_t i);
+
+#endif /* UI_HORA_H_INCLUDED */

@@ -1,0 +1,30 @@
+# LOS QUE PONGO YO A MANO.
+#
+# La base de OpenSky tiene huecos. De los diez aviones que la radio habia
+# cazado de verdad, dos no estan: 39D2B2 y 71C735. No estan ni en el CSV de
+# agosto de 2025 ni en el de diciembre de 2021 -mirados los 85 MB enteros-,
+# asi que no es cosa del filtro: el dato no existe alli.
+#
+# Lo que se escriba aqui entra pase lo que pase: no pasa por el filtro de
+# clases y no se cae si hay que repartir porque el fichero no quepa.
+#
+# Dos columnas, y lo que empiece por # se ignora:
+#
+#     icao24,typecode
+#
+icao24,typecode
+#
+# 39D2B2 -> A359. Esto NO es un dato, es una deduccion, y va escrita aqui
+# para que se pueda deshacer. Las 18 direcciones anteriores seguidas -de
+# 39D2A0 a 39D2B1, sin un hueco- son todas A350-941 del mismo registro
+# frances; la siguiente que aparece en el CSV, 39D2BC, ya es una avioneta
+# WT9, o sea otro bloque. 39D2B2 cae justo dentro de la tirada de A350.
+# Si algun dia sale en pantalla algo que no cuadre, esta es la linea.
+39d2b2,A359
+#
+# 71C735 -> NO LO SE, y no me lo invento. Su bloque coreano no ayuda: de
+# 71C700 a 71C715 hay B738, B789, A21N, B77W, A332 y B38M mezclados, o sea
+# que ahi no se puede deducir nada. En cuanto sepas el tipo, quita la
+# almohadilla y ponlo:
+#
+#71c735,B77W

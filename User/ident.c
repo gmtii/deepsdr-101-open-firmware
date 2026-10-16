@@ -1,0 +1,2112 @@
+#include "ident.h"
+#include "idioma.h"
+#include "hfdl_ram.h"
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+
+/* Ver ident.h para el porque. Aqui el como, y la tabla. */
+
+/*
+ * ==========================================================================
+ * LA TABLA
+ * ==========================================================================
+ *
+ * Cada fila es una firma. Los rangos a 0,0 no se miran. Una fila cuadra si
+ * cuadran todos los rangos que no sean 0,0.
+ *
+ * EL ORDEN IMPORTA PARA LEERLA, NO PARA DECIDIR: se recorre entera siempre
+ * y salen todas las que cuadren. Si eso son tres, se dicen las tres.
+ *
+ * `probada` a 1 es "esto se comprueba contra una grabacion en el banco".
+ * A 0 es "el numero viene de la norma o del catalogo, pero NADIE lo ha
+ * visto salir de esta radio". La pantalla lo marca con un interrogante, y
+ * eso no es adorno: es la diferencia entre una medida y una cita.
+ */
+static const ident_firma_t k_firmas[] = {
+
+/* --- portadoras y silencio ------------------------------------------- */
+{
+    "Portadora sola (heterodino)", IDENT_POR_PICO,
+    0U,0U, 0U,0U, 0U,0U, 0U,120U, 81U,100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    "No lleva datos. Medida: 57% de la potencia en +-8 Hz.",
+    "Lone carrier (heterodyne)",
+    "Carries no data. Measured: 57% of the power within +-8 Hz."
+},
+/*
+ * EL CW ES LA MISMA RAYA, PERO PARPADEANDO - 05/10/2026.
+ *
+ * Pedido por el usuario.
+ *
+ * Un tono de Morse y un heterodino son LO MISMO para el espectro: toda la
+ * potencia en una raya estrecha. Lo unico que los separa con lo que aqui se
+ * mide es el ciclo de trabajo: una portadora esta siempre, y el Morse se
+ * enciende y se apaga.
+ *
+ * Por eso la fila de la portadora, que hasta hoy no miraba el ciclo, ahora
+ * pide 81% o mas: sin eso se quedaba con el Morse tambien y esta fila no
+ * habria cuadrado nunca.
+ *
+ * El 15..80 no sale de ninguna norma -el Morse no tiene una- sino de la
+ * aritmetica: con la proporcion clasica de 1 a 3 entre punto y raya y los
+ * espacios de la norma ITU-R M.1677, el texto corriente sale alrededor del
+ * 50%, y los extremos son uno todo rayas y otro todo puntos. Por eso va sin
+ * comprobar: hace falta una grabacion.
+ */
+{
+    "CW (Morse)", IDENT_POR_PICO,
+    0U,0U, 0U,0U, 0U,0U, 0U,200U, 15U,80U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    "Un tono que se enciende y se apaga. Ponlo en CW.",
+    "CW (Morse)",
+    "A tone switching on and off. Put it in CW."
+},
+
+/* --- FSK de dos tonos ------------------------------------------------- */
+/*
+ * LAS CUATRO DE 100 BAUDIOS Y 170 Hz SON LA MISMA MODULACION y por eso van
+ * en filas distintas separadas SOLO por el ciclo de trabajo. No hay otra
+ * forma de distinguirlas sin decodificar:
+ *   SITOR-B / NAVTEX  emiten seguido        -> ciclo alto
+ *   SITOR-A / DSC     emiten a rafagas      -> ciclo bajo
+ * Y dentro de cada pareja, ya no se pueden separar por la señal: NAVTEX es
+ * un SERVICIO que va en SITOR-B, no una modulacion distinta.
+ */
+/*
+ * CUANDO EL ALFABETO SE VE Y LOS DOS TONOS NO - 08/10/2026.
+ *
+ * La grabacion sim/muestras/navtex8424.mp3 es un NAVTEX de libro y la fila de
+ * arriba no cuadraba. El motivo no era el salto ni la velocidad: el buscador
+ * de dos tonos dice "no" sobre ella -ancho 205 Hz, pico 28%, los dos tonos
+ * demasiado juntos y demasiado desvanecidos para destacar como dos rayas- y
+ * sin hay_tonos una fila IDENT_POR_TONOS no puede cuadrar por definicion.
+ *
+ * Pero el ALFABETO si se ve: 78% de grupos de siete bits con cuatro unos, a
+ * 100,0 Bd (ver cr7_pc en stanag_det.h). O sea que la señal se deja leer por
+ * dentro aunque su espectro no se deje leer por fuera.
+ *
+ * Asi que esta fila va por ANCHO mas alfabeto, y es mucho menos floja de lo
+ * que "por ancho" suena: el ancho solo abre la puerta -150 a 260 Hz-, y quien
+ * decide es que el flujo sea CCIR 476 a 100 baudios, que es una condicion que
+ * ni el ruido ni ninguna otra modulacion de la tabla cumple (el peor que no
+ * llega al 42%, medido en sim/cr7_test.c).
+ *
+ * No se solapa con la cifrada de 50 Bd / 200 Hz: aquella pide cr7_bd 500 y
+ * esta 1000, y trocear al baudio equivocado deshace la relacion constante.
+ */
+{
+    "NAVTEX o SITOR-B (tonos poco claros)", IDENT_POR_ANCHO,
+    0U,0U, 0U,0U, 0U,0U, 150U,260U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 60U,1000U, 1U,
+    "Alfabeto del NAVTEX a 100 Bd. Ponlo en NAVTEX: deberia salir texto.",
+    "NAVTEX or SITOR-B (tones unclear)",
+    "NAVTEX alphabet at 100 Bd. Put it in NAVTEX: text should come out."
+},
+{
+    "SITOR-B / NAVTEX / telex", IDENT_POR_TONOS,
+    150U,190U, 950U,1050U, 0U,0U, 0U,0U, 70U,100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    "Emite seguido. Ponlo en NAVTEX: sale texto en claro.",
+    "SITOR-B / NAVTEX / telex",
+    "Transmits continuously. Put it in NAVTEX: plain text comes out."
+},
+{
+    "SITOR-A o DSC (a rafagas)", IDENT_POR_TONOS,
+    150U,190U, 950U,1050U, 0U,0U, 0U,0U, 0U,69U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    "Misma modulacion que el NAVTEX pero a rafagas. La radio no lo decodifica.",
+    "SITOR-A or DSC (bursts)",
+    "Same modulation as NAVTEX but in bursts. This radio does not decode it."
+},
+/*
+ * COMPROBADA EN ANTENA - 06/10/2026, la cuarta. Y la fila YA ESTABA: lo que
+ * fallaba era el detector de dos tonos, no la tabla.
+ *
+ * Pedido por el usuario.
+ *
+ * La señal de 5339 kHz. El detector no veia el par de tonos porque los
+ * comparaba entre si y la ionosfera los desvanece por separado - ver el
+ * comentario de TONO_REALCE en stanag_det.c, que es donde se arreglo.
+ *
+ * LO BONITO DE ESTA: se midio DOS VECES por caminos que no comparten nada.
+ * Yo, con numpy sobre un audio que el usuario grabo con el movil delante del
+ * altavoz; y la radio, con su detector, sobre la señal de verdad:
+ *
+ *                la radio      yo        diferencia
+ *     tono bajo     508 Hz     510 Hz      0,4 %
+ *     tono alto    1345 Hz    1348 Hz      0,2 %
+ *     salto         841 Hz     838 Hz      0,4 %
+ *     velocidad    74,7 Bd    75,11 Bd     0,5 %
+ *
+ * Cuatro numeros, cuatro aciertos por debajo del medio por ciento. Eso es
+ * mas que "la fila funciona": es que el detector y el analisis de fuera
+ * miden lo MISMO, que es lo unico que hace creible todo lo demas.
+ *
+ * Y CIFRADA, comprobado y no supuesto, igual que con FUG: la radio puesta
+ * en RTTY-U con 850 Hz y 75 Bd saca Baudot CORRECTO -con cambios de letras
+ * a figuras coherentes, ".051/891E"- y lo que sale no son palabras:
+ * "MYSLBUGBVAMUSNWK", "DJBXB S CPLWHXBMEZBXQ". La demodulacion esta bien y
+ * lo que va dentro esta cifrado. Ahi se para la radio.
+ *
+ * DE LA FRECUENCIA, lo que se sabe: el usuario trajo el factsheet "Unid ALE
+ * Nets" de la UDXF y 5339 esta en el, en una red ALE sin identificar con
+ * los indicativos HPL, POC, VNL y ZOC. Asi que en esa frecuencia alternan
+ * DOS cosas: las rafagas de 8-FSK del ALE -que esta misma pantalla habia
+ * descrito bien, con "actividad 24 %"- y este 4481 FSK cuando hay trafico.
+ * Parte del "va variando" era la señal cambiando de verdad, no el detector.
+ */
+{
+    "STANAG 4481 FSK (KG-84)", IDENT_POR_TONOS,
+    780U,920U, 700U,800U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    "Cifrado con KG-84. Se demodula, no se lee.",
+    "STANAG 4481 FSK (KG-84)",
+    "Encrypted with KG-84. It demodulates, it does not read."
+},
+/*
+ * COMPROBADA EN ANTENA - 05/10/2026, la tercera. Y la fila NO EXISTIA.
+ *
+ * Pedido por el usuario.
+ *
+ * 850 Hz de salto con 50 baudios es de lo mas visto en trafico naval y
+ * diplomatico, y entre las dos filas de al lado se escapaba por los dos
+ * lados: la de 4481 pide 70..80 baudios, y la de RTTY comercial pide
+ * 400..500 Hz de salto. Sin fila que cuadrara, la pantalla se caia a la
+ * pista del ancho y decia "SSTV o fax meteorologico" con dos tonos
+ * limpios delante. Un disparate, y de los que mas engañan: suena a
+ * respuesta.
+ *
+ * LO MEDIDO, en 13.418 kHz con FUG emitiendo:
+ *   tonos 1195 y 2045 Hz, salto 850 Hz
+ *   50,00 baudios EXACTOS -alineando 806 transiciones a una rejilla,
+ *   calidad 0,958-, no 75 como se esperaba de la marina francesa
+ *   95% de actividad, emision continua
+ *
+ * Y CIFRADA, comprobado y no supuesto: demodulada en ITA2 aparte, salen
+ * letras con reparto plano -O 8, N 7, A 7, H 6- sin palabras ni espacios.
+ * La pantalla de la radio, puesta en RTTY-U, enseñaba a la vez lo mismo:
+ * "TTTI / A / O / EZ A / E A / HIA". Eso no es texto, es cifra, y encaja
+ * con KG-84.
+ *
+ * La nota lo dice tal cual porque es lo honrado: la radio llega hasta la
+ * forma de onda y ahi se para.
+ */
+{
+    "FSK 50 Bd / 850 Hz (naval)", IDENT_POR_TONOS,
+    780U,920U, 480U,520U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    "Ponlo en RTTY. Suele ir cifrada: salen letras sin sentido.",
+    "FSK 50 Bd / 850 Hz (naval)",
+    "Put it in RTTY. Usually encrypted: letters come out meaningless."
+},
+/*
+ * COMPROBADA EN ANTENA - 06/10/2026, en 14.118 kHz. Dos grabaciones del
+ * usuario, separadas 18 minutos, medidas por separado:
+ *
+ *     15:09   tonos 711,00 / 910,95   salto 199,95 Hz   50,00 Bd
+ *     15:27   tonos 708,98 / 909,12   salto 200,13 Hz   50,00 Bd
+ *
+ * La velocidad no es una estimacion: barriendo de 40 a 130 baudios y mirando
+ * cuanto se concentran las transiciones en una rejilla, 50,00 da 0,52 y lo
+ * siguiente se queda en 0,16.
+ *
+ * Y NO ES BAUDOT, que es lo que hacia falta saber. Troceando el flujo en
+ * grupos de siete bits:
+ *
+ *     unos por grupo:   3 -> 12%    4 -> 73%    5 -> 11%
+ *     al azar seria:    3 -> 27%    4 -> 27%    5 -> 16%
+ *
+ * Setenta y tres por ciento con EXACTAMENTE cuatro unos es un codigo de
+ * relacion constante de 7 bits, o sea el mismo alfabeto CCIR 476 del NAVTEX
+ * (ver navtex.c). El 12 y el 11 de tres y cinco son caracteres con un bit
+ * mal: el canal iba justo.
+ *
+ * PERO NO ES SITOR-B, y por eso el NAVTEX de la radio se queda en "buscando"
+ * por mucho que el alfabeto cuadre. Tres cosas no encajan, y cualquiera de
+ * las tres basta:
+ *
+ *   - NAVTEX_BAUD son 100 y esto va a 50: el reloj muestrea cada bit dos
+ *     veces y los grupos de siete se deshacen.
+ *   - NAVTEX_SHIFT_HZ son 170 y esto tiene 200.
+ *   - El NAVTEX declara enganche POR LA REPETICION -en SITOR-B cada caracter
+ *     se manda dos veces-, y aqui no hay ninguna: buscando caracteres
+ *     iguales a distancia de 1 a 12 sale entre el 2% y el 9%, que es el azar.
+ *
+ * Y EL CONTENIDO VA CIFRADO. Esto se demostro de una forma que no depende de
+ * acertar con la tabla, que es lo que lo hace valido: contando cuantas veces
+ * sale cada uno de los 35 codigos posibles.
+ *
+ *     esta señal                 entropia 4,97   el mas comun 5,3%
+ *     reparto perfectamente plano         5,13                2,9%
+ *     texto llano en el mismo alfabeto    4,34               20,5%  <- el espacio
+ *
+ * En cualquier idioma el espacio y la E se llevan la quinta parte ellos
+ * solos. Aqui los 35 salen casi igual de veces. Y cambiar la tabla es barajar
+ * las etiquetas, que no mueve el reparto: NINGUNA tabla, orden de bits ni
+ * polaridad puede convertir un reparto plano en idioma.
+ *
+ * O sea que la fila no dice "no se decodifica": dice que ya esta decodificado
+ * y que dentro no hay texto. Que es justo lo que el usuario necesitaba oir
+ * despues de media tarde mirando letras sueltas en la pantalla.
+ */
+/*
+ * POR SEPARACION Y POR VELOCIDAD DE SIMBOLO, NO POR LA DE DOS TONOS.
+ *
+ * Pedido por el usuario.
+ *
+ * Y la fila estaba bien; lo que no servia era el numero que le estaba
+ * pidiendo. Metiendo sus dos grabaciones por el motor de verdad
+ * (sim/identaire.c):
+ *
+ *            salto    velocidad de dos tonos    velocidad de simbolo
+ *   15:09    200 Hz          594,0 Bd                  50,5 Bd
+ *   15:27    200 Hz           53,2 Bd                  50,4 Bd
+ *
+ * El salto sale clavado las dos veces. La velocidad de dos tonos se va a
+ * 594 en una de ellas -doce veces la buena- y a 53,2 en la otra: con ese
+ * numero no hay rango que valga. La de SIMBOLO acierta las dos veces.
+ *
+ * Asi que esta fila va por separacion, como la de APRS y por la misma clase
+ * de motivo: no se le pide a un medidor el numero que no da. Y la velocidad
+ * no se tira, se pide por el otro camino: sim_min/sim_max, 46,0 a 55,0 Bd,
+ * que es una segunda condicion independiente del salto.
+ */
+/*
+ * Y EL MEDIDOR DE SIMBOLO TAMPOCO DABA EL NUMERO - 08/10/2026.
+ *
+ * Pedido por el usuario.
+ *
+ * Era esta misma señal otra vez: 50,00 Bd, 201 Hz de salto, tonos 935 y
+ * 1137. El motor la midio bien de salto y de velocidad y la fila NO cuadro,
+ * porque simb_x10 dio 25,0 Bd contra un rango de 46,0 a 55,0. La mitad
+ * exacta, y por una razon que estaba delante: en una FSK de DOS tonos con
+ * bits al azar el tono cambia cada dos bits de media, asi que ese medidor
+ * cuenta CAMBIOS DE TONO. Es el mismo error del parrafo de arriba -pedirle
+ * a un medidor un numero que no da-, repetido con el otro medidor, dos dias
+ * despues de escribirlo. Y al caerse la fila ganaba "MFSK multitono
+ * (Olivia)", que es peor que no decir nada.
+ *
+ * Un rango que no entra NO se arregla ensanchandolo: 25,0 y 50,0 no caben
+ * en el mismo rango sin tragarse medio catalogo. Se cambia por una medida
+ * que distinga de verdad, y la que distingue es el ALFABETO: ver cr7_pc en
+ * stanag_det.h. De cada grupo de siete bits, cuantos tienen exactamente
+ * cuatro unos. El 78% aqui y el 31% en una FSK con bits al azar al MISMO
+ * salto y la MISMA velocidad -medido, sim/cr7_test.c-, que es el par que
+ * ninguna medida del espectro puede separar.
+ *
+ * Y el baudio sale de la propia medida (cr7_bd): trocear al baudio
+ * equivocado deshace la relacion constante, asi que el que la maximiza es
+ * el bueno. Se PRUEBA en vez de estimarse, igual que rtty_auto.c hace con
+ * la velocidad, y por el mismo motivo.
+ *
+ * sim_min/sim_max vuelven a 0,0: la fila va por separacion y alfabeto.
+ */
+{
+    "FSK 50 Bd / 200 Hz (cifrada)", IDENT_POR_SEP,
+    192U,215U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 60U,500U, 1U,
+    "Alfabeto del NAVTEX pero no es SITOR-B. Cifrada: no sale texto.",
+    "FSK 50 Bd / 200 Hz (encrypted)",
+    "NAVTEX alphabet but not SITOR-B. Encrypted: no text comes out."
+},
+{
+    "RTTY de aficionado", IDENT_POR_TONOS,
+    150U,190U, 440U,470U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    "45,45 baudios. Ponlo en RTTY-L o RTTY-U.",
+    "Amateur RTTY",
+    "45.45 baud. Put it in RTTY-L or RTTY-U."
+},
+/*
+ * COMPROBADA EN ANTENA - 05/10/2026, la segunda.
+ *
+ * Grabacion de 34,9 s del usuario. El motor midio salto 446 Hz y 49,7 Bd
+ * -la fila pide 400..500 y 48,0..52,0- y dijo "RTTY comercial 50 Bd".
+ * Y no se quedo en que lo pareciera: la grabacion se demodulo aparte,
+ * FSK de dos tonos a 50 baudios con la marca en el tono BAJO, y salio
+ * texto ITA2 limpio:
+ *
+ *     HUMBER (53.5N   2.3E) WT: 17 C
+ *     DI  6. 00Z: W      3-4        0.5 M
+ *     SA 10. 00Z: W-NW     4        VT M
+ *
+ * Es el boletin maritimo del DWD: zona de mar, posicion, temperatura del
+ * agua, y por dias viento y altura de ola. "SA" y "DI" son sabado y
+ * martes en aleman, que es lo que acaba de decidir de quien es.
+ *
+ * Lo unico que hay que saber para oirlo: la marca es el tono bajo, o sea
+ * que si sale basura hay que invertir el desplazamiento.
+ *
+ * CONFIRMADA CON NOMBRE Y APELLIDOS - 06/10/2026, en 3712 kHz.
+ *
+ * El usuario la tenia en 3382 sacando el boletin entero y en 3712 sacando
+ * basura, con las dos bien sintonizadas -medido sobre sus fotos: las rayas
+ * del oscilador encima de los tonos en las dos-. Era la INVERSION: en 3712
+ * la marca es el tono ALTO. Con "Inversion: Invertida" puesta salio esto:
+ *
+ *     RYRYRYRYRYRYRYRYRYRYRYRY...
+ *     CQ CQ CQ DE DDH47 DDH9 DDH8
+ *     FREQUENCIES  147.3 KHZ  11039 KHZ  14467.3 KHZ
+ *
+ * DDH47, DDH9 y DDH8 son los indicativos del Deutscher Wetterdienst en
+ * Pinneberg, y las tres frecuencias que el mismo anuncia cuadran con las
+ * suyas. O sea que ya no es "parece el boletin aleman por el formato": lo
+ * dice la propia estacion con su indicativo.
+ *
+ * Y de paso: el RYRYRY de arriba es el patron de reposo de toda la vida.
+ * Alterna los dos tonos a cada simbolo, que es lo que mejor deja ver si el
+ * desplazamiento y la velocidad estan bien puestos.
+ */
+{
+    "RTTY comercial 50 Bd", IDENT_POR_TONOS,
+    400U,500U, 480U,520U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    "50 baudios, 450 Hz. Ponlo en RTTY.",
+    "Commercial RTTY 50 Bd",
+    "50 baud, 450 Hz. Put it in RTTY."
+},
+/*
+ * APRS. Los dos tonos y la velocidad salen de nuestro propio ax25.c
+ * -AX25_MARCA_HZ 1200, AX25_ESPACIO_HZ 2200, AX25_BAUD 1200-, que es la
+ * fuente mas firme que hay para esta radio: es lo que el decodificador
+ * espera de verdad.
+ *
+ * Va por separacion y no por velocidad A PROPOSITO: 1200 baudios a 3 kHz
+ * son dos muestras y media por simbolo, y el medidor solo llega a 600. Ver
+ * IDENT_POR_SEP en ident.h.
+ */
+{
+    "APRS / paquete AFSK 1200", IDENT_POR_SEP,
+    900U,1100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    "Tonos de 1200 y 2200 Hz. Ponlo en APRS.",
+    "APRS / AFSK 1200 packet",
+    "Tones of 1200 and 2200 Hz. Put it in APRS."
+},
+
+/* --- PSK, por el periodo de la trama ---------------------------------- */
+/*
+ * Los cinco periodos estan MEDIDOS contra grabaciones reales, no copiados:
+ * ver el banco sim/stanag_aire.c, que los contrasta uno a uno. El margen
+ * del 1% viene de ahi: el peor de los cinco quedo a 0,03% de la norma.
+ */
+{
+    "STANAG 4285 o 4481 PSK", IDENT_POR_TRAMA,
+    0U,0U, 0U,0U, 10560U,10774U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    "106,67 ms. Ponlo en STANAG: a 600 bps y entrelazado largo hay texto.",
+    "STANAG 4285 or 4481 PSK",
+    "106.67 ms. Put it in STANAG: at 600 bps with long interleave there is text."
+},
+{
+    "STANAG 4529", IDENT_POR_TRAMA,
+    0U,0U, 0U,0U, 20957U,21381U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    "211,69 ms. Es media banda: 1,24 kHz. No se demodula todavia.",
+    "STANAG 4529",
+    "211.69 ms. Half bandwidth: 1.24 kHz. Not demodulated yet."
+},
+{
+    "STANAG 4415", IDENT_POR_TRAMA,
+    0U,0U, 0U,0U, 6613U,6749U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    "66,81 ms. Para canales muy malos. No se demodula todavia.",
+    "STANAG 4415",
+    "66.81 ms. For very bad channels. Not demodulated yet."
+},
+/*
+ * EL MARGEN DE ESTA FILA ERA DEMASIADO ANCHO - 06/10/2026.
+ *
+ * Pedido por el usuario.
+ *
+ * El margen de antes -11841 a 12081, o sea 118,41 a 120,81 ms- es el +-1%
+ * con el que nacio la fila. Parece prudente hasta que uno mira cuanto se
+ * separan las tramas que hay que distinguir:
+ *
+ *     287 simbolos a 2400 Bd = 119,583 ms    <- el anexo C
+ *     288 simbolos a 2400 Bd = 120,000 ms
+ *
+ * TRES DECIMAS DE PORCENTAJE. Un margen del 1% se las traga las dos, asi que
+ * la fila decia "STANAG 4539" ante cualquier cosa con una trama de 120 ms.
+ *
+ * La grabacion de referencia que ya estaba en el proyecto
+ * (sim/muestras/stanag4539_110b.mp3) mide 119,61 ms con calidad 100%. La
+ * señal del usuario mide 120,02. El medidor distingue de sobra -da centesimas
+ * de milisegundo-; lo que no distinguia era la TABLA.
+ *
+ * AQUI HABIA UN SEGUNDO ARGUMENTO Y ERA MALO. Decia que por el ancho
+ * tampoco podia ser 110B: sobre las grabaciones del usuario la señal media
+ * unos 1450 Hz, y 2400 Bd con raiz de coseno alzado ocupan 3240. Lo retiro,
+ * porque una captura de pantalla posterior de la propia radio, con la misma
+ * señal mejor centrada en el paso de audio, mide ANCHO 2900 con la trama al
+ * 100% de calidad. Y 2900 si cuadra con 2400 Bd.
+ *
+ * Lo que pasaba es que el ancho medido depende MUCHISIMO de donde caiga la
+ * señal dentro del paso de audio: con el dial alto, la mitad de abajo se sale
+ * por debajo de cero y lo que queda se mide estrecho. Tres medidas de la
+ * misma señal: 1450 Hz (grabacion a 7.134,45), 2197 (radio a 7.135,00) y
+ * 2900 (radio a 7.136,00). El numero no era de la señal, era de la sintonia.
+ *
+ * O sea que el ancho no descarta nada aqui, y presentarlo como prueba fue
+ * repetir el fallo del dia: afirmar mas de lo que la medida aguanta. Lo que
+ * separa las dos señales es SOLO el periodo de trama, y con eso basta porque
+ * el medidor da centesimas de milisegundo.
+ *
+ * Nuevo margen: 119,30 a 119,80 ms. Entra la referencia (119,61) con 0,3 ms
+ * de holgura por cada lado y se queda fuera la de 120,02 por 0,22. Es
+ * estrecho a proposito: esta fila nombra un protocolo con apellidos y un
+ * periodo de trama es TODO lo que mira. Cuando lo unico que se mide es un
+ * numero, ese numero tiene que cuadrar de verdad.
+ */
+{
+    "STANAG 4539 / MIL-188-110B", IDENT_POR_TRAMA,
+    0U,0U, 0U,0U, 11930U,11980U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    "119,61 ms, que son 287 simbolos. No se demodula todavia.",
+    "STANAG 4539 / MIL-188-110B",
+    "119.61 ms, which is 287 symbols. Not demodulated yet."
+},
+{
+    "STANAG 4538 / MIL-188-141B", IDENT_POR_TRAMA,
+    0U,0U, 0U,0U, 1320U,1347U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    "13,33 ms y a rafagas: es el 3G ALE, busca enlace.",
+    "STANAG 4538 / MIL-188-141B",
+    "13.33 ms and in bursts: this is 3G ALE looking for a link."
+},
+
+/* --- los tres estrechos de aficionado, por el ancho -------------------- */
+/*
+ * AQUI EL ANCHO SI IDENTIFICA, y es el unico sitio donde lo hace.
+ *
+ * Los tres son modos digitales de aficionado que no llevan ni dos tonos
+ * que contar ni una trama que se repita dentro de los 256 ms que alcanza
+ * la autocorrelacion. Lo que SI tienen es un ancho de banda fijado por la
+ * norma y muy distinto entre ellos, y una casilla del espectro mide 1,46
+ * Hz: de sobra para separar 6 de 31 y de 50.
+ *
+ *   WSPR   4-FSK con los tonos a 1,4648 Hz -el numero esta en nuestro
+ *          wspr_msg.h- : cuatro tonos son 5,9 Hz. Emite 110,6 s de cada
+ *          ventana de 120, o sea que mientras esta, esta entero.
+ *   PSK31  BPSK a 31,25 baudios -PSK31_BAUDIO_X100 en nuestro psk31.h-,
+ *          con la envolvente en coseno que le quita las colas: el lobulo
+ *          util son los mismos 31 Hz de la velocidad.
+ *   FT8    8-FSK con los tonos a 6,25 Hz -ver ft8_waterfall_adapter.h-:
+ *          ocho tonos son 50 Hz. Emite 12,64 s de cada 15.
+ *
+ * Los margenes son anchos a proposito por abajo: el ancho a -10 dB de una
+ * señal debil se come las faldas y mide de menos.
+ *
+ * Las tres van SIN COMPROBAR hasta que haya grabacion de cada una. Los
+ * numeros salen de la norma y de nuestros propios decodificadores, que es
+ * lo que pide la regla, pero medir no es lo mismo que calcular.
+ */
+{
+    "WSPR", IDENT_POR_ANCHO,
+    0U,0U, 0U,0U, 0U,0U, 1U,14U, 80U,100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    "4-FSK de 6 Hz. Ponlo en WSPR: tarda dos minutos por ciclo.",
+    "WSPR",
+    "4-FSK of 6 Hz. Put it in WSPR: two minutes per cycle."
+},
+{
+    "PSK31", IDENT_POR_ANCHO,
+    0U,0U, 0U,0U, 0U,0U, 15U,40U, 30U,100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    "31,25 baudios en BPSK. Ponlo en PSK31.",
+    "PSK31",
+    "31.25 baud in BPSK. Put it in PSK31."
+},
+/*
+ * ESTA FILA ES PARA UNA SEÑAL SOLA, no para una banda de FT8. En 7.074 hay
+ * cuarenta a la vez y el ancho medido es el del monton: ahi quien
+ * identifica es la cadencia, tres filas mas abajo. Esta sirve cuando se
+ * ha estrechado el filtro sobre una, o cuando hay una suelta fuera de
+ * banda.
+ */
+{
+    "FT8 (una sola)", IDENT_POR_ANCHO,
+    0U,0U, 0U,0U, 0U,0U, 41U,80U, 50U,100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    "8-FSK de 50 Hz. Ponlo en FT8: emite 12,6 s de cada 15.",
+    "FT8 (a single one)",
+    "8-FSK of 50 Hz. Put it in FT8: 12.6 s out of every 15."
+},
+
+/* --- los que se reconocen por el reloj --------------------------------- */
+/*
+ * Pedido por el usuario.
+ *
+ * Estas tres filas son la respuesta, y no miran el espectro: miran el
+ * RELOJ. Ver ident_cad_t en ident.h para por que hacia falta otro
+ * instrumento.
+ *
+ * Los tres periodos son de la norma de cada modo y estan en la
+ * documentacion de WSJT-X:
+ *
+ *   FT8   ciclo de 15 s, emision de 12,64 -> 84%
+ *   FT4   ciclo de 7,5 s, emision de 4,48 -> 60%
+ *   WSPR  ciclo de 120 s, emision de 110,6 -> 92%
+ *
+ * Los margenes son anchos por abajo en la ocupacion a proposito: si la
+ * señal es debil, el medidor cuenta como apagado el principio y el final de
+ * cada emision y la ocupacion sale de menos. Por arriba se cierran, porque
+ * algo que ocupa el 98% de su ciclo no se esta apagando, esta siempre.
+ *
+ * El WSPR necesita CUATRO MINUTOS de escucha para que entren dos ciclos. La
+ * pantalla dice cuanto lleva, que si no parece que no hace nada.
+ */
+/*
+ * COMPROBADA EN ANTENA el 05/10/2026: el usuario puso el modo en 7.074 kHz y
+ * la radio midio "ciclo 15,5 s, ocupa 86%" contra los 15,0 y 84% de la
+ * norma. Medio segundo era una anotacion del cuaderno, y por eso el
+ * periodo pasa a promediarse: ver cad_calcula().
+ */
+{
+    "FT8 (o JS8 de 15 s)", IDENT_POR_CADENCIA,
+    0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 140U,160U, 60U,95U, 0U,0U, 0U,0U, 0U,0U, 1U,
+    "Todas empiezan a la vez cada 15 s. Ponlo en FT8.",
+    "FT8 (or 15 s JS8)",
+    "They all start together every 15 s. Put it in FT8."
+},
+{
+    "FT4", IDENT_POR_CADENCIA,
+    0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 68U,82U, 40U,80U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    "Ciclo de 7,5 s. Esta radio no lo decodifica todavia.",
+    "FT4",
+    "7.5 s cycle. This radio does not decode it yet."
+},
+{
+    "WSPR", IDENT_POR_CADENCIA,
+    0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 1150U,1250U, 80U,98U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    "Ciclo de dos minutos. Ponlo en WSPR.",
+    "WSPR",
+    "Two-minute cycle. Put it in WSPR."
+},
+
+/* --- los que se reconocen por el ritmo del simbolo --------------------- */
+/*
+ * Pedido por el usuario.
+ *
+ * Estas filas son la respuesta. No miran cuantos tonos hay ni donde estan
+ * -eso no se puede medir con esta ventana, ver SIMB_W en stanag_det.c-,
+ * miran CADA CUANTO CAMBIA DE TONO, que es una medida sola y vale para
+ * cualquier cosa que tenga simbolos.
+ *
+ * Y las tres piden expresamente que NO se hayan visto dos tonos: un RTTY
+ * tambien tiene velocidad de simbolo, pero ese ya lo identifican las filas
+ * de dos tonos, que son mas firmes. Estas son para cuando hay muchos.
+ */
+{
+    "MFSK multitono (Olivia y parecidos)", IDENT_POR_SIMBOLO,
+    0U,0U, 0U,0U, 0U,0U, 150U,2600U, 0U,0U, 0U,0U, 0U,0U, 150U,400U, 4U,60U, 0U,0U, 0U,
+    "Separacion = velocidad. Divide el ancho entre ella y salen los tonos.",
+    "Multitone MFSK (Olivia and the like)",
+    "Spacing = speed. Divide the bandwidth by it to get the tones."
+},
+{
+    "ALE 2G (MIL-188-141)", IDENT_POR_SIMBOLO,
+    0U,0U, 0U,0U, 0U,0U, 1400U,2400U, 0U,0U, 0U,0U, 0U,0U, 1150U,1350U, 0U,0U, 0U,0U, 0U,
+    "125 baudios, 8 tonos de 750 a 2500 Hz. Ponlo en ALE.",
+    "ALE 2G (MIL-188-141)",
+    "125 baud, 8 tones from 750 to 2500 Hz. Put it in ALE."
+},
+/*
+ * JTTY, QUE LLEVABA DECODIFICADOR Y NO LLEVABA FILA - 09/10/2026.
+ *
+ * Esta radio decodifica JTTY desde el 28/09 y el Ident no lo tenia: una
+ * señal de JTTY delante salia como "Modem estrecho sin identificar", que
+ * es exactamente el renglon que este modo existe para no dar cuando la
+ * respuesta se sabe.
+ *
+ * LOS TRES NUMEROS SALEN DE NUESTRO PROPIO RECEPTOR, no de una cita de
+ * catalogo. Ver la cabecera de jtty_rx.h, donde el encaje esta explicado
+ * entero:
+ *
+ *   31,25 baudios          -> 312 decimas, y el rango 300-325 es +-4%
+ *   tonos separados 31,25  -> cuatro tonos ocupan 3*31,25 + el ancho de
+ *                             uno = unos 125 Hz
+ *   tonos = ancho/velocidad -> 125/31,25 = 4 clavados
+ *
+ * EL RANGO DE ANCHO ES 90-170 Y NO 120-130 por lo de siempre: el ancho a
+ * -10 dB de una señal debil se come las faldas y mide de menos, y el de
+ * una fuerte se las traga y mide de mas. Por arriba se solapa con la fila
+ * del MFSK multitono, que empieza en 150, y eso NO es un problema: a 160
+ * Hz medidos las dos cuadran y la pantalla dice las dos, que es la verdad.
+ *
+ * NO HAY FILA DE CADENCIA PARA JTTY, y no es un olvido. FT8, FT4 y WSPR
+ * tienen la suya porque empiezan en un segundo conocido del reloj; JTTY
+ * empieza cuando el otro le da a la tecla (ver jtty_rx.h: "NO HAY
+ * RANURAS"). Una fila de cadencia para este modo seria inventarse un
+ * ciclo que no existe.
+ *
+ * VA SIN COMPROBAR -`probada` a 0- hasta que haya una grabacion. Los
+ * numeros son los de nuestro receptor, que es mas que una cita de la
+ * norma, pero sigue sin ser una medida en antena.
+ */
+{
+    "JTTY", IDENT_POR_SIMBOLO,
+    0U,0U, 0U,0U, 0U,0U, 90U,170U, 0U,0U, 0U,0U, 0U,0U, 300U,325U, 3U,6U, 0U,0U, 0U,
+    "4-FSK de 31,25 Hz a 31,25 baudios. Ponlo en JTTY.",
+    "JTTY",
+    "4-FSK of 31.25 Hz at 31.25 baud. Put it in JTTY."
+},
+{
+    "Teletipo de 100 Bd sin dos tonos claros", IDENT_POR_SIMBOLO,
+    0U,0U, 0U,0U, 0U,0U, 100U,900U, 0U,0U, 0U,0U, 0U,0U, 950U,1050U, 0U,0U, 0U,0U, 0U,
+    "100 baudios. Si fuera SITOR saldria arriba; prueba NAVTEX igual.",
+    "100 Bd teletype without two clear tones",
+    "100 baud. A SITOR would show up above; try NAVTEX anyway."
+},
+
+/* --- imagen por subportadora de FM ------------------------------------ */
+/*
+ * SSTV Y FAX SON LA MISMA FORMA DE ONDA y esta radio NO LOS SEPARA. Los
+ * dos mandan la imagen como frecuencia dentro de la misma ventana -1500 Hz
+ * el negro, 2300 el blanco- y los dos van seguidos. Lo unico que los
+ * distingue de verdad es cuanto dura un renglon: 500 ms clavados el fax, y
+ * entre 428 y 446 ms los modos de SSTV que lleva esta radio.
+ *
+ * Y ESO NO SE PUEDE MEDIR AQUI: la autocorrelacion mira hasta 768 muestras
+ * a 3 kHz, o sea 256 ms. Los dos se salen por arriba.
+ *
+ * Asi que la fila dice las dos y lo dice. Prometer una de las dos a cara o
+ * cruz seria exactamente lo que la cabecera de ident.h dice que este modo
+ * no va a hacer nunca.
+ */
+{
+    "SSTV o fax meteorologico", IDENT_POR_ANCHO,
+    0U,0U, 0U,0U, 0U,0U, 600U,1300U, 85U,100U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    "Imagen en FM, 1500-2300 Hz. Prueba SSTV y luego WEFAX.",
+    "SSTV or weather fax",
+    "Image in FM, 1500-2300 Hz. Try SSTV and then WEFAX."
+},
+
+/* --- por el ancho, y solo como pista ---------------------------------- */
+/*
+ * ESTAS NO IDENTIFICAN, ORIENTAN. En cada tramo de ancho de banda hay
+ * decenas de cosas distintas, asi que lo que dicen es "mira por aqui", y
+ * su texto lo deja claro. Estan porque un ancho medido ya descarta el 90%
+ * del catalogo, y eso vale mas que un renglon en blanco.
+ *
+ * Y SE CALLAN CUANDO HABLA ALGUIEN CON MAS AUTORIDAD: ver ident_casa().
+ */
+{
+    "Modem estrecho sin identificar", IDENT_POR_ANCHO,
+    0U,0U, 0U,0U, 0U,0U, 81U,599U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    "Entre 0,1 y 0,6 kHz. Teletipo o ARQ: hay decenas.",
+    "Unidentified narrow modem",
+    "Between 0.1 and 0.6 kHz. Teletype or ARQ: there are dozens."
+},
+{
+    "Podria ser ALE 2G", IDENT_POR_ANCHO,
+    0U,0U, 0U,0U, 0U,0U, 1400U,2200U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    "8-FSK de 750 a 2500 Hz a rafagas cortas. Prueba ALE.",
+    "Could be ALE 2G",
+    "8-FSK from 750 to 2500 Hz in short bursts. Try ALE."
+},
+{
+    "Podria ser HFDL, o un modem de fase", IDENT_POR_ANCHO,
+    0U,0U, 0U,0U, 0U,0U, 2201U,3200U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,0U, 0U,
+    "Ocupa el canal entero. Prueba HFDL y mira el periodo de abajo.",
+    "Could be HFDL, or a phase modem",
+    "Takes the whole channel. Try HFDL and look at the period below."
+},
+};
+#define N_FIRMAS ((uint16_t)(sizeof k_firmas / sizeof k_firmas[0]))
+
+const ident_firma_t *ident_firmas(uint16_t *n)
+{
+    if (n) { *n = N_FIRMAS; }
+    return k_firmas;
+}
+
+const char *ident_nombre(const ident_firma_t *f)
+{
+    return (f == 0) ? "" : tr(f->nombre, f->nombre_en);
+}
+
+const char *ident_nota(const ident_firma_t *f)
+{
+    return (f == 0) ? "" : tr(f->nota, f->nota_en);
+}
+
+/*
+ * ¿Esta fila es solo una pista? Lo dice su propio nombre, que es lo que lee
+ * el usuario: las que orientan empiezan por "Modem" o por "Podria". Ver el
+ * final de ident_casa().
+ */
+/*
+ * QUE UNA FILA DE ANCHO SEA UNA PISTA Y NO UNA RESPUESTA, MEDIDO EN LA
+ * PROPIA FILA Y NO EN SU NOMBRE - 05/10/2026.
+ *
+ * Esto miraba si el nombre empezaba por "Modem" o por "Podria". Funcionaba
+ * mientras las pistas se llamaran asi, y dejo de funcionar el dia que FUG
+ * salio acompañado de "SSTV o fax meteorologico": un nombre que no empieza
+ * por ninguna de las dos y que es tan adivinanza como las otras.
+ *
+ * Lo que de verdad separa una pista de una firma es LO ANCHA QUE SEA SU
+ * VENTANA, y eso esta en la propia tabla:
+ *
+ *   WSPR                       1..14 Hz      13 de rango
+ *   PSK31                     15..40 Hz      25
+ *   FT8 (una sola)            41..80 Hz      39
+ *   ---------------------------------------------------
+ *   Modem estrecho           81..599 Hz     518
+ *   SSTV o fax              600..1300 Hz    700
+ *   Podria ser ALE 2G      1400..2200 Hz    800
+ *   Podria ser HFDL        2201..3200 Hz    999
+ *
+ * Un abismo entre 39 y 518. Las de arriba dicen una anchura concreta de un
+ * modo concreto; las de abajo reparten el espectro en cuatro cajones y
+ * dicen en cual has caido. Con 100 Hz de corte quedan a un lado y a otro,
+ * y el dia que se añada una fila ancha se clasificara sola sin que nadie
+ * se acuerde de ponerle "Podria" delante.
+ */
+#define ANCHO_PISTA  100U
+
+/* Lo mas alto que llega cr7_pc con este motor, medido: ver el comentario
+ * dentro de ident_encaje(). */
+#define CR7_TECHO     85U
+
+static uint8_t es_pista(const ident_firma_t *f)
+{
+    if (f->criterio != IDENT_POR_ANCHO) { return 0U; }
+    if (f->ancho_max <= f->ancho_min)   { return 0U; }
+    /*
+     * Y UNA FILA QUE ADEMAS PIDE EL ALFABETO NO ES UNA PISTA - 08/10/2026.
+     *
+     * "Pista" aqui quiere decir "esto cuadra solo por el ancho, con un rango
+     * muy abierto, o sea que es media banda". La de "NAVTEX o SITOR-B (tonos
+     * poco claros)" usa el ancho nada mas para abrir la puerta: quien decide
+     * es que el flujo sea CCIR 476 a 100 baudios, que no lo cumple ni el
+     * ruido ni ninguna otra modulacion de la tabla. Dejarla como pista la
+     * mandaba al renglon de abajo y la pantalla seguia diciendo "no cuadra
+     * con ninguna firma" teniendo el nombre delante.
+     */
+    if (f->cr7_min != 0U) { return 0U; }
+    return (uint8_t)((uint16_t)(f->ancho_max - f->ancho_min) >= ANCHO_PISTA);
+}
+
+/* Un rango a 0,0 no se mira; si no, el valor tiene que caer dentro. */
+static uint8_t dentro(uint16_t v, uint16_t lo, uint16_t hi)
+{
+    if (lo == 0U && hi == 0U) { return 1U; }
+    return (uint8_t)(v >= lo && v <= hi);
+}
+
+/*
+ * Lo centrado que cae `v` dentro de [lo,hi], en 0..100. Un rango a 0,0 no
+ * se mira y devuelve 100: no resta lo que no se pide.
+ *
+ * `tope_natural` es el valor maximo que esa magnitud puede tener por su
+ * propia naturaleza, o 0 si no tiene.
+ *
+ * *** Y SIN ESO, UN SITOR-B DE LIBRO SALIA AL 0%. ***
+ *
+ * La fila de SITOR-B pide un ciclo de trabajo del 70 al 100%, y un SITOR-B
+ * emite SEGUIDO: mide 100%. O sea justo el borde de arriba, o sea "cuadra
+ * por los pelos" segun la cuenta... cuando 100 es el valor mas tipico que
+ * puede dar y ademas el mayor que existe.
+ *
+ * La leccion: estar pegado a un borde solo significa "por los pelos" si al
+ * otro lado del borde hay algo. Al otro lado del 100% de ciclo no hay
+ * nada, porque no se puede emitir mas del tiempo entero. Un borde que es un
+ * limite fisico no es un borde.
+ */
+static uint8_t centrado_t(uint32_t v, uint32_t lo, uint32_t hi,
+                          uint32_t tope_natural)
+{
+    uint32_t mitad, medio, d;
+
+    if (lo == 0U && hi == 0U) { return 100U; }
+    if (hi <= lo)             { return 100U; }
+    if (v < lo || v > hi)     { return 0U; }
+
+    medio = (lo + hi) / 2U;
+    mitad = (hi - lo) / 2U;
+    if (mitad == 0U) { return 100U; }
+
+    /* Bordes que no son bordes: el limite fisico por arriba y el cero por
+     * abajo. Pasado el medio hacia ese lado, no se descuenta nada. */
+    if (tope_natural != 0U && hi >= tope_natural && v >= medio) { return 100U; }
+    if (lo == 0U && v <= medio) { return 100U; }
+
+    d = (v > medio) ? (v - medio) : (medio - v);
+    if (d >= mitad) { return 0U; }
+    return (uint8_t)(100U - ((d * 100U) / mitad));
+}
+
+static uint8_t centrado(uint32_t v, uint32_t lo, uint32_t hi)
+{
+    return centrado_t(v, lo, hi, 0U);
+}
+
+static uint8_t menor(uint8_t a, uint8_t b) { return (a < b) ? a : b; }
+
+uint8_t ident_encaje(const stanag_det_t *m, const ident_cad_t *c,
+                     uint16_t firma, uint16_t n_cuadran)
+{
+    const ident_firma_t *f;
+    ident_cad_t sin_cad;
+    uint16_t e;
+
+    if (m == 0 || firma >= N_FIRMAS) { return 0U; }
+    if (c == 0) { memset(&sin_cad, 0, sizeof sin_cad); c = &sin_cad; }
+    f = &k_firmas[firma];
+
+    /* --- 1. lo centrado que cae en cada rango que la fila pide --- */
+    e = 100U;
+    e = menor((uint8_t)e, centrado(m->sep_hz,      f->sep_min,   f->sep_max));
+    e = menor((uint8_t)e, centrado(m->baudios_x10, f->bd_min,    f->bd_max));
+    e = menor((uint8_t)e, centrado(m->periodo_us,  f->trama_min, f->trama_max));
+    e = menor((uint8_t)e, centrado(m->ancho10_hz,  f->ancho_min, f->ancho_max));
+    e = menor((uint8_t)e, centrado_t((uint32_t)m->ciclo_pc,
+                                     (uint32_t)f->ciclo_min,
+                                     (uint32_t)f->ciclo_max, 100U));
+    e = menor((uint8_t)e, centrado(c->periodo_ds,  f->cad_min,   f->cad_max));
+    e = menor((uint8_t)e, centrado_t((uint32_t)c->ocupa_pc,
+                                     (uint32_t)f->ocup_min,
+                                     (uint32_t)f->ocup_max, 100U));
+    e = menor((uint8_t)e, centrado(m->simb_x10,    f->sim_min,   f->sim_max));
+    e = menor((uint8_t)e, centrado((uint32_t)m->tonos,
+                                   (uint32_t)f->ton_min, (uint32_t)f->ton_max));
+
+    /*
+     * --- 2. la calidad de la medida que manda en esta fila ---
+     *
+     * Las de dos tonos no tienen un numero de calidad propio -el buscador
+     * de rayas dice si o no, no dice cuanto- asi que ahi manda lo centrado
+     * y ya. Eso esta bien dicho asi y no hay que taparlo con un 100
+     * inventado: lo que pasa es que el eslabon no existe.
+     */
+    switch (f->criterio) {
+    case IDENT_POR_TRAMA:
+        e = menor((uint8_t)e, m->calidad);
+        break;
+    case IDENT_POR_SIMBOLO:
+        e = menor((uint8_t)e, m->simb_q);
+        break;
+    case IDENT_POR_CADENCIA:
+        e = menor((uint8_t)e, c->firmeza);
+        break;
+    case IDENT_POR_PICO:
+        /*
+         * La misma regla que con el alfabeto: se estira desde el minimo que
+         * admite la fila (40%) hasta LO MEJOR QUE SE HA MEDIDO DE VERDAD, no
+         * hasta 100. La unica portadora medida en antena dio 57% (ver la
+         * fila de "Portadora sola"), asi que el techo es 60 y no 90: con 90,
+         * una portadora de libro salia al 34% y parecia dudosa.
+         *
+         * Y queda dicho que ese techo sale de UNA medida. Si algun dia se
+         * mide una portadora mas limpia, se sube.
+         */
+        if (m->pico_pc <= 40U) { e = 0U; }
+        else {
+            uint16_t pc = m->pico_pc; if (pc > 60U) { pc = 60U; }
+            {
+                uint16_t v = (uint16_t)(((uint16_t)(pc - 40U) * 100U) / 20U);
+                e = menor((uint8_t)e, (uint8_t)((v > 100U) ? 100U : v));
+            }
+        }
+        break;
+    default:
+        break;
+    }
+
+    /*
+     * El alfabeto, si la fila lo pide, manda tanto como el criterio: va del
+     * umbral de la fila al 100% de los grupos. Ver cr7_pc en stanag_det.h.
+     */
+    if (f->cr7_min != 0U) {
+        if (m->cr7_pc <= f->cr7_min) { e = 0U; }
+        else {
+            /*
+             * EL TECHO NO ES 100, ES 85, Y ESTO NO ES AFINAR: ES NO MENTIR.
+             *
+             * El 100% de grupos con cuatro unos NO SE ALCANZA con este
+             * motor: el mejor caso medido -CCIR 476 sintetico, limpio, sin
+             * ruido- da 87% (ver sim/cr7_test.c), porque el cortador de
+             * bits no tiene recuperacion de reloj de verdad. Estirando de
+             * 60 a 100, una deteccion impecable de 79% salia al 47% y
+             * parecia dudosa cuando no lo era. Se estira de 60 a 85, que
+             * es hasta donde se puede llegar de verdad.
+             */
+            uint16_t tope = (uint16_t)CR7_TECHO;
+            uint16_t pc = m->cr7_pc; if (pc > tope) { pc = tope; }
+            if (tope <= f->cr7_min) { e = menor((uint8_t)e, 100U); }
+            else {
+                uint16_t margen = (uint16_t)(tope - f->cr7_min);
+                uint16_t v = (uint16_t)(((uint16_t)(pc - f->cr7_min) * 100U)
+                                        / margen);
+                e = menor((uint8_t)e, (uint8_t)((v > 100U) ? 100U : v));
+            }
+        }
+    }
+
+    /*
+     * --- 3. si la fila no se ha visto nunca en antena, techo del 70% ---
+     * Lo que encaja entonces es con lo que yo creo que es el modo, no con
+     * el modo. Ver `probada` en ident.h.
+     */
+    if (f->probada == 0U && e > 70U) { e = 70U; }
+
+    /*
+     * --- y si cuadran varias, todas bajan ---
+     * Dos nombres delante es no saber cual, por bien que encajen los dos.
+     * Con dos, el 70%; con tres, el 55%; de cuatro para arriba, el 40%.
+     */
+    if (n_cuadran >= 4U)      { if (e > 40U) { e = 40U; } }
+    else if (n_cuadran == 3U) { if (e > 55U) { e = 55U; } }
+    else if (n_cuadran == 2U) { if (e > 70U) { e = 70U; } }
+
+    return (uint8_t)e;
+}
+
+uint16_t ident_casa(const stanag_det_t *m, const ident_cad_t *c,
+                    uint8_t *salen, uint16_t max)
+{
+    uint16_t i, n = 0U;
+    ident_cad_t sin_cad;
+
+    if (m == 0 || salen == 0 || max == 0U) { return 0U; }
+    if (c == 0) { memset(&sin_cad, 0, sizeof sin_cad); c = &sin_cad; }
+
+    for (i = 0U; i < N_FIRMAS; i++) {
+        const ident_firma_t *f = &k_firmas[i];
+
+        /*
+         * LO PRIMERO, QUE LA MEDIDA QUE PIDE LA FIRMA EXISTA. Una firma de
+         * dos tonos no puede cuadrar si no se han visto dos tonos, por
+         * mucho que los demas rangos esten a cero: sin esto, una fila con
+         * todos los rangos abiertos cuadraria siempre.
+         */
+        switch (f->criterio) {
+        case IDENT_POR_TONOS:
+            if (!m->hay_tonos || m->baudios_x10 == 0U) { continue; }
+            break;
+        case IDENT_POR_CADENCIA:
+            /* Sin cadencia medida no hay nada que comparar. Y con poca
+             * firmeza tampoco: un ciclo que apenas destaca del ruido es
+             * una coincidencia, no un modo. */
+            if (!c->vale || c->periodo_ds == 0U || c->firmeza < 40U) { continue; }
+            break;
+        case IDENT_POR_SIMBOLO:
+            /*
+             * Aqui NO se exige que no haya dos tonos, aunque lo parezca.
+             * El buscador de dos tonos coge las DOS RAYAS MAS ALTAS, y en
+             * un MFSK de veintiuna siempre hay dos mas altas que las
+             * demas: con un MFSK sintetico de 21 tonos dice que si. O sea
+             * que "hay dos tonos" no significa "es una FSK de dos".
+             *
+             * Quien manda sobre estas filas no es esa bandera, es el
+             * RESULTADO: si alguna fila de dos tonos ha cuadrado de verdad
+             * -con su separacion y su velocidad- esa gana y estas se caen.
+             * Se hace al final, con las pistas del ancho.
+             */
+            if (m->simb_x10 == 0U || m->simb_q < 12U) { continue; }
+            break;
+        case IDENT_POR_SEP:
+            /* Dos tonos, y nada mas: la velocidad no se le pide porque a
+             * 1200 baudios el medidor no llega. Ver IDENT_POR_SEP. */
+            if (!m->hay_tonos || m->sep_hz == 0U) { continue; }
+            break;
+        case IDENT_POR_TRAMA:
+            if (!m->vale || m->periodo_us == 0U) { continue; }
+            break;
+        case IDENT_POR_PICO:
+            /* Una raya sola: mas de la mitad de la potencia en +-8 Hz. Con
+             * 57% medido en la grabacion del usuario y 2% en un modem suyo,
+             * el 40% parte la diferencia de sobra. */
+            if (!m->hay_esp || m->pico_pc < 40U) { continue; }
+            break;
+        case IDENT_POR_ANCHO:
+        default:
+            if (!m->hay_esp || m->ancho10_hz == 0U) { continue; }
+            /* Y que no sea una portadora: esa ya tiene su fila. */
+            if (m->pico_pc >= 40U) { continue; }
+            break;
+        }
+
+        if (!dentro(m->sep_hz,      f->sep_min,   f->sep_max))   { continue; }
+        if (!dentro(m->baudios_x10, f->bd_min,    f->bd_max))    { continue; }
+        if (!dentro(m->periodo_us,  f->trama_min, f->trama_max)) { continue; }
+        if (!dentro(m->ancho10_hz,  f->ancho_min, f->ancho_max)) { continue; }
+        if (!dentro((uint16_t)m->ciclo_pc, (uint16_t)f->ciclo_min,
+                    (uint16_t)f->ciclo_max)) { continue; }
+        if (!dentro(c->periodo_ds, f->cad_min, f->cad_max)) { continue; }
+        if (!dentro((uint16_t)c->ocupa_pc, (uint16_t)f->ocup_min,
+                    (uint16_t)f->ocup_max)) { continue; }
+        if (!dentro(m->simb_x10, f->sim_min, f->sim_max)) { continue; }
+        if (!dentro((uint16_t)m->tonos, (uint16_t)f->ton_min,
+                    (uint16_t)f->ton_max)) { continue; }
+
+        /* El alfabeto. Ver cr7_min en ident.h y cr7_pc en stanag_det.h.
+         * cr7_bd es exacto porque solo hay tres valores posibles. */
+        if (f->cr7_min != 0U) {
+            if (m->cr7_pc < f->cr7_min) { continue; }
+            if (f->cr7_bd != 0U && m->cr7_bd_x10 != f->cr7_bd) { continue; }
+        }
+
+        salen[n++] = (uint8_t)i;
+        if (n >= max) { break; }
+    }
+
+    /*
+     * LAS PISTAS SE CALLAN CUANDO HAY UN NOMBRE - 05/10/2026.
+     *
+     * Las filas de IDENT_POR_ANCHO que son pistas -"modem estrecho sin
+     * identificar", "podria ser ALE"- cuadran por rangos muy abiertos, y
+     * eso esta bien mientras sean lo unico que hay. En cuanto una fila con
+     * un criterio fuerte -dos tonos, una trama que se repite, una raya
+     * sola- ha dicho un nombre, la pista no añade nada y resta: la
+     * pantalla ensena tres renglones y un "STANAG 4285" seguido de "podria
+     * ser HFDL" se lee como una duda que no existe.
+     *
+     * Las tres filas de ancho que SI identifican -WSPR, PSK31, FT8- y la de
+     * la imagen no son pistas: se quedan. Se distinguen porque su rango de
+     * ancho es estrecho, pero fiarse de eso seria fragil, asi que lo que se
+     * mira es el texto que ya tienen: una pista empieza por "Modem" o por
+     * "Podria".
+     *
+     * Se hace aqui y no al construir la tabla porque es una regla sobre el
+     * RESULTADO, no sobre las firmas: la misma fila es pista o no segun con
+     * quien venga.
+     */
+    if (n > 1U) {
+        uint16_t j, fuertes = 0U, dedos = 0U, k;
+
+        for (j = 0U; j < n; j++) {
+            uint8_t c2 = k_firmas[salen[j]].criterio;
+            if (c2 == IDENT_POR_TONOS || c2 == IDENT_POR_SEP) { dedos++; }
+            /* Una fila de ritmo de simbolo tambien es un nombre, asi que
+             * tambien calla a las pistas del ancho. */
+            if (c2 != IDENT_POR_ANCHO) { fuertes++; }
+        }
+        /*
+         * Y si una fila de DOS TONOS ha cuadrado, las de ritmo de simbolo
+         * se caen: un RTTY tiene velocidad de simbolo igual que un MFSK,
+         * pero "170 Hz y 45,45 baudios" es un nombre y "algo que cambia 45
+         * veces por segundo" es una familia. Gana el nombre.
+         */
+        k = 0U;
+        for (j = 0U; j < n; j++) {
+            const ident_firma_t *f = &k_firmas[salen[j]];
+            if (fuertes > 0U && f->criterio == IDENT_POR_ANCHO && es_pista(f)) { continue; }
+            if (dedos > 0U && f->criterio == IDENT_POR_SIMBOLO) { continue; }
+            salen[k++] = salen[j];
+        }
+        n = k;
+    }
+
+    return n;
+}
+
+/*
+ * ==========================================================================
+ * EL MODO
+ * ==========================================================================
+ */
+static uint8_t  s_activo;
+
+/*
+ * *** AIS NO TIENE FILA EN LA TABLA, Y NO VA A TENERLA. ***
+ *
+ * Estaba apuntado como "AIS y JTTY no tienen fila en el Ident". JTTY si la
+ * tiene ya, porque se puede medir. AIS no, y la razon no es pereza:
+ *
+ *   AIS es GMSK a 9.600 bits con desviacion de +-2.400 Hz. Por la regla de
+ *   Carson eso ocupa 2*(2400+4800) = 14.400 Hz (ver ais_rx.h). Este modo
+ *   come la banda lateral diezmada a 12 kHz y mide dentro de una ventana
+ *   de 3 kHz. La señal es CINCO VECES mas ancha que la ventana entera.
+ *
+ * Lo que se ve ahi dentro no es AIS: es un trozo de AIS, y un trozo de AIS
+ * se parece a ruido ancho. Una fila que dijera "AIS" a partir de eso no
+ * seria una medida, seria una adivinanza con cara de medida - que es lo
+ * unico que la cabecera de ident.h promete no hacer nunca.
+ *
+ * LO QUE SI SE PUEDE DECIR CON CERTEZA ES DONDE ESTAS. AIS solo vive en
+ * 161,975 y 162,025 MHz, y en esas dos frecuencias no hay nada mas. Eso no
+ * es identificar una forma de onda, es leer el dial - y es una respuesta
+ * honrada y util, que es lo que se pedia. Por eso esto es un renglon de la
+ * pantalla y no una fila de k_firmas[].
+ *
+ * El bucle principal la pone en cada vuelta, igual que hace con ALE (ver
+ * ale_modo_frec_pon()). En kilohercios, que es lo que pasa la radio.
+ */
+static uint32_t s_khz;
+/*
+ * LAS LINEAS DEL PANEL: PUNTEROS, NO COPIAS - 06/10/2026.
+ *
+ * Esto era `char s_lin[9][IDENT_LARGO]`, o sea NUEVE COPIAS. Y casi todo lo
+ * que se mete son cadenas que YA ESTAN en la flash: los nombres y las notas
+ * de k_firmas[] y las frases fijas de tr(). Copiarlas era pagar RAM por
+ * tener dos veces lo mismo, y encima con un tope -48 bytes- que cortaba las
+ * notas largas a mitad de palabra.
+ *
+ * Subir el tope a 80 arreglaba el corte y costaba 288 bytes mas de RAM...
+ * que no habia: el enlazador se planto con "region RAM overflowed by 192
+ * bytes". Lo cual estuvo bien, porque el arreglo era otro.
+ *
+ * Ahora cada linea es UN PUNTERO. Las que son const no se copian: se
+ * apuntan, y se pintan enteras midan lo que midan, sin tope ninguno.
+ *
+ * Los buffers solo hacen falta para lo que NO vive en flash: las lineas que
+ * se arman con numeros -ponf()- y la del nombre con su "(?)" pegado, que se
+ * monta en una variable local de escribe() y desaparece al salir. Para esas
+ * hay un buffer por linea, del tamaño de antes, que de sobra les llega.
+ *
+ * Sale ganando por los dos lados: 252 bytes MENOS que el array de 80 que no
+ * cabia, y las notas ya no se cortan.
+ */
+static const char *s_lin[IDENT_LINEAS];
+static char        s_buf[IDENT_LINEAS][IDENT_LARGO];
+static uint8_t  s_nlin;
+static stanag_det_t s_m;
+static uint32_t s_medidas;
+
+/*
+ * ==========================================================================
+ * EL MEDIDOR DE CADENCIA
+ * ==========================================================================
+ *
+ * Pedido por el usuario.
+ *
+ * Un cuaderno de energia: una anotacion cada medio segundo, 512 de ellas,
+ * o sea los ULTIMOS CUATRO MINUTOS Y PICO. Con eso se ve lo que no cabe en
+ * una ventana de 341 ms: que la banda entera se enciende y se apaga a
+ * compas.
+ *
+ * Medio segundo por anotacion no es un numero redondo cualquiera: el ciclo
+ * mas corto que hay que reconocer son los 7,5 s del FT4, o sea quince
+ * anotaciones. Con una por segundo serian siete y medio, y medio ciclo de
+ * error en un periodo de siete no lo distingue de nada.
+ *
+ * Y 1024 anotaciones -512 segundos- por el WSPR, que tarda 120 s en
+ * repetirse. El periodo se mide contando el hueco entre subidas, y para
+ * tener DOS huecos que comparar hacen falta tres subidas, o sea 360 s. Con
+ * 256 s solo habria uno, y un hueco suelto no es un ciclo, es un salto.
+ * Ocho minutos y medio dan cuatro ciclos y margen de sobra.
+ *
+ * La memoria sale del mismo prestamo que el motor -ver ram_coge()-, no de
+ * .bss: dos kilobytes en una radio con mil novecientos bytes libres no se
+ * piden al enlazador, se piden prestados a quien no esta.
+ */
+#define CAD_N       1024U       /* anotaciones: 1024 x 0,5 s = 512 s */
+#define CAD_MS       500U       /* cada cuanto se anota */
+#define CAD_MUESTRAS (12000U / 2U)   /* 0,5 s a 12 kHz */
+#define CAD_MIN      16U        /* lo minimo para intentar medir: 8 s */
+#define CAD_HUECOS   16U        /* huecos entre subidas que se guardan */
+
+/*
+ * REVISION A FONDO DEL 08/10/2026: LOS DOS QUE CRUZAN CON LA INTERRUPCION
+ * DE AUDIO, VOLATILE.
+ *
+ * cad_mete() corre en la interrupcion de audio y es quien sube s_cad_n y
+ * s_cad_desde; los lee el bucle principal -s_cad_n para saber cuantas
+ * anotaciones hay que mirar, s_cad_desde para decidir si toca volver a
+ * calcular la cadencia-. Los otros cuatro no cruzan: s_cad_w, s_cad_acu
+ * y s_cad_acu_n solo los toca la interrupcion, y s_cad es el puntero al
+ * prestamo, que se fija al arrancar el modo. Sin volatile el compilador
+ * puede dar por bueno el valor que leyo hace un momento y entonces, o la
+ * cadencia no se recalcula nunca -se queda en la de hace diez minutos-,
+ * o se mide sobre menos anotaciones de las que hay. Un sintoma que se
+ * buscaria en la tabla de firmas, que es donde no esta.
+ */
+static float   *s_cad;          /* CAD_N energias, en el prestamo */
+static volatile uint16_t s_cad_n;   /* cuantas hay escritas, tope CAD_N */
+static uint16_t s_cad_w;        /* donde va la siguiente */
+static uint32_t s_cad_acu_n;    /* muestras acumuladas en la de ahora */
+static float    s_cad_acu;      /* y su suma de cuadrados */
+static volatile uint16_t s_cad_desde; /* anotaciones desde el ultimo calculo */
+static ident_cad_t s_cad_r;
+
+/* Una anotacion cada CAD_MUESTRAS muestras. Corre en la interrupcion de
+ * audio, asi que aqui no hay mas que una multiplicacion y una suma. */
+static void cad_mete(const float *a, uint16_t n)
+{
+    uint16_t i;
+
+    if (s_cad == 0) { return; }
+    for (i = 0U; i < n; i++) {
+        s_cad_acu += a[i] * a[i];
+        s_cad_acu_n++;
+        if (s_cad_acu_n >= (uint32_t)CAD_MUESTRAS) {
+            s_cad[s_cad_w] = s_cad_acu / (float)s_cad_acu_n;
+            s_cad_w = (uint16_t)((s_cad_w + 1U) % CAD_N);
+            if (s_cad_n < (uint16_t)CAD_N) { s_cad_n++; }
+            s_cad_desde++;
+            s_cad_acu = 0.0f;
+            s_cad_acu_n = 0U;
+        }
+    }
+}
+
+/*
+ * Y el calculo, que corre en el bucle principal.
+ *
+ * SE MIDE EL HUECO ENTRE SUBIDAS, NO LA AUTOCORRELACION. La primera
+ * version correlacionaba la secuencia de encendidos consigo misma, que es
+ * lo que se hace siempre, y con el FT8 y el FT4 funcionaba. Con el WSPR
+ * daba 4 segundos.
+ *
+ * Y daba 4 segundos por un motivo que no es un error de programacion sino
+ * de instrumento: el WSPR esta encendido el 92% del ciclo, o sea que sus
+ * apagones duran 9 s y sus encendidos 110. Una onda cuadrada con tramos
+ * tan largos correlaciona FORTISIMO consigo misma desplazada un poco -el
+ * tramo se solapa con su propio tramo- y el maximo sale en los retardos
+ * cortos, no en el periodo. La autocorrelacion mide "cuanto se parece a si
+ * misma", y una señal que esta casi siempre encendida se parece a si misma
+ * en casi cualquier desplazamiento.
+ *
+ * Lo que define el ciclo de estos modos no es el parecido: son las
+ * SUBIDAS. Todas las emisiones empiezan a la vez, cada 15 s el FT8 y cada
+ * 120 el WSPR, y eso se mide contando cuantas anotaciones hay de una
+ * subida a la siguiente. Es mas simple, mas barato -no hay bucle de 256
+ * retardos- y, sobre todo, no se deja engañar por la duracion del tramo.
+ *
+ * Tres pasos:
+ *
+ *  1. El umbral. En lineal no vale: entre el silencio y una emision fuerte
+ *     hay cuarenta decibelios y la media lineal la manda el pico. El punto
+ *     medio EN DECIBELIOS entre el maximo y el minimo es, en lineal, la
+ *     media geometrica de los dos: sqrt(mx*mn). Asi que sale de una raiz y
+ *     no de quinientos logaritmos.
+ *
+ *  2. Las subidas, con rebote. Una anotacion suelta por encima del umbral
+ *     en mitad de un apagon es ruido, no una emision: hace falta que dos
+ *     seguidas digan lo mismo para cambiar de estado. Sin esto, una banda
+ *     con QRM cuenta subidas a docenas.
+ *
+ *  3. La MEDIANA de los huecos, no la media. Si una emision se pierde, ese
+ *     hueco mide el doble y la media se va; la mediana no se entera. Y la
+ *     firmeza sale de lo que se separan los huecos entre si: huecos todos
+ *     iguales es un ciclo, huecos dispares es casualidad.
+ */
+static void cad_calcula(void)
+{
+    uint16_t i, n = s_cad_n;
+    float mx = 0.0f, mn = 1e30f, umbral;
+    uint32_t on = 0U;
+    uint16_t hue[CAD_HUECOS];
+    uint8_t  nh = 0U;
+    uint16_t ult = 0U;
+    uint8_t  hay_ult = 0U;
+    uint8_t  est = 0U;      /* el estado con rebote */
+    uint8_t  cand = 0U, cuenta = 0U;
+
+    s_cad_r.vale = 0U;
+    s_cad_r.segundos = (uint16_t)(((uint32_t)n * CAD_MS) / 1000U);
+    if (n < (uint16_t)CAD_MIN || s_cad == 0) { return; }
+
+    for (i = 0U; i < n; i++) {
+        uint16_t k = (uint16_t)((s_cad_w + (uint16_t)CAD_N - n + i) % CAD_N);
+        float e = s_cad[k];
+        if (e < 1e-20f) { e = 1e-20f; }
+        if (e > mx) { mx = e; }
+        if (e < mn) { mn = e; }
+    }
+    /* Menos de 6 dB de recorrido es que esto no se apaga: no hay cadencia
+     * que medir. 10^(6/10) = 3,98. */
+    if (!(mx > mn * 3.98f)) { return; }
+    umbral = sqrtf(mx * mn);
+
+    for (i = 0U; i < n; i++) {
+        uint16_t k = (uint16_t)((s_cad_w + (uint16_t)CAD_N - n + i) % CAD_N);
+        uint8_t  b = (uint8_t)((s_cad[k] > umbral) ? 1U : 0U);
+
+        if (b) { on++; }
+
+        if (b == est) { cuenta = 0U; cand = est; continue; }
+        if (b != cand) { cand = b; cuenta = 1U; continue; }
+        cuenta++;
+        if (cuenta < 2U) { continue; }
+
+        est = b;
+        cuenta = 0U;
+        if (est == 1U) {                      /* una subida */
+            if (hay_ult && nh < (uint8_t)CAD_HUECOS) {
+                hue[nh++] = (uint16_t)(i - ult);
+            }
+            ult = i;
+            hay_ult = 1U;
+        }
+    }
+
+    s_cad_r.ocupa_pc = (uint8_t)((((float)on * 100.0f) / (float)n) + 0.5f);
+    if (nh < 2U) { return; }   /* con un solo hueco no hay ciclo, hay un salto */
+
+    /* La mediana, por ordenacion directa: son como mucho dieciseis. */
+    for (i = 0U; i < (uint16_t)nh; i++) {
+        uint16_t j;
+        for (j = (uint16_t)(i + 1U); j < (uint16_t)nh; j++) {
+            if (hue[j] < hue[i]) {
+                uint16_t t = hue[i]; hue[i] = hue[j]; hue[j] = t;
+            }
+        }
+    }
+    {
+        uint16_t med = hue[nh / 2U];
+        uint16_t dentro = 0U;
+        uint32_t suma = 0UL;
+
+        if (med < 8U) { return; }   /* menos de 4 s: ningun modo de estos */
+
+        /*
+         * LA MEDIANA DECIDE QUIEN VALE; LA MEDIA DE LOS QUE VALEN DA EL
+         * NUMERO - 05/10/2026.
+         *
+         * *** La radio, en 7.074: "ciclo 15,5 s ocupa 86%". El FT8 va a
+         * 15,0. ***
+         *
+         * Medio segundo de mas, que es EXACTAMENTE una anotacion: el
+         * cuaderno apunta cada 0,5 s, asi que un hueco medido solo puede
+         * valer 15,0 o 15,5, y la mediana se queda con uno de los dos.
+         *
+         * Pero los huecos no se equivocan todos en la misma direccion: uno
+         * sale largo y el siguiente corto, porque el error es donde cae el
+         * corte, no el periodo. Promediando CUATRO huecos el error se
+         * reparte y la resolucion baja de medio segundo a un octavo.
+         *
+         * Se promedian solo los que caen cerca de la mediana, que son los
+         * mismos que cuentan para la firmeza: si una emision se pierde, ese
+         * hueco mide el doble y la media se iria. La mediana elige, la
+         * media afina.
+         */
+        for (i = 0U; i < (uint16_t)nh; i++) {
+            uint16_t d = (hue[i] > med) ? (uint16_t)(hue[i] - med)
+                                        : (uint16_t)(med - hue[i]);
+            if ((uint32_t)d * 100UL <= (uint32_t)med * 15UL) {
+                dentro++;
+                suma += hue[i];
+            }
+        }
+        s_cad_r.firmeza = (uint8_t)(((uint32_t)dentro * 100UL) / nh);
+        /* x0,5 s -> decimas de segundo, con el redondeo dentro. */
+        s_cad_r.periodo_ds = (uint16_t)(((suma * 5UL) + (dentro / 2U)) / dentro);
+        s_cad_r.vale = 1U;
+    }
+}
+
+/* Para cadenas que viven en flash y no se mueven: se apunta. Sin tope. */
+static void pon(const char *t)
+{
+    if (s_nlin >= IDENT_LINEAS) { return; }
+    s_lin[s_nlin] = t;
+    s_nlin++;
+}
+
+/* Para lo que esta en una variable que va a desaparecer -el nombre con su
+ * "(?)" pegado, que se monta en el marco de escribe()-: hay que copiarlo. */
+static void pon_copia(const char *t)
+{
+    if (s_nlin >= IDENT_LINEAS) { return; }
+    (void)snprintf(s_buf[s_nlin], IDENT_LARGO, "%s", t);
+    s_lin[s_nlin] = s_buf[s_nlin];
+    s_nlin++;
+}
+
+/*
+ * 1 si TODO lo que ha cuadrado son pistas de ancho. Ver donde se usa.
+ * Con n == 0 no se llama: eso ya tiene su propia frase.
+ */
+static uint8_t solo_pistas(const uint8_t *cand, uint16_t n)
+{
+    uint16_t i;
+    for (i = 0U; i < n; i++) {
+        if (!es_pista(&k_firmas[cand[i]])) { return 0U; }
+    }
+    return 1U;
+}
+
+static void ponf(const char *fmt, int a, int b, int c)
+{
+    if (s_nlin >= IDENT_LINEAS) { return; }
+    (void)snprintf(s_buf[s_nlin], IDENT_LARGO, fmt, a, b, c);
+    s_lin[s_nlin] = s_buf[s_nlin];
+    s_nlin++;
+}
+
+static float *ram_coge(uint32_t floats)
+{
+    uint8_t *b; uint32_t cap = 0U;
+    hfdl_ram_coge();
+    b = hfdl_ram_todo(&cap);
+    if (b == 0 || cap < (floats * 4U)) { hfdl_ram_suelta(); return 0; }
+    return (float *)(void *)b;
+}
+
+/*
+ * Las ultimas separaciones medidas, para quedarse con la mediana. Ver
+ * ident_modo_poll(). Dieciseis a cuatro por segundo son cuatro segundos de
+ * memoria: bastante para comerse el desvanecimiento y poco para que la
+ * pantalla tarde en reaccionar cuando de verdad cambias de señal.
+ */
+#define IDENT_SEP_N 16U
+static uint16_t s_sep_anillo[IDENT_SEP_N];
+static uint8_t  s_sep_pon;
+static uint8_t  s_sep_hay;
+
+/* Las ultimas cuentas de señales, para la misma mediana. Ver donde se
+ * rellenan, en ident_modo_poll(). */
+static uint8_t s_nsen_anillo[IDENT_SEP_N];
+static uint8_t s_nsen_pon;
+static uint8_t s_nsen_hay;
+
+static uint8_t nsen_mediana(void)
+{
+    uint8_t t[IDENT_SEP_N];
+    uint8_t i, j, n = s_nsen_hay;
+
+    if (n == 0U) { return 0U; }
+    for (i = 0U; i < n; i++) { t[i] = s_nsen_anillo[i]; }
+    for (i = 1U; i < n; i++) {
+        uint8_t v = t[i];
+        j = i;
+        while (j > 0U && t[j - 1U] > v) { t[j] = t[j - 1U]; j--; }
+        t[j] = v;
+    }
+    return t[n / 2U];
+}
+
+static uint16_t sep_mediana(void)
+{
+    uint16_t o[IDENT_SEP_N];
+    uint8_t i, j, n = s_sep_hay;
+
+    for (i = 0U; i < n; i++) { o[i] = s_sep_anillo[i]; }
+    /* Insercion: son como mucho dieciseis. */
+    for (i = 1U; i < n; i++) {
+        uint16_t v = o[i];
+        for (j = i; j > 0U && o[j - 1U] > v; j--) { o[j] = o[j - 1U]; }
+        o[j] = v;
+    }
+    return (n == 0U) ? 0U : o[n / 2U];
+}
+
+/*
+ * ==========================================================================
+ * Y LA BANDERA Y LA VELOCIDAD, POR LO MISMO - 10/10/2026
+ * ==========================================================================
+ *
+ * El 06/10 se suavizo la SEPARACION porque "una separacion que baila es un
+ * nombre que baila". Se arreglo el valor y se dejaron crudos la bandera de
+ * "hay dos tonos" y la velocidad, que salen del `s_m = r` de mas abajo: o
+ * sea que la pantalla ensenaba, para esos dos, LO QUE DIJO LA ULTIMA
+ * VENTANA. Medio arreglo.
+ *
+ * Y cuesta las dos grabaciones de 4481 FSK que tenemos, las dos:
+ *
+ *   sim/muestras/stanag4481_fsk.mp3   837 ventanas
+ *       dos tonos en el 97 %, mediana 839 Hz
+ *       velocidad en el 91 %, mediana 74,9 Bd
+ *       ULTIMA VENTANA: sin tonos, sin velocidad
+ *       -> la radio no daba ningun nombre
+ *
+ *   sim/muestras/fsk4481_5339.mp3     377 ventanas
+ *       dos tonos en el 91 %, mediana 832 Hz
+ *       velocidad en el  1 %, mediana 73,4 Bd
+ *       ULTIMA VENTANA: tonos si, velocidad no
+ *       -> la radio decia "CW (Morse) 40 %"
+ *
+ * La fila de 4481 FSK pide 780..920 Hz de salto y 70..80 baudios. Las dos
+ * grabaciones lo cumplen EN LA MEDIANA, y las dos fallaban por la ventana
+ * que tocara ser la ultima. La radio tenia la respuesta buena nueve de cada
+ * diez veces y publicaba la decima.
+ *
+ * Y "CW (Morse)" no es un error cualquiera: es una respuesta CONCRETA Y
+ * CONFIADA. Manda al usuario a poner la radio en CW delante de una FSK.
+ *
+ * ASI QUE SE PUBLICA LO QUE PASA LA MAYOR PARTE DEL TIEMPO:
+ *
+ *   - la bandera, por mayoria de las ultimas dieciseis. Mayoria y no "al
+ *     menos una": con "al menos una" un unico golpe de ruido encenderia los
+ *     dos tonos durante cuatro segundos.
+ *   - la velocidad, por mediana de las ultimas OCHO MEDIDAS BUENAS, no de
+ *     las ultimas ocho ventanas. La diferencia importa: en 5339 solo el 1 %
+ *     de las ventanas da velocidad -son rafagas con huecos- y un anillo de
+ *     ventanas estaria casi siempre vacio. El de medidas buenas se llena en
+ *     cuatro rafagas y se queda.
+ *
+ * Y CON FECHA DE CADUCIDAD, que es lo que falta en "quedarse la ultima
+ * buena". Una velocidad de hace cinco minutos es de otra senal: si pasan
+ * IDENT_BD_SECO ventanas seguidas sin una sola medida, el anillo se vacia y
+ * se vuelve a "no lo se". Mejor no decir nada que decir lo de antes.
+ *
+ * LO QUE NO SE TOCA: la medida CRUDA que se le pasa a ident_casa() para la
+ * cuenta de senales que se turnan, unas lineas mas abajo. Ahi tiene que ser
+ * cruda a proposito -lo dice su propio comentario- porque una rafaga de
+ * tres segundos no mueve una mediana y se perderia.
+ */
+#define IDENT_BD_N     8U    /* medidas buenas que se recuerdan */
+#define IDENT_BD_MIN   3U    /* y cuantas hacen falta para publicar */
+#define IDENT_BD_SECO 240U   /* ventanas sin ninguna antes de olvidarlas */
+
+static uint8_t  s_ton_anillo[IDENT_SEP_N];
+static uint8_t  s_ton_pon;
+static uint8_t  s_ton_hay;
+static uint16_t s_ton_bajo_ult;   /* el ultimo PAR bueno, para la pantalla */
+static uint16_t s_ton_alto_ult;
+
+static uint16_t s_bd_anillo[IDENT_BD_N];
+static uint8_t  s_bd_pon;
+static uint8_t  s_bd_hay;
+static uint16_t s_bd_seco;
+
+static uint8_t ton_mayoria(void)
+{
+    uint8_t i, si = 0U;
+
+    for (i = 0U; i < s_ton_hay; i++) { if (s_ton_anillo[i]) { si++; } }
+    return (s_ton_hay != 0U && (uint16_t)si * 2U > (uint16_t)s_ton_hay) ? 1U : 0U;
+}
+
+static uint16_t bd_mediana(void)
+{
+    uint16_t o[IDENT_BD_N];
+    uint8_t i, j, n = s_bd_hay;
+
+    if (n < IDENT_BD_MIN) { return 0U; }
+    for (i = 0U; i < n; i++) { o[i] = s_bd_anillo[i]; }
+    for (i = 1U; i < n; i++) {
+        uint16_t v = o[i];
+        for (j = i; j > 0U && o[j - 1U] > v; j--) { o[j] = o[j - 1U]; }
+        o[j] = v;
+    }
+    return o[n / 2U];
+}
+
+/*
+ * CUANDO EN LA MISMA FRECUENCIA HAY MAS DE UNA COSA - 06/10/2026.
+ *
+ * Pedido por el usuario. Y tiene razon: ahi
+ * hay dos emisiones distintas turnandose, y enseñar solo una es contar la
+ * mitad.
+ *
+ * En 5339 conviven un STANAG 4481 FSK -que esta casi todo el rato- y una
+ * red ALE que solo abre la boca cuando alguien llama: sondeos de dos o
+ * tres segundos separados por minutos. La mediana de la separacion
+ * (ver abajo) arregla el BAILE del nombre, pero al arreglarlo se come
+ * justamente eso: la rafaga rara pasa a ser minoria y desaparece.
+ *
+ * Asi que se cuentan las dos cosas por separado:
+ *
+ *   - el NOMBRE de arriba sale de la medida suavizada, y es estable;
+ *   - esta cuenta mira cada ventana EN CRUDO y apunta quien gano, de modo
+ *     que una rafaga de tres segundos deja ocho o diez marcas aunque no
+ *     mueva la mediana ni un hertzio.
+ *
+ * La memoria es exponencial: al llegar a IDENT_ALT_TOPE anotaciones se
+ * parten todas por la mitad. Con ~3 ventanas por segundo, 480 son unos
+ * 160 s de ventana y unos 5 min de memoria util: suficiente para que un
+ * sondeo ALE siga contando cuando vuelve a tocar, y poco para que una
+ * señal que se fue hace un cuarto de hora siga saliendo en pantalla.
+ *
+ * Y las pistas de ancho NO cuentan. "Podria ser ALE 2G" a secas es el
+ * cajon de 1400-2200 Hz, no una identificacion; si eso valiera, cualquier
+ * ruido ancho acabaria saliendo como segunda señal.
+ */
+/*
+ * Y NO CUENTA UNA VENTANA SUELTA, SINO UNA RACHA - 06/10/2026, el mismo dia.
+ *
+ * La primera version apuntaba al ganador de cada ventana. El banco
+ * sim/ident_turnos.c, en la tirada de control -el 4481 SOLO, sin ALE ni
+ * nada mas-, saco esto:
+ *
+ *     STANAG 4481 FSK (KG-84)
+ *     y a ratos: Portadora sola (heterodino)
+ *
+ * Y no habia ninguna portadora. Es el mismo desvanecimiento selectivo de
+ * siempre: de vez en cuando uno de los dos tonos se va, la ventana se
+ * queda con una raya sola y el 57% de la potencia en +-8 Hz dispara la
+ * fila de la portadora. Una ventana aqui y otra alla, y en tres minutos
+ * se juntan las seis que hacen falta.
+ *
+ * O sea que el aviso se inventaba una segunda señal, que es peor que no
+ * darlo: manda al usuario a buscar algo que no esta.
+ *
+ * Lo que separa una emision de verdad de un hipo del desvanecimiento no es
+ * CUANTAS veces aparece, es SI SE QUEDA. Un sondeo ALE ocupa el canal dos
+ * o tres segundos seguidos -ocho o nueve ventanas-; un tono que se cae un
+ * momento ocupa una y la siguiente ya vuelve a ser lo de antes. Asi que
+ * solo cuentan las ventanas a partir de la cuarta seguida: 1,4 s pidiendo
+ * el canal. Con datos aleatorios a 75 baudios, que la fila de la portadora
+ * aguante 1,4 s son cien bits iguales de fila, y eso no pasa.
+ */
+#define IDENT_ALT_TOPE   480U   /* anotaciones antes de partir por la mitad */
+#define IDENT_ALT_RACHA    4U   /* ventanas seguidas antes de empezar a contar */
+#define IDENT_ALT_ENTRA    6U   /* marcas para empezar a salir en pantalla */
+#define IDENT_ALT_SIGUE    3U   /* y para seguir saliendo, una vez dentro */
+#define IDENT_ALT_NADIE  0xFFU
+
+static uint16_t s_alt[N_FIRMAS];
+static uint16_t s_alt_tot;
+static uint8_t  s_alt_ult = IDENT_ALT_NADIE;
+static uint8_t  s_alt_quien = IDENT_ALT_NADIE;   /* quien gana la racha de ahora */
+static uint8_t  s_alt_racha;                     /* y cuantas ventanas lleva */
+
+
+static void alt_apunta(uint8_t fila)
+{
+    uint16_t i;
+
+    if ((uint16_t)fila >= N_FIRMAS) { return; }
+    if (s_alt[fila] < 0xFFFFU) { s_alt[fila]++; }
+    s_alt_tot++;
+    if (s_alt_tot >= IDENT_ALT_TOPE) {
+        for (i = 0U; i < N_FIRMAS; i++) { s_alt[i] = (uint16_t)(s_alt[i] >> 1); }
+        s_alt_tot = (uint16_t)(s_alt_tot >> 1);
+    }
+}
+
+/* Una ventana mas para `fila`. Solo cuenta si lleva IDENT_ALT_RACHA seguidas. */
+static void alt_racha(uint8_t fila)
+{
+    if (fila == s_alt_quien) {
+        if (s_alt_racha < 0xFFU) { s_alt_racha++; }
+    } else {
+        s_alt_quien = fila;
+        s_alt_racha = 1U;
+    }
+    if (s_alt_racha >= IDENT_ALT_RACHA) { alt_apunta(fila); }
+}
+
+/*
+ * La mas vista de las que NO se estan enseñando ya. Devuelve
+ * IDENT_ALT_NADIE cuando no hay ninguna que merezca el renglon.
+ *
+ * La puerta es mas floja para la que ya estaba (IDENT_ALT_SIGUE) que para
+ * una nueva (IDENT_ALT_ENTRA): sin esa holgura, una cuenta rondando el
+ * umbral enciende y apaga el renglon cada pocos segundos, que es el mismo
+ * parpadeo que acabamos de quitarle al nombre.
+ */
+static uint8_t alt_otra(const uint8_t *cand, uint16_t n)
+{
+    uint16_t i, j, cuenta = 0U, puerta;
+    uint8_t  mejor = IDENT_ALT_NADIE;
+
+    for (i = 0U; i < N_FIRMAS; i++) {
+        uint8_t fuera = 0U;
+
+        if (es_pista(&k_firmas[i])) { continue; }
+        for (j = 0U; j < n; j++) {
+            if ((uint16_t)cand[j] == i) { fuera = 1U; }
+        }
+        if (fuera) { continue; }
+        if (s_alt[i] > cuenta) { cuenta = s_alt[i]; mejor = (uint8_t)i; }
+    }
+
+    if (mejor == IDENT_ALT_NADIE) { s_alt_ult = IDENT_ALT_NADIE; return mejor; }
+    puerta = (mejor == s_alt_ult) ? IDENT_ALT_SIGUE : IDENT_ALT_ENTRA;
+    if (cuenta < puerta) { s_alt_ult = IDENT_ALT_NADIE; return IDENT_ALT_NADIE; }
+
+    s_alt_ult = mejor;
+    return mejor;
+}
+
+void ident_modo_frec_pon(uint32_t khz) { s_khz = khz; }
+
+/* ¿El dial esta en uno de los dos canales de AIS? Ver s_khz. */
+static uint8_t ident_es_ais(void)
+{
+    return (uint8_t)((s_khz == 161975UL) || (s_khz == 162025UL));
+}
+
+uint8_t ident_modo_start(void)
+{
+    s_sep_pon = 0U;
+    s_sep_hay = 0U;
+    s_ton_pon = 0U;
+    s_ton_hay = 0U;
+    s_ton_bajo_ult = 0U;
+    s_ton_alto_ult = 0U;
+    s_bd_pon = 0U;
+    s_bd_hay = 0U;
+    s_bd_seco = 0U;
+    s_nsen_pon = 0U;
+    s_nsen_hay = 0U;
+    float *t;
+
+    if (s_activo) { return 1U; }
+    ident_modo_borra();
+    t = ram_coge(STANAG_DET_FLOATS + CAD_N);
+    if (t == 0) { return 0U; }
+    if (!stanag_det_init(t, STANAG_DET_FLOATS)) {
+        hfdl_ram_suelta();
+        return 0U;
+    }
+    /* El cuaderno de la cadencia va DETRAS del motor, en el mismo
+     * prestamo: ver su comentario. */
+    s_cad = &t[STANAG_DET_FLOATS];
+    s_cad_n = 0U; s_cad_w = 0U; s_cad_acu = 0.0f; s_cad_acu_n = 0U;
+    s_cad_desde = 0U;
+    memset(&s_cad_r, 0, sizeof s_cad_r);
+    s_medidas = 0UL;
+    memset(&s_m, 0, sizeof s_m);
+    s_activo = 1U;
+    return 1U;
+}
+
+void ident_modo_stop(void)
+{
+    if (!s_activo) { return; }
+    s_activo = 0U;          /* PRIMERO: calla a la interrupcion */
+    s_cad = 0;              /* y el cuaderno, que vive en ese prestamo */
+    hfdl_ram_suelta();
+}
+
+uint8_t ident_modo_activo(void) { return s_activo; }
+
+void ident_modo_mete(const float *audio, uint16_t n)
+{
+    if (!s_activo) { return; }
+    stanag_det_mete(audio, (uint32_t)n);
+    cad_mete(audio, n);
+}
+
+void ident_medidas(stanag_det_t *out) { if (out) { *out = s_m; } }
+void ident_cadencia(ident_cad_t *out) { if (out) { *out = s_cad_r; } }
+
+/*
+ * EL RENGLON DE ARRIBA, QUE ES EL QUE SE LEE.
+ *
+ * Si cuadra una firma, su nombre. Si cuadran varias, todas separadas por
+ * barras mientras quepan. Si no cuadra ninguna, se dice -y debajo quedan
+ * los numeros, que es con lo que se puede buscar en el catalogo-.
+ */
+static void escribe(void)
+{
+    uint8_t cand[8];
+    uint16_t n, i;
+    char fila[IDENT_LARGO];
+
+    s_nlin = 0U;
+
+    /*
+     * EL DIAL MANDA SOBRE LA MEDIDA CUANDO EL DIAL ES CONCLUYENTE.
+     *
+     * Va ANTES del "escuchando..." y antes de la tabla a proposito: en los
+     * canales de AIS no hay nada que esperar de la medida (ver s_khz), y
+     * dejar que la pantalla diga primero "escuchando..." durante medio
+     * minuto para acabar en "Podria ser HFDL" seria hacerle perder el
+     * tiempo a quien ya tiene la respuesta en la cabecera de la radio.
+     */
+    if (ident_es_ais()) {
+        pon(tr("AIS (por la frecuencia, no por la señal)",
+               "AIS (from the frequency, not from the signal)"));
+        pon(tr("14 kHz de GMSK: no caben en esta ventana",
+               "14 kHz of GMSK: does not fit this window"));
+        pon(tr("ponlo en AIS, que si lo decodifica",
+               "put it in AIS, which does decode it"));
+        /*
+         * Y SE SIGUE BAJANDO A LOS NUMEROS, no se vuelve aqui.
+         *
+         * La primera version se volvia, y dejaba la pantalla con tres
+         * renglones fijos que no cambian nunca: eso se lee como una radio
+         * parada. Los numeros de abajo son lo que se esta midiendo de
+         * verdad, y aunque no identifiquen AIS -no pueden, son un trozo de
+         * una señal cinco veces mas ancha- si dicen si entra señal, cuanto
+         * ocupa de la ventana y si hay ritmo. Taparlos seria quitar lo
+         * unico que se mueve.
+         *
+         * Lo que SI se salta es la tabla: aqui ninguna firma puede acertar,
+         * y "Podria ser HFDL" al lado de la respuesta buena solo estorba.
+         */
+    } else if (s_medidas == 0UL && !s_cad_r.vale) {
+        pon(tr("escuchando...", "listening..."));
+        if (s_cad_r.segundos > 0U) {
+            ponf(tr("llevo %d s (el WSPR pide 360)", "%d s so far (WSPR needs 360)"),
+                 (int)s_cad_r.segundos, 0, 0);
+        }
+        return;
+    } else {
+
+    n = ident_casa(&s_m, &s_cad_r, cand, 8U);
+
+    if (n == 0U) {
+        pon(tr("No se parece a nada que conozca", "It matches nothing I know"));
+    } else if (solo_pistas(cand, n)) {
+        /*
+         * CUANDO LO UNICO QUE CUADRA ES EL ANCHO, DECIRLO ANTES QUE EL
+         * NOMBRE - 05/10/2026.
+         *
+         * Esto salia como cualquier otra respuesta, con su "(?)" chiquito
+         * al lado, y el "(?)" no pesa nada al lado de un nombre de
+         * protocolo. Dos ejemplos del mismo dia, los dos falsos:
+         *
+         *   FUG en 13.418, FSK de 850 Hz y 50 baudios, dos tonos limpios
+         *   en pantalla          ->  "SSTV o fax meteorologico (?)"
+         *
+         *   una joroba de ruido sin tonos, sin ritmo y sin ciclo
+         *                        ->  "Podria ser ALE 2G (?)"
+         *
+         * El primero era una fila que faltaba y ya esta puesta. El segundo
+         * no tiene arreglo por tabla: no habia NADA que medir, y de un
+         * ancho a secas no sale un protocolo. Lo honrado es decir primero
+         * que no se ha podido medir nada, y despues en que cajon de
+         * anchura ha caido - en ese orden, porque el orden es el que
+         * decide que se queda en la cabeza de quien lee.
+         */
+        /*
+         * Y ESTE RENGLON NO PUEDE DECIR "NI TONOS" CUANDO HAY TONOS -
+         * 06/10/2026.
+         *
+         * Pedido por el usuario.
+         *
+         * Se reia con razon: la cabecera decia que no se habia podido medir
+         * nada y tres renglones mas abajo estaban los numeros medidos. Una
+         * pantalla que se contradice consigo misma es peor que una que no
+         * dice nada, porque la de abajo era verdad.
+         *
+         * Lo que pasaba de verdad no es que no hubiera medidas, es que
+         * ninguna FIRMA cuadraba con ellas. Son dos cosas distintas y para
+         * quien mira son muy distintas: una dice "esta señal no tiene forma"
+         * y la otra dice "tiene forma, pero no reconozco cual". La
+         * segunda invita a apuntar los numeros; la primera invita a cambiar
+         * de frecuencia.
+         */
+        if (s_m.hay_tonos || s_m.simb_x10 != 0U || s_cad_r.vale) {
+            pon(tr("No cuadra con ninguna firma",
+                   "Matches no signature"));
+            pon(tr("los numeros estan medidos, la tabla no los tiene",
+                   "the numbers are measured, the table lacks them"));
+        } else {
+            pon(tr("Sin estructura medible", "No measurable structure"));
+            pon(tr("ni tonos, ni ritmo, ni ciclo", "no tones, no rhythm, no cycle"));
+        }
+        (void)snprintf(fila, IDENT_LARGO, tr("por el ancho: %s", "by bandwidth: %s"),
+                       ident_nombre(&k_firmas[cand[0]]));
+        pon_copia(fila);
+        pon(ident_nota(&k_firmas[cand[0]]));
+    } else {
+        for (i = 0U; i < n && s_nlin < 3U; i++) {
+            const ident_firma_t *f = &k_firmas[cand[i]];
+            /*
+             * Y CON SU ENCAJE AL LADO - 08/10/2026. Ver ident_encaje() en
+             * ident.h: no es una probabilidad, es lo lejos que esta la
+             * señal de dejar de cuadrar con esta fila. Va pegado al nombre
+             * porque es parte de la respuesta: "STANAG 4415" y "STANAG
+             * 4415 32%" no dicen lo mismo, y hasta hoy la pantalla decia
+             * las dos cosas igual.
+             */
+            (void)snprintf(fila, IDENT_LARGO, "%s %u%%%s",
+                           ident_nombre(f),
+                           (unsigned)ident_encaje(&s_m, &s_cad_r, cand[i], n),
+                           f->probada ? "" : " (?)");
+            pon_copia(fila);
+        }
+        /* La nota de la PRIMERA, que es la que mas probabilidades tiene de
+         * ser la buena: las demas son el aviso de que no esta cerrado. */
+        pon(ident_nota(&k_firmas[cand[0]]));
+        if (n > 1U) {
+            pon(tr("(varias cuadran: la señal no las separa)",
+                "(several match: the signal does not tell them apart)"));
+        }
+        /*
+         * Y si por esta frecuencia pasa algo MAS de vez en cuando, decirlo.
+         * Va aqui, pegado al nombre, y no abajo con los numeros: es parte
+         * de la respuesta, no de la medida.
+         */
+        {
+            uint8_t otra = alt_otra(cand, n);
+            if (otra != IDENT_ALT_NADIE) {
+                (void)snprintf(fila, IDENT_LARGO, tr("y a ratos: %s", "and now and then: %s"),
+                               ident_nombre(&k_firmas[otra]));
+                pon_copia(fila);
+            }
+        }
+    }
+    }   /* fin del "else" del dial: ver ident_es_ais() arriba */
+
+    /*
+     * SI HAY MAS DE UNA, ESO VA PRIMERO - 10/10/2026.
+     *
+     * Pedido por el usuario.
+     *
+     * Y la radio le contesto "APRS 70%" sobre tres RTTY, porque el detector
+     * juntaba el tono de arriba de una con el de abajo de otra (ver
+     * n_senales en stanag_det.h). Eso ya no pasa, pero el caso sigue
+     * existiendo: con tres estaciones encima, lo unico honrado que se puede
+     * decir es CUANTAS HAY y que estreche el filtro.
+     *
+     * Va ARRIBA del todo de los numeros y no al final: si hay tres señales,
+     * todo lo que venga debajo esta medido sobre una de ellas, y el que lo
+     * lee tiene que saberlo antes de creerselo.
+     */
+    if (s_m.n_senales >= 2U) {
+        ponf(tr("*** %d señales a la vez: estrecha el filtro ***",
+                "*** %d signals at once: narrow the filter ***"),
+             (int)s_m.n_senales, 0, 0);
+    }
+
+    /* Y siempre los numeros, cuadre o no: son lo unico que no opina. */
+    ponf(tr("ancho %d  centro %d  pico %d%%", "width %d  centre %d  peak %d%%"),
+         (int)s_m.ancho10_hz, (int)s_m.centro_hz, (int)s_m.pico_pc);
+    if (s_m.hay_tonos) {
+        ponf(tr("tonos %d y %d  salto %d Hz", "tones %d and %d  shift %d Hz"),
+             (int)s_m.tono_bajo, (int)s_m.tono_alto, (int)s_m.sep_hz);
+    } else {
+        pon(tr("un solo tono o fase: no es FSK de dos",
+            "one tone only, or phase: not two-tone FSK"));
+    }
+    /*
+     * "activo" y no "ciclo": en la pantalla de la radio salia "ciclo 5%" en
+     * este renglon y "ciclo 15,5 s" dos mas abajo, y son dos cosas que no
+     * tienen nada que ver. Esta mide, dentro de una ventana de 341 ms, que
+     * parte del tiempo hay señal por encima del ruido; la otra, cada cuanto
+     * se enciende la banda entera. Dos medidas distintas con el mismo
+     * nombre son peor que una sin nombre.
+     */
+    if (s_m.simb_x10 && !s_m.hay_tonos) {
+        ponf(tr("simbolo %d,%d Bd  ~%d tonos", "symbol %d.%d Bd  ~%d tones"),
+             (int)(s_m.simb_x10 / 10U), (int)(s_m.simb_x10 % 10U),
+             (int)s_m.tonos);
+    }
+    ponf(tr("%d,%d Bd   activo %d%%", "%d.%d Bd   active %d%%"),
+         (int)(s_m.baudios_x10 / 10U), (int)(s_m.baudios_x10 % 10U),
+         (int)s_m.ciclo_pc);
+    if (s_m.vale) {
+        ponf(tr("trama %d,%02d ms  calidad %d%%", "frame %d.%02d ms  quality %d%%"),
+             (int)(s_m.periodo_us / 100U), (int)(s_m.periodo_us % 100U),
+             (int)s_m.calidad);
+    } else {
+        pon(tr("sin trama que se repita", "no repeating frame"));
+    }
+    /*
+     * Y la cadencia, que es la medida LENTA: cada cuanto se enciende y se
+     * apaga toda la banda. Siempre sale el tiempo que lleva escuchando,
+     * tambien cuando aun no hay ciclo, porque cuatro minutos mirando una
+     * pantalla que no dice nada se parecen mucho a una radio rota.
+     */
+    if (s_cad_r.vale) {
+        ponf(tr("ciclo %d,%d s  ocupa %d%%", "cycle %d.%d s  takes %d%%"),
+             (int)(s_cad_r.periodo_ds / 10U), (int)(s_cad_r.periodo_ds % 10U),
+             (int)s_cad_r.ocupa_pc);
+    } else {
+        ponf(tr("sin ciclo (llevo %d s; WSPR pide 360)",
+                "no cycle yet (%d s so far; WSPR needs 360)"),
+             (int)s_cad_r.segundos, 0, 0);
+    }
+}
+
+void ident_modo_poll(void)
+{
+    stanag_det_t r;
+    uint8_t hay_nuevo = 0U;
+
+    if (!s_activo) { return; }
+
+    /*
+     * La cadencia, cada ocho anotaciones -cuatro segundos-. No en cada
+     * vuelta: son 512 logaritmos y una autocorrelacion de 256 retardos, y
+     * eso cuatro veces por segundo seria tirar el bucle principal por una
+     * medida que se mueve cada minuto.
+     */
+    if (s_cad_desde >= 8U) {
+        s_cad_desde = 0U;
+        cad_calcula();
+        hay_nuevo = 1U;
+    }
+
+    if (stanag_det_paso(&r)) {
+        s_m = r;
+        s_medidas++;
+
+        /* La bandera de los dos tonos, por mayoria; y el PAR que se ensena,
+         * el ultimo que fue bueno de verdad -si no, con la bandera
+         * encendida por mayoria y la ultima ventana sin tonos, la pantalla
+         * pondria "0 y 0 Hz"-. Ver el comentario de ton_mayoria(). */
+        s_ton_anillo[s_ton_pon] = r.hay_tonos ? 1U : 0U;
+        s_ton_pon = (uint8_t)((s_ton_pon + 1U) % IDENT_SEP_N);
+        if (s_ton_hay < IDENT_SEP_N) { s_ton_hay++; }
+        if (r.hay_tonos) {
+            s_ton_bajo_ult = r.tono_bajo;
+            s_ton_alto_ult = r.tono_alto;
+        }
+        s_m.hay_tonos = ton_mayoria();
+        if (s_m.hay_tonos) {
+            s_m.tono_bajo = s_ton_bajo_ult;
+            s_m.tono_alto = s_ton_alto_ult;
+        }
+
+        /* Y la velocidad, por mediana de las ultimas medidas BUENAS, con
+         * fecha de caducidad. Ver IDENT_BD_SECO. */
+        if (r.baudios_x10 != 0U) {
+            s_bd_anillo[s_bd_pon] = r.baudios_x10;
+            s_bd_pon = (uint8_t)((s_bd_pon + 1U) % IDENT_BD_N);
+            if (s_bd_hay < IDENT_BD_N) { s_bd_hay++; }
+            s_bd_seco = 0U;
+        } else if (s_bd_hay != 0U) {
+            s_bd_seco++;
+            if (s_bd_seco >= IDENT_BD_SECO) {
+                s_bd_hay = 0U; s_bd_pon = 0U; s_bd_seco = 0U;
+            }
+        }
+        s_m.baudios_x10 = bd_mediana();
+        /*
+         * LA SEPARACION QUE SE USA ES LA MEDIANA, NO LA ULTIMA - 06/10/2026.
+         *
+         * Pedido por el usuario.
+         *
+         * ident_casa() busca la fila por la separacion entre tonos, asi que
+         * una separacion que baila es un NOMBRE que baila. Y baila por algo
+         * real: con desvanecimiento selectivo, en algunas ventanas el tono
+         * flojo se va del todo y el detector se queda con otra raya.
+         *
+         * Medido sobre la grabacion de 5339 (342 ventanas con dos tonos):
+         *
+         *     800-899 Hz ... 236     600-699 ... 26
+         *     500-599 ......  61     700-799 ...  8
+         *     400-499 ......  10     100-199 ...  1
+         *
+         * La buena es la mayoritaria -el 71 %- pero una de cada tres
+         * ventanas dice otra cosa, y la pantalla ensenaba la ULTIMA. De ahi
+         * el baile.
+         *
+         * La mediana de las ultimas dieciseis se come las ventanas malas
+         * mientras sean minoria, que es justo lo que son. La MEDIANA y no la
+         * media: con la media, una ventana que dice 124 Hz arrastra el
+         * numero hacia abajo; con la mediana, no cuenta mas que las demas.
+         */
+        if (r.hay_tonos && r.sep_hz > 0U) {
+            s_sep_anillo[s_sep_pon] = r.sep_hz;
+            s_sep_pon = (uint8_t)((s_sep_pon + 1U) % IDENT_SEP_N);
+            if (s_sep_hay < IDENT_SEP_N) { s_sep_hay++; }
+            s_m.sep_hz = sep_mediana();
+        }
+        /*
+         * Y CUANTAS SEÑALES HAY, por la misma mediana y por la misma razon:
+         * con desvanecimiento, en una ventana suelta se cae un tono y la
+         * cuenta baja. Lo que se enseña tiene que ser lo que pasa la mayor
+         * parte del tiempo, no lo que paso en la ultima ventana.
+         */
+        if (r.n_senales > 0U) {
+            s_nsen_anillo[s_nsen_pon] = r.n_senales;
+            s_nsen_pon = (uint8_t)((s_nsen_pon + 1U) % IDENT_SEP_N);
+            if (s_nsen_hay < IDENT_SEP_N) { s_nsen_hay++; }
+            s_m.n_senales = nsen_mediana();
+        }
+        /*
+         * Y lo que dice ESTA ventana, sin suavizar, para la cuenta de las
+         * señales que se turnan. Tiene que ser la medida CRUDA: con la
+         * mediana, una rafaga de tres segundos no mueve nada y no se
+         * enteraria nadie. Ver alt_apunta().
+         */
+        {
+            uint8_t  c[8];
+            uint16_t nc = ident_casa(&r, &s_cad_r, c, 8U);
+            if (nc > 0U && !solo_pistas(c, nc)) { alt_racha(c[0]); }
+            else { s_alt_quien = IDENT_ALT_NADIE; s_alt_racha = 0U; }
+        }
+        hay_nuevo = 1U;
+    }
+
+    if (hay_nuevo) { escribe(); }
+}
+
+uint8_t     ident_modo_lineas(void) { return s_nlin; }
+
+const char *ident_modo_linea(uint8_t i)
+{
+    if (i >= IDENT_LINEAS) { return ""; }
+    return s_lin[i] ? s_lin[i] : "";
+}
+
+void ident_modo_borra(void)
+{
+    uint8_t i;
+    for (i = 0U; i < IDENT_LINEAS; i++) { s_lin[i] = ""; s_buf[i][0] = '\0'; }
+    s_nlin = 0U;
+    s_medidas = 0UL;
+    memset(s_alt, 0, sizeof s_alt);
+    s_alt_tot = 0U;
+    s_alt_ult = IDENT_ALT_NADIE;
+    s_alt_quien = IDENT_ALT_NADIE;
+    s_alt_racha = 0U;
+    memset(&s_m, 0, sizeof s_m);
+    memset(&s_cad_r, 0, sizeof s_cad_r);
+    s_cad_n = 0U; s_cad_w = 0U; s_cad_acu = 0.0f; s_cad_acu_n = 0U;
+    s_cad_desde = 0U;
+}

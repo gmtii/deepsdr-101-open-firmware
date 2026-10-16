@@ -1,0 +1,238 @@
+#include "nb.h"
+
+/*
+ * Ver nb.h para que hace esto y por que va donde va. Aqui esta el como.
+ *
+ * El bucle es, por bloque:
+ *   1. magnitud de cada muestra, |I|+|Q| (ver NOTA L1 abajo)
+ *   2. marcar las que pasan de umbral = suelo * K
+ *   3. ensanchar cada marca NB_GUARDA muestras a cada lado
+ *   4. rellenar cada tramo marcado interpolando entre los bordes buenos
+ *   5. actualizar el suelo SOLO con las muestras no marcadas
+ *
+ * NOTA L1: |I|+|Q| en vez de sqrt(I*I+Q*Q). Es la aproximacion de
+ * "city block" y se pasa hasta un 41% (cuando I==Q) y se queda corta 0%
+ * (cuando uno de los dos es cero). Da igual: aqui no se mide nada, solo se
+ * compara contra un umbral que se deduce del MISMO estimador, asi que el
+ * sesgo se cancela en la division. Y ahorra una raiz por muestra a 96 kHz
+ * dentro de una interrupcion, que no es poco.
+ */
+
+#define NB_GUARDA        3U     /* muestras borradas a cada lado del pico */
+#define NB_TOPE_BORRADO  64U    /* si hay que borrar mas de esto, no se borra nada */
+#define NB_SUELO_ALFA    0.005f /* ~0,5 s de constante de tiempo a 2,67 ms/bloque */
+#define NB_SUELO_MIN     1.0f   /* evita dividir por cero con la entrada en silencio */
+
+/* Umbrales por nivel, en veces el suelo de ruido. Medidos con sim/nbtest.c,
+ * no elegidos a ojo - ver la tabla que imprime ese banco. */
+static const float k_umbral[4] = { 0.0f, 8.0f, 5.0f, 3.0f };
+
+static uint8_t s_nivel = 0U;
+static float   s_suelo = 0.0f;
+static uint8_t s_suelo_listo = 0U;
+
+/* Ultima muestra buena del bloque anterior, para poder interpolar un tramo
+ * que empiece en la muestra 0: sin esto habria que dejarlo tal cual, y un
+ * pulso que caiga justo en el borde del bloque es el caso normal, no el
+ * raro -los bloques no saben nada de cuando llegan los pulsos-. */
+static float s_ult_i = 0.0f;
+static float s_ult_q = 0.0f;
+
+static float mag_l1(float i, float q)
+{
+    float ai = (i < 0.0f) ? -i : i;
+    float aq = (q < 0.0f) ? -q : q;
+    return ai + aq;
+}
+
+void nb_set_nivel(uint8_t nivel)
+{
+    uint8_t antes = s_nivel;
+
+    s_nivel = (nivel <= 3U) ? nivel : 0U;
+
+    /*
+     * AL ENCENDERLO, EL SUELO SE MIDE DE NUEVO - 06/10/2026.
+     *
+     * Con el nivel a cero, nb_proceso() vuelve antes de actualizar el suelo
+     * (ver su propio return), pero s_suelo_listo se queda a 1 de la ultima
+     * vez. Al volver a encender el supresor desde el menu, el umbral salia
+     * de un suelo medido en otras condiciones de señal y de ganancia: o
+     * demasiado alto -y el NB no cazaba nada- o demasiado bajo, y entonces
+     * el freno saltaba en cada bloque y el suelo tardaba medio segundo en
+     * ponerse al dia (NB_SUELO_ALFA a 375 bloques por segundo).
+     *
+     * apply_demod_mode() ya llamaba a nb_reset() por esta misma razon, y lo
+     * explica bien. Lo que faltaba era aplicar el mismo criterio al
+     * encendido manual, que es el que hace el usuario.
+     */
+    if ((antes == 0U) && (s_nivel != 0U)) {
+        nb_reset();
+    }
+}
+
+uint8_t nb_get_nivel(void)
+{
+    return s_nivel;
+}
+
+void nb_reset(void)
+{
+    s_suelo = 0.0f;
+    s_suelo_listo = 0U;
+    s_ult_i = 0.0f;
+    s_ult_q = 0.0f;
+}
+
+uint32_t nb_process(float *i_buf, float *q_buf, uint32_t n)
+{
+    static float   mag[NB_MAX_BLOQUE];
+    static uint8_t marca[NB_MAX_BLOQUE];
+    float    umbral, suma;
+    uint32_t k, j, marcadas = 0U, buenas = 0U;
+    float    suma_malas = 0.0f;  /* lo que se lleva lo marcado, para restar */
+
+    if (s_nivel == 0U || n == 0U || n > NB_MAX_BLOQUE) { return 0U; }
+
+    /*
+     * 1. magnitudes. Y de paso se limpia marca[], que antes era una pasada
+     * entera para si sola. Ver el comentario de LAS CINCO PASADAS, abajo.
+     */
+    suma = 0.0f;
+    for (k = 0U; k < n; k++) {
+        mag[k] = mag_l1(i_buf[k], q_buf[k]);
+        suma += mag[k];
+        marca[k] = 0U;
+    }
+
+    /* Primer bloque tras un reset: el suelo se siembra con la media de este
+     * bloque en vez de arrancar de cero. Arrancando de cero, el umbral sale
+     * ridiculo y el primer bloque se borra entero. */
+    if (!s_suelo_listo) {
+        s_suelo = suma / (float)n;
+        if (s_suelo < NB_SUELO_MIN) { s_suelo = NB_SUELO_MIN; }
+        s_suelo_listo = 1U;
+    }
+
+    umbral = s_suelo * k_umbral[s_nivel];
+
+    /*
+     * ======================================================================
+     * LAS CINCO PASADAS - 10/10/2026
+     * ======================================================================
+     *
+     * Esto recorria el bloque CINCO veces: magnitudes, limpiar marca[],
+     * marcar y ensanchar, contar las marcadas, y al final sumar las buenas.
+     * Y las cuatro ultimas no hacian falta por separado.
+     *
+     *   - limpiar marca[] se hace en la pasada de las magnitudes;
+     *   - contar se hace al marcar, con el truco de contar solo cuando una
+     *     marca pasa de 0 a 1 (al ensanchar, los tramos se solapan, y
+     *     sumar a ciegas contaria de mas);
+     *   - y la suma de las buenas no hace falta: ya se tiene la suma de
+     *     TODAS de la primera pasada, asi que basta ir apuntando la de las
+     *     marcadas y restar.
+     *
+     * Y el ensanchado ya no reescribe lo que ya estaba escrito: con ruido
+     * de pulsos seguido, los entornos de muestras consecutivas se solapan
+     * casi del todo y se estaban pintando las mismas posiciones una y otra
+     * vez. Como k solo crece, todo lo que esta por debajo de `ultimo` ya
+     * esta marcado.
+     *
+     * LA RESTA NO DA EL MISMO BIT QUE LA SUMA, y se dice: sumar las buenas
+     * aparte o restar las marcadas del total son la misma cuenta en los
+     * reales y no en coma flotante. La diferencia es del orden del ultimo
+     * bit, y lo que alimenta -el suelo, con una EMA de alfa pequeña- no
+     * distingue eso ni de lejos. Medido contra la version de antes: ver el
+     * banco.
+     */
+    {
+        uint32_t ultimo = 0U;    /* primera posicion AUN sin marcar */
+
+        for (k = 0U; k < n; k++) {
+            if (mag[k] > umbral) {
+                uint32_t d = (k > NB_GUARDA) ? (k - NB_GUARDA) : 0U;
+                uint32_t h = k + NB_GUARDA;
+
+                if (h >= n) { h = n - 1U; }
+                if (d < ultimo) { d = ultimo; }
+                for (j = d; j <= h; j++) {
+                    marca[j] = 1U;
+                    marcadas++;
+                    suma_malas += mag[j];
+                }
+                if (h + 1U > ultimo) { ultimo = h + 1U; }
+            }
+        }
+    }
+
+    /*
+     * FRENO. Si hay que borrar mas de NB_TOPE_BORRADO muestras, esto NO es
+     * ruido de pulsos: es una señal fuerte, o una ráfaga larga, o el suelo
+     * se ha quedado desfasado. Borrar un cuarto del bloque se oiria mucho
+     * peor que el ruido que se pretende quitar -la señal buena saldria
+     * troceada-, asi que en ese caso se deja el bloque intacto y se deja que
+     * el suelo se ponga al dia por su cuenta. Sin este freno, una portadora
+     * fuerte al sintonizarla se pica a si misma.
+     */
+    if (marcadas > NB_TOPE_BORRADO) {
+        float media = suma / (float)n;
+        s_suelo += NB_SUELO_ALFA * (media - s_suelo);
+        if (s_suelo < NB_SUELO_MIN) { s_suelo = NB_SUELO_MIN; }
+        s_ult_i = i_buf[n - 1U];
+        s_ult_q = q_buf[n - 1U];
+        return 0U;
+    }
+
+    /* 4. rellenar los tramos marcados interpolando entre los bordes buenos.
+     * Interpolar y no poner a cero: un hueco a cero es un escalon, y un
+     * escalon es otro pulso -mas pequeño, pero pulso-, o sea que el blanker
+     * se fabricaria su propio chasquido. */
+    k = 0U;
+    while (k < n) {
+        uint32_t ini, fin;
+        float i0, q0, i1, q1, paso_i, paso_q;
+
+        if (!marca[k]) { k++; continue; }
+
+        ini = k;
+        fin = k;
+        while (fin + 1U < n && marca[fin + 1U]) { fin++; }
+
+        /* Borde de la izquierda: la muestra buena anterior, o la ultima del
+         * bloque de antes si el tramo empieza en 0. */
+        if (ini > 0U) { i0 = i_buf[ini - 1U]; q0 = q_buf[ini - 1U]; }
+        else          { i0 = s_ult_i;         q0 = s_ult_q;         }
+
+        /* Borde de la derecha: la siguiente buena, o -si el tramo llega al
+         * final del bloque- se prolonga el valor de la izquierda, que es lo
+         * unico honrado sin ver el bloque siguiente. */
+        if (fin + 1U < n) { i1 = i_buf[fin + 1U]; q1 = q_buf[fin + 1U]; }
+        else              { i1 = i0;              q1 = q0;              }
+
+        paso_i = (i1 - i0) / (float)(fin - ini + 2U);
+        paso_q = (q1 - q0) / (float)(fin - ini + 2U);
+        for (j = ini; j <= fin; j++) {
+            float t = (float)(j - ini + 1U);
+            i_buf[j] = i0 + paso_i * t;
+            q_buf[j] = q0 + paso_q * t;
+        }
+        k = fin + 1U;
+    }
+
+    /* 5. el suelo se actualiza SOLO con lo que no se ha borrado. Si se
+     * actualizara con todo, cada pulso subiria el suelo, el umbral subiria
+     * detras, y el blanker se iria apagando solo justo cuando mas falta
+     * hace: cuanto peor el ruido, menos lo quitaria. */
+    suma -= suma_malas;      /* la de las buenas, por resta. Ver arriba. */
+    buenas = n - marcadas;
+    if (buenas > 0U) {
+        float media = suma / (float)buenas;
+        s_suelo += NB_SUELO_ALFA * (media - s_suelo);
+        if (s_suelo < NB_SUELO_MIN) { s_suelo = NB_SUELO_MIN; }
+    }
+
+    s_ult_i = i_buf[n - 1U];
+    s_ult_q = q_buf[n - 1U];
+    return marcadas;
+}

@@ -1,0 +1,94 @@
+# Lo que sale de compilar. Ver "Como se entrega" en el cuaderno de taller: los que
+# SI van al repositorio son update.bin, customboot.bin y BD.BIN, porque son
+# los que se copian al disco de la radio y no todo el mundo tiene montado un
+# arm-none-eabi-gcc.
+build/
+build_470/
+*.o
+*.d
+*.elf
+*.su
+boot/*.elf
+boot/*.map
+
+# El simulador escribe aqui sus PNG y sus ejecutables.
+out/
+
+# Lo que deja el sistema operativo por su cuenta.
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Lo que deja el editor.
+*.swp
+*~
+.vscode/
+.idea/
+
+# TUS AJUSTES, NO LOS DE NADIE MAS. CONFIG.CSV lleva dentro el QTH, el huso
+# y todo lo que hayas tocado en la radio. Se queda en la carpeta -hace falta
+# ahi- pero no se publica.
+CONFIG.CSV
+
+# Material de trabajo que vive en la carpeta y no es el proyecto.
+# (tools/publicar.ps1 movia casi todo esto a _archivo\; ese guion ya no existe.)
+_archivo/
+cabecera_ft8.png
+mapa_indicativos.png
+mockups_mapa/
+screens/
+rescate/
+
+# Cache de Python: lo genera el interprete solo.
+__pycache__/
+*.pyc
+
+# EL SIMULADOR, lo que de el no se publica.
+#
+# Pedido por el usuario el 13/10/2026: ni las muestras ni vendor.
+#
+#   out/       lo que escribe el simulador al correr: PNG y ejecutables.
+#   muestras/  veinte grabaciones de aire. Parte no son nuestras: se las
+#              paso gente al usuario o salen de un WebSDR.
+#   vendor/    gfx.c y spectrum.c del firmware ORIGINAL, guardados para
+#              comparar el dibujado nuevo contra el viejo. Es codigo del
+#              fabricante y no hay licencia que invocar.
+#
+# CORREGIDO EL 16/10/2026. Aqui ponia: "Ninguna de las tres hace falta para
+# make comprueba: esa tanda da sus 154 TODO CORRECTO sin ellas. Medido."
+# Medido otra vez hoy, moviendo las carpetas de sitio y lanzando la tanda:
+# con muestras/ era cierto; con vendor/ NO. La tanda moria en el primero de
+# los veinte objetivos que lo usan.
+#
+# Ya no: esos veinte se saltan solos cuando vendor/ no esta (ver el final de
+# local.mk y la linea "comprueba:" de Makefile). Medido en las dos
+# direcciones:
+#
+#   con vendor/    175 "TODO CORRECTO", exit 0
+#   sin vendor/    158 "TODO CORRECTO", exit 0   <- lo que ve quien clona
+#
+# Y los bancos que las piden por su nombre siguen fallando diciendo cual
+# falta y por que.
+deepsdr-ui/out/
+deepsdr-ui/sim/muestras/
+deepsdr-ui/vendor/
+
+# Y sim/aire/, que es LO MISMO QUE muestras/ y se escapo - 16/10/2026.
+#
+# muestras/ se saco el 13/10 a peticion del usuario.
+# sim/aire/ se creo despues, con la misma clase de material (grabaciones
+# de aire que paso el usuario, ver sim/hfdl_aire.c) y nadie
+# actualizo esta lista. Son siete .wav y 13,8 MB: el 27 % del repositorio
+# entero en un proyecto de firmware. La regla ya estaba escrita; lo que
+# faltaba era aplicarla.
+deepsdr-ui/sim/aire/
+
+# Las dos listas de emisoras viven en tools/datos/, con su LEEME que dice
+# de donde sale cada una. El simulador las lee de ahi (ver LISTAS_DIR en
+# deepsdr-ui/local.mk); si alguien deja una copia local, no se sube.
+deepsdr-ui/datos/eibi.txt
+deepsdr-ui/datos/aoki.txt
+
+# El puntero al espejo de trabajo; no es del proyecto.
+.repo
+out/mapas_tmp/
