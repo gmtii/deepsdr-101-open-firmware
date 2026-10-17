@@ -14,7 +14,8 @@ a spectrum_set_palette(). Desde ese dia el arranque hacia esto:
     1. leer CONFIG.CSV   -> poner TURBO        (lo que el usuario guardo)
     2. aplicar el tema   -> poner SMOKE        (lo que el tema propone)
 
-y el usuario veia "la configuracion se ignora". No se ignoraba: se leia y se
+y el usuario veia una configuracion que se ignoraba. No se ignoraba: se leia
+y se
 machacaba. Nadie lo vio porque el comentario que lo autorizaba seguia ahi,
 diciendo que no habia peligro, dos semanas despues de que lo hubiera.
 
@@ -62,7 +63,7 @@ def main(raiz):
         print("  TODO CORRECTO")
         return 0
     for f in fallos:
-        print("    *** MAL Pedido por el usuario. %d FALLOS ***" % len(fallos))
+        print("    *** MAL: %d FALLOS ***" % len(fallos))
     return 1
 
 if __name__ == "__main__":

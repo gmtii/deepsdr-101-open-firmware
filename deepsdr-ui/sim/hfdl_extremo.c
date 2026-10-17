@@ -854,8 +854,8 @@ int main(void)
                 /*
                  * Con ruido puro lo que NO puede pasar es que algo llegue
                  * al CRC: cada una de esas deja al receptor sordo entre
-                 * 1,2 y 2,8 segundos, y esa sordera es lo que el usuario ve
-                 * como "escucho tramas y no suben las lineas".
+                 * 1,2 y 2,8 segundos, y esa sordera es lo que se ve desde
+                 * fuera como tramas que se oyen y renglones que no suben.
                  */
                 if ((hfdl_modo_total() - tot_antes) != 0u) {
                     printf("    FALLO: %u enganches de RUIDO han llegado al CRC\n",

@@ -349,8 +349,8 @@ int main(void)
     /*
      * LA PRUEBA A/B, QUE LA HACE LA RADIO.
      *
-     * *** Despues de tres mensajes pidiendole numeros de la pantalla: "eres
-     * un coñazo". ***
+     * *** Despues de tres mensajes pidiendole numeros de la pantalla, y
+     * con razon. ***
      *
      * Se le dan espectros FABRICADOS que cambian segun el corrector este
      * encendido o apagado -que es lo que pasa en la radio, porque el espectro

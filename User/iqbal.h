@@ -137,7 +137,7 @@ int16_t iqbal_espejo_bin(void);  /* a cuantos bins del centro estaba el pico */
  * LA PRUEBA A/B, QUE LA HACE LA RADIO Y NO EL DUEÑO - 07/10/2026.
  *
  * *** Tres mensajes seguidos pidiendole que apunte numeros de una pantalla,
- * y con razon: "eres un coñazo". ***
+ * y con razon: el metodo era un engorro. ***
  *
  * Y la culpa es del metodo, no suya. La pregunta era si los 14 dB que sale en
  * el espectro son espejo de verdad o una emisora que casualmente cae en el

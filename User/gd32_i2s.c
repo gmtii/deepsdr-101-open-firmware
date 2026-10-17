@@ -468,7 +468,7 @@ void gd32_i2s_dma_start_silence(void)
      * edge, which is exactly what SPI_STAT_FERR flags: real hardware
      * logs showed it set on essentially every sdr_tick check for the
      * entire duration of a WFM session, and never once at 48kHz -
-     * matching the project owner's "ruido de fondo" report (a starved
+     * matching the project owner's background-noise report (a starved
      * TX register underneath otherwise-correct audio, not a gain/
      * volume issue - the RX side, which always won the arbitration,
      * stayed clean the whole time, which is also why the spectrum
@@ -499,8 +499,8 @@ void gd32_i2s_dma_start_silence(void)
 
 /*
  * *** BUG FOUND AND FIXED 04/08/2026 - THIS is almost certainly what
- * the project owner heard as a high-pitched hiss, a "repeating
- * pattern", and general slowdown right after the 48kHz migration ***
+ * the project owner heard as a high-pitched hiss, a repeating
+ * pattern, and general slowdown right after the 48kHz migration ***
  *
  * This was previously a HAND-COPIED literal `512U`, with a comment
  * literally saying "MUST equal SDR_RX_BLOCK_SAMPLES" - a manually
@@ -604,7 +604,7 @@ static void stream_arm_dma(void)
     dma_init_struct.number              = s_stream_total_words;
     /* *** 05/08/2026 fix *** - was DMA_PRIORITY_HIGH, strictly below
      * sdr_rx.c's RX channel (DMA0/CH3, ULTRA_HIGH). THIS is the
-     * instance that actually matters for the WFM "ruido de fondo"
+     * instance that actually matters for the WFM background-noise
      * report - stream_arm_dma() is what's live during real audio
      * playback (the silence-keeper/test-tone instances only run
      * before/outside a real stream). See gd32_i2s_dma_start_silence()'s
@@ -740,7 +740,7 @@ void gd32_i2s_stream_write_half(const int16_t *stereo_frames)
      * something important: the diagnostic prints themselves were
      * causing the NEXT symptom being chased. Once rx_lock's retry
      * fix guaranteed a clean raw I/Q capture, the project owner still
-     * heard WFM audio as "muy distorsionado/entrecortado" - and the
+     * heard WFM audio as badly distorted and broken up - and the
      * log showed "SAME HALF WRITTEN TWICE" firing in tight clusters
      * immediately after every logged/heartbeat block, far too
      * regularly (every exact multiple of the heartbeat interval) to

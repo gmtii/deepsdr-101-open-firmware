@@ -258,10 +258,9 @@ static float *ram_coge(uint32_t n_floats)
  *     boton de forma en "Auto"  -> detector, para identificar
  *     boton en "S4285"          -> demodulador, para leer
  *
- * Y no es un apaño por la memoria: es lo que pidio el usuario cuando
- * salio llamandose IDENT - "quiero un boton especifico de stanag, que
- * voy a usar cuando sepa seguro que la señal es stanag". Primero se
- * identifica, luego se lee.
+ * Y no es un apaño por la memoria: es lo que se pidio cuando salio
+ * llamandose IDENT - un boton especifico de STANAG para cuando ya se
+ * sabe seguro que la señal lo es. Primero se identifica, luego se lee.
  */
 /*
  * EL 4481 TAMBIEN DEMODULA, Y NO PONERLO FUE UN DESCUIDO.
@@ -585,7 +584,8 @@ void stanag_modo_borra(void)
 /*
  * MIENTRAS NO HAY TEXTO, UNA LINEA QUE DIGA QUE PASA.
  *
- * Es la otra mitad del "no lo hace, no sale": el renglon de arriba
+ * Es la otra mitad del problema de no hacer nada y no sacar nada: el
+ * renglon de arriba
  * cuenta lo que esta haciendo en vez de dejar el panel vacio. Con
  * entrelazado largo esto se ve diez segundos largos, y hay que verlo.
  */

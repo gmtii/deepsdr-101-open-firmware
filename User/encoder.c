@@ -16,8 +16,8 @@
  * comment). Flipped here rather than swapping the A/B wires.
  *
  * 30/09/2026: esto es el sentido de ESTA placa, no el de todas. El usuario
- * estreno otra unidad y giraba al reves que la suya de siempre: "giraba en
- * sentido horario y la frecuencia crecia, aqui la frecuencia decrece". O
+ * estreno otra unidad y giraba al reves que la suya de siempre: donde una
+ * subia la frecuencia al girar en sentido horario, la otra la bajaba. O
  * sea que el cableado del mando varia entre placas y una constante de
  * compilacion no puede acertar en las dos.
  *

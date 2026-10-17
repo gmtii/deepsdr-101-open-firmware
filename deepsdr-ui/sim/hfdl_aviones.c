@@ -307,8 +307,8 @@ static void prueba_anonimas(void)
      * quita, la tabla se llena de "ID 255" y los aviones de verdad se
      * caen por abajo.
      *
-     * Lo vio el usuario en la pantalla antes que ningun banco: "siguen
-     * saliendo los mismos datos", con ID 255 dos veces en la foto.
+     * Lo vio el usuario en la pantalla antes que ningun banco: seguian
+     * saliendo los mismos datos, con ID 255 dos veces en la foto.
      */
     hfdl_ac_init(&t, mem, sizeof mem);
     for (i = 0U; i < 5U; i++) {

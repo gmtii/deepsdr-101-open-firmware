@@ -215,8 +215,8 @@ static uint16_t s_ms_marca, s_ms_ciclo, s_marcas_raras;
  *     2 polos a 15 Hz   ya se come el elemento
  *     3 polos a 15 Hz   no decodifica ni sin ruido
  *
- * Y LO QUE DE VERDAD IMPORTA, porque es la pregunta que hizo el usuario -"no
- * tengo claro si estoy recibiendo realmente el als162"-: con dos polos a
+ * Y LO QUE DE VERDAD IMPORTA, porque es la pregunta que hizo el usuario -si
+ * de verdad estaba recibiendo ALS162-: con dos polos a
  * 25 Hz el numero de marca SEPARA los dos casos, que es lo que antes no
  * hacia:
  *

@@ -24,7 +24,7 @@
  *   1. CUANTO OCUPA. Una portadora ocupa 18 Hz, un SITOR 205, un STANAG
  *      4285 2531. Es la medida que mas separa y la mas barata.
  *   2. SI ES UNA PORTADORA SOLA. El 57% de la potencia metida en +-8 Hz
- *      del pico decia "aqui no hay modem, hay un heterodino" cuando el
+ *      del pico decia que ahi no habia modem sino un heterodino, cuando
  *      el usuario llevaba media hora intentando decodificarlo.
  *   3. SI SON DOS TONOS Y CUANTO SE SEPARAN. 170 Hz salio SITOR; 850 Hz
  *      habria salido STANAG 4481 FSK.

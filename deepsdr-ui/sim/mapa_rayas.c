@@ -1,7 +1,7 @@
 /*
  * LAS RAYAS DEL MAPA AL ACERCARSE.
  *
- * Pedido por el usuario: "a partir del zoom 2 empiezan a salir rayas".
+ * Pedido por el usuario: a partir del zoom 2 empezaban a salir rayas.
  *
  * QUE ES UNA RAYA. Un renglon horizontal, de uno o dos pixeles de alto,
  * del color del mar cruzando la tierra o del color de la tierra cruzando

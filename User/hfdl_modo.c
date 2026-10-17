@@ -503,8 +503,8 @@ static volatile uint32_t s_pisada;    /* rafagas descartadas por eso */
  * Pedido por el usuario.
  *
  * Y no habia forma de contestarle. La radio contaba tramas buenas y totales
- * -"19/117"- y nada mas, asi que "no me salen coordenadas" no se podia
- * distinguir de "no ha llegado ninguna". Son dos averias distintas con dos
+ * -"19/117"- y nada mas, asi que no salir coordenadas no se podia distinguir
+ * de no haber llegado ninguna. Son dos averias distintas con dos
  * arreglos distintos, y sin estos dos numeros se contestaba a ojo.
  *
  * En HFDL la posicion SOLO viaja dentro de un LPDU de datos de usuario, y
@@ -1324,8 +1324,8 @@ static void simbolo_de_segmento(hfdl_estado_t *e, float ih, float qh,
      * ventanas -de 1,2 a 2,8 segundos a 1800 baudios- durante las cuales
      * este receptor esta SORDO. La ráfaga de verdad llega, el preambulo
      * esta ahi, y no lo mira nadie porque la cadena esta ocupada
-     * decodificando ruido. Eso es exactamente "escucho tramas y no suben
-     * las lineas".
+     * decodificando ruido. Eso es exactamente oir tramas y no ver subir
+     * los renglones.
      *
      * EL PORTERO. Al preambulo le siguen nueve ventanas de entrenamiento:
      * 135 simbolos que son HFDL_T_SEQ y que se saben de memoria. Si lo que
@@ -2274,8 +2274,8 @@ const char *hfdl_modo_linea_crc(void)
      * Y hasta ahora NO HABIA FORMA DE SABER QUIEN ERA CIERTO. El embudo
      * cuenta enganches, y un enganche puede ser ruido; la chapa cuenta
      * tramas rematadas. Ninguno de los dos dice cuantas ráfagas DE VERDAD
-     * ha habido, asi que "oigo diez y salen dos" y "solo han pasado dos"
-     * se veian igual en pantalla.
+     * ha habido, asi que oir diez y que salgan dos, y que solo hayan
+     * pasado dos, se veian igual en pantalla.
      *
      * El pre-key si lo dice: son 249 ms de tono puro que la norma pone
      * delante de cada ranura, y ni el ruido ni los datos los imitan (ver
@@ -2524,9 +2524,9 @@ void hfdl_modo_mete(const float *i_in, const float *q_in, uint32_t n)
  *    shall be 249 ms."
  *
  * O sea: 448 simbolos de PORTADORA PURA antes del preambulo. Y la
- * descripcion del decodificador comercial que el usuario mando dice
- * literalmente que "detects each slot with the characteristic pre-key
- * (1440 Hz single tone)". Nosotros buscabamos el preambulo a ciegas
+ * descripcion de un decodificador comercial dice que cada ranura se
+ * detecta por su pre-key caracteristica, un tono solo de 1440 Hz.
+ * Nosotros buscabamos el preambulo a ciegas
  * contra el ruido, con un correlador de 127 simbolos, sin saber siquiera
  * que venia algo.
  *

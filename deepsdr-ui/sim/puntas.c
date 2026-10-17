@@ -1,8 +1,8 @@
 /*
  * DE QUE FORMA SE DIBUJA LA PUNTA DE UN PICO - 23/09/2026.
  *
- * Nace de una observacion del usuario del proyecto: "las señales son planas en
- * su punta, antes eran picos". Y de una condicion suya que es la que manda
+ * Nace de una observacion del usuario: las señales salian planas en la punta
+ * cuando antes eran picos. Y de una condicion suya que es la que manda
  * aqui: que si la radio tiene un modo de puntas planas, sea porque se ha
  * PROGRAMADO asi, no porque salga de casualidad de como esta escrito el
  * dibujo.

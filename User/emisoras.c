@@ -236,7 +236,7 @@ static uint32_t frec_cerca(uint32_t hz, uint32_t *hz_out)
     /*
      * `lo` es el primero que NO es menor que hz. La mas cercana es esa o
      * la de antes: hay que mirar las dos. Mirar solo una da el fallo
-     * clasico de "sintonizo 9.419,8 y no encuentra los 9.420".
+     * clasico de sintonizar 9.419,8 y no encontrar los 9.420.
      */
     for (k = (lo > 0UL) ? (lo - 1UL) : 0UL; k <= lo && k < s_n_frec; k++) {
         uint32_t v, d;

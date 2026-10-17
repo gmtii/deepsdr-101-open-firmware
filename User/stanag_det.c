@@ -1460,8 +1460,8 @@ static void mide_espectro(void)
          *
          * Y eso importa mas de lo que parece: ident_casa() busca la fila por
          * la separacion, asi que una separacion que baila es un nombre que
-         * baila. Es exactamente lo que el usuario veia: "el modo ident va
-         * variando entre lo que es".
+         * baila. Es exactamente lo que el usuario veia: el modo que daba el
+         * Ident iba cambiando entre varios.
          *
          * Subir TONO_SEP_MIN no vale: el RTTY de aficionado va a 170 Hz de
          * salto y se quedaria fuera. Lo que distingue dos rayas de una raya

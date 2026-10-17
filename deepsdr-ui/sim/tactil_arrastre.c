@@ -414,7 +414,7 @@ int main(void)
      * (3) Y LA ENTRADA SIGUE PIDIENDO CONFIRMACION.
      *
      * Esto es lo que el filtro hacia bien y no se puede perder por el
-     * camino: Pedido por el usuario. Una sola lectura suelta no es un toque.
+     * camino. Una sola lectura suelta no es un toque.
      */
     printf("  -- (3) una lectura suelta sigue sin ser un toque --\n");
     {

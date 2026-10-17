@@ -80,7 +80,7 @@ int main(void)
     mira("EA4ABC/P", "Espana");        /* el sufijo de portable no estorba */
 
     printf("\n  BLOQUES ENTEROS, NO UN PREFIJO SUELTO\n");
-    /* El fallo que reporto el usuario del proyecto: "lb4pi no sale pais". La
+    /* El fallo avisado por el usuario: un indicativo noruego no sacaba pais. La
      * tabla tenia "LA" y Noruega es LA-LN entera. Lo mismo pasaba en media
      * Europa, asi que se comprueban varias letras del mismo bloque: acertar
      * con una y fallar con otra es el fallo, no acertar con una. */

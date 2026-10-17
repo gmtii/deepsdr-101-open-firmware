@@ -4,8 +4,7 @@
 #include <stdint.h>
 
 /*
- * PSK31 - 28/09/2026, por el usuario del proyecto: "hay que implementar
- * psk31".
+ * PSK31 - 28/09/2026, pedido por el usuario.
  *
  * QUE ES. Treinta y un baudios y pico de texto en una portadora que solo
  * cambia de fase. Nada de tonos: una sola frecuencia, y lo que lleva la

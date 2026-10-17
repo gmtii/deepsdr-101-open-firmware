@@ -27,8 +27,8 @@
 #define UID_PIE_Y   (UIG_Y + UIG_H - UID_PIE_H - 4)   /* 384 */
 
 /*
- * FILA DE AJUSTES RAPIDOS - 24/09/2026, a peticion del usuario del proyecto:
- * "debajo de los Hz, tres botones que eran los tres BW fijos".
+ * FILA DE AJUSTES RAPIDOS - 24/09/2026, pedido por el usuario: debajo de los
+ * Hz, tres botones con los tres anchos de banda fijos.
  *
  * Es el reparto que hace util un mando continuo: el mando afina, y estos
  * tres devuelven de un toque a algo conocido. Sin ellos, volver a los 2,3

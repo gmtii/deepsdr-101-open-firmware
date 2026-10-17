@@ -4,13 +4,12 @@
 QUE CADA CENTRO EMISOR ESTE EN SU PAIS - 10/10/2026.
 
 *** Nace de una aportacion: alguien geolocalizo a mano unos cientos de
-sitios de aoki.txt con OSM Nominatim "con un umbral del 70% de confianza",
-los metio en sitios_xy.csv -de 46 filas a 593- y escribio: "puede que haya
-errores de sitio, pero espero que se corrijan rapido. Lo he probado con el
-toolchain y no da errores. No se como probarlo contra el mapa para
-validarlo". ***
+sitios de aoki.txt con OSM Nominatim, con un umbral del 70 % de confianza,
+los metio en sitios_xy.csv -de 46 filas a 593- y avisó de que podia haber
+errores de sitio, de que lo habia probado con el toolchain sin errores y de
+que no sabia como validarlo contra el mapa. ***
 
-Las dos frases importantes son las dos ultimas. "No da errores" solo quiere
+Las dos ultimas cosas son las importantes. Que no de errores solo quiere
 decir que el fichero PARSEA: emisoras_pack.py lee tres columnas y nunca ha
 tenido forma de saber si una coordenada es la buena. Y no, no habia como
 validarlo. Esto es ese como.

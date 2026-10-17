@@ -250,7 +250,8 @@ void ft8_decimator_reset(void)
      * anticipated (e.g. resumed with a full flag on a buffer it's
      * about to write into again), which is a very plausible cause of
      * an intermittent hang - a data race by nature only bites
-     * sometimes, matching "se congela muchas veces" (not always).
+     * sometimes, matching the reported freeze happening often but not
+     * always.
      */
     __disable_irq();
 

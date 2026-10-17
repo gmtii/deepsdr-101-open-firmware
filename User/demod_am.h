@@ -514,9 +514,8 @@ typedef enum {
 /*
  * LA BANDA DEL DETECTOR SINCRONO - 11/10/2026.
  *
- * *** De un issue: "I would like the AM synchronous detector to be able to
- * operate selectively on the upper and lower sidebands. Sometimes this
- * saves you from interference". ***
+ * *** De un issue: se pedia que el detector sincrono de AM pudiera trabajar sobre una
+ * sola banda lateral, para escapar de una interferencia. ***
  *
  * Y para eso es: con una emisora pisando por un lado, quedarse con el otro
  * recupera la escucha. En AM normal no se puede -el detector de envolvente

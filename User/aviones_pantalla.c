@@ -10,7 +10,7 @@
  *
  * Pedido por el usuario.
  *
- * Era cierto. las dos veces, y la segunda explica la primera. El primer
+ * Era cierto las dos veces, y la segunda explica la primera. El primer
  * intento pintaba la radio entera y le plantaba encima una caja negra con
  * borde de un pixel y la fuente de mapa de bits a doble tamano. O sea: la
  * radio aparecia, tapada; y lo que tapaba estaba dibujado con primitivas

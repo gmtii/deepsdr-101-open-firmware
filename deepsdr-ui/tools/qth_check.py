@@ -21,11 +21,10 @@ para no tener ninguno:
     comentario original y nadie lo cambio. El aspa de los mapas salia en
     Tenerife y las distancias se median desde 1.796 km de donde tocaba, sin
     un solo aviso.
-  - el 29/09 se cambio a "IN80dk" razonando "el usuario esta en Madrid
-    capital". Era una suposicion. El 30/09 el usuario dijo que su QTH es
-    IN80fp, a 29 km de ahi: el valor compilado volvio a ser el de otro
-    sitio, y este banco lo aprobaba, porque su referencia tambien estaba
-    inventada.
+  - el 29/09 se cambio a otro localizador, elegido suponiendo donde estaba
+    la radio. Seguia siendo una suposicion: el QTH de verdad caia a 29 km
+    de ahi, asi que el valor compilado volvio a ser el de otro sitio, y
+    este banco lo aprobaba, porque su referencia tambien estaba inventada.
 
 Dos veces el mismo fallo, y las dos veces este banco lo aprobo, porque su
 referencia tambien estaba inventada. Asi que ya no comprueba SI el valor es

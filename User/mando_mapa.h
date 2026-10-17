@@ -8,8 +8,8 @@
  * DE QUIEN ES EL MANDO CON EL MAPA PUESTO - 15/10/2026
  * ======================================================================
  *
- * *** De un informe: "When the map is on the screen, the control
- * functions stop working." ***
+ * *** De un informe: con el mapa en pantalla, los controles dejan de
+ * responder. ***
  *
  * Y era verdad. El despacho del mando en main.c decia:
  *
@@ -48,9 +48,9 @@
  *     El mapa solo se queda los giros cuando el mando esta en su destino
  *     por omision -la sintonia-, que es donde nadie ha pedido nada.
  *
- * Y el mapa no pierde la funcion que pidio el usuario ("hay que implementar
- * en las ventanas de mapa que puedas hacer zoom con el encoder"): en el
- * estado normal, que es como se mira un mapa, el giro sigue haciendo zoom.
+ * Y el mapa no pierde la funcion que pidio el usuario -zoom con el mando
+ * en las ventanas de mapa-: en el estado normal, que es como se mira un
+ * mapa, el giro sigue haciendo zoom.
  * Ademas de los dos botones de la esquina, que no se tocan.
  *
  * POR QUE NO SE TOCAN LA REJILLA NI EL TECLADO. Son vistas MODALES que

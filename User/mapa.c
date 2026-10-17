@@ -5,12 +5,11 @@
 /*
  * EL MAPA SIGUE AL TEMA (SOLO EN UNO) - 05/10/2026, de un issue.
  *
- * *El que lo abrio:* "I have noticed that the world map uses its own
- * palette. I am hoping at some point this will be harmonised with the
- * standard colour palette, as again the outlines for the continents are
- * barely legible for me".
+ * *El que lo abrio* pedia que el mapa dejara de tener paleta propia y
+ * siguiera la del resto de la interfaz, porque con algunos temas los
+ * contornos de los continentes apenas se le veian.
  *
- * Era cierto. y era peor de lo que el creia: este fichero llevaba NUEVE
+ * Era cierto, y era peor de lo que el creia: este fichero llevaba NUEVE
  * colores escritos a pelo y CERO referencias a la paleta. El mapa salia
  * azul oscuro con el tema que fuera, incluidos los dos claros que ya
  * habia. Un tema no cambiaba el mapa ni un pixel.

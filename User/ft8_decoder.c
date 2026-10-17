@@ -718,7 +718,7 @@ uint8_t ft8_decoder_slot_paso(void)
          *
          * Y aqui no es adorno ni copiar al vecino: es el UNICO numero que
          * mide si la ranura esta cuadrada. El usuario del proyecto habia
-         * observado que la suya iba "desfasada con 6" y la unica forma de
+         * observado que la suya iba desfasada y la unica forma de
          * corregirlo era a ojo, tocando la chapa en el momento que pareciera
          * bueno. Con esto se lee: si todas las estaciones salen con el mismo
          * DT, ese numero ES tu desfase, y basta con restarlo.
@@ -763,8 +763,8 @@ uint8_t ft8_decoder_slot_paso(void)
         pos = append_str(line, pos, FT8_DECODER_LINE_LEN, text);
 
         /* Distance to the DX station's grid square (09/2026, per the
-         * project owner) - only standard CQ-with-grid messages
-         * ("CQ CALL GRID") carry a grid square at all; anything else
+         * project owner) - only standard CQ-with-grid messages, of the
+         * CQ/call/grid shape, carry a grid square at all; anything else
          * (a signal report, RRR, 73, ...) has no FTX_FIELD_GRID entry
          * in offsets, so this quietly adds nothing for those lines
          * rather than guessing. offsets.offsets[i] is the BYTE OFFSET

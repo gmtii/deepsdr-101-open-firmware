@@ -111,6 +111,17 @@ ANCLAJES = (
     # vio al romper el README a proposito para ver si saltaba. Una
     # comprobacion que no se ha visto fallar no esta comprobada.
     (r'(?m)^\s*VERSION\s+(V\d+\.\d\d)\b', 'el bloque Estado'),
+    # Y LA CABECERA DEL README, QUE CAMBIO DE FORMA Y DEJO AL BANCO
+    # MIRANDO A UN FANTASMA - 17/10/2026. El README dejo de llevar una
+    # linea "VERSION Vx.yy" y paso a abrir con «`V5.03` . cargador
+    # `v2.16`». Ningun anclaje casaba, asi que barre_la_carpeta() leia
+    # el fichero, no encontraba NINGUNA version declarada y lo daba por
+    # bueno sin mirar: el README se quedo en V5.03 con el firmware en
+    # V5.04 y nadie se entero. Un guardian que no encuentra nada no
+    # dice "todo bien", dice "no se donde mirar" - por eso ademas de
+    # este anclaje esta la cuenta de abajo.
+    (r'(?m)^`(V\d+\.\d\d)`\s*[\u00b7|]\s*(?:cargador|bootloader)',
+     'la cabecera del README'),
 )
 
 # Lo de terceros no se toca y no declara nuestra version.
@@ -158,6 +169,25 @@ def barre_la_carpeta(firmware, raiz):
             dichas = set()
             for patron, _ in ANCLAJES:
                 dichas.update(re.findall(patron, txt))
+            if f.lower() == 'readme.md' and base == raiz:
+                # EL README NO PUEDE CALLARSE. Los demas .md declaran
+                # version o no, y no pasa nada; el README es la primera
+                # pantalla del repositorio y tiene DOS cabeceras, la
+                # espanola y la inglesa. Si una pierde el formato y la
+                # otra no, el conjunto sigue declarando V5.04 y el fallo
+                # pasa de largo: por eso no basta con mirar el fichero
+                # entero, hay que contar las cabeceras una por una.
+                cab = re.findall(r'(?m)^(.*(?:cargador|bootloader)\s*`v[\d.]+`.*)$',
+                                 txt)
+                buenas = [c for c in cab
+                          if re.match(r'^`V\d+\.\d\d`\s*[\u00b7|]', c)]
+                if not cab:
+                    malos.append((os.path.relpath(ruta, raiz),
+                                  'no tiene cabecera de version'))
+                elif len(buenas) != len(cab):
+                    malos.append((os.path.relpath(ruta, raiz),
+                                  '%d de %d cabeceras sin version delante'
+                                  % (len(cab) - len(buenas), len(cab))))
             if not dichas:
                 continue
             mirados += 1
@@ -179,11 +209,83 @@ def barre_la_carpeta(firmware, raiz):
     return 0
 
 
+def mira_los_binarios(raiz):
+    """Que los tamaños y los CRC que anuncia el README sean los de los .bin.
+
+    POR QUE EXISTE (17/10/2026). El README se quedo en V5.03 y con el no se
+    quedaron solo la version: tambien el tamaño -469.904 cuando el fichero
+    media 470.328- y el CRC -3EED8CE8 cuando la cabecera decia 90681EDF-.
+    Tres datos, los tres mal, en la primera pantalla de lo que ve quien
+    llega al repositorio, y todos comprobables leyendo el fichero que esta
+    tres carpetas mas abajo.
+
+    Son ADEMAS los tres datos con los que alguien decide si el binario que
+    se ha bajado es el bueno. Un CRC equivocado en el README no se lee como
+    "el README esta viejo": se lee como "me he bajado algo que no es".
+
+    El CRC que se publica es el de la CABECERA en +0x200, que es el que
+    comprueba la radio, no el CRC-32 del fichero entero. Son numeros
+    distintos y confundirlos ya costo una tarde.
+    """
+    import struct
+    readme = os.path.join(raiz, 'README.md')
+    if not os.path.isfile(readme):
+        print('  no hay README.md en %s   MAL' % raiz)
+        return 1
+    txt = open(readme, encoding='utf-8', errors='replace').read()
+
+    # «`update.bin` 470.328 B CRC `90681EDF`» y su version inglesa con coma.
+    pares = re.findall(
+        r'`(update(?:_470)?\.bin)`\s+([\d.,]+)\s*B\s+CRC\s+`([0-9A-Fa-f]{8})`',
+        txt)
+    if not pares:
+        print('  el README no anuncia ningun binario con tamaño y CRC   MAL')
+        print('  (formato esperado: `update.bin` 470.328 B CRC `90681EDF`)')
+        return 1
+
+    malos, vistos = [], set()
+    for nombre, tam_txt, crc_txt in pares:
+        ruta = os.path.join(raiz, nombre)
+        if not os.path.isfile(ruta):
+            malos.append('%s: el README lo anuncia y no esta en la carpeta'
+                         % nombre)
+            continue
+        d = open(ruta, 'rb').read()
+        dicho = int(tam_txt.replace('.', '').replace(',', ''))
+        if dicho != len(d):
+            malos.append('%s: el README dice %d B y mide %d'
+                         % (nombre, dicho, len(d)))
+        if len(d) < 0x210:
+            malos.append('%s: no llega ni a la cabecera' % nombre)
+            continue
+        magia, _long, crc, _ver = struct.unpack('<IIII', d[0x200:0x210])
+        if magia != 0x52445344:
+            malos.append('%s: en +0x200 no hay cabecera "DSDR"' % nombre)
+            continue
+        if crc != int(crc_txt, 16):
+            malos.append('%s: el README dice CRC %s y la cabecera %08X'
+                         % (nombre, crc_txt.upper(), crc))
+        vistos.add(nombre)
+
+    print('  %d binarios anunciados en el README' % len(pares))
+    if malos:
+        for m in malos:
+            print('  %s   MAL' % m)
+        return 1
+    print('  tamaños y CRC del README cuadran con los .bin  ok')
+    return 0
+
+
 def main():
-    if len(sys.argv) not in (3, 4):
+    # Con DOS argumentos de mas -CAMBIOS.md y el manual- comprueba todo.
+    # Con UNO solo comprueba lo que vive dentro del repositorio, que es
+    # como corre en un clon: ahi docs/ y manual/ no estan, y hasta hoy
+    # eso se saltaba el banco ENTERO, README incluido.
+    if len(sys.argv) not in (2, 3, 4):
         print(__doc__)
         return 1
-    config_h, cambios_md = sys.argv[1], sys.argv[2]
+    config_h = sys.argv[1]
+    cambios_md = sys.argv[2] if len(sys.argv) >= 3 else None
     manual_md = sys.argv[3] if len(sys.argv) == 4 else None
 
     txt = open(config_h, encoding='utf-8', errors='replace').read()
@@ -198,18 +300,22 @@ def main():
         print('  el menor tiene que ser dos cifras, y es "%s"   MAL' % men.group(1))
         return 1
 
-    md = open(cambios_md, encoding='utf-8', errors='replace').read()
-    m = re.search(r'^\s*VERSION\s+(V\d+\.\d\d)\s*$', md, re.M)
-    if not m:
-        print('  falta la linea "VERSION Vx.yy" en el Estado de %s   MAL' % cambios_md)
-        return 1
-    diario = m.group(1)
-
-    print('  firmware dice %s, el diario dice %s' % (firmware, diario))
-    if firmware != diario:
-        print('  NO COINCIDEN: sube las dos o no subas ninguna   MAL')
-        return 1
-    print('  la version cuadra  ok')
+    if cambios_md is not None:
+        md = open(cambios_md, encoding='utf-8', errors='replace').read()
+        m = re.search(r'^\s*VERSION\s+(V\d+\.\d\d)\s*$', md, re.M)
+        if not m:
+            print('  falta la linea "VERSION Vx.yy" en el Estado de %s   MAL'
+                  % cambios_md)
+            return 1
+        diario = m.group(1)
+        print('  firmware dice %s, el diario dice %s' % (firmware, diario))
+        if firmware != diario:
+            print('  NO COINCIDEN: sube las dos o no subas ninguna   MAL')
+            return 1
+        print('  la version cuadra  ok')
+    else:
+        print('  firmware dice %s (docs/ no esta: no comparo el diario)'
+              % firmware)
 
     rc = 0
     if manual_md is not None:
@@ -219,6 +325,7 @@ def main():
     # sale de donde este config.h: User/config.h -> la carpeta del firmware.
     raiz = os.path.dirname(os.path.dirname(os.path.abspath(config_h)))
     rc |= barre_la_carpeta(firmware, raiz)
+    rc |= mira_los_binarios(raiz)
     return rc
 
 

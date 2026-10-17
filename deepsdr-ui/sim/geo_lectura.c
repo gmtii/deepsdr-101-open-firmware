@@ -3,7 +3,7 @@
  *
  * POR QUE EXISTE.
  *
- * *** De un issue: "The loader doesn't see update.bin on the disk", con
+ * *** De un issue: el cargador no veia update.bin en el disco, con
  * una foto de la ficha que decia "Volumen: no se reconoce" y la radio con
  * el FORMATEO DE FABRICA, sin reformatear en ningun momento. ***
  *

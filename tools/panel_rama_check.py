@@ -11,8 +11,8 @@ ramas sacandolas de ejecutar el boot.bin de serie -que estuvo bien, porque
 dos de las tres estaban mal copiadas- y por el camino la B cambio: se le
 anadio el desbloqueo que la captura anterior se habia dejado fuera.
 
-Y la pantalla dejo de verse como se veia. Pedido por el usuario. Tres entregas seguidas diciendo "esto es equivalente a lo que
-tenias" y las tres equivocadas.
+Y la pantalla dejo de verse como se veia. Pedido por el usuario. Tres entregas seguidas dando por equivalente lo
+entregado, y las tres equivocadas.
 
 Equivalente no se dice: se compara. Esto compara, paso a paso y espera a
 espera, lo que la tabla generada mandara al bus contra lo que mandaba el

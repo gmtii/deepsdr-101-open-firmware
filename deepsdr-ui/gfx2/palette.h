@@ -336,8 +336,8 @@ static const palette_t k_pal_fosforo = {
  * El crit que el eligio, #FF0029, ya cumplia las dos (3,97:1 y 0xFF) y se
  * queda como esta.
  *
- * EL MAPA. Es la otra mitad del issue: "the world map uses its own palette
- * ... the outlines for the continents are barely legible for me". Cierto,
+ * EL MAPA. Es la otra mitad del issue: el mapa del mundo tenia paleta
+ * propia y los contornos de los continentes apenas se le veian. Cierto,
  * mapa.c llevaba nueve colores a pelo. Este es el unico tema con
  * mapa_sigue = 1, asi que el mapa se vuelve claro SOLO aqui y los demas
  * temas no se enteran. Ver mapa.c.

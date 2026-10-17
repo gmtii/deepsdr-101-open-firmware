@@ -178,7 +178,7 @@ gfx2_surf_t gfx2_sub_y(const gfx2_surf_t *s, int16_t y, int16_t h);
  *
  * Pedido por el usuario.
  *
- * Era cierto. y el sitio exacto es este. gfx2_sub_y() recorta SOLO en Y
+ * Era cierto, y el sitio exacto es este. gfx2_sub_y() recorta SOLO en Y
  * -lo dice su nombre- porque una banda tiene el ancho entero de la pantalla
  * y no hay "zancada" en gfx2_surf_t con la que estrecharla: las filas van
  * seguidas de w en w. En la pantalla de verdad eso no se nota, porque la

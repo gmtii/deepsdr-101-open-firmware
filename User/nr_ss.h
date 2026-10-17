@@ -7,7 +7,7 @@
  * Noise reduction by Spectral Subtraction - ported 03/08/2026 from
  * JF3HZB / T. Uebo's ESP32 nr_ss.c/h (uploaded by the project owner)
  * for AM/USB/LSB use, mainly SSB - explicitly NOT WFM/NFM, per the
- * project owner ("no tiene sentido en WFM ni NFM"). See nr_ss.c's own
+ * project owner, who saw no use for it in WFM or NFM. See nr_ss.c's own
  * header comment for the full list of what changed in the port.
  *
  * This module knows NOTHING about demod modes, decimation, or the

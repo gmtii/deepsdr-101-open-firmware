@@ -181,7 +181,7 @@ void sam_reset(sam_t *s);
  * the capture range is too wide; for proper operation, it should be limited
  * to a hundred hertz on either side of the carrier." ***
  *
- * Era cierto., y el banco lo mide (sim/sam_captura.c). Con los 4.000 Hz que
+ * Era cierto, y el banco lo mide (sim/sam_captura.c). Con los 4.000 Hz que
  * traia el original -el filtro de canal mide lo mismo, asi que el lazo podia
  * ir a CUALQUIER sitio que pasara el filtro-, una portadora intrusa 20 dB
  * mas fuerte a 500 o a 1.000 Hz se lleva el lazo en cuanto la deseada se

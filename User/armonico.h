@@ -23,8 +23,8 @@
  *     el 3.o armonico      -2x
  *     una imagen I/Q       -2x
  *
- * Mirandolas no se distinguen. El usuario vio una señal "que va al reves al
- * doble de velocidad" y se tardo un dia entero en averiguar que no era una
+ * Mirandolas no se distinguen. El usuario vio una señal que iba al reves y
+ * al doble de velocidad, y se tardo un dia entero en averiguar que no era una
  * imagen, con dos versiones de firmware y un corrector de banda ancha por el
  * camino. Esto lo habria contestado en un segundo.
  *

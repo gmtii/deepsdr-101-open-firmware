@@ -83,7 +83,7 @@ try {
         Write-Host "  sigue subiendo, el cable y el USB van bien y lo que falla"
         Write-Host "  es de aqui para dentro. Si no sube, es el cable."
     } else {
-        Write-Host "CONTESTA A $bien de $($preguntas.Count). Pega esto en el chat."
+        Write-Host "CONTESTA A $bien de $($preguntas.Count). Apunta esta salida."
     }
 
     # Y la prueba de que ESCRIBE, no solo lee: mover el dial desde aqui.

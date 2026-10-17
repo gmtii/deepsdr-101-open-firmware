@@ -11,7 +11,7 @@
  * Aqui se mide con gfx2_text_w() y la MISMA fuente con la que se dibuja,
  * asi que lo que diga esto es lo que va a pasar en el cristal.
  *
- * El caso que lo motivo: Pedido por el usuario.. Al darle columna propia al modelo hubo que
+ * El caso que lo motivo: al darle columna propia al modelo hubo que
  * recolocar las cinco que ya habia, y recolocar a ojo cinco columnas es
  * exactamente como se rompe la de al lado sin enterarse.
  */

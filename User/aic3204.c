@@ -923,8 +923,8 @@ uint8_t aic3204_set_pga_gain_db(float db)
 
 /*
  * Input impedance / Rin selector (Page 1, R52/R54/R55/R57) - added
- * 07/08/2026, per the project owner, after the datasheet's "Analog
- * PGA versus Input Configuration" table (2.3.2.1) turned up something
+ * 07/08/2026, per the project owner, after the datasheet's Analog
+ * PGA versus Input Configuration table (2.3.2.1) turned up something
  * useful for the RF-level auto-AGC (see main.c's rf_agc_poll()):
  * choosing Rin=20k or 40k instead of the captured baseline's 10k
  * shifts the WHOLE PGA gain range down by 6dB/12dB respectively

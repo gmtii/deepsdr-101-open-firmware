@@ -13,9 +13,9 @@ repositorio se tomó midiendo y no a ojo.
 > grabar este firmware y volver al firmware original en cualquier momento.
 > No secuestramos ni bloqueamos ningún dispositivo.**
 
-`V5.03` · cargador `v2.16` · **dos binarios, uno por chip**:
-`update.bin` 469.904 B CRC `3EED8CE8` (GD32F450VET6, 512 kB) ·
-`update_470.bin` 469.936 B CRC `60507300` (GD32F470VGT6, 1024 kB) ·
+`V5.04` · cargador `v2.16` · **dos binarios, uno por chip**:
+`update.bin` 470.328 B CRC `90681EDF` (GD32F450VET6, 512 kB) ·
+`update_470.bin` 470.360 B CRC `AC1BE33F` (GD32F470VGT6, 1024 kB) ·
 **177 comprobaciones en verde, 0 fallos** (`make comprueba`)
 
 🇬🇧 [English below](#deepsdr-101--open-firmware) · 📘
@@ -533,9 +533,9 @@ in this repository was made by measuring rather than by eye.
 > It is also entirely reversible: anyone can flash this firmware and go back
 > to the original one at any time. We do not hold or lock any device.**
 
-`V5.03` · bootloader `v2.16` · **two builds, one per chip**:
-`update.bin` 469,904 B CRC `3EED8CE8` (GD32F450VET6, 512 kB) ·
-`update_470.bin` 469,936 B CRC `60507300` (GD32F470VGT6, 1024 kB) ·
+`V5.04` · bootloader `v2.16` · **two builds, one per chip**:
+`update.bin` 470,328 B CRC `90681EDF` (GD32F450VET6, 512 kB) ·
+`update_470.bin` 470,360 B CRC `AC1BE33F` (GD32F470VGT6, 1024 kB) ·
 **177 checks green, 0 failures** (`make comprueba`)
 
 📘 [User manual (PDF, ES + EN)](DeepSDR_Reload_Manual-ES-EN.pdf)

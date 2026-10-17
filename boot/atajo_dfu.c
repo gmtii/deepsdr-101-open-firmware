@@ -105,7 +105,7 @@ static uint32_t boton(void)
  *                            USB de la ROM se va a NUESTRA tabla, su
  *                            manejador no corre, el byte de 0x20000162 no
  *                            se pone, y la ROM se queda en su bucle de
- *                            USART. Que es "la radio se queda pillada".
+ *                            USART. Que es la radio quedandose pillada.
  *
  * Viniendo del reset, el reloj y el VTOR YA estan como queremos y el USBFS
  * no lo ha tocado nadie. Se hace igual de todas formas: cuesta nada y no

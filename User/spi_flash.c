@@ -1444,7 +1444,7 @@ static uint8_t geo_lee(void)
      * HASTA AQUI, LO QUE HACE FALTA PARA LEER - 06/10/2026.
      * ===================================================================
      *
-     * *** De un issue: "The loader doesn't see update.bin on the disk",
+     * *** De un issue: el cargador no veia update.bin en el disco,
      * con una ficha que decia "Volumen: no se reconoce" y la radio con el
      * formateo DE FABRICA, sin reformatear nunca. ***
      *
@@ -4503,7 +4503,7 @@ static uint8_t recorta_interno(const char name8[8], const char ext3[3], uint32_t
  *
  * Pedido por el usuario.
  *
- * Era cierto. y faltaba la pieza: este driver sabia crear, ampliar,
+ * Era cierto, y faltaba la pieza: este driver sabia crear, ampliar,
  * recortar y sobrescribir, pero no borrar. ICAO24.BIN son medio mega en un
  * disco de pocos megas, y una vez esta en la zona alta de la flash no
  * pinta nada ahi.

@@ -43,9 +43,9 @@ static chip_hit_t s_hits[5];
 static uint8_t    s_hits_n;
 
 /*
- * Donde acaba la lectura de frecuencia - 22/09/2026, por el usuario del
- * proyecto: "estando en ajustes si toco arriba entre lsb y la hora sale esta
- * pantalla", la de meter la frecuencia a mano.
+ * Donde acaba la lectura de frecuencia - 22/09/2026, avisado por el usuario:
+ * con los ajustes abiertos, un toque arriba entre el modo y la hora abria la
+ * pantalla de meter la frecuencia a mano.
  *
  * El toque que abre esa pantalla lo decide main.c con FREQ_TAP_X1, que valia
  * MODE_X = 396: la X donde el rotulo de modo estaba en la cabecera ANTERIOR
@@ -435,9 +435,9 @@ static int16_t chip_w(const char *label, const char *value, int active)
  */
 #define ST_BAR_X    10
 /*
- * 120 y no 150, y la lectura 30 px a la izquierda - 23/09/2026, por el usuario:
- * "los indicadores de nr nco agc estan muy juntos hay que separarlos un
- * pelin... si te falta espacio haz un pelin mas pequeño el smeter".
+ * 120 y no 150, y la lectura 30 px a la izquierda - 23/09/2026, pedido por el
+ * usuario: los indicadores de NR, NCO y AGC iban muy juntos y habia que
+ * separarlos, aunque fuera a costa de encoger un poco el S-metro.
  *
  * Y tiene razon en las dos cosas. Para meter el chip del NCO se habian
  * apretado los margenes de los chips (de 18 a 12) y el hueco entre ellos (de

@@ -685,7 +685,7 @@ uint16_t spectrum_colormap(float db, float db_min, float db_max)
 #define SPEC_COLOR_TRACE  GFX_COLOR_WHITE
 #define SPEC_COLOR_PEAK   GFX_COLOR_ORANGE
 #define SPEC_COLOR_GRID   0x4A49U /* very dark gray, under everything */
-#define SPEC_COLOR_CENTER 0xCE59U /* 08/09/2026: changed from full-bright red to a light gray (~200,200,200), per the project owner ("el rojo queda mal con los nuevos colores") - red was fine against the old fixed palette but clashes with several of the new selectable ones (FIRE/INFERNO/TURBO all have red/orange near the hot end of their own gradient, so a red demod line stopped standing out and started looking like part of the signal). Gray is neutral against every palette instead of matching or clashing with any one hue. */
+#define SPEC_COLOR_CENTER 0xCE59U /* 08/09/2026: changed from full-bright red to a light gray (~200,200,200), per the project owner, for whom red clashed with the new palettes - red was fine against the old fixed palette but clashes with several of the new selectable ones (FIRE/INFERNO/TURBO all have red/orange near the hot end of their own gradient, so a red demod line stopped standing out and started looking like part of the signal). Gray is neutral against every palette instead of matching or clashing with any one hue. */
 #define SPEC_CENTER_HALF_WIDTH_PX 1U /* 01/09/2026: was implicitly 0 (a single exact-column pixel) - now +/-1, i.e. 3px total */
 
 /* SPECTRUM_STYLE_LINE's palette - see spectrum_set_style()'s comment
@@ -713,7 +713,7 @@ uint16_t spectrum_colormap(float db, float db_min, float db_max)
  * dibujan por encima de la senal (SPEC_COLOR_BAND_EDGE) el relleno ya no
  * tiene que cargar con la informacion, solo insinuar la zona. */
 #define SPEC_COLOR_BAND_TINT      0x18E3U /* era 0x632C */
-#define SPEC_COLOR_BAND_TINT_OLD  0x632CU /* 08/09/2026: changed from a warm amber to a medium gray (~150,150,150), per the project owner - same "red/warm clashes with the new palettes" reasoning as SPEC_COLOR_CENTER just above (amber sits close to several of the new hot-end palette colors too, e.g. FIRE/INFERNO/TURBO/GQRX). Gray stays neutral against all of them. */
+#define SPEC_COLOR_BAND_TINT_OLD  0x632CU /* 08/09/2026: changed from a warm amber to a medium gray (~150,150,150), per the project owner - same reasoning as SPEC_COLOR_CENTER (red and warm tones clash with the new palettes) just above (amber sits close to several of the new hot-end palette colors too, e.g. FIRE/INFERNO/TURBO/GQRX). Gray stays neutral against all of them. */
 /* ETAPA 3b: los BORDES del filtro, no su relleno. El tinte de arriba va
  * por debajo de todo, asi que en cuanto hay senal desaparece - justo
  * cuando mas falta hace saber si la emisora vecina cae dentro o fuera.
@@ -1234,8 +1234,8 @@ void spectrum_draw(const float *db, uint32_t n_bins,
 
     /* SPEC_CENTER_HALF_WIDTH_PX: half-width, in pixels, of the demod
      * center marker - 01/09/2026, bumped from a single pixel to 3px
-     * total, per the project owner ("la linea de demodulacion...
-     * mas ancho"). Computed with signed math and re-clamped into
+     * total, per the project owner, who asked for a wider
+     * demod line. Computed with signed math and re-clamped into
      * [0, w-1] independently (not just center_mark_col +/- 1 as
      * uint16_t, which would underflow to a huge value if center_
      * mark_col is 0) so the marker never walks off either edge of
@@ -1375,8 +1375,8 @@ void spectrum_draw(const float *db, uint32_t n_bins,
      * scattered dots instead of a connected line/contour - most
      * visible in HEATMAP now that different palettes make the
      * fill-vs-background contrast vary a lot more than the old fixed
-     * gradient did (reported by the project owner, 08/09/2026: "los
-     * puntos del espectro no estan conectados"). Runs for EVERY style
+     * gradient did (reported by the project owner, 08/09/2026: the
+     * spectrum dots were not joined up). Runs for EVERY style
      * now (used to be OUTLINE-only, on the theory that HEATMAP/LINE's
      * fill already hides the gap - true only WITHIN one column's own
      * bar, not BETWEEN two columns of very different heights, which

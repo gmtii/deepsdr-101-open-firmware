@@ -1,7 +1,7 @@
 /*
  * Noise reduction by Spectral Subtraction - ported 03/08/2026 from
- * JF3HZB / T. Uebo's ESP32 nr_ss.c/h (uploaded by the project owner:
- * "Created on June 10, 2025") to this project's bare-metal GD32F450
+ * JF3HZB / T. Uebo's ESP32 nr_ss.c/h (uploaded by the project owner,
+ * dated June 10, 2025) to this project's bare-metal GD32F450
  * pipeline. See nr_ss.h for the module's contract; this comment is
  * about what changed getting here from the original.
  *
@@ -148,9 +148,8 @@ static uint32_t s_pt_frm; /* which s_sigf[] row gets written next (mod NR_SS_NFR
 /*
  * LA GANANCIA DE CADA BIN, SUAVIZADA EN EL TIEMPO - 07/10/2026.
  *
- * *** Victor, por el canal del proyecto: "¿Es el reductor de ruido el que
- * produce ese burbujeo tan fuerte?... cuando la señal útil no supera mucho el
- * nivel de ruido, se oye esa cosa rara". ***
+ * *** De un aviso recibido: con la señal poco por encima del ruido se oye un
+ * burbujeo fuerte, y se preguntaba si lo producia el reductor de ruido. ***
  *
  * La version anterior decidia la ganancia de cada bin desde cero en cada
  * cuadro. La FFT es de 128 con salto de 32 a 12 kHz, o sea TRESCIENTAS
@@ -161,7 +160,7 @@ static uint32_t s_pt_frm; /* which s_sigf[] row gets written next (mod NR_SS_NFR
  * ms y al siguiente lo matan. Eso son rafagas de tono cortas en frecuencias
  * al azar, que es el ruido musical de toda la vida.
  *
- * NO SE HA PODIDO REPRODUCIR EL BURBUJEO FUERTE que describe Victor -ni en el
+ * NO SE HA PODIDO REPRODUCIR EL BURBUJEO FUERTE que se describia -ni en el
  * banco ni en el video del usuario, y el porque esta en sim/nr_burbujeo.c-. Asi
  * que esto NO entra por oido, entra porque las tres medidas salen mejores o
  * iguales y ninguna peor:

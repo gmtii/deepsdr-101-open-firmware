@@ -705,7 +705,7 @@ int main(int argc, char **argv)
 
         /*
          * Y EL TOQUE QUE CUADRA LA RANURA, que se mudo de la chapa a la
-         * barra: Pedido por el usuario.. Tiene que responder DENTRO de la barra y no encima
+         * barra. Tiene que responder DENTRO de la barra y no encima
          * del boton del mapa, que es el vecino. Ese error exacto ya pasó
          * una vez con la chapa y el quinto boton (28/09/2026).
          */

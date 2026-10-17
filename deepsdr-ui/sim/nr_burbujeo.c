@@ -1,11 +1,11 @@
 /*
  * EL BURBUJEO DEL REDUCTOR DE RUIDO: PRIMERO HACERLO APARECER.
  *
- * *** Victor, 07/10/2026: "¿Es el reductor de ruido el que produce ese
- * burbujeo tan fuerte?" - "Sí... cuando la señal útil no supera mucho el
- * nivel de ruido, se oye esa cosa rara. Pero si escuchas la banda de 40
- * metros, con esos «veteranos» que transmiten con un kilovatio, no se oye el
- * burbujeo y sus voces de barítono suenan con calidad Hi-Fi." ***
+ * *** De un aviso recibido el 07/10/2026: con la señal poco por encima del
+ * ruido se oye un burbujeo fuerte, y se preguntaba si lo producia el
+ * reductor de ruido. Con señales fuertes -las de 40 metros, transmitiendo
+ * con mucha potencia- no se oye nada de eso y las voces graves suenan
+ * limpias. ***
  * Pedido por el usuario.
  *
  * ESO ULTIMO MANDA. Si el usuario no lo oye y el banco no lo mide, arreglarlo
@@ -69,8 +69,8 @@
  *   - se vea de un vistazo donde esta la ventana util del mando, que es un
  *     7 % de su recorrido y es un defecto medido por su cuenta;
  *   - cualquier cambio futuro que EMPEORE el vaiven que añade el reductor
- *     salte en rojo. No puedo demostrar el burbujeo fuerte que describe
- *     Victor, pero si puedo impedir que crezca el que si se mide.
+ *     salte en rojo. No puedo demostrar el burbujeo fuerte del aviso,
+ *     pero si puedo impedir que crezca el que si se mide.
  *
  * Para demostrarlo hace falta una grabacion donde los huecos existan: audio
  * digital de la radio, o el movil pegado al altavoz en silencio con DIEZ
@@ -117,7 +117,7 @@ static float ruidito(void)
 
 /*
  * VOZ DE MENTIRA, PERO CON LO QUE IMPORTA: armonicos de 120 Hz -un baritono,
- * como los de Victor- dentro de la banda de SSB, y una envolvente silabica
+ * como los del aviso- dentro de la banda de SSB, y una envolvente silabica
  * de 3,5 Hz con silencios de verdad entre silabas. Los silencios son el
  * punto: es donde se oye el burbujeo.
  */

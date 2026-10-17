@@ -1053,8 +1053,8 @@ int main(void)
      * vector apuntando a mitad de su propio .text. Ni un mensaje.
      *
      * Lo gracioso es que el aviso estaba escrito: tools/mapa.py existe
-     * justo para esto y decia "si alguien mueve la base y se deja ese, la
-     * radio se cuelga en la primera interrupcion". Lo que no hacia era
+     * justo para esto y avisaba de que si alguien movia la base y se dejaba
+     * uno, la radio se colgaria en la primera interrupcion. Lo que no hacia era
      * BUSCAR los SCB->VTOR que no conocia de antemano - miraba uno solo,
      * en un fichero concreto-. Ahora los busca todos, en todo el arbol.
      *
@@ -2120,7 +2120,7 @@ int main(void)
              * WFM, since demod_am_process_raw() stops being called at
              * all while WFM is active). Branch on the live mode so
              * each path's real ISR gets checked against its own real
-             * budget - suspected relevant to the "ruido de fondo"
+             * budget - suspected relevant to the background-noise
              * WFM report: atan2f() runs once per sample (512x/block)
              * in the WFM discriminator, far more expensive than AM's
              * plain envelope detection, making an occasional real-time
@@ -2240,8 +2240,8 @@ static void calib_height_ruler_draw(void)
 static const uint16_t TOP_H        = 64;
 
 /*
- * *** 01/09/2026, right-hand column REMOVED, per the project owner:
- * "la parte derecha es de poco uso y desaprovecha mucho espacio" ***
+ * *** 01/09/2026, right-hand column REMOVED, per the project owner,
+ * who found the right-hand column little used and wasteful of space ***
  * - S-meter, SNR readout, and the status badges all move into a new
  * horizontal STATUS_STRIP row directly under the top bar (see its own
  * comment below), freeing the old RCOL_X..799 width entirely for the
@@ -2767,15 +2767,15 @@ typedef struct {
 } demod_mode_entry_t;
 
 /*
- * LAS DOS CATEGORIAS DE LA COLUMNA - 24/09/2026, por el usuario del
- * proyecto: "en la ventana de modo, igual que la de bandas, en categorias
- * analogico y digital".
+ * LAS DOS CATEGORIAS DE LA COLUMNA - 24/09/2026, pedido por el usuario:
+ * en la ventana de modo, igual que la de bandas, en categorias de
+ * analogico y digital.
  *
  * El corte es por lo que SALE, no por lo que hay debajo. CW, RTTY, NAVTEX,
  * WEFAX y SSTV son USB por debajo, igual que USB a secas, y APRS es NFM
  * igual que NFM a secas - pero lo que entrega uno es sonido para el oido y
- * lo que entrega el otro es texto o una imagen. Quien busca "el modo para
- * oir la emisora" y quien busca "el modo que me saca el mapa" no buscan lo
+ * lo que entrega el otro es texto o una imagen. Quien busca el modo para
+ * oir la emisora y quien busca el modo que saca el mapa no buscan lo
  * mismo, y esa es la unica division que le sirve a ninguno de los dos.
  */
 /*
@@ -2931,7 +2931,7 @@ static const demod_mode_entry_t k_demod_modes[] = {
      *
      * Pedido por un usuario.
      *
-     * Era cierto. y la radio llega: TUNE_MAX_HZ son 180 MHz y hay banda de
+     * Era cierto, y la radio llega: TUNE_MAX_HZ son 180 MHz y hay banda de
      * 2 m en la lista (144-146, NFM). En onda corta la SSTV va por banda
      * lateral; en dos metros va en FM, y ahi esta la ISS.
      *
@@ -3078,8 +3078,8 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * conmuta; los barcos alternan entre las dos, asi que en cualquiera se
      * ve la mitad del trafico - y en un puerto la mitad sobra. Que esto
      * entre en el margen del sintonizador (TUNE_MAX_HZ, 180 MHz) lo dijo el
-     * usuario cuando yo di por hecho que no: "ais es en 160 mhz que yo sepa
-     * esta radio llega a 200mhz". Era cierto.
+     * usuario cuando yo di por hecho que no: AIS va en 160 MHz y la radio
+     * llega mas arriba. Era cierto.
      */
     { "AIS", T("Barcos", "Ships"),                DEMOD_MODE_NFM, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
     /*
@@ -3452,9 +3452,9 @@ static const band_preset_t k_band_presets[] = {
      * occidental, America y casi todo lo demas.
      *
      * 23/09/2026, a peticion del usuario: la de siempre se vuelve a llamar
-     * "FM" a secas -que es lo que es para casi todo el mundo, y el nombre
+     * FM a secas -que es lo que es para casi todo el mundo, y el nombre
      * es lo que sale tambien en la pastilla de la cabecera, donde cabe
-     * poco- y la otra se queda con su sigla, "FM OIRT", que es como la
+     * poco- y la otra se queda con su sigla, FM OIRT, que es como la
      * llama todo el que la busca. CCIR sigue escrito en el subtitulo de la
      * de siempre, que es donde no estorba.
      *
@@ -3649,7 +3649,7 @@ static uint8_t s_encoder_ajuste = AJ_ENGANCHE_NINGUNO;
  * !s_menu_open guard at the check site is what keeps the two paths
  * from interfering with each other. */
 static uint32_t s_volume_target_last_ms = 0U;
-#define VOLUME_TARGET_TIMEOUT_MS 4000UL /* "a few seconds" per the project owner - comfortably longer than the pause between two encoder detents while actually adjusting */
+#define VOLUME_TARGET_TIMEOUT_MS 4000UL /* a few seconds, per the project owner - comfortably longer than the pause between two encoder detents while actually adjusting */
 /* PGA (analog input gain, MIC_PGA_L/R - see aic3204_set_pga_gain_db())
  * - same 0.5dB-native-units reasoning as s_volume_db_x2 above, just
  * unsigned (0-95, matching the register's 0-47.5dB range, no cut
@@ -3665,8 +3665,8 @@ static int16_t s_pga_gain_db_x2 = CONFIG_PGA_START_DB_X2; /* see config.h */
  * --- RF-level (analog PGA) auto-AGC -------------------------------------
  *
  * Added 07/08/2026, per the project owner, after ruling out the
- * digital AM/SSB AGC's own math as the cause of "señales muy fuertes
- * saturan la radio del todo" (see demod_am.c's AGC comment - instant
+ * digital AM/SSB AGC's own math as the cause of very strong signals
+ * saturating the radio completely (see demod_am.c's AGC comment - instant
  * attack, no lower gain clamp, mathematically fine for any input
  * short of the ADC itself having already clipped). If the front end
  * clips before ANY of that digital chain runs, no amount of correct
@@ -3686,8 +3686,8 @@ static int16_t s_pga_gain_db_x2 = CONFIG_PGA_START_DB_X2; /* see config.h */
  *
  * s_rf_agc_enabled is a genuine master on/off switch, independent of
  * the backoff amount - same "toggle separate from the value" shape as
- * s_nr_on/nr_ss_get_enabled(), per the project owner ("como el botón
- * NR"). Defaults OFF: this changes what gets written to the codec
+ * s_nr_on/nr_ss_get_enabled() - the project owner asked for it to work
+ * like the NR button. Defaults OFF: this changes what gets written to the codec
  * autonomously, based on a heuristic (rf_clip_scan()'s threshold/
  * count in demod_am.c) - opt-in like every other automatic-behavior
  * feature in this codebase (NR, NB historically), not a surprise for
@@ -3735,8 +3735,8 @@ static int16_t  s_rf_agc_backoff_x2 = 0;      /* 0..RF_AGC_BACKOFF_MAX_X2, in 0.
 static uint8_t  s_rf_agc_rin_level = 0U;      /* aic3204_rin_t - 0=10k/1=20k/2=40k, see rf_agc_escalate_rin() */
 
 /*
- * SUELO MANUAL DEL ATENUADOR - 22/09/2026, por el usuario del proyecto: "el
- * atenuador en usb 20m no me deja poner nada mas que -6".
+ * SUELO MANUAL DEL ATENUADOR - 22/09/2026. En USB de 20 m el atenuador no
+ * admitia nada por debajo de -6 dB.
  *
  * No le dejaba, y el comentario de menu_tile_att_callback() ya lo decia sin
  * llamarlo fallo: el tile manual y el AGC de RF compartian
@@ -3920,9 +3920,9 @@ static char    s_fil_det[16];
  * needs the room: target_max = max(target_min + MIN_SPAN_DB,
  * frame_max + CEIL_MARGIN_DB). With no strong signals, the display now
  * always keeps at least MIN_SPAN_DB of headroom above the floor.
- * *** 01/09/2026, DEFAULT FLIPPED TO ON, same day *** - per the
- * project owner, after bench-testing the ceiling fix above: "me gusta"
- * - on by default now, departing from this project's usual "new
+ * *** 01/09/2026, DEFAULT FLIPPED TO ON, same day *** - the project
+ * owner approved it after bench-testing the ceiling fix above, so it
+ * is on by default now, departing from this project's usual "new
  * control defaults to the old behavior" rule for once, since the
  * owner explicitly asked for it after confirming the behavior on real
  * hardware. Manual SCALE adjustment (tune_encoder_poll()'s
@@ -4655,8 +4655,8 @@ static void battery_display_draw(void)
 
 /*
  * Simple speaker glyph - box (the driver) + a flat-right-edge
- * trapezoid "horn", no sound-wave arcs (per the project owner:
- * "hazlo mas facil" after seeing a fancier waves version).
+ * trapezoid "horn", no sound-wave arcs (the project owner asked
+ * for something simpler after seeing a fancier waves version).
  *
  * Proportions (box_w=7, box_h=10, full W=16, full H=24) are scaled
  * from the real, standard "speaker/volume" glyph most icon sets use
@@ -4874,8 +4874,8 @@ static void smeter_dbfs_uart_report(float peak)
  *     1MHz higher) read about 20dB worse - suggests a real LO-level
  *     difference between the two generation methods that hasn't been
  *     tracked down yet, independent of this offset.
- * Applied UNCONDITIONALLY anyway ("adelante con el resto lo mas
- * simple", per the project owner) rather than trying to detect and
+ * Applied UNCONDITIONALLY anyway (the project owner preferred the
+ * simplest route) rather than trying to detect and
  * special-case any of the above - the tradeoff being: expect this
  * reading to be genuinely wrong (not just imprecise) in those specific
  * conditions, until each is separately investigated and, if needed,
@@ -4897,8 +4897,8 @@ static const float k_att_db_values[3] = { 0.0f, -6.0f, -12.0f };
  * smeter_dbm_update_and_draw() - added 01/09/2026, per the project
  * owner, REPLACING the earlier SNR readout that used to live in this
  * exact screen spot (SNR_X/SNR_Y, in the status strip next to the
- * S-meter bar) - "ponemos el valor numerico del smeter al lado en
- * lugar del SNR actual". The 12-segment S-meter bar is coarse (7dB/
+ * S-meter bar), which the owner wanted replaced by the numeric
+ * S-meter value. The 12-segment S-meter bar is coarse (7dB/
  * segment); this gives the same underlying peak reading (demod_am_
  * get_signal_peak(), the exact same value smeter_draw() and smeter_
  * dbfs_uart_report() already use) as a precise, calibrated dBm number
@@ -4907,8 +4907,8 @@ static const float k_att_db_values[3] = { 0.0f, -6.0f, -12.0f };
  *
  * *** 01/09/2026: dynamically compensated for the CURRENT ATT/PGA
  * setting, not just valid at the one exact combination calibrated
- * against *** - per the project owner ("no una relacion lineal entre
- * el valor PGA y esta medida de dbm?"). Both ATT (the Rin selector,
+ * against *** - the project owner asked whether the PGA value and this
+ * dBm reading were not linearly related. Both ATT (the Rin selector,
  * k_att_db_values - a real, physics-derived 0/-6/-12dB signal drop,
  * not an approximation) and PGA (aic3204_set_pga_gain_db(), a real
  * 0.5dB-precision hardware gain stage per the AIC3204 datasheet) are
@@ -5060,8 +5060,8 @@ static void smeter_dbm_update_and_draw(float peak)
 #define BADGE_ROW_X0 (uint16_t)(SNR_X + 100U) /* 01/09/2026: widened from +90 to +100 - the dBm readout that replaced SNR here can reach 3-digit magnitudes ("-128dBm", 7 chars, 84px at this font/scale) wider than SNR's old 2-digit-typical range ever needed */
 
 /* Indexed directly by agc_profile_t (demod_am.h) - MANUAL, SLOW,
- * MEDIUM, FAST in that order. Originally "MAN, SLW, MED, FST" per the
- * project owner's verbatim request; MAN relabeled to OFF on
+ * MEDIUM, FAST in that order. Originally MAN/SLW/MED/FST, as the
+ * project owner asked; MAN relabeled to OFF on
  * 01/09/2026 (also per the project owner) once MANUAL was re-added to
  * the cycle as an explicit "AGC off" rung - OFF reads more clearly
  * than MAN for that purpose. */
@@ -6043,8 +6043,8 @@ _Static_assert(sizeof(k_audio_bw_hz) / sizeof(k_audio_bw_hz[0])
  * for more controls). Factored out so both entry points can't drift
  * out of sync with each other.
  *
- * MANUAL was removed from the cycle 07/08/2026, per the project owner
- * ("no tiene sentido por ahora"), then RE-ADDED 01/09/2026 (also per
+ * MANUAL was removed from the cycle 07/08/2026, per the project owner,
+ * who saw no use for it then, then RE-ADDED 01/09/2026 (also per
  * the project owner: an explicit "AGC off" option is wanted after
  * all) - the enum value, the demod_am.c MANUAL branch (fixed unity
  * gain, peak-tracking bypassed), and k_agc_profile_labels[0]="OFF"
@@ -6424,8 +6424,8 @@ static uint32_t spec_zoom_full_span_hz(void)
  * Panadapter frequency scale under the spectrum trace - 5 reference
  * points (both edges, both quarter-points, and center), each showing
  * the ACTUAL absolute frequency at that point, TRUNCATED to kHz (last
- * 3 digits dropped - "quitando los 3 ultimos digitos", per the
- * project owner, once 3 points at full Hz precision didn't leave room
+ * 3 digits dropped, per the project owner, once 3 points at full Hz
+ * precision didn't leave room
  * for more of them). Same grouped-thousands look as
  * freq_display_draw()'s title-bar readout (via tune_freq_format() -
  * already defined above, reused here on the truncated kHz value
@@ -6475,7 +6475,7 @@ static uint32_t spec_zoom_full_span_hz(void)
  * every change rather than diffing against the last-drawn value.
  */
 #define SPEC_SCALE_TEXT_SIZE 2 /* was 1 - bumped 03/08/2026, per the
-                                 * project owner: "casi no se ve" */
+                                 * project owner: barely legible before */
 
 static spec_chrome_t s_chrome;      /* lo ultimo que se dibujo */
 static uint8_t       s_chrome_init = 0U;
@@ -7380,7 +7380,7 @@ static void menu_tile_zoom_callback(void *widget, ui_event_t event, void *user_d
  *      swap which function receives each captured block
  *      (demod_am_process_raw <-> demod_wfm_process_raw) - these have
  *      entirely separate buffers/state (see demod_wfm_process_raw()'s
- *      comment on the "ruta separada" decision), so this swap alone
+ *      comment on the separate-path decision), so this swap alone
  *      is what actually routes audio through the right pipeline.
  *   4. Re-arm both DMA channels (sdr_rx_start()/gd32_i2s_stream_
  *      start()) - the GD32's own I2S peripherals resync here too,
@@ -8107,8 +8107,8 @@ static void menu_tile_cw_wpm_callback(void *widget, ui_event_t event, void *user
 }
 
 /*
- * RFAGC tile: a plain toggle (per the project owner, "como el botón
- * NR"), not a detail view - there's nothing to dial in, just on/off.
+ * RFAGC tile: a plain toggle - the project owner asked for it to work
+ * like the NR button - not a detail view - there's nothing to dial in, just on/off.
  * Turning OFF immediately drops any active backoff AND Rin escalation,
  * restoring the PGA to the plain ceiling value at 10k input impedance,
  * rather than leaving either frozen in place - "off" should mean
@@ -11103,8 +11103,8 @@ static void ajuste_accion(uint8_t id)
      * Hasta hoy cada caso de ahi arriba tenia que acordarse de llamar a
      * settings_mark_dirty() por su cuenta, y unos cuantos no se acordaban:
      * la velocidad de la cascada, la sintonia automatica de CW... El usuario
-     * lo noto como "siempre que arranco me pone rapida y tengo que
-     * cambiarla". Cuarenta y tantos casos y una regla que hay que recordar
+     * lo noto en que la cascada arrancaba siempre en rapida y habia que
+     * cambiarla a mano. Cuarenta y tantos casos y una regla que hay que recordar
      * en cada uno es una regla que se va a romper; ya se rompio.
      *
      * Asi que se le da la vuelta al defecto: se avisa SIEMPRE, y la lista
@@ -11148,9 +11148,9 @@ static void ajuste_accion(uint8_t id)
  * no cuatro grupos fijos.
  */
 /* Las dos pantallas que usan la columna de categorias. Bandas se paso a este
- * reparto el 22/09/2026, por el usuario del proyecto: "en la pantalla de bandas
- * vamos a hacer lo mismo que en la de ajustes, menu lateral que marque la
- * categoria". Con 16 celdas por familia, ninguna necesita paginar. */
+ * reparto el 22/09/2026, pedido por el usuario: el mismo menu lateral de
+ * categorias que ya tenia la pantalla de ajustes. Con 16 celdas por familia,
+ * ninguna necesita paginar. */
 static ui_cfg_state_t s_cfg;
 static uint8_t        s_cfg_cat = 0U;
 static int8_t         s_cfg_cursor = 0;
@@ -11378,11 +11378,11 @@ static void tema_aplicar(uint8_t i)
  * forma de aprovecharlo sin recompilar.
  */
 /*
- * Siguiente paleta del espectro, en el sitio - 22/09/2026, por el usuario del
- * proyecto: "un boton que sea la paleta del espectro y que vaya cambiando
- * conforme le vas dando, igual que el de tema".
+ * Siguiente paleta del espectro, en el sitio - 22/09/2026, pedido por el
+ * usuario: un boton de paleta del espectro que vaya cambiando conforme se
+ * le da, igual que el de tema.
  *
- * El "igual que el de tema" es literal: mismo gesto, misma celda, mismo
+ * Lo de "igual que el de tema" es literal: mismo gesto, misma celda, mismo
  * volver a la lista con el nombre nuevo puesto. La diferencia es que un tema
  * repinta toda la pantalla porque cambia todos los colores de la interfaz, y
  * una paleta solo cambia el espectro y la cascada, asi que basta con
@@ -12818,7 +12818,7 @@ static void cat_freq_pon(uint32_t hz)
  *
  * Pedido por el usuario, 09/10/2026.
  *
- * Era cierto. y era un olvido mio: cat_freq_pon() movia el oscilador y no
+ * Era cierto, y era un olvido mio: cat_freq_pon() movia el oscilador y no
  * repintaba nada. El camino del mando (tune_encoder_poll) si lo hace, y el
  * del teclado tambien; este entraba por un sitio nuevo y se quedo sin ello.
  *
@@ -13938,7 +13938,7 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
          * la izquierda. Ver reset_causa.h: T tension, P patilla, S
          * software, G perro guardian, B bajo consumo.
          *
-         * Existe porque "se reinicia random" no es un dato y esto si lo es:
+         * Existe porque un reinicio suelto no es un dato y esto si lo es:
          * una T es la bateria o un pico de consumo, una P es el cableado, y
          * se arreglan en sitios distintos.
          */
@@ -14173,8 +14173,8 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
     case INFO_XAJUSTES: {
         /* Cuantas veces se ha guardado CONFIG.CSV desde que arranco, cuantas
          * han fallado, y hace cuanto fue la ultima buena. Ver el comentario
-         * de los contadores en settings.c: esto convierte "no se me guardan
-         * los ajustes" en un numero. */
+         * de los contadores en settings.c: esto convierte el "los ajustes
+         * no se guardan" en un numero. */
         uint16_t ok = 0U, mal = 0U;
         uint32_t ult = 0U;
         uint8_t  i = 0U;
@@ -14810,8 +14810,8 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
     /*
      * CUANTAS VECES SE HA QUEDADO UN DIBUJO SIN PINTAR - 13/10/2026.
      *
-     * *** Por el fallo conocido: "el boton Borrar del panel de CW
-     * desaparece despues de mucho rato decodificando". ***
+     * *** Por el fallo conocido: el boton Borrar del panel de CW
+     * desaparecia despues de mucho rato decodificando. ***
      *
      * gfx2 monta la pantalla en UNA banda de 16 filas que se coge y se
      * suelta. Si alguien la pide y esta cogida -la captura de pantalla se
@@ -16298,7 +16298,7 @@ static void grid_apply(uint8_t cel)
                  * LANZA LA PRUEBA A/B, que antes era conmutar a mano.
                  *
                  * *** Despues de tres mensajes seguidos pidiendole que
-                 * apuntara numeros de la pantalla: "eres un coñazo". ***
+                 * apuntara numeros de la pantalla, y con razon. ***
                  *
                  * Era cierto. La pregunta -si lo que se ve es espejo o una
                  * emisora que cae en el bin simetrico- se contesta apagando
@@ -17166,7 +17166,7 @@ static void menu_freq_keypad_show(void)
 /*
  * --- Clock-setting keypad (08/09/2026, per the project owner) -----------
  *
- * "podemos poner un tile para ajustar el reloj... hora y minutos" -
+ * A tile to set the clock -hours and minutes-, per the project owner:
  * tap the clock readout (TIME_TAP_X1/Y2's zone, checked in
  * demo_touch_poll()) to type in HH:MM as 4 digits, same "reuse
  * s_menu_screen/MENU_AREA, opened straight from the top bar" shape as
@@ -18907,7 +18907,7 @@ static uint8_t s_rtty_text_last_was_eol = 1U; /* starts "true" so a leading CR/L
  * s_rtty_text_draw_row/col: how far rtty_text_panel_draw() has ALREADY
  * painted onto the real LCD - always <= (s_rtty_text_cur_row,
  * s_rtty_text_cur_col) in reading order. Added 10/08/2026, per the
- * project owner ("mucho flicker el texto"): the original version
+ * project owner, who reported heavy flicker in the text: the original version
  * cleared the WHOLE 676x144 panel (gfx_fill_rect, ~97k pixels) and
  * redrew every line on EVERY new character, even though normally only
  * the single newest glyph actually changed - that clear-then-redraw
@@ -18975,10 +18975,9 @@ static void digi_borra(gfx2_surf_t *s, void *ctx)
  * ===========================================================================
  * El primer intento le dio al RDS dos renglones donde va la cascada.
  * Funcionaba, pero se comia media pantalla por un dato que se mira de reojo,
- * y el usuario lo dijo en una linea: "creo que el texto del rds estaria mejor
- * en otro sitio, como entre el boton de bandas y la hora, en modo
- * marquesina". Era cierto.: ese hueco de la cabecera estaba vacio, y asi la
- * cascada vuelve entera.
+ * y el usuario pidio moverlo al hueco de la cabecera que queda entre el
+ * boton de bandas y la hora, en modo marquesina. Era cierto que ese hueco
+ * estaba vacio, y asi la cascada vuelve entera.
  *
  * Aqui se monta el texto; ui_top.c lo pinta recortado al hueco. El texto
  * lleva todo seguido -emisora, codigo, hora y radiotexto- separado por
@@ -20056,7 +20055,7 @@ static void ft8_chapa(void)
          *
          * Y es justo el numero con el que se decide si el reloj esta
          * torcido, asi que leerlo diez veces mas grande se parece mucho a
-         * "esta radio va fatal de hora" cuando va bien. Ahora son segundos
+         * un reloj que va fatal cuando en realidad va bien. Ahora son segundos
          * con una cifra -lo mismo que pone WSJT-X- y lleva su "s" detras
          * para que no haya duda.
          */
@@ -20290,8 +20289,8 @@ static void ft8_mapa_pinta(gfx2_surf_t *s, void *ctx)
         }
     } else if (wspr_modo_activo()) {
         /*
-         * WSPR, del localizador de la baliza - 28/09/2026, por el usuario:
-         * "wspr no tiene mapa".
+         * WSPR, del localizador de la baliza - 28/09/2026, pedido por el
+         * usuario, que echaba en falta el mapa en WSPR.
          *
          * Aqui el localizador tiene COLUMNA PROPIA -las de WSPR son Hora,
          * Indicativo, Loc., dBm, Desvio y Cal.-, o sea el campo 3, y no hay
@@ -21500,8 +21499,8 @@ static void digi_sync(void)
         /*
          * ENCENDIDO SI ESTAS EN UNA DE LAS SUYAS - 11/10/2026.
          *
-         * Nace de una confusion del usuario que costo media conversacion:
-         * daba por hecho que 13.312 no estaba en la lista. Y estaba. Lo
+         * Nace de una confusion del usuario: daba por hecho que 13.312 no
+         * estaba en la lista. Y estaba. Lo
          * que pasa es que este rotulo enseña la frecuencia sintonizada
          * ESTE o NO ESTE en la tabla -lo dice su propio comentario, y se
          * hizo a proposito para que el boton no pareciera roto-, asi que
@@ -21687,9 +21686,9 @@ static void digi_sync(void)
         s_digi.cebra   = 0U;
 
         /*
-         * Columnas y titulos - 25/09/2026, por el usuario del proyecto: "una
-         * cabecera que diga que es cada campo", "algo mas espaciados", "hay
-         * mucho hueco a la derecha vacio".
+         * Columnas y titulos - 25/09/2026, pedido por el usuario: una
+         * cabecera que diga que es cada campo, mas aire entre columnas y
+         * aprovechar el hueco que quedaba a la derecha.
          *
          * Las unidades viven AQUI, en los titulos, y no en cada renglon: un
          * "Hz" repetido dieciseis veces es ruido, y ademas era lo que hacia
@@ -21702,8 +21701,8 @@ static void digi_sync(void)
                             "Time\tHz\tdB\tDT\tMessage\tkm\tCountry");
 
         /*
-         * DE ARRIBA HACIA ABAJO, Y PEGADO ARRIBA - 25/09/2026, por el usuario
-         * del proyecto: "el texto ha aparecido abajo del todo".
+         * DE ARRIBA HACIA ABAJO, Y PEGADO ARRIBA - 25/09/2026, avisado por
+         * el usuario: el texto aparecia abajo del todo.
          *
          * ft8_modo_linea(0) es el MAS NUEVO y el panel pinta de viejo a
          * nuevo, asi que hay que darle la vuelta. Lo que fallaba no era eso
@@ -21840,7 +21839,7 @@ static void digi_sync(void)
     /*
      * Y LAS MISMAS DOS CONDICIONES QUE ARRIBA - 13/10/2026.
      *
-     * Ponia solo `rtty_get_enabled()`. El arreglo del 06/10 -Pedido por el usuario.- le anadio `&& !sstv_activo() && !wefax_activo()` a
+     * Ponia solo `rtty_get_enabled()`. El arreglo del 06/10 le anadio `&& !sstv_activo() && !wefax_activo()` a
      * btn3 y btn4, y este bloque, escrito el mismo dia y por lo mismo, se
      * quedo con la condicion vieja.
      *
@@ -23655,8 +23654,8 @@ static void sstv_hdr_draw(void)
         /*
          * Y "buscando el modo" no es lo mismo que "esperando una imagen":
          * con Auto puesto la radio NO esta parada, esta midiendo el ritmo
-         * de las lineas. Decirlo evita la pregunta de siempre -"le doy a
-         * empezar y no empieza"- mientras pasan las tres o cuatro lineas
+         * de las lineas. Decirlo evita la pregunta de siempre -por que al
+         * darle a Empezar no empieza- mientras pasan las tres o cuatro lineas
          * que cuesta medirlo.
          */
         e = in.vis ? tr("Modo no soportado, VIS ", "Unsupported mode, VIS ")
@@ -24193,8 +24192,8 @@ static uint8_t digi_panel_active(void)
      * sdr_spectrum_waterfall_tick()-, y eso tiene sentido cuando estas
      * decodificando teletipo, donde lo que miras es el texto. Con el RDS no:
      * el RDS es un dato de fondo mientras escuchas la FM y miras el
-     * espectro. El usuario lo dijo en una linea - "rds activo y el espectro
-     * desaparece"- y ademas, como el osciloscopio de tono no tiene datos en
+     * espectro. El usuario lo dijo en una linea -con el RDS activo el
+     * espectro desaparecia- y ademas, como el osciloscopio de tono no tiene datos en
      * FM, lo que quedaba era una pantalla en negro.
      *
      * El RDS tiene su propio panel, mas pequeno, que ocupa solo la cascada.
@@ -24231,8 +24230,8 @@ static uint8_t digi_panel_active(void)
      * EL SINTOMA ERA EL PEOR POSIBLE: el modo se selecciona, el
      * demodulador arranca, el decodificador corre y hasta decodifica - pero
      * el espectro NO cede su sitio, asi que el panel con la tabla y los
-     * botones no llega a pintarse nunca. Desde fuera: "le doy y no pasa
-     * nada". Nada falla, nada avisa, y lo que hay roto es una linea que no
+     * botones no llega a pintarse nunca. Desde fuera: se pulsa y no pasa
+     * nada. Nada falla, nada avisa, y lo que hay roto es una linea que no
      * menciona el modo por ningun lado.
      *
      * LA PREGUNTA QUE CONTESTA ESTA FUNCION es "¿el espectro ha dejado su
@@ -24528,8 +24527,8 @@ static void rtty_scope_draw(void)
      * indicador de velocidad de justo debajo.
      */
     /*
-     * NI el boton NI la chapa se repintan por frame - 22/09/2026, por el
-     * usuario del proyecto: "los ppm y el boton borrar parpadean".
+     * NI el boton NI la chapa se repintan por frame - 22/09/2026, avisado
+     * por el usuario: los ppm y el boton de borrar parpadeaban.
      *
      * Parpadeaban porque estaban ENCIMA del trazo y spectrum_draw() repinta
      * el trazo entero en cada cuadro: cada frame los borraba y volvian a
@@ -24784,9 +24783,9 @@ static void tune_encoder_poll(void)
      * shape as the long-press handler right after this block.
      *
      * *** SOLO CUANDO EL MANDO ESTA SINTONIZANDO. 02/10/2026, por un
-     * fallo que nos reportaron: "although the volume mode can be
-     * selected (light blue highlight), moving the encoder does not
-     * change the volume level when in either RTTY mode". ***
+     * fallo que nos reportaron: en los dos modos de RTTY se podia
+     * seleccionar el volumen -el boton se encendia en azul- pero el
+     * mando no cambiaba el nivel. ***
      *
      * Y tenian razon. Esta rama estaba ANTES de mirar s_encoder_target,
      * asi que en RTTY se quedaba con TODOS los detentes pasara lo que
@@ -24805,7 +24804,7 @@ static void tune_encoder_poll(void)
      * Con el destino en TUNE la pulsacion corta y la larga se las sigue
      * tragando esta rama, como antes. Eso no molesta: la corta cambia el
      * paso de sintonia, que en RTTY no se usa, y la larga significa
-     * "devuelveme el mando a TUNE", donde ya esta.
+     * devolver el mando a TUNE, donde ya esta.
      *
      * *** !s_menu_open added 08/08/2026 *** - without it, the encoder
      * kept nudging mark/space even while MENU/MODE was open, hijacking
@@ -24851,13 +24850,13 @@ static void tune_encoder_poll(void)
     /*
      * EL VOLUMEN, CON EL MENU DELANTE - 05/10/2026.
      *
-     * *** De un issue: "volume doesn't work when in settings menu... the
-     * 'volume' text box appears as expected, but moving the encoder goes
-     * through the settings options instead of changing the volume. If it's
-     * by design, then the volume button shouldn't be able to be
-     * activated." ***
+     * *** De un issue: con el menu de ajustes abierto, el volumen no
+     * respondia. La caja de volumen aparecia como se espera, pero el giro
+     * del mando seguia recorriendo las opciones de ajustes en vez de
+     * cambiar el volumen; y si eso era a proposito, entonces el boton de
+     * volumen no deberia ni poder activarse. ***
      *
-     * Y era cierto. en lo peor: el boton SI hacia algo -ponia el destino
+     * Y era cierto en lo peor: el boton SI hacia algo -ponia el destino
      * del mando en VOLUMEN, encendia el boton y sacaba la caja- y despues
      * el giro se lo quedaba la rejilla, que corre antes y hace return. O
      * sea que la radio prometia una cosa y hacia otra. De las dos salidas
@@ -24952,7 +24951,7 @@ static void tune_encoder_poll(void)
      */
     /*
      * LA REGLA ENTERA VIVE EN mando_mapa.c - 15/10/2026, por un informe:
-     * "When the map is on the screen, the control functions stop working".
+     * con el mapa en pantalla los controles dejaban de responder.
      *
      * Aqui habia "todos los giros son del mapa MENOS los del volumen", y
      * eso dejaba muerto el mando enganchado al ancho de banda, al squelch,
@@ -25371,7 +25370,7 @@ static void tune_encoder_poll(void)
      *
      * Pedido por el usuario.
      *
-     * Era cierto. y el fallo era mio. El mando entrega los detentes
+     * Era cierto, y el fallo era mio. El mando entrega los detentes
      * ACUMULADOS, asi que un giro rapido pedia hasta diez saltos y cada
      * uno gastaba su tope entero: diez veces el peor caso dentro del mismo
      * paso del bucle, con la cascada parada mientras tanto.
@@ -25794,8 +25793,8 @@ static void radio_screen_draw(void)
  */
 
 /*
- * spec_tap_tune_to_x() - added 01/09/2026, per the project owner:
- * "poder elegir visualmente una señal para sintonizarla" - a genuine
+ * spec_tap_tune_to_x() - added 01/09/2026, per the project owner,
+ * who wanted to pick a signal visually and tune to it - a genuine
  * TAP (as opposed to a drag - see s_spec_drag_moved's own comment in
  * demo_touch_poll() for how the two are told apart) on the spectrum
  * panel tunes DIRECTLY to whatever frequency that pixel column
@@ -25813,8 +25812,8 @@ static void radio_screen_draw(void)
  * zoom 1x) and why full_span_hz comes from spec_zoom_full_span_hz().
  *
  * Rounded to the NEAREST active tune step (07/09/2026, per the
- * project owner - "interesa que se redondeen al step activo... asi
- * 7.123.531 pasaria a ser 7.124 si el step esta a 1k") - this used to
+ * project owner, who wanted the result rounded to the active
+ * step: with a 1 kHz step, 7.123.531 becomes 7.124) - this used to
  * be deliberately UNQUANTIZED (landing exactly on whatever pixel the
  * finger hit, on the reasoning that a real signal's peak has no
  * reason to fall on a round step), but that leaves ugly, hard-to-read
@@ -26759,8 +26758,8 @@ static void demo_touch_poll(void)
      * decide de quien es el gesto ni se arma ningun boton: ese toque se
      * pierde entero y solo funciona el de despues.
      *
-     * Se ve como "el primer toque en la lista de frecuencias no hace
-     * nada" y como "hay que darle dos veces al boton de saltar". Por eso
+     * Se ve en que el primer toque en la lista de frecuencias no hace
+     * nada y en que hay que pulsar dos veces el boton de saltar. Por eso
      * ahora saltan a `fin`, que es esa misma limpieza: un `goto` hacia
      * delante y no una copia de las veinte lineas, porque esos latches son
      * estaticos DE ESTA FUNCION y no se pueden bajar desde fuera.
@@ -27191,8 +27190,8 @@ fin:
  * arrays on every single spectrum poll while in WFM - textbook memory
  * corruption of whatever static variables happen to sit next in the
  * linker layout, which is almost certainly what the project owner
- * saw as "el espectro se ralentiza, el volumen se sube solo, se
- * activan otros menus solos, y al volver a AM se cuelga" - all
+ * saw: the spectrum slowing down, the volume rising by itself,
+ * menus opening on their own, and a hang on going back to AM - all
  * classic symptoms of a buffer overrun clobbering unrelated state
  * (gain variables, UI state, whatever else the linker happened to
  * place right after these two arrays), not four separate bugs.
@@ -28045,8 +28044,8 @@ static void sdr_spectrum_waterfall_tick(void)
      * a multiplos de 375 Hz, con bandas laterales separadas 41,75 Hz, que es
      * exactamente esos 24,0 ms.
      *
-     * Explica ademas lo que el ya habia notado: "los fps han modificado un
-     * poco el siseo". Cambiar los fps mueve de 9 bloques a 8, a 10 o a 13,
+     * Explica ademas lo que el ya habia notado: los fps cambiaban un poco
+     * el siseo. Cambiar los fps mueve de 9 bloques a 8, a 10 o a 13,
      * pero SIGUE SIENDO ENTERO - cambia el timbre y no se va.
      *
      * LO QUE SE HACE: que el plazo baile unos milisegundos, asi que unos
@@ -28178,7 +28177,7 @@ static void sdr_spectrum_waterfall_tick(void)
 
     /*
      * TEMPORAL smoothing ACROSS display frames - added 31/07/2026 per
-     * the project owner: the trace looked too "nervous"/jittery bin-
+     * the project owner: the trace looked too jittery bin-
      * to-bin between frames. This is a SEPARATE thing from the
      * intra-frame FFT averaging just above (which combines multiple
      * FFT snapshots WITHIN one ~33ms display frame, reducing noise
@@ -28300,8 +28299,7 @@ static void sdr_spectrum_waterfall_tick(void)
          * filter and WFM's full-Nyquist width are both FIXED - see
          * the BW badge's "6K3"/"96K", non-interactive, in
          * aux_row_display_draw()) - band_active stays 0 for those,
-         * same as the project owner asked ("en WFM, NFM no se
-         * muestra").
+         * same as the project owner asked: not shown in WFM or NFM.
          *
          * full_span_hz: the SAME halving-per-zoom-step span
          * spec_span_labels_draw() uses for its tick ruler (96000 at
@@ -28317,8 +28315,8 @@ static void sdr_spectrum_waterfall_tick(void)
          * both ways, +/-bw_hz. USB only demodulates the UPPER
          * sideband: the tint extends RIGHT (higher frequency) only,
          * from the center point out to +bw_hz. LSB is the mirror:
-         * LEFT only, -bw_hz to the center point - exactly the "a la
-         * derecha o la izquierda" the project owner asked for.
+         * LEFT only, -bw_hz to the center point - exactly the one-sided
+         * tint, left or right, that the project owner asked for.
          */
         {
             demod_mode_t mode = demod_am_get_mode();
@@ -28326,10 +28324,10 @@ static void sdr_spectrum_waterfall_tick(void)
             if (mode == DEMOD_MODE_AM || mode == DEMOD_MODE_SAM
                 || mode == DEMOD_MODE_USB || mode == DEMOD_MODE_LSB) {
                 /*
-                 * DE DONDE SALE EL ANCHO - 25/09/2026, por el usuario del
-                 * proyecto: "si pongo lo de bw y elijo un filtro mas pequeno
-                 * luego en la ventana principal el espacio entre las dos
-                 * lineas verticales deberia de ajustarse".
+                 * DE DONDE SALE EL ANCHO - 25/09/2026, avisado por el
+                 * usuario: al elegir un filtro mas estrecho con el boton BW,
+                 * el espacio entre las dos lineas verticales de la ventana
+                 * principal no se ajustaba.
                  *
                  * Y no se ajustaba. Esto leia k_audio_bw_hz[], que es la
                  * tabla de tres posiciones del boton BW (4K0/2K3/1K8), y el

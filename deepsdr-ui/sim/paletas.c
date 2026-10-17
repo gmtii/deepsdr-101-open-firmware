@@ -5,8 +5,8 @@
  * del firmware, compilando vendor/spectrum.c tal cual) una vez por cada
  * paleta de spectrum_palette_t, y escribe un PPM por paleta.
  *
- * Para que: el usuario recuerda que en una demo antigua "se notaban muy
- * bien los valles entre senales" y que era "una que tenia puntitos".
+ * Para que: el usuario recuerda una demo antigua en la que se notaban muy
+ * bien los valles entre señales, y que esa paleta tenia puntitos.
  * En vez de adivinar cual era, se dibujan las 16 con los mismos datos
  * y se miran.
  *

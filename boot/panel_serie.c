@@ -10,7 +10,7 @@
  * POR QUE HACIA FALTA. Nuestro rm68120_init() usa la secuencia del NT35510
  * (RM68120_USE_NT35510_SEQUENCE = 1) y deja el panel con el canal ROJO a
  * tope: el NEGRO 0x0000 sale rojo, el VERDE 0x07E0 sale amarillo y el GRIS
- * 0x8410 sale blanco. Es el mismo "painted the panel red on boot" que
+ * 0x8410 sale blanco. Es el mismo panel pintado de rojo al arrancar que
  * main.c linea 912 documenta desde el 30/07, y el motivo por el que la
  * aplicacion dejo de llamar a rm68120_init() y se apoya en el cargador.
  *
@@ -278,8 +278,8 @@ uint8_t  g_panel_rama;
  * parametros aplastadas a una escritura- y por eso la A dejaba la pantalla
  * en blanco.
  *
- * La B no. La B la usa la radio del usuario, es la unica verificada mirandola
- * -Pedido por el usuario.- y cada vez que la he tocado la he oscurecido.
+ * La B no. La B la usa la radio del usuario, es la unica verificada
+ * mirandola, y cada vez que la he tocado la he oscurecido.
  * Asi que se copia de ahi, de ejecutar el customboot v2.2 y anotar lo que
  * le escribe al panel. Ver panel_rama_b_v22.h.
  *

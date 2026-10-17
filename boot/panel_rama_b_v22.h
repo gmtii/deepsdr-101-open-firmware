@@ -3,8 +3,8 @@
  *
  * GENERADO. No editar a mano.
  *
- * Es la rama que usa la radio del usuario y la unica verificada MIRANDOLA:
- * Pedido por el usuario.. Cada vez que la he tocado la he oscurecido, asi
+ * Es la rama que usa la radio del usuario y la unica verificada MIRANDOLA.
+ * Cada vez que la he tocado la he oscurecido, asi
  * que no se deduce de nada: se EMULA el customboot.bin v2.2 (sha256
  * 40dfcc82...) y se anota lo que le escribe al panel, en orden y con sus
  * esperas.

@@ -18,7 +18,7 @@
  * reading common/monitor.c and demo/decode_ft8.c.
  *
  * PARAMETER DERIVATION (09/2026 REVISION - widened from the original
- * 400Hz design, per the project owner, "vamos alla" on step 2 of the
+ * 400Hz design, green-lighted by the project owner as step 2 of the
  * memory-budget plan below):
  *
  *   sample_rate = 3200 Hz         (chosen - see ft8_decimator.h for why

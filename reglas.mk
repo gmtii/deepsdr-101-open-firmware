@@ -465,6 +465,7 @@ comprueba: comprueba-fw
 comprueba-fw:
 	@echo "== las dieciseis del firmware =="
 	@python3 tools/mkfile_check.py
+	@python3 tools/citas_check.py .
 	@python3 tools/copias_bin_check.py
 	@python3 tools/novedades_check.py User/config.h NOVEDADES.md
 	@python3 tools/md_enlaces_check.py .

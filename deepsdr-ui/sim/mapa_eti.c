@@ -233,8 +233,8 @@ int main(void)
          * ESTE BANCO EXIGIA "SOLO SE PINTA UNA" HASTA EL 13/10/2026, y lo
          * que estaba protegiendo era medio cierto: lo correcto es que no
          * se amontonen y que gane la mas nueva, NO que se pinte una sola.
-         * Pintar una sola es lo que hizo que el usuario viera "3 cq en la
-         * lista y en el mapa solo salen 2" con dos estaciones inglesas en
+         * Pintar una sola es lo que hizo que el usuario viera tres CQ en la
+         * lista y solo dos en el mapa, con dos estaciones inglesas en
          * IO92. Desde que hay seis colocaciones posibles entran las que
          * quepan sin pisarse, y el resto -esas si- se callan.
          *

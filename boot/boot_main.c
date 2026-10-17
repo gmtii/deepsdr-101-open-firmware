@@ -43,7 +43,7 @@ extern usb_core_driver g_usb;   /* en soporte.c, compartido con usb_it.c */
 /*
  * LA PALETA, Y POR QUE NO ES LA DE ANTES - 01/10/2026.
  *
- * Pedido por el usuario. Era cierto. las dos.
+ * Pedido por el usuario. Era cierto en las dos.
  *
  * Los colores de arriba son los primitivos del principio -azul puro, gris
  * medio, blanco- y puestos uno al lado de otro no forman nada. Estos salen
@@ -58,8 +58,8 @@ extern usb_core_driver g_usb;   /* en soporte.c, compartido con usb_it.c */
 /*
  * LA ETIQUETA SUBE DE 0x6D A 0xA6 - 05/10/2026, de un issue.
  *
- * *** El que lo abrio: "on the new bootloader, I cannot see the text
- * clearly on the left hand side of 'flash 512 kB'". *** La columna de la
+ * *** El que lo abrio decia que en el cargador nuevo no se leia bien el
+ * texto de la columna izquierda, la de la flash. *** La columna de la
  * izquierda es justo esta, y el numero canta:
  *
  *     ETIQUETA  RGB565 0x6B6D -> #6B6D6B   componente mayor 0x6D
@@ -230,7 +230,7 @@ static void borra_linea(uint16_t y)
  *
  * Pedido por el usuario. Y hace falta por
  * algo mas que por orden: hoy han salido dieciseis binarios distintos y la
- * unica forma de saber cual estaba grabado era mirar el sha256 en el chat.
+ * unica forma de saber cual estaba grabado era comparar el sha256 a mano.
  * Con esto se mira la radio y ya esta.
  *
  * SUBIRLA al tocar cualquier cosa del cargador. Si no se sube, miente, y
@@ -649,7 +649,7 @@ static uint16_t ficha(void)
     /*
      * Y SI NO SE RECONOCE, POR QUE - 06/10/2026.
      *
-     * *** De un issue: "The loader doesn't see update.bin on the disk". Y
+     * *** De un issue: el cargador no veia update.bin en el disco. Y
      * la foto de su ficha decia "Volumen: no se reconoce". ***
      *
      * Son el MISMO fallo y no dos: cargador_busca_update() empieza con
@@ -972,7 +972,7 @@ static void modo_actualizacion(void)
      * Pedido por el usuario. Y tiene razon: el
      * instrumento se estaba comiendo el trabajo. Queda quitada.
      *
-     * LO QUE SE APRENDIO Y NO HAY QUE PERDER: Pedido por el usuario. O sea que no
+     * LO QUE SE APRENDIO Y NO HAY QUE PERDER. No
      * fallaba solo el color: fallaban tambien los bordes y las letras. Yo
      * lo di por bueno mirando una FOTO, que es el error que este proyecto
      * ya tiene documentado dos veces en palette.h. Quien retome esto, que

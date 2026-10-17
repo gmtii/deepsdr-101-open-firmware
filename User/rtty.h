@@ -5,7 +5,7 @@
 
 /*
  * RTTY (radioteletype) decoder - added 08/08/2026, per the project
- * owner. Same "decoupled from the radio pipeline" shape as nr_ss.h:
+ * owner. Same decoupled-from-the-radio-pipeline shape as nr_ss.h:
  * this module knows nothing about demod modes or decimation, it just
  * processes whatever RTTY_BLOCK_SAMPLES-sample float AUDIO block it's
  * handed (READ-ONLY - unlike nr_ss_process(), this doesn't modify the

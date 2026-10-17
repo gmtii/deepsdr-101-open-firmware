@@ -1,9 +1,9 @@
 /*
  * EL SNR DE FT8, MEDIDO CONTRA UNA SEÑAL DE SNR CONOCIDO - 13/10/2026.
  *
- * *** De un issue: "the built-in FT8 SNR readings seem to be offset or
- * incorrectly calculated compared to standard software like WSJT-X...
- * rarely drop below +5 dB, with an average reading around +11 dB." ***
+ * *** De un issue: el SNR del decodificador propio salia desviado frente
+ * al de WSJT-X: casi nunca bajaba de +5 dB, con una media cerca de +11.
+ * ***
  *
  * POR QUE ESTE BANCO Y NO AJUSTARLO MIRANDO WSJT-X. Entre la antena y ese
  * numero hay el AGC, el FT8_ADAPTER_DB_OFFSET de -112, la ganancia coherente

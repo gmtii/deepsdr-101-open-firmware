@@ -1,8 +1,8 @@
 /*
  * Render y comprobacion de la pantalla de MODO con columna de categorias.
  *
- * La pantalla de modo se paso a la columna el 24/09/2026, por el usuario del
- * proyecto: "igual que la de bandas, en categorias analogico y digital".
+ * La pantalla de modo se paso a la columna el 24/09/2026, pedido por el
+ * usuario: igual que la de bandas, en categorias de analogico y digital.
  * Este banco comprueba lo que no se ve mirando el codigo:
  *
  *   - que ninguna categoria pase de UIC_CELLS modos, porque pasarse no
@@ -71,7 +71,7 @@ int main(void)
         int n = 0;
         for (i = 0; i < MODO_TABLA_N; i++) { if (k_modo_tabla[i].fam == f) { n++; } }
         printf("  %-12s %d modos", k_modo_fam_nombres[f][0], n);
-        if (n > UIC_CELLS) { printf("   *** SE PASA DE %d Pedido por el usuario. VACIA ***"); fallos++; }
+        if (n > UIC_CELLS) { printf("   *** SE PASA DE %d: LOS DE MAS NO SE VEN ***\n", (int)UIC_CELLS); fallos++; }
         printf("\n");
     }
     printf("\n");

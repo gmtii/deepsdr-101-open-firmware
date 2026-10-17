@@ -345,7 +345,7 @@ int main(int argc, char **argv)
                          * PEGADO SI - 15/10/2026.
                          *
                          * Aqui pedia cero repetidos y el barrido dijo
-                         * MAL. Era cierto. el barrido y estaba mal la
+                         * MAL. Era cierto el barrido y estaba mal la
                          * exigencia: una emisora en dos extremos de la
                          * ventana son DOS señales en la pantalla, y
                          * cuando sobran huecos se nombran las dos. Lo

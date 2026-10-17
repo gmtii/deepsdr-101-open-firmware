@@ -17,8 +17,8 @@
 
 /* Never let the panel go fully black, even if something asks for
  * percent=0 (an encoder run to the floor, a bug elsewhere, etc.) -
- * per the project owner's explicit request, 31/07/2026. Picked as "a
- * dim but still legible glow in a dark room", not calibrated against
+ * per the project owner's explicit request, 31/07/2026. Picked as a
+ * dim but still legible glow in a dark room, not calibrated against
  * an actual lux measurement - adjust if it's still too dim/too bright
  * for real use. Enforced centrally in backlight_set_percent() below,
  * so every caller (the encoder, any future UI control, and
@@ -33,7 +33,7 @@
  *
  * Este numero solo manda cuando el CONFIG.CSV no trae brillo guardado - o
  * sea, la primera vez, o despues de borrarlo. Y el usuario acababa de
- * borrarlo: "he borrado el config.csv y he dejao que lo cree el". Asi que
+ * borrarlo para que la radio lo creara de nuevo. Asi que
  * la pantalla se quedo al 50% sin que nadie lo tocara, igual que el NR se
  * quedo en 50 de 4.095. Dos mordiscos del mismo borrado.
  *
@@ -150,7 +150,7 @@ void backlight_set_percent(uint8_t percent)
      *
      * Pedido por el usuario.
      *
-     * Era cierto., y la unica diferencia funcional entre este fichero y el
+     * Era cierto, y la unica diferencia funcional entre este fichero y el
      * del proyecto padre era esta linea, que yo añadi el 25/09:
      *
      *     if (ccr > BACKLIGHT_PWM_PERIOD) { ccr = BACKLIGHT_PWM_PERIOD; }

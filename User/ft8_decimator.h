@@ -12,7 +12,7 @@
  * internals changed.
  *
  * WHY 3200Hz, AND WHY THIS NEEDED A REAL RESAMPLER (09/2026, per the
- * project owner, "vamos alla" on widening the search window beyond
+ * project owner green-lighting a wider search window beyond
  * 400Hz): 12000 has no integer decimation factor landing on a fs that
  * gives a power-of-two nfft together with FREQ_OSR=2 preserved (see
  * ft8_waterfall_adapter.h's memory-budget history for why FREQ_OSR=2

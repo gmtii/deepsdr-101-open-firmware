@@ -712,7 +712,8 @@ comprueba: novedades
 
 # QUIEN SE QUEDA CON EL MANDO - 05/10/2026.
 #
-# De un issue: "volume doesn't work when in settings menu". El reparto del
+# De un issue: con el menu de ajustes abierto el volumen no respondia. El
+# reparto del
 # mando en tune_encoder_poll() es una ESCALERA y el volumen esta al final:
 # cualquier pantalla que coja los detentes y vuelva antes le deja sin giro,
 # mientras el boton -que se puede pulsar siempre- ya ha encendido la luz y
@@ -931,7 +932,7 @@ comprueba: chips
 # El fichero existia desde la etapa 2 y no lo compilaba nadie: no habia
 # regla, asi que no entraba en "comprueba" ni se enteraba nadie de si
 # seguia compilando. Entra hoy porque hacia falta un sitio donde medir el
-# tanto por ciento dentro del dibujo de la bateria -Pedido por el usuario.-, y el sitio natural era este.
+# tanto por ciento dentro del dibujo de la bateria, pedido por el usuario, y el sitio natural era este.
 #
 # Y de paso trae lo suyo: el peor caso de la pastilla del mando y el de la
 # lectura S+dBm, que llevaban desde entonces sin comprobarse.
@@ -1502,7 +1503,7 @@ comprueba: dxcc
 # ---------------------------------------------------------------------
 # QUE HACE EL NR EN CADA POSICION DEL MANDO (25/09/2026)
 #
-# Nacio de un susto: "creo que el NR se ha vuelto casi inapreciable" justo
+# Nacio de un susto: el NR parecia haberse vuelto casi inapreciable justo
 # despues de cambiar powf por expf en nr_ss_set_strength(). Compila el
 # nr_ss.c DEL FIRMWARE y mide, en vez de opinar. Deja dicho ademas donde
 # esta el escalon del mando, que es lo que de verdad desconcierta.
@@ -1699,11 +1700,18 @@ comprueba: hfdlaviones
 .PHONY: version
 # Desde el 10/10/2026 tambien el MANUAL: iba por V4.30 con el firmware en
 # V4.40 y ningun banco lo miraba. Ver mira_el_manual() en version_check.py.
+# Y DESDE EL 17/10/2026 TAMBIEN SIN docs/. Antes, cuando faltaban docs/ y
+# manual/ -o sea, SIEMPRE en un clon del repositorio publico- este objetivo
+# se saltaba el banco ENTERO. Y dentro del banco iba el barrido del README,
+# que si esta en el repositorio. Resultado: el README se quedo en V5.03 con
+# el firmware en V5.04, con el tamano y el CRC de la version anterior, y
+# justo en un clon -lo que ve quien llega- no habia nada que lo mirara.
+# Ahora, sin docs/, corre la parte que solo necesita lo que hay dentro.
 version:
 ifeq ($(HAY_DOCS),)
-	@echo "  (docs/ y manual/ no estan en el repositorio: me salto version_check;"
-	@echo "   la version del firmware contra NOVEDADES.md la mira novedades_check,"
-	@echo "   que si esta dentro y la corre 'make comprueba' de la raiz)"
+	@echo "  (docs/ y manual/ no estan: comparo solo lo que vive dentro"
+	@echo "   del repositorio -config.h, README.md y los .bin-)"
+	python3 tools/version_check.py $(FIRMWARE)/User/config.h
 else
 	python3 tools/version_check.py $(FIRMWARE)/User/config.h $(FIRMWARE)/../docs/CAMBIOS.md \
 	        $(FIRMWARE)/../manual/MANUAL_V2_ES.md
@@ -1729,7 +1737,8 @@ comprueba: hfdlcols
 # ---------------------------------------------------------------------
 # LA PANTALLA DE LA BASE DE AVIONES (25/09/2026)
 #
-# "Es muy cutre" no se contesta compilando, se contesta mirando. Esto
+# Si una pantalla queda pobre no se contesta compilando, se contesta
+# mirando. Esto
 # deja las cuatro fases en out/aviones_*.ppm y mide que los rotulos no
 # se salgan. Ver la cabecera de sim/aviones_pant.c.
 out/avipant: sim/aviones_pant.c sim/lcd_sim.c gfx2/gfx2.c gfx2/fonts_data.c $(FIRMWARE)/User/aviones_pantalla.c
@@ -2379,7 +2388,7 @@ out/cargador: sim/cargador.c sim/fmc_sim.c sim/w25q_sim.c sim/gd32_pines.c \
 #
 # El de fabrica tiene UN sector por cluster; Windows, al formatear, pone
 # clusters de 4 kB. El driver tiene que tragar los dos, y el de fabrica es
-# el que no se puede romper: Pedido por el usuario.
+# el que no se puede romper.
 #
 # Las imagenes las hace mkfs.fat y las valida fsck.fat, que no saben nada de
 # este proyecto y por eso valen como tribunal.
@@ -3134,7 +3143,7 @@ comprueba: atan
 
 # LEER NO ES ESCRIBIR - 06/10/2026.
 #
-# De un issue: "The loader doesn't see update.bin on the disk", con la ficha
+# De un issue: el cargador no veia update.bin en el disco, con la ficha
 # diciendo "Volumen: no se reconoce" y la radio con el formateo DE FABRICA.
 # Los dos sintomas eran el mismo fallo: cargador_busca_update() se va sin
 # mirar el directorio si la geometria no vale, y geo_lee() contestaba a dos
@@ -3185,8 +3194,8 @@ out/fat16.img:
 
 # QUE EL PIE DE LA CELDA QUEPA EN LA CELDA - 06/10/2026.
 #
-# Pedido por el usuario. y
-# "75-256/104". La primera vez lo arregle contando caracteres y ampliando el
+# Pedido por el usuario: el pie de la celda salia cortado, y la segunda vez
+# seguia saliendo asi. La primera lo arregle contando caracteres y ampliando el
 # buffer, y la segunda seguia cortado - porque el limite que manda NO es el
 # buffer: es el ANCHO de la celda, 192 px, con una fuente PROPORCIONAL. Por
 # eso los dos recortes caen en sitios distintos. Contar no sirve: esto MIDE,
@@ -3512,8 +3521,8 @@ stanagfase: out/stanagfase ; ./out/stanagfase
 comprueba: stanagfase
 
 # ---------------------------------------------------------------------
-# EL BURBUJEO DEL REDUCTOR DE RUIDO (07/10/2026, de un comentario de Victor
-# por el canal del proyecto). Ver la cabecera de sim/nr_burbujeo.c: NO
+# EL BURBUJEO DEL REDUCTOR DE RUIDO (07/10/2026, de un aviso recibido).
+# Ver la cabecera de sim/nr_burbujeo.c: NO
 # demuestra que el burbujeo exista -no se ha podido reproducir ni en el banco
 # ni en el video que mando el usuario, y alli esta escrito por que- pero deja
 # fijado lo que el reductor hace HOY, con tope, para que ningun cambio futuro
@@ -3749,7 +3758,7 @@ comprueba: hfdlsolape
 
 # ---------------------------------------------------------------------
 # LA PASTILLA DE BANDA AL CAMBIAR DE ANCHO - 11/10/2026.
-# Nace del "cuando pongo sstv 20 el boton de arriba se corta" del usuario.
+# Nace de un aviso del usuario: en SSTV de 20 el boton de arriba se cortaba.
 # Mira PIXELES, no cuentas. Ver sim/bandacorte.c.
 # ---------------------------------------------------------------------
 out/bandacorte: sim/bandacorte.c sim/lcd_sim.c gfx2/gfx2.c gfx2/ui_top.c \
@@ -3807,8 +3816,8 @@ comprueba: wfmdc
 # ---------------------------------------------------------------------
 # LA REDUCCION DE RUIDO EN SAM (11/10/2026)
 #
-# *** De un issue: "Noise reduction doesn't work in Synchro AM mode,
-# though it would be nice if it did". ***
+# *** De un issue: la reduccion de ruido no funcionaba en SAM y se
+# pedia que lo hiciera. ***
 #
 # Y era peor que "no funciona": el boton de Ruido no esta limitado por
 # modo, asi que en SAM se encendia, ponia "activo" en la barra, y
@@ -3831,9 +3840,8 @@ comprueba: samnr
 # ---------------------------------------------------------------------
 # SAM CON UNA SOLA BANDA (11/10/2026)
 #
-# *** De un issue: "I would like the AM synchronous detector to be able to
-# operate selectively on the upper and lower sidebands. Sometimes this
-# saves you from interference". ***
+# *** De un issue: se pedia que el detector sincrono de AM pudiera trabajar sobre una
+# sola banda lateral, para escapar de una interferencia. ***
 #
 # El estimulo lleva UN TONO DISTINTO EN CADA BANDA, y eso no es un detalle:
 # con un AM normal -el mismo tono arriba y abajo- quedarse con una banda
@@ -4029,8 +4037,8 @@ comprueba: mapatroc
 
 # --- DE QUIEN ES EL MANDO CON EL MAPA PUESTO - 15/10/2026 --------------
 #
-# Por un informe: "When the map is on the screen, the control functions
-# stop working". Ver User/mando_mapa.h.
+# Por un informe: con el mapa en pantalla los controles dejaban de
+# responder. Ver User/mando_mapa.h.
 out/mandomapa: sim/mando_mapa_test.c $(FIRMWARE)/User/mando_mapa.c
 	@mkdir -p out
 	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ $(filter %.c,$^)

@@ -4,8 +4,9 @@
  * puntuacion basica util para UI de SDR (frecuencias, dB, unidades,
  * menus). Generada localmente para este proyecto.
  *
- * Minusculas añadidas 07/08/2026, per the project owner ("queda fea
- * sin ellas"): rasterizadas con PIL a partir de DejaVu Sans Mono Bold
+ * Minusculas añadidas 07/08/2026, a peticion del project owner, que
+ * las echaba en falta: rasterizadas con PIL a partir de DejaVu Sans
+ * Mono Bold
  * y reducidas a 5x7 por bloques (Image.BOX), no a mano - mas fiable
  * que transcribir bytes de memoria a este tamaño. SIN descendentes
  * propiamente dichas (g/j/p/q/y) - la rejilla solo tiene 7 filas de
@@ -16,8 +17,8 @@
  * bloque, no en un gancho) - suficiente para distinguirlas a simple
  * vista, no una tipografia con descendentes de verdad. Para eso hace
  * falta una celda mas alta (8x12 o similar) y tocar gfx_char() -
- * pendiente, discutido con el project owner como la opcion "completa"
- * frente a esta ("rapida").
+ * pendiente, planteada al project owner como la opcion completa
+ * frente a esta, la rapida.
  *
  * 'a' y 'e' salieron IDENTICAS del rasterizado automatico a este
  * tamaño (ambas colapsan a la misma forma de "caja cerrada" al
@@ -28,8 +29,9 @@
  *
  * *** 01/09/2026: LINEA BASE corregida en las 21 minusculas sin
  * descendente (a,b,c,d,e,f,h,i,k,l,m,n,o,r,s,t,u,v,w,x,z) - bug real
- * detectado por el project owner en pantalla real ("d y m arriba, y B
- * abajo... muy raro") *** - el rasterizado automatico de estas 21
+ * detectado por el project owner en pantalla real: unas letras salian
+ * una fila mas arriba que otras *** - el rasterizado automatico de
+ * estas 21
  * letras las habia dejado ocupando las filas 2-5 (o 0/1-5 segun la
  * altura de cada trazo), es decir, UNA FILA por encima de donde
  * deberian - mayusculas y digitos ocupan 0-6, con la fila 6 como

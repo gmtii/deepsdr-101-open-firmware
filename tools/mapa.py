@@ -91,7 +91,7 @@ def vtor_sueltos():
     pantalla del cargador congelada porque se estrella en la primera
     interrupcion. Ni un aviso, ni un mensaje.
 
-    La leccion no es "se me olvido un sitio" -eso pasa-, es que el guardian
+    La leccion no es que se olvide un sitio -eso pasa-, es que el guardian
     buscaba lo que sabia que existia en vez de buscar la CLASE de cosa
     peligrosa. Asi que ahora barre todo el arbol y exige que cada VTOR que
     encuentre sea uno de los tres valores que tienen sentido:

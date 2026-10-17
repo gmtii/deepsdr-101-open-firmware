@@ -12,7 +12,7 @@ copio ese: tenia el tamano correcto (262.152), la firma correcta en su
 sitio y el puntero de pila correcto, asi que paso todas las
 comprobaciones que se le hacian. Lo unico que no tenia era el cambio.
 
-Eso son tres horas de "pues a mi no me sale" por un fichero con la cara
+Eso son tres horas de informes de que no funciona por un fichero con la cara
 del bueno. Comprobar la FECHA no vale -copiar conserva fechas raras y el
 reloj del contenedor no es el de nadie-; lo que vale es comprobar el
 CONTENIDO:

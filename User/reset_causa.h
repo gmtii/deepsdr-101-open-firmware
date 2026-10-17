@@ -53,7 +53,7 @@
  * se cae, "T P T" es otra cosa.
  *
  * LO QUE ESTO NO ARREGLA: nada. No evita ni un reinicio. Lo que hace es
- * convertir "se reinicia random" en una letra, que es lo que hacia falta
+ * convertir un reinicio suelto en una letra, que es lo que hacia falta
  * para no seguir arreglando a ciegas.
  */
 

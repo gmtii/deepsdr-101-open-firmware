@@ -93,7 +93,7 @@ uint8_t navtex_car_a_cod(char c, uint8_t figuras)
  *
  * Pedido por el usuario.
  *
- * Era cierto., y el fallo estaba en como se elegia el desplazamiento.
+ * Era cierto, y el fallo estaba en como se elegia el desplazamiento.
  * Contar codigos validos es un criterio ROMO: el desplazamiento bueno saca
  * el 100%, pero el de al lado saca el 70-75% el solo. Al correr un bit, un
  * codigo de cuatro unos SIGUE teniendo cuatro unos siempre que el bit que

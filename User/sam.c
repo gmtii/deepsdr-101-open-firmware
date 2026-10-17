@@ -183,9 +183,8 @@ static void sam_nucleo(sam_t *s, const float32_t *i_in, const float32_t *q_in,
          * LA COMPONENTE EN CUADRATURA, PARA QUIEN QUIERA UNA SOLA BANDA -
          * 11/10/2026.
          *
-         * *** De un issue: "I would like the AM synchronous detector to be
-         * able to operate selectively on the upper and lower sidebands.
-         * Sometimes this saves you from interference". ***
+         * *** De un issue: se pedia que el detector sincrono de AM pudiera trabajar sobre
+         * una sola banda lateral, para escapar de una interferencia. ***
          *
          * c1 ya se calcula aqui -lo necesita el detector de fase del PLL-
          * y hasta hoy solo vivia dentro de este bucle. Sacarlo no cuesta

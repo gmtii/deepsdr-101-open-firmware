@@ -3,9 +3,8 @@
  * SAM CON UNA SOLA BANDA - 11/10/2026
  * ======================================================================
  *
- * *** De un issue: "I would like the AM synchronous detector to be able to
- * operate selectively on the upper and lower sidebands. Sometimes this
- * saves you from interference". ***
+ * *** De un issue: se pedia que el detector sincrono de AM pudiera trabajar sobre una
+ * sola banda lateral, para escapar de una interferencia. ***
  *
  * COMO SE MIDE, y es la unica forma que vale: se mete una portadora con UN
  * TONO DISTINTO EN CADA BANDA. Con las dos bandas salen los dos; eligiendo

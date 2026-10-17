@@ -10,7 +10,7 @@
  * the capture range is too wide; for proper operation, it should be limited
  * to a hundred hertz on either side of the carrier." ***
  *
- * Era cierto., y esto lo mide. El lazo venia con los 4.000 Hz del original
+ * Era cierto, y esto lo mide. El lazo venia con los 4.000 Hz del original
  * -que es justo lo que mide el filtro de canal, asi que el lazo podia irse
  * a CUALQUIER sitio que pasara el filtro-.
  *

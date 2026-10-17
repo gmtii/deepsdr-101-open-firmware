@@ -42,7 +42,7 @@
  *    4 rejilla      9 tinta_off    14 linea
  *
  * Y LOS CINCO ULTIMOS SON LOS MISMOS EN TODOS LOS MODOS. Esto lo corrigio
- * el usuario y era cierto: Pedido por el usuario.
+ * el usuario, y era cierto.
  *
  * Yo defendia que los cinco colores que habia -verde para FT8, ambar para
  * los aviones, azul para los barcos, salmon para WSPR, lila para JTTY-

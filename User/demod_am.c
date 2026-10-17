@@ -1014,9 +1014,8 @@ static uint8_t  s_fil_fam_puesta = 0xFFU;   /* la que hay construida */
  * las dos frecuencias de muestreo.
  */
 /*
- * CUATRO etapas, no dos - 22/09/2026, por el usuario del proyecto: "creo que
- * hace falta un ancho mas estrecho para cw, porque escucho muchas senales a
- * la vez".
+ * CUATRO etapas, no dos - 22/09/2026, pedido por el usuario: en CW hacia
+ * falta un ancho mas estrecho, porque se colaban varias senales a la vez.
  *
  * El ancho no era el unico problema, ni el principal. Medido con
  * sim/cwbw.c, que evalua ESTOS coeficientes:
@@ -1215,7 +1214,7 @@ static uint16_t s_wfm_dc_n;
  * 48kHz s_i_buf/s_q_buf/s_env/s_audio_out/s_dcb_x1/y1/s_agc_peak
  * above (see sdr_rx.h's SDR_RX_BLOCK_SAMPLES_MAX comment for why this
  * project went with fully separate buffers per rate rather than
- * making every shared buffer size-aware - the "ruta separada"
+ * making every shared buffer size-aware - the separate-path
  * decision). s_wfm_alpf_inst/state and s_fm_i_prev/q_prev and
  * s_wfm_deemph_y1 just above are REUSED as-is, not duplicated here -
  * CMSIS biquad DF1 state is always 4 floats/stage regardless of block
@@ -1229,7 +1228,7 @@ static uint16_t s_wfm_dc_n;
  *
  * Eran ocho arrays: cuatro para WFM a 192 kHz (8.192 bytes) y cuatro para
  * AM/SSB/NFM a 96 kHz (4.096). El comentario de arriba explicaba por que
- * estaban separados -"la ruta separada"- y era una decision de claridad,
+ * estaban separados -la ruta separada- y era una decision de claridad,
  * no de necesidad: cuesta 4.096 bytes de los 196.608 que tiene la radio.
  *
  * Y NO PUEDEN ESTAR VIVOS A LA VEZ. No es una suposicion:
@@ -1309,8 +1308,8 @@ static uint32_t s_wfm_diag_count;
  * dump, the I2S frame-sync bug now fixed by main.c's rx_lock retry
  * logic. But real hardware logs then showed the logging itself had
  * become the problem: with the rx_lock fix guaranteeing a clean raw
- * capture, the project owner still heard WFM as "muy distorsionado/
- * entrecortado" - and gd32_i2s.c's write_half() diagnostic (now also
+ * capture, the project owner still heard WFM as badly distorted and
+ * broken up - and gd32_i2s.c's write_half() diagnostic (now also
  * removed, see its own history) showed "SAME HALF WRITTEN TWICE"
  * firing in tight clusters immediately after every one of THIS
  * function's logged blocks. debug_print()/debug_print_dec() go out
@@ -1336,7 +1335,7 @@ static uint8_t wfm_should_log_diag(void)
 /*
  * AM/SSB/NFM's own diagnostic counter, added 05/08/2026 after the
  * project owner's report that AM/SSB/NFM can ALSO come back broken
- * ("no hay demodulacion, ruido muy fuerte") specifically right after
+ * (no demodulation at all, very loud noise) specifically right after
  * a WFM session, even though the panadapter's own RF spectrum looks
  * correct at the same moment - pointing at the TX/audio-output side
  * rather than the RX/RF side. WFM's own equivalent diagnostic
@@ -1538,8 +1537,8 @@ static float32_t s_ssb_dec[DEC_BLOCK_SAMPLES_MAX];       /* combined SSB audio @
  * demod_am_process_raw()), which avoids interpolating SSB's audio up
  * to 192kHz only to immediately decimate it back down again just for
  * NR - a wasted round trip that was pushing SSB+NR up against the
- * ISR's cycle budget (the project owner's own report: "en modo SSB y
- * con NR ya estamos llegando al limite del controlador"). AM has no
+ * ISR's cycle budget - the project owner reported SSB with NR already
+ * running up against the controller's limit. AM has no
  * equivalent already-decimated buffer (its envelope only ever exists
  * at the full s_env[]), so it still needs this dedicated pair. Same
  * coefficients as the SSB chain above either way (passed by pointer,
@@ -2830,7 +2829,7 @@ static void fm_discriminate(const float32_t *i_buf, const float32_t *q_buf,
 
 /*
  * WFM's OWN, SEPARATE processing path - added 05/08/2026, per the
- * project owner's "ruta separada" decision, when WFM was reactivated
+ * project owner's separate-path decision, when WFM was reactivated
  * at its native 192kHz/512-sample rate while AM/SSB/NFM stayed at
  * 48kHz/128 samples in demod_am_process_raw() above. Registered as
  * the sdr_rx block hook (sdr_rx_set_block_hook()) ONLY while WFM is
@@ -2897,9 +2896,9 @@ void demod_wfm_process_raw(const int16_t *raw_interleaved)
     /*
      * Raw sample dump - added 05/08/2026 after AGC data looked fully
      * converged/reasonable on both sides of a switch (WFM and AM)
-     * while the project owner still heard the exact same "ruido/
-     * pitido fuerte, sin voz reconocible" as before any of the AGC/
-     * mute fixes - meaning those fixes aren't the issue. min/max
+     * while the project owner still heard the exact same loud noise
+     * and whistle, with no recognizable voice, as before any of the
+     * AGC/mute fixes - meaning those fixes aren't the issue. min/max
      * alone can't distinguish real signal from scrambled-but-
      * plausible-magnitude noise (e.g. an I2S word-select/frame
      * alignment glitch on re-enable would produce exactly that: bit-
@@ -2983,8 +2982,7 @@ void demod_wfm_process_raw(const int16_t *raw_interleaved)
     }
 
     /*
-     * S-METER EN WFM (22/09/2026, por el usuario del proyecto: "en WFM por
-     * que es S0 todo el rato?").
+     * S-METER EN WFM - 22/09/2026. En WFM marcaba S0 todo el rato.
      *
      * Porque no lo actualizaba NADIE. s_sig_peak solo se escribia en
      * demod_am_process_raw(), que es el camino de AM/USB/LSB/NFM; WFM tiene
@@ -3050,8 +3048,9 @@ void demod_wfm_process_raw(const int16_t *raw_interleaved)
      * function's first draft had it AFTER those two stages instead,
      * which doesn't match the original, already-validated pre-
      * migration WFM chain (discriminate -> DC-block -> de-emphasis ->
-     * ALPF) and is the leading suspect for the project owner's "suena
-     * a NFM" report once the clock itself was confirmed correct
+     * ALPF) and is the leading suspect for the project owner's report
+     * that it sounded like NFM, once the clock itself was confirmed
+     * correct
      * (BCLK=6.144MHz/WCLK=192kHz, measured) - de-emphasis is itself a
      * lowpass, so running it before the DC blocker lets whatever DC
      * bias the discriminator outputs sit in the signal (and interact
@@ -3197,9 +3196,8 @@ void demod_wfm_process_raw(const int16_t *raw_interleaved)
  * EL METODO DE FASES, EN UN SOLO SITIO - 11/10/2026
  * ======================================================================
  *
- * *** De un issue: "I would like the AM synchronous detector to be able to
- * operate selectively on the upper and lower sidebands. Sometimes this
- * saves you from interference". ***
+ * *** De un issue: se pedia que el detector sincrono de AM pudiera trabajar sobre una
+ * sola banda lateral, para escapar de una interferencia. ***
  *
  * Esto estaba escrito en linea dentro de la rama de USB/LSB. Ahora lo usan
  * DOS: esa rama y la de SAM, que para elegir banda hace exactamente lo
@@ -3312,7 +3310,7 @@ static void fases_combina(const float32_t *i_dec, const float32_t *q_dec,
  * del camino estrecho comparten bytes con los de WFM (la union s_via), y
  * lo que hace correcto compartirlos es que se toquen SOLO dentro de
  * demod_am_process_raw(). tools/via_audio_check.py lo comprueba leyendo el
- * fichero, y se puso rojo en cuanto esta funcion los nombro. Era cierto.:
+ * fichero, y se puso rojo en cuanto esta funcion los nombro. Era cierto:
  * nombrarlos aqui es exactamente el "mover un trozo de proceso a una
  * funcion auxiliar" contra el que avisa su cabecera.
  */
@@ -3729,9 +3727,9 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * Y UNA SOLA BANDA, SI SE PIDE - 11/10/2026
          * ==============================================================
          *
-         * *** De un issue: "I would like the AM synchronous detector to
-         * be able to operate selectively on the upper and lower
-         * sidebands. Sometimes this saves you from interference". ***
+         * *** De un issue: se pedia que el detector sincrono de AM pudiera trabajar
+         * sobre una sola banda lateral, para escapar de una
+         * interferencia. ***
          *
          * sam.h lo tenia escrito como pendiente desde agosto: el codigo
          * del que se porto traia SAML/SAMU y se dejaron fuera porque "no
@@ -4217,9 +4215,9 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * decimation avoids interpolating this audio up to 192kHz
          * (step 3, right below) only to immediately decimate it back
          * down again for NR and interpolate AGAIN - a wasted round
-         * trip discovered 04/08/2026 once NR made the ISR "reach the
-         * controller's limit" in SSB specifically (the project owner's
-         * own words) - this is that fix. AM has no equivalent
+         * trip discovered 04/08/2026 once NR pushed the ISR up against
+         * the controller's limit in SSB specifically, as the project
+         * owner reported - this is that fix. AM has no equivalent
          * already-decimated buffer to reuse (its envelope only ever
          * exists at the full 512-sample/192kHz s_env[]), so it still
          * goes through its own dedicated decimate/interpolate pair -
@@ -4465,7 +4463,7 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
      * la unica que llega hasta alli: AM, SAM y NFM salen por su propio
      * camino mucho antes. O sea que en AM y en SAM el notch NO SE APLICABA
      * NUNCA, y el mando de la pantalla no esta limitado por modo: el usuario
-     * lo pone "a saco" estando en AM, la etiqueta cambia de NOTCH a la
+     * lo mueve estando en AM, la etiqueta cambia de NOTCH a la
      * fuerza elegida, y el heterodino sigue sonando igual. Un mando que
      * cambia de etiqueta y no cambia el audio es peor que no tenerlo.
      *
@@ -4492,10 +4490,10 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
      * Y LA REDUCCION DE RUIDO TAMBIEN EN SAM - 11/10/2026
      * ==================================================================
      *
-     * *** De un issue: "Noise reduction doesn't work in Synchro AM mode,
-     * though it would be nice if it did". ***
+     * *** De un issue: la reduccion de ruido no funcionaba en SAM y se
+     * pedia que lo hiciera. ***
      *
-     * Era cierto., y ademas era peor que "no funciona": el boton de Ruido
+     * Era cierto, y ademas era peor que "no funciona": el boton de Ruido
      * NO esta limitado por modo. En SAM se podia encender, se quedaba
      * encendido, ponia "activo" en la barra de abajo... y aqui dentro no
      * entraba. Un control que dice una cosa y hace otra.

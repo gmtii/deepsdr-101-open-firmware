@@ -34,8 +34,8 @@
  *     V3.92                4,0 /s   (el reloj, cuatro por segundo, pase lo que pase)
  *     V3.93                0,4 /s   (se repinta cuando CAMBIA el texto, y ya)
  *
- * Y no basto con la V3.92: el usuario siguio diciendo "se sigue tostando y no
- * dejandome darle a los botones". Cuatro repintados por segundo de un panel
+ * Y no basto con la V3.92: el usuario siguio avisando de que la radio se
+ * calentaba y no dejaba pulsar los botones. Cuatro repintados por segundo de un panel
  * entero por un bus SPI se notan igual, y en reposo los cuatro dejaban la
  * pantalla exactamente como estaba.
  *

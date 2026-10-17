@@ -513,8 +513,8 @@ uint8_t spec_rotulos_filtra(spec_rot_cand_t *c, uint8_t n,
  * las tres formas posibles, y las tres fallaron por el mismo sitio:
  *
  *   - METIDO EN LA ELECCION, ganando su casilla: al cruzar el dial de
- *     una casilla a otra cambiaban DOS carteles de golpe. "baf beijing
- *     desaparece y sale new york radio como cambian un khz".
+ *     una casilla a otra cambiaban DOS carteles de golpe: desaparecia uno
+ *     y salia otro distinto con mover el dial un kilohercio.
  *   - PINTADO EL PRIMERO, para que los demas se apartaran: dejaba su
  *     marca de agua en el centro de su fila y se comia todo lo que tenia
  *     a su izquierda. Media fila desaparecia.
@@ -565,7 +565,7 @@ uint8_t spec_rotulos_draw(gfx2_surf_t *s, const spec_rotulos_t *rr,
      * Pedido por el usuario.
      *
      * Antes la altura de renglon era la de la fuente y el que llamaba
-     * pedia "tres por quince, dame 46". Pero el sitio que hay no es un
+     * pedia tres por quince, o sea 46. Pero el sitio que hay no es un
      * numero que se pida: es el que haya hasta la primera raya de la
      * rejilla, que en este panel son 41 pixeles. Pedir 46 se saltaba esa
      * raya y la franja se comia dos huecos del espectro.

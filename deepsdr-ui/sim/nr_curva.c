@@ -6,7 +6,7 @@
  * POR QUE EXISTE (25/09/2026). Pedido por el usuario. Opinar no vale; esto lo mide.
  *
  * REESCRITO ENTERO EL 11/10/2026, y la historia merece quedarse porque es
- * la leccion del dia: Pedido por el usuario. Al ir a medirlo, este banco mintio
+ * la leccion del dia. Al ir a medirlo, este banco mintio
  * CUATRO veces seguidas, cada una de una forma distinta:
  *
  *   1. Llamaba nr_ss_process(buf, 128) cuando el contrato son 32. Con el

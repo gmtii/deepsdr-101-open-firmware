@@ -4,12 +4,11 @@
 /*
  * EL SNR DE FT8, EN LA REFERENCIA DE 2500 Hz - 13/10/2026.
  *
- * *** De un issue: "the built-in FT8 SNR readings seem to be offset or
- * incorrectly calculated compared to standard software like WSJT-X. The
- * internal decoder shows SNR values that rarely drop below +5 dB, with an
- * average reading around +11 dB. In reality, typical FT8 signals usually
- * report negative SNR values (e.g. around -8 dB or lower in WSJT-X) due to
- * the standard 2500 Hz reference bandwidth calculation." ***
+ * *** De un issue: el SNR que daba el decodificador propio salia desviado
+ * frente al de WSJT-X. Casi nunca bajaba de +5 dB, con una media cerca de
+ * +11, cuando una señal de FT8 normal da valores NEGATIVOS -del orden de
+ * -8 dB- porque el SNR de FT8 se refiere a un ancho de banda de 2.500 Hz.
+ * ***
  *
  * ERA CIERTO, Y EL NUMERO DE ANTES NO ERA UN SNR. ft8_decoder.c ponia
  *

@@ -208,7 +208,7 @@ static uint8_t geo(void)
         /*
          * LECTURA, NO ESCRITURA - 06/10/2026.
          *
-         * *** De un issue: "The loader doesn't see update.bin on the disk",
+         * *** De un issue: el cargador no veia update.bin en el disco,
          * con una ficha que decia "Volumen: no se reconoce". Y la radio con
          * el formateo DE FABRICA, sin tocar. ***
          *

@@ -7,8 +7,8 @@
 /*
  * FAT32 DE SOLO LECTURA, PARA EL PINCHO.
  *
- * *** La peticion que llego al repositorio: "Implementation of On-Air
- * Recording Functionality to an External USB Drive". ***
+ * *** La peticion que llego al repositorio: grabar lo que se recibe a un
+ * pendrive USB. ***
  *
  * EL NUMERO QUE MANDA EN TODO ESTE FICHERO
  * ----------------------------------------

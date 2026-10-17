@@ -692,10 +692,9 @@ static const dxcc_t k_dxcc[] __attribute__((section(".rodata.k_dxcc"))) = {
     { "FO",   PAIS_150 },
 
     /* ------------------------------------------------------------------
-     * ANADIDOS EL 25/09/2026, por el usuario del proyecto: "lb4pi no sale
-     * pais".
+     * ANADIDOS EL 25/09/2026: un indicativo noruego no sacaba pais.
      *
-     * Y era cierto. en mas de lo que decia. La primera version ponia UN
+     * Y era cierto en mas de lo que parecia. La primera version ponia UN
      * prefijo por pais -"LA" para Noruega- cuando casi todos tienen un
      * BLOQUE entero: Noruega es LA-LN, Suecia SA-SM, Alemania DA-DR. O sea
      * que acertaba con el indicativo que se me ocurrio de ejemplo y fallaba

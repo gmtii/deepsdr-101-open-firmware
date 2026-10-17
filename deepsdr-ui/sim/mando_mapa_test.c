@@ -1,8 +1,8 @@
 /*
  * DE QUIEN ES EL MANDO CON EL MAPA PUESTO - 15/10/2026
  *
- * *** De un informe: "When the map is on the screen, the control
- * functions stop working." ***
+ * *** De un informe: con el mapa en pantalla los controles dejaban de
+ * responder. ***
  *
  * Ver User/mando_mapa.h para el fallo y la regla. Este banco existe por
  * un motivo concreto: el fallo se habia pagado ya DOS veces antes -con la

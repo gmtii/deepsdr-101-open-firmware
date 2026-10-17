@@ -175,8 +175,8 @@ uint8_t spectrum_get_bridge(void);
 
 /*
  * Color palette for the shared dB->RGB565 colormap (spectrum_colormap()
- * below) - added 08/09/2026, per the project owner ("un tile para
- * cambiar las paletas... irnos a otras combinaciones de colores").
+ * below) - added 08/09/2026, per the project owner, who wanted a tile
+ * to switch palettes and reach other color combinations.
  * Unlike spectrum_style_t (which only affects the SPECTRUM panel's
  * own fill/outline look), this affects BOTH the spectrum's HEATMAP
  * style AND the waterfall, since both read colors through the same

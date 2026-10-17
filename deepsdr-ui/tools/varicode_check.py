@@ -17,7 +17,7 @@ comprueba que uno es el otro. Ademas comprueba las tres propiedades que
 hacen que el varicode funcione, que son las que un error de transcripcion
 rompe:
 
-  - ningun codigo lleva dos ceros seguidos (el "00" es el separador)
+  - ningun codigo lleva dos ceros seguidos (el 00 es el separador)
   - todos empiezan y acaban en uno
   - las 128 claves son distintas entre si
 """

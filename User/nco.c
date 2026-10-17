@@ -207,10 +207,10 @@ uint32_t nco_lo_aparcado(uint32_t freq_hz, uint32_t lo_actual_hz,
     /*
      * PRIMERO, QUE LA CUENTA QUEPA - 09/10/2026.
      *
-     * *** De un video de un usuario, con su transcripcion: "esta en 66 pero
-     * no esta nada ahi", "ahi esta, 66, y por que pone 91,3?", "ahora ha
-     * decidido no recibir nada", y al final la frase que lo delata: "me fui
-     * a radiodifusion mas arriba y volvi, y se normalizo todo". ***
+     * *** De un aviso con video: la radio marcaba una frecuencia de FM y no
+     * recibia nada, luego enseñaba otra distinta de la sintonizada y dejaba
+     * de recibir. El dato que lo delata es que se arreglaba yendo a una
+     * frecuencia mas alta y volviendo. ***
      *
      * Irse y volver solo arregla lo que depende de DONDE ESTABA EL
      * OSCILADOR, y lo unico que recuerda eso es esta funcion.

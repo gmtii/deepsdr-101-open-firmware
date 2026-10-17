@@ -185,8 +185,8 @@ static void pinta_chip(gfx2_surf_t *s, const ui_digi_state_t *st)
  */
 /*
  * DONDE VA - 25/09/2026, segunda version. Ocupaba el hueco de los DOS
- * botones, porque FT8 no tenia ninguno. Ahora tiene el de borrar (por el
- * usuario del proyecto: "y no hay boton borrar?"), asi que la barra se queda
+ * botones, porque FT8 no tenia ninguno. Ahora tiene el de borrar (pedido por
+ * el usuario, que echaba en falta uno), asi que la barra se queda
  * con el hueco del segundo, desde donde acaba el primero hasta donde empieza
  * la chapa.
  *
@@ -519,7 +519,7 @@ static void pinta_boton3(gfx2_surf_t *s, const ui_digi_state_t *st)
  *
  * En HFDL la barra cambia cada dos por tres -es la fase del preambulo- asi
  * que el boton aparecia en el repintado entero y desaparecia al instante
- * siguiente. De ahi el "emm, donde esta".
+ * siguiente. De ahi que pareciera no estar.
  *
  * Se limpia el ancho DE VERDAD, el que devuelve bar_w(). Y el boton se
  * repinta detras, que no cuesta nada y cubre el caso de que alguna vez se
@@ -1172,8 +1172,8 @@ static void solo_chip(gfx2_surf_t *s, void *ctx)
      * Y LOS BOTONES QUE VIVEN DENTRO DE ESTA FRANJA, detras: el relleno de
      * arriba se los acaba de llevar.
      *
-     * *** TERCERA VEZ. El tercero con solo_barra(): "emm donde esta mi
-     * boton de frecuencias?". El cuarto, aqui mismo. Y el 28/09/2026 el
+     * *** TERCERA VEZ. El tercero con solo_barra(), y el boton de
+     * frecuencias desaparecido. El cuarto, aqui mismo. Y el 28/09/2026 el
      * quinto: el boton existia pero no se veia. Respondia al dedo
      * -la zona de toque estaba bien-; lo que no estaba era el dibujo.
      *

@@ -196,8 +196,8 @@ uint8_t gfx2_render(int16_t x, int16_t y, int16_t w, int16_t h,
      *
      * El fallo de verdad estaba en quien pedia la ventana y ya esta
      * arreglado (ver barra_ventana_w() en ui_digi.c), pero recortar aqui
-     * cuesta dos restas y convierte "la pantalla se vuelve rayas" en "falta
-     * un trozo del dibujo", que es un fallo que se ve y se arregla en vez
+     * cuesta dos restas y convierte una pantalla llena de rayas en un trozo
+     * del dibujo que falta, que es un fallo que se ve y se arregla en vez
      * de uno que asusta. Catorce sitios llaman a esto.
      */
     if (x < 0) { w = (int16_t)(w + x); x = 0; }

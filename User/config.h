@@ -2,8 +2,8 @@
  * config.h - centralized runtime-tunable parameters.
  *
  * Added 07/08/2026, per the project owner: this project's usual style
- * is "constant lives right next to what it configures, with a comment
- * explaining why" (see e.g. AM_SETTLE_MUTE_BLOCKS in demod_am.c, or
+ * is to keep each constant right next to what it configures, with a
+ * comment explaining why (see e.g. AM_SETTLE_MUTE_BLOCKS in demod_am.c, or
  * MENU_TILE_GAP in main.c) - good for understanding WHY a value is
  * what it is once you've found it, bad for finding it in the first
  * place across several thousand-line files if you don't already know

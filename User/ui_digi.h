@@ -37,9 +37,9 @@
  *
  * UDG_ROWS son los ocho renglones del panel de RTTY/CW/NAVTEX, que es el que
  * convive con el osciloscopio de sintonia y por eso solo tiene media
- * pantalla. FT8 no lleva osciloscopio -por el usuario del proyecto: "para ft8
- * no me hace falta ver el espectro"- asi que se queda con el panel entero y
- * le caben el doble de renglones.
+ * pantalla. FT8 no lleva osciloscopio -ahi no hace falta, pedido por el
+ * usuario- asi que se queda con el panel entero y le caben el doble de
+ * renglones.
  *
  * El numero de renglones que se pintan lo dice ahora el que llama, en el
  * campo `filas`. Un 0 quiere decir UDG_ROWS, que es lo que habia: asi los
@@ -48,8 +48,7 @@
 #define UDG_ROWS_MAX 24
 
 /*
- * CABECERA DEL PANEL - 22/09/2026, por el usuario del proyecto: "los ppm y el
- * boton borrar parpadean".
+ * CABECERA DEL PANEL - 22/09/2026. Los ppm y el boton de borrar parpadeaban.
  *
  * Parpadeaban por donde estaban, no por como se dibujaban. Los dos vivian
  * ENCIMA del trazo, y spectrum_draw() repinta el trazo entero en cada cuadro:

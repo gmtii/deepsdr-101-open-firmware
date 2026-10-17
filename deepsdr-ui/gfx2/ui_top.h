@@ -80,9 +80,9 @@ typedef struct {
     const char *mode;        /* "AM", "USB", "WFM"... */
     /*
      * La banda en la que cae la frecuencia ("40 m", "FM", "OM"...), o 0 si no
-     * esta en ninguna de las de la lista - 23/09/2026, por el usuario del
-     * proyecto: "me gustaria poner ahi la banda que estas escuchando, y que
-     * lo pulses y se te abra la pantalla de bandas".
+     * esta en ninguna de las de la lista - 23/09/2026, pedido por el
+     * usuario: que ahi salga la banda que se esta escuchando, y que al
+     * pulsarla se abra la pantalla de bandas.
      *
      * Sube aqui desde la barra de abajo, y de paso deja de ser un boton que
      * solo abre una pantalla para ser ademas un dato: antes, en que banda

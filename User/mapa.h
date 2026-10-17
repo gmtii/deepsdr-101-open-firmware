@@ -257,8 +257,8 @@ void mapa_arrastra(mapa_caja_t *c, int16_t dx, int16_t dy);
 /*
  * Y por debajo de ESTE recorrido total, al soltar, fue un toque.
  *
- * Eran 8 px y el usuario los midio con el dedo - 13/10/2026: "en el mapa me
- * cuesta mucho darle a los indicativos y que salga la info abajo". Ocho
+ * Eran 8 px y el usuario los midio con el dedo - 13/10/2026: en el mapa
+ * costaba dar a los indicativos y sacar su ficha abajo. Ocho
  * pixeles es menos de lo que se mueve un dedo en un panel resistivo
  * mientras aprieta: la presion cambia, la lectura se va, y el gesto
  * acababa contando como arrastre. Veinte son el 2,5 % del ancho del mapa

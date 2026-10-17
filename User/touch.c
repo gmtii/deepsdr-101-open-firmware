@@ -338,8 +338,8 @@ static uint16_t clamp_u16(int32_t v, uint16_t max_exclusive)
 }
 
 /*
- * FIRMEZA DEL TOQUE (22/09/2026, por el usuario del proyecto: "ajusta un poco
- * el tactil, que ahora es demasiado delicado").
+ * FIRMEZA DEL TOQUE - 22/09/2026, pedido por el usuario: el tactil
+ * respondia a la minima y habia que endurecerlo.
  *
  * Hasta ahora bastaba UNA lectura con el pin PENIRQ bajo para dar un toque
  * por bueno. Sobre un panel resistivo barato eso convierte en pulsacion

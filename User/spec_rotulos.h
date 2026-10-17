@@ -10,14 +10,12 @@
  * LOS NOMBRES DE LAS EMISORAS, SOBRE EL ESPECTRO - 15/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
+ * Pedido por el usuario, con tres condiciones que son las que fijan el
+ * diseño:
  *
- * Y tres precisiones suyas, que son las que fijan el diseño:
- *
- *   "los carteles solo se mueven cuando muevas la frecuencia"
- *   "tienen que estar ligados al vfo, a la barra central que pone las
- *    frecuencias"
- *   "un boton nuevo que sea BD en espectro, para que se pueda activar o no"
+ *   - los carteles solo se mueven cuando se mueve la frecuencia;
+ *   - van ligados al VFO, a la barra central que pone las frecuencias;
+ *   - un boton nuevo en el espectro para activarlos o no.
  *
  * LIGADOS AL VFO quiere decir una cosa muy concreta: la x de cada cartel
  * sale de los MISMOS center_hz y span_hz con los que se dibuja la regla
@@ -230,7 +228,7 @@ void spec_rotulos_pon(spec_rotulos_t *rr, uint8_t i, uint32_t hz,
  *
  * ESTO YA SE INTENTO ESTA MISMA TARDE Y SALIO MAL. Lo apunte aqui: "al
  * cruzar el dial de una casilla a la siguiente cambiaban DOS carteles de
- * golpe". Era cierto. el sintoma y estaba mal el diagnostico: no fallaba
+ * golpe". Era cierto el sintoma y estaba mal el diagnostico: no fallaba
  * meter la sintonia, fallaba meterla SIN TOLERANCIA. Si manda "la mas
  * cercana al dial" pase lo que pase, siempre hay una mandando, y cruzar
  * un borde suelta una casilla y coge otra: dos cambios en un clic.

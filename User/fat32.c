@@ -114,8 +114,8 @@ int fat32_monta(fat32_t *fs, const bloques_t *dev)
      * formatear, uno de otro sistema, o basura. Un `spc` a cero divide por
      * cero mas abajo, y en esta radio una excepcion CUELGA -no hay perro
      * guardian y el HardFault_Handler es un bucle infinito-. O sea que esto
-     * no es higiene: es lo que separa "el pincho no vale" de "la radio se
-     * ha quedado tiesa".
+     * no es higiene: es lo que separa un pincho que no vale de una radio
+     * que se ha quedado tiesa.
      */
     if (tam_sec != SEC)                      { return FAT32_E_SECTOR; }
     if ((spc == 0U) || ((spc & (spc - 1U)) != 0U)) { return FAT32_E_GEOMETRIA; }

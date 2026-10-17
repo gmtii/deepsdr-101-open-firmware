@@ -3,8 +3,8 @@
  * LA REDUCCION DE RUIDO EN SAM - 11/10/2026
  * ======================================================================
  *
- * *** De un issue: "Noise reduction doesn't work in Synchro AM mode,
- * though it would be nice if it did". ***
+ * *** De un issue: la reduccion de ruido no funcionaba en SAM y se
+ * pedia que lo hiciera. ***
  *
  * Y era peor que "no funciona": el boton de Ruido no esta limitado por
  * modo, asi que en SAM se encendia, se quedaba encendido, ponia "activo"
