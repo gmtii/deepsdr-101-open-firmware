@@ -2,6 +2,7 @@
 #include "idioma.h"
 #include "gfx.h"
 #include "gfx2.h"
+#include "palette.h"
 #include <string.h> /* memcpy() - see build_lut()'s comment for the six palettes copied straight from a 256-entry source table */
 
 /* --- palette LUT ---------------------------------------------------- */
@@ -722,6 +723,66 @@ uint16_t spectrum_colormap(float db, float db_min, float db_max)
  * frio: es el unico elemento de la traza que no es ni blanco ni gris ni
  * parte de la paleta de calor, asi que no se confunde con nada. */
 #define SPEC_COLOR_BAND_EDGE      0x2DFFU /* ~(48,188,255) */
+/*
+ * EL ESPECTRO SIGUE AL TEMA - 17/10/2026, de un issue.
+ *
+ * Todo lo de arriba son colores escritos a pelo, y son los que se usan
+ * cuando el tema NO pide espectro claro: los ocho de antes pintan byte a
+ * byte lo que pintaban ayer.
+ *
+ * Cuando lo pide -palette.h, campo espectro_claro-, los colores salen de
+ * la paleta del tema. No hay que inventar ninguno: los campos existen
+ * desde el principio y grid dice literalmente "rejilla del espectro".
+ *
+ * La paleta guarda 0xRRGGBB porque es lo que usan gfx2_rgb() y los temas;
+ * el panel quiere 565. Se convierte aqui, una vez por color y por
+ * dibujado, no en cada pixel.
+ */
+static uint16_t pal565(uint32_t hex)
+{
+    return gfx_rgb565((uint8_t)((hex >> 16) & 0xFFU),
+                      (uint8_t)((hex >> 8) & 0xFFU),
+                      (uint8_t)(hex & 0xFFU));
+}
+
+static uint8_t tema_claro(void)
+{
+    return (g_pal != 0) ? g_pal->espectro_claro : 0U;
+}
+
+/* a sobre b con alfa 0..255, en 0xRRGGBB. */
+static uint32_t pal_mezcla(uint32_t a, uint32_t b, uint8_t k)
+{
+    uint32_t i = 255U - (uint32_t)k;
+    uint32_t r = ((((a >> 16) & 0xFFU) * (uint32_t)k) + (((b >> 16) & 0xFFU) * i)) / 255U;
+    uint32_t g = ((((a >> 8)  & 0xFFU) * (uint32_t)k) + (((b >> 8)  & 0xFFU) * i)) / 255U;
+    uint32_t z = (((a & 0xFFU) * (uint32_t)k) + ((b & 0xFFU) * i)) / 255U;
+    return (r << 16) | (g << 8) | z;
+}
+
+/*
+ * EL RELLENO DEL TRAZO, con el tema claro puesto. No es la traza tal
+ * cual: sobre papel, una traza entera rellena tapa la rejilla y la
+ * banda de paso. Es la traza al 25 % sobre el fondo, que es lo mismo
+ * que hacia el estilo LINE con su azul y su fondo oscuro.
+ */
+static uint16_t color_relleno_claro(void)
+{
+    return pal565(pal_mezcla(g_pal->trace, g_pal->surf_0, 64U));
+}
+
+/*
+ * EL PUNTO DE PICO va en el ambar del tema y no en el acento, que ya
+ * se lleva la raya de la demodulacion: dos cosas distintas con el
+ * mismo color es lo que hace que una pantalla deje de decir nada.
+ */
+#if SPECTRUM_PEAK_HOLD
+static uint16_t color_pico(void)
+{
+    return tema_claro() ? pal565(g_pal->warn) : SPEC_COLOR_PEAK;
+}
+#endif
+
 #define SPEC_LINE_BAND_EDGE       0x1CDDU /* la misma idea, apagada para el estilo LINE */
 
 #define SPEC_LINE_BAND_TINT       0x18E3U /* era 0x5ACB, misma razon */ /* same reasoning as SPEC_COLOR_BAND_TINT just above, dimmed further (~90,90,90) to match LINE style's own generally darker palette (see SPEC_LINE_BG/GRID/TRACE) */
@@ -1153,7 +1214,7 @@ static void compon(uint16_t *dst, uint32_t stride, uint16_t row, uint16_t nf,
                 if ((s_peak_h[col] >= 1U) && (s_peak_h[col] <= h)) {
                     r = (uint16_t)(h - s_peak_h[col]);
                     if ((r >= row) && (r < (uint16_t)(row + nf))) {
-                        dst[(uint32_t)(r - row) * stride + (col - c0)] = SPEC_COLOR_PEAK;
+                        dst[(uint32_t)(r - row) * stride + (col - c0)] = color_pico();
                     }
                 }
 #endif
@@ -1421,7 +1482,8 @@ void spectrum_draw(const float *db, uint32_t n_bins,
             /* LINE reads this as its flat fill color. OUTLINE never
              * reads it (fill_enabled below is 0 for that style) - left
              * assigned anyway so the two styles share this branch. */
-            s_row_color[row] = SPEC_LINE_FILL;
+            s_row_color[row] = tema_claro() ? color_relleno_claro()
+                                           : SPEC_LINE_FILL;
         }
         s_row_grid[row] = 0;
     }
@@ -1483,6 +1545,13 @@ void spectrum_draw(const float *db, uint32_t n_bins,
         uint16_t bg_color    = (s_style == SPECTRUM_STYLE_HEATMAP) ? GFX_COLOR_BLACK : SPEC_LINE_BG;
         uint16_t grid_color  = (s_style == SPECTRUM_STYLE_HEATMAP) ? SPEC_COLOR_GRID : SPEC_LINE_GRID;
         uint16_t trace_color = (s_style == SPECTRUM_STYLE_HEATMAP) ? SPEC_COLOR_TRACE : SPEC_LINE_TRACE;
+
+        /* Y si el tema pide espectro claro, los cuatro salen de el. */
+        if (tema_claro()) {
+            bg_color    = pal565(g_pal->surf_0);
+            grid_color  = pal565(g_pal->grid);
+            trace_color = pal565(g_pal->trace);
+        }
         /* 23/09/2026: sin ternario a proposito. SPEC_COLOR_BAND_TINT y
          * SPEC_LINE_BAND_TINT valen HOY lo mismo (0x18E3): el 08/09/2026 los
          * dos pasaron de ambar a gris y acabaron en el mismo valor, pero el
@@ -1492,6 +1561,17 @@ void spectrum_draw(const float *db, uint32_t n_bins,
          * vuelve el ternario. */
         uint16_t band_color  = SPEC_COLOR_BAND_TINT;
         uint16_t band_edge   = (s_style == SPECTRUM_STYLE_HEATMAP) ? SPEC_COLOR_BAND_EDGE : SPEC_LINE_BAND_EDGE;
+        uint16_t marca       = SPEC_COLOR_CENTER;
+
+        if (tema_claro()) {
+            /* passband es el tinte de la banda; la raya de la
+             * demodulacion y el borde del filtro van en el acento, que
+             * es el color que el tema reserva para lo que hay que ver
+             * primero. */
+            band_color = pal565(g_pal->passband);
+            band_edge  = pal565(g_pal->ink_mute);
+            marca      = pal565(g_pal->accent);
+        }
 
         /*
          * Las dos plantillas, una vez por dibujado. El orden de pintado es
@@ -1516,7 +1596,7 @@ void spectrum_draw(const float *db, uint32_t n_bins,
             }
 #if SPECTRUM_CENTER_MARK
             if ((col >= center_mark_col_lo) && (col <= center_mark_col_hi)) {
-                liso = SPEC_COLOR_CENTER; rej = SPEC_COLOR_CENTER;
+                liso = marca; rej = marca;
             }
 #endif
             if (band_active && ((col == band_col_lo) || (col == band_col_hi))) {
@@ -1696,6 +1776,21 @@ void spectrum_draw(const float *db, uint32_t n_bins,
             vuela = gfx_blit_arranca((uint16_t)(x + c0), (uint16_t)(y + row),
                                      (uint16_t)(c1 - c0 + 1U), nf, buf[cual]);
             cual = (uint8_t)(cual ^ 1U);
+            /*
+             * Y EL TACTIL, ENTRE BANDA Y BANDA - 19/10/2026.
+             *
+             * Este bucle se lleva de siete a once milisegundos de cada
+             * fotograma. Hasta hoy, durante todo ese rato el tactil no se
+             * miraba: gfx2_render() tiene su gancho para esto desde hace
+             * meses (ver gfx2_set_pump()), pero el espectro se monta las
+             * bandas el solo y no pasa por alli.
+             *
+             * Va DESPUES de arrancar el volcado y no antes: asi la mirada
+             * al tactil cae mientras el DMA esta empujando la banda por el
+             * bus, que es tiempo en el que la CPU no tiene nada que hacer.
+             * Sale gratis.
+             */
+            gfx2_pump();
         }
         if (vuela) { (void)gfx_blit_espera(); }
         gfx2_banda_suelta();

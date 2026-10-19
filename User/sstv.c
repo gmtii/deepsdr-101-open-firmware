@@ -860,6 +860,14 @@ void sstv_start(float fs_hz)
     /* El prestamo, antes que nada: si no hay, no se arranca. Ver el
      * comentario de s_sal_p mas arriba. */
     if (s_sal_p == 0) {
+        /*
+         * DUENO DEL PRESTAMO, no prestatario: aqui no se pregunta
+         * waterfall_prestada() y es a proposito. Ver tools/prestamo_check.py.
+         *
+         * Mismo caso que dsc_start() y hell_start(): se entra aqui desde el
+         * cambio de modo, con el modo anterior ya parado y la memoria suelta.
+         * El que la coge en un poll es el que tiene que preguntar antes.
+         */
         hfdl_ram_coge();
         b = hfdl_ram_todo(&cap);
         if (b == 0 || cap < (uint32_t)sizeof(sal_t)) {
@@ -1234,7 +1242,7 @@ void sstv_vis_dbg(uint8_t *est, uint32_t *lider, uint32_t *c1200, float *hz)
  * La primera vuelta midio el desvio sobre el lider y corrio las bandas. Mejor
  * que nada, pero seguia teniendo la pescadilla dentro: PARA MEDIR EL LIDER
  * HAY QUE RECONOCERLO, y se reconocia por caer encima de 1600 Hz. Con -190
- * aguantaba por poco (1710). Con -390 -la segunda grabacion del usuario, con el
+ * aguantaba por poco (1710). Con -390 -la segunda grabacion de referencia, con el
  * dial ya movido- el lider cae en 1510 y se clasifica como NEGRO: la cabecera
  * no existe para el decodificador por mucho que la emisora la repita.
  *

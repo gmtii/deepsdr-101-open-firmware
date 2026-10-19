@@ -107,7 +107,7 @@ static void hfdl_soft_demod_psk4(float32_t i_in, float32_t q_in, uint8_t *out)
      * frente al mismo Viterbi con informacion blanda, y esos 2 dB se
      * pagan justo donde duele. Las tramas de 1200 bps son las LARGAS -270
      * bytes contra 68- y son las que llevan los partes de posicion; en el
-     * aire real de la grabacion del usuario las dos de 4-PSK fallaban y
+     * aire real de la grabacion de referencia las dos de 4-PSK fallaban y
      * ninguna de las dos daba coordenadas.
      *
      * Y no hace falta ninguna tabla: 4-PSK con codigo Gray son DOS BPSK

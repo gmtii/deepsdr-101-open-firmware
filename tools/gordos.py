@@ -61,7 +61,42 @@ pend = None
 # porque el mismo error se volveria a cometer el dia que alguien parta la
 # flash otra vez por cualquier motivo.
 #
-APP_BASE = 0x0800C000         # = CARGA_APP_BASE, lo vigila tools/mapa.py
+#
+# *** Y LA BASE SE QUEDO DOS SECTORES ATRAS - 19/10/2026. ***
+#
+# Aqui ponia 0x0800C000 con un comentario al lado que decia "= CARGA_APP_BASE,
+# lo vigila tools/mapa.py". Las dos mitades de esa frase eran falsas: el
+# 17/10/2026 el cargador se recorto a DOS sectores y CARGA_APP_BASE bajo a
+# 0x08008000 (ver User/cargador.h), y nadie lo vigilaba aqui.
+#
+# Dieciseis mil trescientos ochenta y cuatro bytes de menos. Esta
+# herramienta contestaba "FLASH 468.370 de 475.136 usados, 6.766 libres"
+# cuando la verdad son 22.704 - y el que la mira para decidir si cabe un
+# cambio, con 6.766 dice que no y con 22.704 dice que si. Un instrumento
+# desfasado no te deja sin dato: te da uno equivocado, que es peor.
+#
+# Asi que ya no se escribe: se LEE de cargador.h, que es de donde sale el
+# numero de verdad y el unico sitio donde puede cambiar.
+#
+def _app_base():
+    import os
+    import re
+    ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        '..', 'User', 'cargador.h')
+    try:
+        with open(ruta, encoding='utf-8') as f:
+            m = re.search(r'#define\s+CARGA_APP_BASE\s+(0x[0-9A-Fa-f]+)', f.read())
+        if m:
+            return int(m.group(1), 16)
+    except OSError:
+        pass
+    # Sin cabecera, lo de siempre Y SE DICE: un valor por defecto callado es
+    # como nacio el fallo de arriba.
+    print('  (aviso: no he podido leer CARGA_APP_BASE de User/cargador.h;'
+          ' uso 0x08008000)')
+    return 0x08008000
+
+APP_BASE = _app_base()
 APP_FIN  = 0x08080000
 
 def region_de(dirn):

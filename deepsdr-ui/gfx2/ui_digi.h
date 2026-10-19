@@ -311,7 +311,33 @@ void    ui_digi_pinta_en(gfx2_surf_t *s, const ui_digi_state_t *st);
  * pinte dos veces. Ver su comentario en ui_digi.c. */
 void    ui_digi_draw_cabecera(const ui_digi_state_t *st);
 void    ui_digi_draw_fila(const ui_digi_state_t *st, uint8_t i); /* solo uno */
+
+/*
+ * EL REPINTADO QUE SOLO TOCA LO QUE HA CAMBIADO.
+ *
+ * Es el que hay que usar en vez de ui_digi_draw_texto() para el repintado
+ * periodico de un panel. Lleva por dentro una huella del marco y otra de
+ * cada renglon: si el marco cambia repinta entero, y si no, solo los
+ * renglones cuyo texto, tinta o condicion de "renglon vivo" se hayan
+ * movido. Ver su comentario largo en ui_digi.c, con los accesos al bus
+ * medidos.
+ *
+ * Devuelve 0 si no pudo pintar -la banda compositora estaba cogida-, igual
+ * que ui_digi_draw_texto().
+ */
+uint8_t ui_digi_draw_cambios(const ui_digi_state_t *st);
+
+/* Tira lo apuntado: el siguiente ui_digi_draw_cambios() repintara entero.
+ * Lo llama quien sabe que los pixeles que hay debajo ya no son de este
+ * panel: el mapa encima, un menu que se cierra, una foto de la pantalla. */
+void    ui_digi_olvida(void);
 void    ui_digi_draw_chip(const ui_digi_state_t *st);   /* la chapa de estado */
+/* Lo que de verdad se lee en la chapa: el texto ya recortado a lo que cabe.
+ * Devuelve un puntero DENTRO de st->chip, o "" si no hay chapa. Lo usa el
+ * banco de la cabecera del fax, que tiene que comprobar que el estado no se
+ * pierde por delante; preguntar es lo unico que vale, porque una copia del
+ * recorte en el banco mide la copia. Ver chip_txt() en ui_digi.c. */
+const char *ui_digi_chip_visible(const ui_digi_state_t *st);
 void    ui_digi_draw_barra(const ui_digi_state_t *st);  /* solo la barra de progreso */
 
 /* Columnas de FT8, en pixeles. Las define ui_digi.c -es quien pinta- y se

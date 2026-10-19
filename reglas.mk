@@ -375,7 +375,7 @@ update: $(BUILD_DIR)/$(TARGET).bin
 #   make -C boot          ->  customboot.bin
 #   make -C boot f470     ->  boot/customboot_470.bin
 #
-# --tope: 0x08100000 - 0x0800C000 = 999.424 bytes, el doble que el chip de
+# --tope: 0x08100000 - 0x08008000 = 1.015.808 bytes, el doble que el chip de
 # serie. Sin decirselo, cabecera.py rechazaria por "sobran" una imagen que
 # cabe de sobra el dia que la aplicacion pase de 475.136.
 #
@@ -388,7 +388,7 @@ update470:
 	@$(MAKE) BUILD_DIR=build_470 TARGET=firmware_470 \
 	         LDSCRIPT=GD32F470VG_FLASH.ld DEFS_EXTRA=-DCHIP_F470VG
 	@python3 tools/cabecera.py build_470/firmware_470.bin update_470.bin \
-	         --tope=999424 --clave=" 470"
+	         --tope=1015808 --clave=" 470"
 	@python3 tools/comprueba_update.py update_470.bin
 	@python3 tools/ram_mapa.py build_470/firmware_470.map
 #
@@ -438,12 +438,25 @@ dos:
 # Y falta uno que no se llama *_check.py: tools/mapa.py, que es el que
 # User/cargador.h nombra -"los tres sitios que tienen que cuadrar los
 # vigila tools/mapa.py"- y que vivia suelto en un target de avisos.mk que
-# no colgaba de aqui. El guardian nombrado no lo corria nadie. Son
-# dieciseis.
+# no colgaba de aqui. El guardian nombrado no lo corria nadie.
 #
-#   make comprueba     <- antes de cada push. Corre las dieciseis de aqui Y
-#                        LUEGO las del simulador.
-#   make comprueba-fw  <- solo las dieciseis de aqui, sin compilar el host.
+#   make comprueba     <- antes de cada push. Corre las de aqui Y LUEGO las
+#                        del simulador.
+#   make comprueba-fw  <- solo las de aqui, sin compilar el host.
+#
+# Y LAS CARPETAS HERMANAS - 18/10/2026. citas_check.py se colgo de aqui el
+# 17/10, y aqui se mira SOLO la carpeta del firmware. docs/ y manual/ son
+# repositorios aparte, al lado de este, y se quedaron fuera: en
+# docs/CAMBIOS.md habia noventa y cuatro citas mientras la tanda decia que
+# no habia ninguna. Un guardian que no mira donde esta el problema no es
+# una red, es un fichero. Ahora se le pasan las tres carpetas, y si las
+# hermanas no estan al lado se salta y sigue.
+#
+# CUANTAS SON, SIN ESCRIBIRLO A MANO - 18/10/2026. Aqui ponia "dieciseis"
+# en cinco sitios y hacia tiempo que eran dieciocho: la frase se quedo
+# quieta mientras la lista crecia debajo. Es exactamente lo que cazan la
+# mitad de estos bancos -un numero que dice una cosa mientras el codigo
+# hace otra-, asi que el numero sale ahora de contar la receta.
 #
 # OJO, Y ESTO CASI SALE MAL: deepsdr-ui/local.mk YA tenia un target
 # llamado "comprueba", con otras setenta y una. Dos targets con el mismo
@@ -455,6 +468,8 @@ dos:
 # Se para en el primero que falle (ni -k ni ||true): si algo esta mal, lo
 # que hace falta es mirarlo, no seguir y enterrarlo en pantallas de texto.
 #
+N_BANCOS_FW := $(shell awk '/^comprueba-fw:/{d=1;next} d&&/^[^\t]/{exit} d&&/python3 tools\//{n++} END{print n+0}' reglas.mk)
+
 .PHONY: comprueba
 comprueba: comprueba-fw
 	@echo ""
@@ -463,9 +478,14 @@ comprueba: comprueba-fw
 
 .PHONY: comprueba-fw
 comprueba-fw:
-	@echo "== las dieciseis del firmware =="
+	@echo "== los $(N_BANCOS_FW) bancos del firmware =="
 	@python3 tools/mkfile_check.py
 	@python3 tools/citas_check.py .
+	@for d in ../docs ../manual; do \
+	   if [ -d "$$d" ]; then python3 tools/citas_check.py "$$d" || exit 1; fi; \
+	 done
+	@python3 tools/interruptores_check.py .
+	@python3 tools/prestamo_check.py .
 	@python3 tools/copias_bin_check.py
 	@python3 tools/novedades_check.py User/config.h NOVEDADES.md
 	@python3 tools/md_enlaces_check.py .
@@ -473,6 +493,8 @@ comprueba-fw:
 	@python3 tools/mapa.py
 	@python3 tools/mando_check.py User/main.c
 	@python3 tools/panel_check.py
+	@python3 tools/osci_check.py .
+	@python3 tools/tactil_check.py User/main.c
 	@python3 tools/panel_rama_check.py
 	@python3 tools/repinta_check.py
 	@python3 tools/via_audio_check.py
@@ -482,7 +504,7 @@ comprueba-fw:
 	@python3 tools/hfdl_canales_check.py
 	@python3 tools/mapa_anillos_check.py mapas/001.map
 	@echo ""
-	@echo "  las dieciseis del firmware, en verde."
+	@echo "  los $(N_BANCOS_FW) bancos del firmware, en verde."
 
 # El reparto de la RAM, sin compilar nada. Ver tools/ram_mapa.py: la RAM no se
 # decide en un .c, se decide en el enlazado, y el mapa es el unico sitio donde
@@ -497,8 +519,8 @@ update4: update
 
 # Opciones extra de compilacion, en un fichero aparte (23/09/2026). El "-"
 # de "-include" significa "si no esta, no pasa nada", asi que el proyecto
-# sigue compilando sin el. Esta separado porque el puente con el que Claude
-# escribe en este ordenador no puede escribir ficheros llamados Makefile
-# -son codigo que se ejecuta- pero si un .mk: asi cambiar las opciones no
-# obliga a renombrar nada a mano cada vez.
+# sigue compilando sin el. Esta separado porque el puente con el que se
+# escriben los ficheros de este proyecto no puede escribir ficheros llamados
+# Makefile -son codigo que se ejecuta- pero si un .mk: asi cambiar las
+# opciones no obliga a renombrar nada a mano cada vez.
 -include avisos.mk

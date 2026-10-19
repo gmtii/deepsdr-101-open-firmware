@@ -37,6 +37,30 @@ Y NO exige que las copias existan. Una copia que no esta no engana a nadie; la
 que engana es la que esta y esta vieja. Asi el arbol de quien no quiera copias
 pasa igual.
 
+Y NO BASTA CON MIRAR LOS QUE SE LLAMAN ASI - 19/10/2026
+--------------------------------------------------------
+*** El dueno: "SPLF.BIN y esto que". ***
+
+Repasando lo que sobra en la carpeta aparecio esto en la raiz:
+
+    customboot_f470vg.bin    41.224   <- de antes del 17/10
+    boot/customboot_470.bin  32.700   <- el de hoy, de DOS sectores
+
+Un cargador del 470 de antes de recortarlo a dos sectores, 8.524 bytes mas
+grande, sin que lo nombre NADIE: ni el README, ni las reglas, ni la
+documentacion. Y este banco lo dejaba pasar porque buscaba el nombre exacto
+"customboot.bin" y aquel se llama de otra forma.
+
+O sea que la guarda cubria el caso que ya habia pasado y no la familia. Es
+el mismo fallo que ella misma persigue, un piso mas arriba: lo peligroso no
+es la copia que sabes que existe, es la que se llama parecido.
+
+Ahora se miran DOS nombres -el del 450 y el del 470, cada uno contra SU
+original en boot/- y ademas se avisa de cualquier otro "customboot*.bin"
+que aparezca por el arbol, aunque no se sepa contra que compararlo: un
+cargador suelto sin dueno es justo lo que no debe haber, porque el dia que
+alguien busque "el cargador del 470" lo va a encontrar a el.
+
 LA EXCEPCION, QUE ES DE VERDAD
 ------------------------------
 rescate/ esta exenta A PROPOSITO y no por comodidad: es la copia CONGELADA,
@@ -50,8 +74,15 @@ import sys
 import hashlib
 
 RAIZ   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BUENO  = os.path.join(RAIZ, "boot", "customboot.bin")
-NOMBRE = "customboot.bin"
+
+# Los dos cargadores que salen de compilar, cada uno con su original. Lo que
+# se compara es el nombre; lo que se mira es que no haya una copia vieja.
+PAREJAS = (
+    ("customboot.bin",     os.path.join(RAIZ, "boot", "customboot.bin")),
+    ("customboot_470.bin", os.path.join(RAIZ, "boot", "customboot_470.bin")),
+)
+BUENO  = PAREJAS[0][1]
+NOMBRE = PAREJAS[0][0]
 
 # Carpetas que no se miran. rescate/ por el motivo de arriba; las otras
 # porque son obra del compilador o de otro proyecto.
@@ -66,16 +97,19 @@ def sha(p):
     return h.hexdigest()
 
 
-def main():
-    if not os.path.isfile(BUENO):
-        print("COPIAS BIN: no encuentro boot/customboot.bin; compila el "
-              "cargador antes")
-        return 1
+def revisa(nombre, bueno):
+    """Compara todas las copias de `nombre` contra `bueno`. Devuelve
+    (malas, exentas)."""
+    if not os.path.isfile(bueno):
+        print("COPIAS BIN: no encuentro %s; compila el cargador antes"
+              % os.path.relpath(bueno, RAIZ))
+        return None, None
 
-    bueno_sha = sha(BUENO)
-    bueno_n   = os.path.getsize(BUENO)
-    print("COPIAS BIN: el bueno es boot/customboot.bin, %d bytes, %s"
-          % (bueno_n, bueno_sha[:16]))
+    bueno_sha = sha(bueno)
+    bueno_n   = os.path.getsize(bueno)
+    print("COPIAS BIN: el bueno es %s, %d bytes, %s"
+          % (os.path.relpath(bueno, RAIZ).replace(os.sep, "/"),
+             bueno_n, bueno_sha[:16]))
 
     malas, exentas = [], []
     for dd, dirs, ficheros in os.walk(RAIZ):
@@ -84,32 +118,69 @@ def main():
             exentas.append(os.path.relpath(os.path.join(dd, d), RAIZ))
         dirs[:] = [d for d in dirs if d not in EXENTAS]
 
-        if NOMBRE not in ficheros:
+        if nombre not in ficheros:
             continue
-        p = os.path.join(dd, NOMBRE)
-        if os.path.normpath(p) == os.path.normpath(BUENO):
+        p = os.path.join(dd, nombre)
+        if os.path.normpath(p) == os.path.normpath(bueno):
             continue
         rel = os.path.relpath(p, RAIZ)
         if sha(p) != bueno_sha:
-            malas.append((rel, os.path.getsize(p)))
+            malas.append((rel, os.path.getsize(p), bueno_n))
         else:
             print("  %-34s igual  ok" % rel)
 
     for d in sorted(set(exentas)):
-        q = os.path.join(RAIZ, d, NOMBRE)
+        q = os.path.join(RAIZ, d, nombre)
         if os.path.isfile(q):
             print("  %-34s EXENTA (congelada), %d bytes"
-                  % (os.path.join(d, NOMBRE), os.path.getsize(q)))
+                  % (os.path.join(d, nombre), os.path.getsize(q)))
+    return malas, exentas
 
-    if malas:
-        print("\nMAL: hay una copia del cargador que NO es la que sale de "
-              "compilar.")
-        for rel, n in malas:
-            print("       %-32s %d bytes  (el bueno: %d)" % (rel, n, bueno_n))
-        print("     Un cargador atrasado no se lee raro: se GRABA. Copia")
-        print("     boot/customboot.bin encima, o borra la copia.")
+
+def sueltos(conocidos):
+    """Cualquier otro customboot*.bin del arbol. No se compara con nada
+    -no se sabe contra que-, pero se dice que esta: un cargador suelto sin
+    dueño es lo que de verdad hace dano, porque parece el bueno."""
+    fuera = []
+    for dd, dirs, ficheros in os.walk(RAIZ):
+        dirs[:] = [d for d in dirs if d not in EXENTAS]
+        for f in ficheros:
+            if not (f.startswith("customboot") and f.endswith(".bin")):
+                continue
+            if f in conocidos:
+                continue
+            fuera.append((os.path.relpath(os.path.join(dd, f), RAIZ),
+                          os.path.getsize(os.path.join(dd, f))))
+    return fuera
+
+
+def main():
+    fallo = 0
+    for nombre, bueno in PAREJAS:
+        malas, _ = revisa(nombre, bueno)
+        if malas is None:
+            return 1
+        if malas:
+            print("\nMAL: hay una copia del cargador que NO es la que sale "
+                  "de compilar.")
+            for rel, n, bn in malas:
+                print("       %-32s %d bytes  (el bueno: %d)" % (rel, n, bn))
+            print("     Un cargador atrasado no se lee raro: se GRABA. Copia")
+            print("     boot/%s encima, o borra la copia." % nombre)
+            fallo = 1
+
+    otros = sueltos({n for n, _ in PAREJAS})
+    if otros:
+        print("\nMAL: hay cargadores sueltos que no salen de compilar nada.")
+        for rel, n in otros:
+            print("       %-32s %d bytes" % (rel, n))
+        print("     Nadie los nombra y nadie los actualiza, pero el dia que")
+        print("     alguien busque 'el cargador' los va a encontrar a ellos.")
+        print("     Borralos, o dales un sitio y un nombre en boot/.")
+        fallo = 1
+
+    if fallo:
         return 1
-
     print("COPIAS BIN: todo correcto")
     return 0
 

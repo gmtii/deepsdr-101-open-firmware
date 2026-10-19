@@ -114,7 +114,7 @@ _Min_Stack_Size = 0x1600;
  * porque el cargador borra por sectores y no puede borrarse a si mismo; y
  * tiene que estar alineado a 512 como minimo por el VTOR.
  */
-_app_base = 0x0800C000;
+_app_base = 0x08008000;
 
 MEMORY
 {
@@ -123,7 +123,7 @@ MEMORY
    * 999.424 = 0x08100000 - 0x0800C000. Toda la flash menos el cargador,
    * en el chip de 1024 kB.
    */
-  FLASH  (rx)  : ORIGIN = 0x0800C000, LENGTH = 999424
+  FLASH  (rx)  : ORIGIN = 0x08008000, LENGTH = 1015808
   TCMRAM (rw)  : ORIGIN = 0x10000000, LENGTH = 64K
 }
 

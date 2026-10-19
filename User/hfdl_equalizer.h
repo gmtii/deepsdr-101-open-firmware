@@ -167,7 +167,7 @@
  * precipicio donde el ecualizador se va a cero y la radio queda muda del
  * todo. Se coge 0,04, dentro de la meseta y lejos del borde.
  *
- * Lo que gana: Hf-acars de 9 a 12 buenas, y en la grabacion del usuario dos
+ * Lo que gana: Hf-acars de 9 a 12 buenas, y en la grabacion de referencia dos
  * renglones y dos coordenadas mas.
  *
  * Y la leccion, otra vez la misma de hoy: un numero copiado de otro

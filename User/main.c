@@ -151,7 +151,7 @@ static void systick_delay_init(void);
  * Igual que con el USB: cuando no se sabe donde esta el tiempo, se pone un
  * cronometro, no una teoria.
  */
-static volatile uint16_t s_bucle_us;    /* la vuelta entera */
+static volatile uint32_t s_bucle_us;    /* la vuelta entera */
 /*
  * Y LO PEOR QUE SE HA VISTO DESDE EL ARRANQUE - 07/10/2026.
  *
@@ -169,8 +169,40 @@ static volatile uint16_t s_bucle_us;    /* la vuelta entera */
  *   peor vuelta grande y peor poll pequeño -> es el dibujo, el tactil o
  *                                             una espera, y no el decodificador
  */
-static volatile uint16_t s_bucle_max_us;
-static volatile uint16_t s_polls_max_us;
+/*
+ * EN 32 BITS, PORQUE 65 ms ERA EL TOPE Y NO LA MEDIDA - 18/10/2026.
+ *
+ * Eran uint16 de microsegundos, o sea que cualquier vuelta de 65,5 ms o
+ * mas se leia como 65. En la radio se leyo exactamente 65, y ese numero no
+ * queria decir 65: queria decir por lo menos 65, y no se cuanto mas. Un
+ * instrumento pegado al tope no distingue un problema de una catastrofe.
+ */
+static volatile uint32_t s_bucle_max_us;
+static volatile uint32_t s_polls_max_us;
+/*
+ * Y EL TERCERO: EL DIBUJO - 19/10/2026.
+ *
+ * Avisado por el usuario, que en STANAG y en IDENT la radio responde al
+ * dedo mas despacio que en los demas modos.
+ *
+ * La regla que acompaña a los dos de arriba ya contestaba la mitad: "peor
+ * vuelta grande y peor poll pequeño -> es el dibujo, el tactil o una
+ * espera, y no el decodificador". La foto de la radio decia exactamente
+ * eso -65 ms la vuelta, 0 los poll- y la mitad que faltaba era saber
+ * CUAL de los tres.
+ *
+ * Asi que se mide el dibujo, que es el unico de los tres que puede durar
+ * decenas de milisegundos: un repintado del panel entero son 253.940
+ * accesos al bus de la pantalla, mas que dos tercios de llenarla entera
+ * (medido en el simulador).
+ *
+ * Con los tres numeros ya no queda nada que adivinar:
+ *
+ *   vuelta grande, poll grande                -> un decodificador
+ *   vuelta grande, poll pequeño, dibujo grande-> el panel
+ *   los tres pequeños y la vuelta grande      -> el tactil o una espera
+ */
+static volatile uint32_t s_dibujo_max_us;
 
 /*
  * Y SE ENSEÑAN, QUE SI NO NO SIRVEN DE NADA - 08/10/2026.
@@ -180,11 +212,15 @@ static volatile uint16_t s_polls_max_us;
  * propio panel de STANAG, que es donde esta el problema y donde el usuario no
  * tiene que ir navegando con la radio a medio gas para leerlos.
  */
-uint16_t ui_bucle_peor_us(void) { return s_bucle_max_us; }
-uint16_t ui_polls_peor_us(void) { return s_polls_max_us; }
-void     ui_peores_cero(void)   { s_bucle_max_us = 0U; s_polls_max_us = 0U; }
+uint32_t ui_bucle_peor_us(void)  { return s_bucle_max_us; }
+uint32_t ui_polls_peor_us(void)  { return s_polls_max_us; }
+uint32_t ui_dibujo_peor_us(void) { return s_dibujo_max_us; }
+void     ui_peores_cero(void)
+{
+    s_bucle_max_us = 0U; s_polls_max_us = 0U; s_dibujo_max_us = 0U;
+}
 static volatile uint16_t s_tactil_us;   /* demo_touch_poll() */
-static volatile uint16_t s_polls_us;    /* los poll de los decodificadores */
+static volatile uint32_t s_polls_us;    /* los poll de los decodificadores */
 
 static void radio_screen_draw(void);
 static void info_vivo_invalida(void);
@@ -509,16 +545,76 @@ static void calib_height_ruler_draw(void);
  * UART (throttled, ~150ms) while a finger is held down anywhere on
  * screen - see touch_debug_stream_poll()'s comment. Temporary
  * diagnostic for the "screen edges don't respond" report, 18/08/2026 -
- * back to 0 once that's tracked down. */
-#define TOUCH_EDGE_DEBUG 1
+ * back to 0 once that's tracked down.
+ *
+ * A 0 EL 17/10/2026, dos meses despues. Lo que decia este comentario que
+ * habia que hacer, sin hacer. Y no era gratis: touch_debug_stream_poll()
+ * se llama en CADA vuelta del bucle principal, y con un dedo puesto hace
+ * dos lecturas completas del tactil cada 150 ms -touch_read_raw() y
+ * touch_read()- para imprimirlas por un puerto serie que se compila
+ * apagado (DEBUG_UART_ENABLED=0 en reglas.mk). O sea: trafico en el bus
+ * del XPT2046 justo mientras alguien tiene el dedo en la pantalla, que es
+ * cuando la radio tiene que responder, y nadie lo lee.
+ *
+ * Lo vigila tools/interruptores_check.py, para que la proxima vez no haga
+ * falta tropezarse con el. */
+/*
+ * *** DE VUELTA A 1 EL 18/10/2026, y no por el diagnostico. ***
+ *
+ * Lo puse a 0 ayer razonando que no era gratis. Hoy el usuario reporta que
+ * en STANAG y en IDENT la radio no coge las pulsaciones - y que EL ENCODER
+ * SI VA y cambia la frecuencia-. O sea que el bucle corre: lo que no
+ * responde es el tactil, y el tactil es lo unico de ese camino que toque
+ * ayer.
+ *
+ * touch_debug_stream_poll() llama a touch_read_raw() Y a touch_read()
+ * cada 150 ms mientras hay un dedo puesto. Lo conte como trafico inutil
+ * en el bus del XPT2046; lo que no mire es que era ademas un SEGUNDO
+ * muestreo del panel justo mientras alguien tiene el dedo encima - y en
+ * los dos modos donde el bucle va mas cargado, un gesto necesita varias
+ * muestras seguidas para que la pulsacion y la suelta caigan en la misma
+ * pantalla (ver el comentario gordo de demo_touch_poll()).
+ *
+ * Asi que vuelve a 1 mientras se comprueba. Si con esto el tactil
+ * responde, lo que hay que hacer NO es dejar un diagnostico encendido:
+ * es muestrear el tactil mas de una vez por vuelta de verdad, con su
+ * propia funcion y su banco. Pero primero hay que saber si es esto.
+ */
+/*
+ * *** Y A 0 OTRA VEZ EL 19/10/2026, porque ya se sabe que era esto. ***
+ *
+ * El usuario confirmo que con esto puesto el tactil responde mas rapido,
+ * pero todavia no como en los demas modos. O sea: el camino era el
+ * correcto -una segunda mirada al tactil dentro de la misma vuelta- y lo
+ * que fallaba era la dosis, porque este diagnostico solo mira cada 150 ms
+ * y solo con el dedo ya puesto.
+ *
+ * Asi que se hace de verdad: el bucle principal llama a
+ * demo_touch_poll() una segunda vez detras de la cadena de polls, sin
+ * condicion de tiempo, y sim/tactil_arrastre.c mide cuantos toques se
+ * pierden a cada periodo de muestreo. Con eso, esto vuelve a ser lo que
+ * su propio comentario dice que es: un diagnostico apagado.
+ */
+#define TOUCH_EDGE_DEBUG 0
 
 /* Set to 1 to run spi_flash_probe_dump() once at boot (needs
  * DEBUG_UART_ENABLED=1 to actually see anything - see spi_flash.h's
  * comment). ONE-TIME bring-up step to confirm the external SPI flash
  * chip's identity and whether LBA 0 really holds a FAT boot sector,
  * BEFORE any write/erase support gets added to spi_flash.c - back to
- * 0 for normal use once that's been confirmed on real hardware. */
-#define SPI_FLASH_PROBE_TEST 1
+ * 0 for normal use once that's been confirmed on real hardware.
+ *
+ * A 0 EL 17/10/2026. Su propio comentario de mas abajo ya decia "kept
+ * here, GATED OFF BY DEFAULT, purely as a re-runnable diagnostic", y
+ * llevaba a 1 desde la puesta en marcha: el codigo decia una cosa y el
+ * define la contraria. Volcaba la identidad del chip y escaneaba la FAT
+ * en cada encendido para escribirlo por un puerto serie que se compila
+ * apagado.
+ *
+ * Para volver a usarlo -que para eso se dejo- hay que ponerlo a 1 Y
+ * compilar con `make DEBUG_UART_ENABLED=1`, que es como se usan los
+ * demas diagnosticos de este fichero. */
+#define SPI_FLASH_PROBE_TEST 0
 
 /* Set to 1 to override the ADC's M-terminal (negative input) routing
  * to common-mode right after aic3204_phase2_init(), for HFDL bench
@@ -906,7 +1002,7 @@ static uint32_t demod_if_offset_hz(void)
  * del antialias. La emisora que acabas de perseguir aparece justo donde el
  * codec ya no entrega nivel.
  *
- * De un video del usuario.
+ * De un el video de referencia.
  *
  * Con 40.000 el punto de demodulacion despues de reaparcar cae en la zona
  * plana, y el paseo sigue siendo de 34 kHz -de 6 a 40- en vez de 38. Se
@@ -1163,6 +1259,30 @@ int main(void)
 
     touch_init();
     debug_print_hex32("RCU_PLLI2S after touch_init", RCU_PLLI2S);
+
+    /*
+     * ==================================================================
+     * EL GANCHO QUE LLEVABA MESES MONTADO Y SIN ENCHUFAR - 19/10/2026
+     * ==================================================================
+     *
+     * gfx2.c tiene gfx2_set_pump(), que llama a lo que se le cuelgue
+     * ENTRE BANDAS de cada repintado, y su comentario dice literalmente
+     * para que existe: muestrear el tactil durante un repintado, porque
+     * si no "la entrada solo se lee entre repintados enteros, y si uno
+     * tarda un segundo hay que mantener el dedo puesto todo ese tiempo
+     * para que se note".
+     *
+     * No lo llamaba NADIE en todo el proyecto. El motor montado y el
+     * cable sin enchufar, exactamente como le paso a rtty_auto.c el
+     * 06/10. Y el sintoma era el que avisaba el usuario: en STANAG y en
+     * IDENT -los dos modos que repintan un panel de 253.940 accesos al
+     * bus- la radio respondia al dedo mas despacio que en los demas.
+     *
+     * Enchufado, el tactil se mira cada ocho milisegundos pase lo que
+     * pase con la vuelta del bucle: es el propio dibujo el que lo mira
+     * mientras dibuja. Ver touch_latido().
+     */
+    gfx2_set_pump(touch_latido);
 
     spi_flash_init(); /* unconditional - settings_load()/settings_poll() need this every boot, not just under the SPI_FLASH_PROBE_TEST diagnostics below */
 
@@ -1699,6 +1819,7 @@ int main(void)
 
     while (1) {
         uint32_t t_vuelta0 = DWT->CYCCNT;
+        uint32_t t_dibujo0 = t_vuelta0;   /* ver s_dibujo_max_us */
 
         /*
          * El CAT, lo primero de la vuelta y antes del dibujo.
@@ -1856,9 +1977,36 @@ int main(void)
                      */
                     if (sstv_activo()) { sstv_panel_reinicia(); }
                     else               { fax_panel_reinicia(); }
-                } else if (ft8_modo_activo() || hfdl_modo_activo() || wspr_modo_activo()
-                    || ais_modo_activo() || ale_modo_activo()
-                    || jtty_modo_activo()) {
+                /*
+                 * LA SEXTA LISTA A MANO DE LA MISMA FAMILIA - 19/10/2026.
+                 *
+                 * Aqui habia esto:
+                 *
+                 *   ft8_modo_activo() || hfdl_modo_activo() ||
+                 *   wspr_modo_activo() || ais_modo_activo() ||
+                 *   ale_modo_activo() || jtty_modo_activo()
+                 *
+                 * y le faltaban STANAG e IDENT, que usan EXACTAMENTE el
+                 * mismo panel -son los dos ultimos que entraron en
+                 * modo_panel_entero()-. O sea que al cerrarse un menu
+                 * encima del panel, esos dos caian en la rama del panel de
+                 * TEXTO y quien repintaba era rtty_scope_panel_reset(),
+                 * que no es el suyo.
+                 *
+                 * Hasta hoy el sintoma era suave -el panel se repintaba
+                 * entero en cuanto cambiaba cualquier cosa, y en esos dos
+                 * modos cambia varias veces por segundo-, asi que tapaba
+                 * el menu casi al instante y nadie lo veia. Con el
+                 * repintado por renglones sucios deja de taparlo solo: lo
+                 * que no cambia, no se repinta. Un fallo que estaba
+                 * escondido detras de un derroche.
+                 *
+                 * La pregunta que contesta esta rama es "¿este modo pinta
+                 * con ft8_panel_draw()?", y eso ya lo sabe
+                 * modo_panel_entero(), que es quien reparte el dibujo unas
+                 * lineas mas abajo. Una lista menos.
+                 */
+                } else if (modo_panel_entero()) {
                     ft8_panel_reinicia();
                 } else {
                 rtty_scope_panel_reset();
@@ -1913,6 +2061,28 @@ int main(void)
              * tools/panel_check.py: si un modo rellena el panel en
              * digi_sync() y no aparece aqui, la compilacion se para.
              */
+            /*
+             * Y LA TERCERA MIRADA AL TACTIL, JUSTO ANTES DEL DIBUJO.
+             *
+             * Las otras dos -la de debajo del dibujo y la de detras de la
+             * cadena de polls- dejan el reparto cojo: entre ellas cae el
+             * trabajo de los decodificadores, pero el DIBUJO queda entero
+             * entre la ultima de una vuelta y la primera de la siguiente.
+             * Y el dibujo es lo mas caro que hay aqui: spectrum_draw() se
+             * come 53 de los 69 ms del fotograma.
+             *
+             * Con esta, las tres parten la vuelta en tres tramos en vez de
+             * dos, y ninguno se lleva el dibujo entero.
+             *
+             * CUESTA UNA LECTURA DE UNA PATILLA cuando no hay nadie
+             * tocando: touch_read_raw() mira PENIRQ y se vuelve sin
+             * hablar con el chip. Solo hay trafico en el bus mientras hay
+             * un dedo puesto, que es justo cuando interesa.
+             */
+            demo_touch_poll();
+
+            t_dibujo0 = DWT->CYCCNT;   /* el tramo de dibujo empieza aqui */
+
             if (capt_tapando()) {
                 /*
                  * La captura tiene algo encima -la barra de progreso o un
@@ -1938,6 +2108,12 @@ int main(void)
                  * safe to call here regardless of which of those two
                  * reasons drawing_now was false for. */
                 sdr_spectrum_waterfall_tick();
+            }
+            if (!s_menu_open) {
+                uint32_t d = (DWT->CYCCNT - t_dibujo0)
+                             / (SystemCoreClock / 1000000U);
+                if (d > 999999UL) { d = 999999UL; }
+                if (d > s_dibujo_max_us) { s_dibujo_max_us = d; }
             }
             {
                 uint32_t t0 = DWT->CYCCNT;
@@ -1980,11 +2156,6 @@ int main(void)
          * gratis.
          */
         hfdl_modo_poll();
-        if (!s_menu_open) {
-            uint32_t d = (DWT->CYCCNT - t_polls0) / (SystemCoreClock / 1000000U);
-            s_polls_us = (uint16_t)((d > 65535U) ? 65535U : d);
-        }
-        }
         /*
          * Y WSPR. Aqui no hay nada caro por vuelta: mira el reloj y, dos
          * veces cada dos minutos, abre o cierra una captura. Lo caro -la
@@ -2019,6 +2190,92 @@ int main(void)
         jtty_modo_poll();
         stanag_modo_poll();  /* las dos transformadas del identificador */
         ident_modo_poll();   /* y las del "¿que señal es?", que es el mismo motor */
+        /*
+         * ==============================================================
+         * EL CRONOMETRO CIERRA AQUI, Y NO SEIS LLAMADAS ANTES - 18/10/2026
+         * ==============================================================
+         *
+         * *** Esto es lo que hizo que buscar el cuelgue de STANAG e IDENT
+         * costara una tarde entera. ***
+         *
+         * s_polls_us abria en hora_poll() y cerraba en hfdl_modo_poll().
+         * Detras quedaban SEIS polls mas -wspr, ais, ale, jtty, stanag e
+         * ident- que se fueron añadiendo despues del instrumento sin que
+         * nadie moviera el cierre. O sea que los dos modos de los que el
+         * usuario se queja eran justo los que NO se median.
+         *
+         * Y el panel de STANAG enseña ese numero con todas las letras:
+         * "65 ms la vuelta / 0 ms los poll". El 0 no decia "los
+         * decodificadores son baratos", decia "no he mirado". Y la regla
+         * que acompaña a los dos numeros -vuelta grande con poll pequeño
+         * es el dibujo y no el decodificador- mandaba derecha al sitio
+         * equivocado.
+         *
+         * Un instrumento que no cubre lo que vino despues es peor que no
+         * tenerlo, porque se le hace caso.
+         */
+        if (!s_menu_open) {
+            uint32_t d = (DWT->CYCCNT - t_polls0) / (SystemCoreClock / 1000000U);
+            s_polls_us = (d > 999999UL) ? 999999UL : d;
+        }
+        }
+
+        /*
+         * ==============================================================
+         * EL TACTIL SE MIRA DOS VECES POR VUELTA - 19/10/2026
+         * ==============================================================
+         *
+         * Avisado por el usuario: en STANAG y en IDENT la radio responde
+         * al dedo mas despacio que en los demas modos.
+         *
+         * Y lo que falla NO es el tactil: es cada cuanto se mira. Un
+         * toque solo sale si, mientras el dedo esta puesto, se pasa por
+         * aqui TRES veces - dos para que touch_read() confirme el
+         * contacto (la firmeza, ver su comentario en touch.c) y una mas,
+         * ya sin dedo, para que esto vea la suelta y dispare la accion.
+         *
+         * sim/tactil_arrastre.c lo mide con el touch.c de verdad, y la
+         * tabla no deja lugar a dudas: mirando cada 20 ms salen todos los
+         * toques; cada 65 -lo que marcaba el panel de STANAG- se pierden
+         * 3 de cada 20 de los normales (120 ms) y 15 de cada 20 de los
+         * cortos (80 ms).
+         *
+         * LO QUE NO SE PUEDE HACER es aflojar la firmeza. Confirmar con
+         * dos lecturas SEPARADAS EN EL TIEMPO es lo que distingue un
+         * toque de un roce o del canto de la mano, y endurecer eso lo
+         * pidio el usuario expresamente. Dos lecturas seguidas dentro de
+         * la misma llamada confirmarian igual de rapido y volverian a dar
+         * por bueno cualquier roce: ese filtro mide tiempo, no cuentas.
+         *
+         * Lo que si se puede es MIRAR MAS VECES. La vuelta tarda lo que
+         * tarda -el dibujo manda, y en estos dos modos ademas corren dos
+         * transformadas-, pero el tactil no tiene por que esperar a la
+         * siguiente. Con esta segunda mirada, detras de la cadena de
+         * polls y antes del resto, el periodo baja a la mitad: 32 ms con
+         * la vuelta a 65, que es la fila que sale entera en verde.
+         *
+         * Esto es, con todas las letras, lo que decia el comentario de
+         * TOUCH_EDGE_DEBUG que habia que hacer cuando se supiera si era
+         * esto: "muestrear el tactil mas de una vez por vuelta de verdad,
+         * con su propia funcion y su banco". Ya se sabe que era esto, y
+         * aquel diagnostico vuelve a estar apagado.
+         *
+         * NO se cronometra: s_tactil_us mide UNA mirada, la de arriba, y
+         * sumarle esta haria que el numero del panel dejara de querer
+         * decir lo que dice.
+         *
+         * LAS DOS GUARDIAS SON LAS DE LA PRIMERA MIRADA, no la del
+         * cronometro. Con la pantalla dormida no se toca el tactil a
+         * proposito -es justo el trafico que ese modo existe para
+         * callar- y durante la calibracion el tactil es de
+         * touch_calib.c. Lo que NO se mira aqui es s_menu_open: el menu
+         * tambien se usa con el dedo, y ahi esta exactamente el fallo de
+         * ayer, cuando el cronometro y la llamada se confundieron.
+         *
+         * Lo vigila tools/tactil_check.py: si alguien vuelve a dejar una
+         * sola mirada por vuelta, la compilacion se para.
+         */
+        if (!s_screen_asleep && !touch_calib_active()) { demo_touch_poll(); }
         /*
          * EL AJUSTE AUTOMATICO DEL RTTY - 06/10/2026.
          *
@@ -2155,9 +2412,9 @@ int main(void)
         }
         if (!s_menu_open) {
             uint32_t d = (DWT->CYCCNT - t_vuelta0) / (SystemCoreClock / 1000000U);
-            s_bucle_us = (uint16_t)((d > 65535U) ? 65535U : d);
+            s_bucle_us = (d > 999999UL) ? 999999UL : d;
             if (s_bucle_us > s_bucle_max_us) { s_bucle_max_us = s_bucle_us; }
-            if (s_polls_us > s_polls_max_us) { s_polls_max_us = (uint16_t)s_polls_us; }
+            if (s_polls_us > s_polls_max_us) { s_polls_max_us = s_polls_us; }
         }
     }
 }
@@ -3968,7 +4225,7 @@ static uint8_t s_bd_espectro = 0U;
  * riesgo teorico del margen GRANDE y puse uno mediano, sin medir si el
  * mediano ya lo causaba. Lo causaba: en 7,260 MHz con 96 kHz, DOS de los
  * seis carteles caian fuera de la pantalla y el tercio derecho estaba
- * vacio siempre. Se ve en el video del usuario del 15/10.
+ * vacio siempre. Se ve en el video de referencia del 15/10.
  *
  * Un riesgo que uno mismo escribe y no mide es un fallo con permiso.
  *
@@ -4891,6 +5148,29 @@ static void smeter_dbfs_uart_report(float peak)
  * dB value to compute with, not just a label to print. */
 static const float k_att_db_values[3] = { 0.0f, -6.0f, -12.0f };
 
+/*
+ * LAS SIGLAS DEL ATENUADOR, PARA EL CHIP DE LA BARRA DE ARRIBA - 19/10/2026.
+ *
+ * Pedido por el usuario: el chip que ponia NR pasa a poner ATT.
+ *
+ * Son las mismas tres posiciones que k_att_nombres ("0 dB" / "-6 dB" /
+ * "-12 dB"), pero en un chip de 76 px no cabe "0 dB" y ademas no se lee
+ * igual: "OFF" dice a la primera que el atenuador no esta haciendo nada,
+ * que es la pregunta que se le hace de un vistazo. Es la misma convencion
+ * que usa el chip del AGC, y de ahi sale la regla de "encendido" que
+ * comparten los dos: el estado activo es el que NO empieza por 'O'.
+ *
+ * LA LISTA VIVE EN ui_top.h, no aqui: la necesitan los dos ficheros -este
+ * para decir cual toca, y ui_top.c para medir las tres a la vez y darle al
+ * chip un ancho fijo- y escrita dos veces se separan sola. Ver
+ * UI_TOP_ATT_SIGLAS y el porque de "-06" en vez de "-6".
+ *
+ * Las tres listas -dB, nombres largos y siglas- se atan con un
+ * _Static_assert donde esta la ultima, para que no se pueda anadir un
+ * escalon en una y olvidarlo en las otras.
+ */
+static const char *const k_att_siglas[]     = UI_TOP_ATT_SIGLAS;
+
 #define SNR_X (uint16_t)(SMETER_X + SMETER_SEGS * (SMETER_SEG_W + 1) + 12) /* right after the meter, plus a gap - name kept as "SNR_X/Y" even though this slot no longer shows SNR, since BADGE_ROW_X0 and others already reference it by this name */
 
 /*
@@ -5500,7 +5780,14 @@ static void top_sync(void)
             s_top.bw = 0;
         }
     }
-    s_top.nr_on = s_nr_on;
+    /* El chip de la barra de arriba enseña EL SUELO QUE HAS PEDIDO, no lo
+     * que el AGC de RF tenga puesto en este segundo. Es la misma decision
+     * que tomo la celda de Ajustes el 09/10/2026 (ver AJ_ATT en
+     * ajuste_valor()) y por la misma razon: un chip que se mueve solo hace
+     * pensar que el toque no ha obedecido. Cuando el automatico sube por
+     * encima del suelo, quien lo dice es la celda de Ajustes, entre
+     * parentesis, que es donde hay sitio para decirlo. */
+    s_top.att = k_att_siglas[s_att_suelo < 3U ? s_att_suelo : 0U];
     s_top.nco_on = s_nco_on;
     s_top.jmp_on = s_jmp_on;
     /* La marquesina solo existe en FM ancha con el RDS puesto. Fuera de ahi
@@ -5643,7 +5930,52 @@ static const tema_t k_temas[] = {
     { T("Chemistry", "Chemistry"),
       T("Papel blanco con tinta negra, para pantallas flojas",
         "Paper white, black ink, for weak displays"),
-      &k_pal_chemistry, SPECTRUM_PALETTE_SMOKE }
+      &k_pal_chemistry, SPECTRUM_PALETTE_SMOKE },
+    /*
+     * LOS DIEZ CLAROS - 17/10/2026, del issue que pedia fondo claro
+     * para el espectro. Ver la cabecera del bloque en palette.h: los
+     * colores estan calculados contra su propio fondo y medidos, y
+     * son los primeros que estrenan espectro_claro = 1.
+     *
+     * AL FINAL, como los de antes y por lo mismo: el tema se guarda
+     * por INDICE en CONFIG.CSV.
+     *
+     * LA CASCADA DE CADA UNO NO ES UN GUSTO, ES UNA CUENTA. De las
+     * dieciseis, SMOKE es la unica CLARA -blanco abajo, negro
+     * arriba-, o sea la unica que no planta una mancha oscura en
+     * mitad de un panel de papel. La llevan los diez. Y es la misma
+     * razon por la que ya la llevaban Oliva y Chemistry.
+     */
+    { T("Lino", "Linen"),
+      T("Blanco roto cálido, tema claro", "Warm off-white, light theme"),
+      &k_pal_lino,      SPECTRUM_PALETTE_SMOKE },
+    { T("Marfil", "Ivory"),
+      T("Crema amarillento, tema claro", "Yellowish cream, light theme"),
+      &k_pal_marfil,    SPECTRUM_PALETTE_SMOKE },
+    { T("Arena", "Sand"),
+      T("Beige tostado, tema claro", "Toasted beige, light theme"),
+      &k_pal_arena,     SPECTRUM_PALETTE_SMOKE },
+    { T("Pergamino", "Parchment"),
+      T("Crema envejecido, tema claro", "Aged cream, light theme"),
+      &k_pal_pergamino, SPECTRUM_PALETTE_SMOKE },
+    { T("Niebla", "Mist"),
+      T("Gris azulado muy claro, tema claro", "Pale bluish grey, light theme"),
+      &k_pal_niebla,    SPECTRUM_PALETTE_SMOKE },
+    { T("Almendra", "Almond"),
+      T("Crema rosado, tema claro", "Pinkish cream, light theme"),
+      &k_pal_almendra,  SPECTRUM_PALETTE_SMOKE },
+    { T("Menta", "Mint"),
+      T("Verde muy claro, tema claro", "Pale green, light theme"),
+      &k_pal_menta,     SPECTRUM_PALETTE_SMOKE },
+    { T("Cielo", "Sky"),
+      T("Azul muy claro, tema claro", "Pale blue, light theme"),
+      &k_pal_cielo,     SPECTRUM_PALETTE_SMOKE },
+    { T("Trigo", "Wheat"),
+      T("Dorado pálido, tema claro", "Pale gold, light theme"),
+      &k_pal_trigo,     SPECTRUM_PALETTE_SMOKE },
+    { T("Porcelana", "Porcelain"),
+      T("Blanco azulado, tema claro", "Bluish white, light theme"),
+      &k_pal_porcelana, SPECTRUM_PALETTE_SMOKE }
 };
 #define TEMA_COUNT (sizeof(k_temas) / sizeof(k_temas[0]))
 
@@ -9071,6 +9403,14 @@ _Static_assert(sizeof(k_agc_nombres) / sizeof(k_agc_nombres[0])
                == sizeof(k_agc_profile_labels) / sizeof(k_agc_profile_labels[0]),
                "k_agc_nombres y k_agc_profile_labels tienen que medir lo mismo");
 static const char *const k_att_nombres[3]   = { "0 dB", "-6 dB", "-12 dB" };
+/* Los nombres largos de Ajustes, las siglas del chip de la barra y la tabla
+ * de dB son los mismos tres escalones del atenuador en tres formatos. */
+_Static_assert(sizeof(k_att_nombres) / sizeof(k_att_nombres[0])
+               == sizeof(k_att_siglas) / sizeof(k_att_siglas[0]),
+               "k_att_nombres y k_att_siglas tienen que medir lo mismo");
+_Static_assert(sizeof(k_att_nombres) / sizeof(k_att_nombres[0])
+               == sizeof(k_att_db_values) / sizeof(k_att_db_values[0]),
+               "k_att_nombres y k_att_db_values tienen que medir lo mismo");
 static const texto_t k_tactil_nombres[3] = {
     T("Sensible", "Light"), T("Normal", "Normal"), T("Firme", "Firm")
 };
@@ -11960,8 +12300,8 @@ static uint32_t pila_usada(void)
  * Con cargador propio la region es de una pieza, 0x0800C000..0x08080000, y
  * un solo numero vuelve a decir la verdad entera.
  */
-#define INFO_FLASH_ORIGEN 0x0800C000UL
-#define INFO_FLASH_TOPE   (0x08080000UL - INFO_FLASH_ORIGEN)   /* 475.136 */
+#define INFO_FLASH_ORIGEN CARGA_APP_BASE
+#define INFO_FLASH_TOPE   (0x08080000UL - INFO_FLASH_ORIGEN)   /* 491.520 */
 #define INFO_SRAM_TOPE    (192UL * 1024UL)
 #define INFO_TCM_TOPE     (64UL  * 1024UL)
 
@@ -12253,7 +12593,7 @@ static void espera_ms(uint32_t ms)
  * Peor: habia DOS cargadores escribiendo en la misma zona, y el segundo
  * tenia que mirar donde acababa el primero.
  *
- * ESO FALLO EN LA PRIMERA PRUEBA DE VERDAD. El usuario mando una foto: un
+ * ESO FALLO EN LA PRIMERA PRUEBA DE VERDAD. En pantalla salia un
  * cartel que decia "Base de datos de aviones - ICAO24.BIN, del disco a la
  * zona alta" mientras lo que habia fallado era el cargador de EMISORAS,
  * porque reutilizaba su pantalla. Y debajo, un motivo -"No cabe: la base
@@ -12321,8 +12661,36 @@ static uint8_t datos_arranca(void)
      * que el disco anuncia, escribir las bases se lo llevaria por delante.
      */
     if (DATOS_TOPE > spi_flash_capacidad() || DATOS_BASE < a->fs_bytes) {
-        s_datos_porque = tr("la zona alta de este chip no llega hasta aqui",
-                            "this chip's upper area does not reach that far");
+        /*
+         * Y DECIR CUAL DE LAS DOS ES - 18/10/2026, de un issue.
+         *
+         * Aqui habia un solo mensaje, "la zona alta de este chip no llega
+         * hasta aqui", para dos averias que no se parecen en nada:
+         *
+         *   - el chip es mas pequeño de lo que hace falta, que es un
+         *     problema del equipo;
+         *   - o el VOLUMEN dice medir mas que el disco, que es un
+         *     problema del formateo y se arregla en treinta segundos
+         *     desde la propia radio.
+         *
+         * Y el mensaje mandaba a mirar el chip en los dos casos. Desde
+         * fuera, lo segundo se ve asi: el mapa se graba perfecto -porque
+         * grabarlo solo LEE el disco, y leer sigue permitido-, BD.BIN da
+         * un error -porque esta guardia mira el tamaño declarado-, y el
+         * disco esta roto para Windows, que es lo que lo empezo todo. Tres
+         * sintomas que no cuadran entre si hasta que se sabe cual de los
+         * dos es, y el cartel no lo decia.
+         *
+         * geo_lee() ya distingue los dos casos desde el 08/10 -es
+         * GEO_MAS_GRANDE- y lo que faltaba era preguntarselo.
+         */
+        if (a->fs_bytes > (spi_flash_capacidad() - ZA_BYTES_REGION)) {
+            s_datos_porque = tr("el disco dice medir mas de lo que hay: formatealo",
+                                "the disk claims to be larger than it is: format it");
+        } else {
+            s_datos_porque = tr("la zona alta de este chip no llega hasta aqui",
+                                "this chip's upper area does not reach that far");
+        }
         s_vol_sin_zona = 1U;
         s_vol_estado = 3U;
         return 0U;
@@ -12509,6 +12877,15 @@ static uint8_t mapa_al_arrancar(void)
      */
     if (!hay_fich && !mapa_flash_hay(0)) { return 0U; }
 
+    /*
+     * DUENO DEL PRESTAMO, no prestatario: aqui no se pregunta
+     * waterfall_prestada() y es a proposito. Ver tools/prestamo_check.py.
+     *
+     * Aqui se coge en el ARRANQUE, desde main() y antes de que el bucle
+     * principal de la primera vuelta: no hay ningun poll corriendo todavia
+     * ni ningun modo elegido, asi que no hay a quien preguntar. Se suelta
+     * unas lineas mas abajo, antes de que nada de eso empiece.
+     */
     hfdl_ram_coge();
     pozo = hfdl_ram_todo(&cap);
     if (pozo == 0 || cap < (uint32_t)(MAPA_BIN_RAM + 512U)) {
@@ -13191,8 +13568,8 @@ static char s_info_val[UIG_CELLS][40];
  *
  * Eran 24 y se desbordaron el mismo dia que se escribieron: la fila de
  * audio paso a llevar cuatro numeros -"0dsc 0trd 1rep 75-255/1024"- que
- * son 26 caracteres mas el fin de cadena, o sea 27 en un hueco de 24. El
- * usuario lo vio, el texto cortado; lo que no se ve es que
+ * son 26 caracteres mas el fin de cadena, o sea 27 en un hueco de 24. En
+ * pantalla se veia el texto cortado; lo que no se ve es que
  * los tres bytes de mas van a parar al pie de la celda SIGUIENTE.
  *
  * Esto se arma byte a byte con aj_u2s() y punteros, sin snprintf ni nada
@@ -13673,7 +14050,7 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
          * EL CRUDO PRIMERO, y "sin ref." en vez de un voltaje cuando no
          * vale. En la V4.55 esta fila ponia "3,00 V" tanto si lo habia
          * medido como si estaba cayendo en el valor de reserva, y las dos
-         * cosas se escriben igual: el usuario mando una foto con 3,00 V
+         * cosas se escriben igual: en una captura de pantalla con 3,00 V
          * clavados y lo que parecia una medida perfecta era un fallo.
          * Un valor de reserva que se enseña como medida no informa, miente.
          */
@@ -14759,6 +15136,11 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
         while (buf[i] != '\0') { i++; }
         buf[i++] = '/';
         aj_u2s(&buf[i], (uint32_t)(s_polls_max_us / 1000U));
+        while (buf[i] != '\0') { i++; }
+        /* y el tercero: el dibujo. Ver s_dibujo_max_us, que es el que parte
+         * en dos el caso "la vuelta es grande y los poll no". */
+        buf[i++] = '/';
+        aj_u2s(&buf[i], (uint32_t)(s_dibujo_max_us / 1000U));
         while (buf[i] != '\0') { i++; }
         buf[i] = '\0';
         return buf;
@@ -18608,7 +18990,7 @@ static void apply_lo_tune(uint32_t freq_hz)
              * es la banda: es lo que se cuela por los lados del filtro
              * equivocado.
              *
-             * Y esto explica lo que se veia en el video del usuario. Subir
+             * Y esto explica lo que se veia en el video de referencia. Subir
              * pasa por el MS5351, que SI llama a rf_lpf_select() y pone el
              * rango 1; al volver a bajar, este camino no lo toca, asi que se
              * queda el bueno. Irse y volver no arreglaba nada por magia:
@@ -20099,6 +20481,23 @@ static uint8_t  s_ft8_seg_visto = 0xFFU;
 static void ft8_panel_reinicia(void)
 {
     s_ft8_todo = 1U;
+    /*
+     * Y SE LE DICE A ui_digi QUE OLVIDE LO QUE CREE TENER PINTADO.
+     *
+     * Desde el 19/10/2026 panel_pinta() solo repinta los renglones cuya
+     * huella ha cambiado (ui_digi_draw_cambios()). Esta funcion es la que
+     * llaman los once sitios que saben que los pixeles de debajo YA NO SON
+     * NUESTROS: un cambio de modo, un menu que se cierra encima, el mapa
+     * que se pone o se quita, una pantalla de ajustes.
+     *
+     * Sin esto, s_ft8_todo haria que panel_pinta() se LLAME, pero dentro
+     * se compararian las huellas contra lo que habia antes del menu y, si
+     * el texto no hubiera cambiado mientras tanto, no se repintaria nada:
+     * el panel se quedaria con el menu debajo. Es el fallo clasico de los
+     * repintados parciales, y la forma de no tenerlo es que las dos cosas
+     * -"repinta" y "olvida"- salgan del mismo sitio y no de dos listas.
+     */
+    ui_digi_olvida();
 }
 
 /*
@@ -20553,6 +20952,19 @@ static void mapa_eti_llena(const mapa_caja_t *caja)
          * punto y sin etiqueta, que es mejor que una chapa vacia.
          */
         uint32_t a, na = hfdl_modo_aviones();
+        /*
+         * Y LA OACI Y EL MODELO, QUE FALTABAN EN LA FICHA - 19/10/2026.
+         *
+         * Avisado por el usuario: en el mapa, la ficha de abajo decia
+         * "CCA845 - 864 km - AZ 58" y nada mas, mientras que la LISTA del
+         * mismo modo enseña la OACI y el modelo en sus dos primeras
+         * columnas. Los dos datos estaban guardados; lo que no habia era
+         * por donde pasarlos. Ver hfdl_modo_ficha() y mapa_eti_dx_t.
+         *
+         * El buffer es de aqui y vive lo que dura el bucle: mapa_eti_pon()
+         * solo copia lo que le llega si este avion resulta ser el elegido.
+         */
+        char ficha[32];
 
         for (a = 0UL; a < na; a++) {
             int32_t la, lo;
@@ -20561,6 +20973,10 @@ static void mapa_eti_llena(const mapa_caja_t *caja)
             if (!hfdl_modo_ident(a, dx.call, (uint8_t)MAPA_ETI_CALL)) {
                 continue;
             }
+            if (!hfdl_modo_ficha(a, ficha, (uint8_t)sizeof ficha)) {
+                ficha[0] = '\0';
+            }
+            dx.extra = ficha;
             dx.loc[0] = '\0';          /* un avion no tiene cuadrado */
             dx.hay_pos = 1U;
             dx.avion   = 1U;
@@ -20750,8 +21166,43 @@ static void panel_pinta(void)
          */
         ui_digi_draw_cabecera(&s_digi);
         ft8_mapa_draw();
+        /*
+         * Y LO APUNTADO POR ui_digi SE TIRA: el mapa acaba de pintar
+         * ENCIMA del cuerpo del panel, asi que los renglones que ui_digi
+         * cree tener en pantalla ya no estan. Sin esto, al quitar el mapa
+         * se repintarian solo los renglones que hubieran cambiado y el
+         * resto se quedaria con el mapa debajo. Ver ui_digi_olvida().
+         */
+        ui_digi_olvida();
     } else {
-        ui_digi_draw_texto(&s_digi);   /* cabecera incluida */
+        /*
+         * ==============================================================
+         * SOLO LOS RENGLONES QUE HAN CAMBIADO - 19/10/2026
+         * ==============================================================
+         *
+         * Pedido por el usuario: que la radio vaya mas rapido.
+         *
+         * Aqui habia ui_digi_draw_texto(), que repinta los 800 x 317
+         * enteros SIEMPRE: 253.940 accesos al bus de la pantalla, 11,4 ms
+         * del ajuste rapido y 26,7 del de por defecto. Y esto corre varias
+         * veces por segundo en STANAG, en IDENT, en HFDL, en FT8...
+         *
+         * Medido con sim/digi_sucios.c, que compara pixel a pixel lo
+         * parcial contra lo entero:
+         *
+         *     un renglon cambia .................... 14.434   6 %
+         *     la lista crece (el vivo se mueve) .... 28.868  11 %
+         *     cambia la chapa ...................... 12.610   5 %
+         *     se pulsa un boton .....................2.530   1 %
+         *     entra una linea por arriba .......... 115.472  45 %
+         *     no cambia nada ............................ 0   0 %
+         *
+         * El 45 % del peor caso -cuando cambian los ocho renglones- no es
+         * un consuelo: es que el repintado "entero" tambien se come los
+         * 125 px de fondo vacio que hay debajo del ultimo renglon, cien
+         * mil accesos al bus para no dibujar nada.
+         */
+        ui_digi_draw_cambios(&s_digi);
     }
 }
 
@@ -21788,7 +22239,7 @@ static void digi_sync(void)
      * y el CW no tiene ni desplazamiento ni velocidad de bit. Ensenarles
      * dos botones que no hacen nada seria peor que no tenerlos.
      *
-     * Y SOLO EN RTTY DE VERDAD - 06/10/2026, por una foto del usuario: en SSTV
+     * Y SOLO EN RTTY DE VERDAD - 06/10/2026, visto en pantalla: en SSTV
      * le salian "450 Hz" y "50 Bd" al lado de "Empezar". El SSTV y el fax
      * pintan su cabecera encima de este mismo panel, asi que lo que se ponga
      * aqui se cuela por debajo; rtty_get_enabled() dice que el decodificador
@@ -23003,6 +23454,21 @@ static void capt_progreso(void)
  */
 static void capt_restaura(void)
 {
+    /*
+     * Y EL PANEL DIGITAL, QUE NADIE REPINTA AQUI - 19/10/2026.
+     *
+     * El cartel de la captura se pinta ENCIMA, justo en medio, que es
+     * donde vive el panel de los modos que se lo llevan entero. Quitarlo
+     * es repintar lo de debajo, y radio_screen_draw() -lo que se llama en
+     * la rama de la radio- no toca ese panel: lo pinta ft8_panel_draw() en
+     * su propio ritmo.
+     *
+     * Antes se arreglaba solo por derroche: el siguiente repintado era
+     * entero y borraba el cartel. Desde que solo se repintan los renglones
+     * que cambian, hay que decirlo. Ver ui_digi_olvida().
+     */
+    ft8_panel_reinicia();
+
     switch (menu_capa()) {
     case MENU_CAPA_QTH:  ui_qth_draw(&s_qth);   break;
     case MENU_CAPA_HORA: ui_hora_draw(&s_hora); break;
@@ -23337,9 +23803,44 @@ static void gsv_cierra_ajeno(void)
  * imagen" en su formato -en SSTV es la fila 0, en el fax es que acabe la
  * señal de fase-.
  */
+/*
+ * ======================================================================
+ * LA FILA SE CONVIERTE A TROZOS, NO ENTERA - 19/10/2026
+ * ======================================================================
+ *
+ * Pedido por el usuario: ahorrar RAM.
+ *
+ * Aqui habia un `static uint8_t conv[WEFAX_ANCHO * 3]`, o sea 2.268 bytes
+ * de .bss permanentes, para convertir UNA fila de la imagen al formato
+ * del fichero antes de metersela a gsv_mete(). Permanentes: 2.268 bytes
+ * ocupados las veinticuatro horas para una cosa que solo pasa mientras se
+ * guarda un fax o una SSTV en el pendrive.
+ *
+ * Y no hacian ninguna falta. gsv_mete() YA parte lo que le des en trozos
+ * segun lo que quepa en el bloque de 4 kB -mira su bucle-, asi que darle
+ * la fila entera de una vez no le ahorra nada. Convirtiendo de
+ * GSV_TROZO en GSV_TROZO pixeles sale lo mismo byte a byte, el buffer
+ * cabe en la pila, y la .bss se queda con 2.268 bytes menos.
+ *
+ * NO HAY RELLENO QUE CUADRAR, y conviene decirlo porque es lo unico que
+ * podria romper al trocear: una fila BMP se rellena a multiplo de 4, pero
+ * aqui el ancho es 756 y 756x3 = 2.268 y 756x2 = 1.512 son los dos
+ * multiplos de 4. bmp_fila_bytes() lo confirma en cada llamada (nf), y el
+ * aserto de abajo lo ata para que nadie cambie el ancho sin enterarse.
+ *
+ * TREINTA Y DOS PIXELES porque la pila de esta radio tiene 1.104 bytes de
+ * margen medidos (tools/pila.py): 96 bytes de aqui son holgura de sobra, y
+ * el coste de llamar a gsv_mete() veinticuatro veces en vez de una es una
+ * comparacion por trozo.
+ */
+#define GSV_TROZO  32U
+_Static_assert(((WEFAX_ANCHO * 3U) % 4U) == 0U && ((WEFAX_ANCHO * 2U) % 4U) == 0U,
+               "con este ancho la fila BMP llevaria relleno y el troceado "
+               "de gsv_linea() tendria que ponerlo");
+
 static void gsv_linea(const uint8_t *l, uint16_t y)
 {
-    static uint8_t conv[WEFAX_ANCHO * 3U];   /* el mas ancho de los dos */
+    uint8_t  trozo[GSV_TROZO * 3U];
     uint32_t nf;
 
     if (!s_gsv_on) { return; }
@@ -23363,9 +23864,16 @@ static void gsv_linea(const uint8_t *l, uint16_t y)
      * congelar el aparato.
      */
     while (s_gsv_fila < y && s_gsv_on && s_gsv_bloques == 0U) {
+        uint32_t puesto = 0UL;
         uint32_t i;
-        for (i = 0UL; i < nf; i++) { conv[i] = 0U; }
-        gsv_mete(conv, nf);
+
+        for (i = 0UL; i < sizeof trozo; i++) { trozo[i] = 0U; }
+        while (puesto < nf) {
+            uint32_t c = nf - puesto;
+            if (c > sizeof trozo) { c = sizeof trozo; }
+            gsv_mete(trozo, c);
+            puesto += c;
+        }
         s_gsv_fila++;
     }
     if (!s_gsv_on) { return; }
@@ -23373,11 +23881,25 @@ static void gsv_linea(const uint8_t *l, uint16_t y)
 
     /* A 8 bits el byte del decodificador ES el byte del fichero -ver
      * bmp.h- asi que se mete tal cual, sin pasar por conv[]. */
-    if (s_gsv_bits == BMP_8)        { gsv_mete(l, nf); }
-    else if (s_gsv_bits == BMP_16)  { bmp_fila565(l, conv, s_gsv_ancho);
-                                      gsv_mete(conv, nf); }
-    else                            { bmp_fila24(l, conv, s_gsv_ancho);
-                                      gsv_mete(conv, nf); }
+    if (s_gsv_bits == BMP_8) {
+        gsv_mete(l, nf);
+    } else {
+        uint16_t x = 0U;
+
+        while (x < s_gsv_ancho) {
+            uint16_t m = (uint16_t)(s_gsv_ancho - x);
+
+            if (m > (uint16_t)GSV_TROZO) { m = (uint16_t)GSV_TROZO; }
+            if (s_gsv_bits == BMP_16) {
+                bmp_fila565(l + (uint32_t)x * 3UL, trozo, m);
+                gsv_mete(trozo, (uint32_t)m * 2UL);
+            } else {
+                bmp_fila24(l + (uint32_t)x * 3UL, trozo, m);
+                gsv_mete(trozo, (uint32_t)m * 3UL);
+            }
+            x = (uint16_t)(x + m);
+        }
+    }
     s_gsv_fila++;
     s_gsv_ms = g_msticks;
 
@@ -23419,6 +23941,39 @@ static const char *gsv_rotulo_fax(void)
     return b;
 }
 
+/*
+ * LA CABECERA DE LOS TRES QUE PINTAN IMAGEN, LIMPIA ANTES DE ARMARLA
+ * - 19/10/2026.
+ *
+ * WEFAX, SSTV y Feld-Hell no pasan por digi_sync(): se montan su cabecera
+ * ellos, con los dos botones de la izquierda y la chapa. Pero s_digi es UNA
+ * sola estructura compartida con los demas paneles, y los campos que estos
+ * tres no tocan se quedan con lo que dejo el modo anterior.
+ *
+ * Viniendo de FT8 o de JTTY eso son btn5 ("Mapa") y la barra. El quinto
+ * boton se PINTA -solo_chip() dibuja el cuarto y el quinto dentro de su
+ * franja- o sea que en la cabecera del fax aparecia un boton de otro modo;
+ * y ademas chip_w() ve btn5 puesto y encoge la chapa a su ancho reservado,
+ * 140 px, con lo que del texto de estado no quedaba casi nada.
+ *
+ * Es la misma familia de fallo que digi_sync() ya arregla para la tinta de
+ * los renglones y para barra_dcha, y por la misma razon se hace aqui y no
+ * en cada uno de los tres: una cuarta cabecera que se olvide de uno de los
+ * campos es exactamente como se vuelve a caer.
+ */
+static void img_hdr_limpia(void)
+{
+    s_digi.btn3 = 0;  s_digi.btn3_press = 0U;
+    s_digi.btn4 = 0;  s_digi.btn4_press = 0U;
+    s_digi.btn5 = 0;  s_digi.btn5_press = 0U;
+    s_digi.barra_on       = 0U;
+    s_digi.barra_dcha     = 0U;
+    s_digi.barra_w        = 0;
+    s_digi.barra_txt      = (const char *)0;
+    s_digi.barra_txt_dcha = (const char *)0;
+    s_digi.titulos        = (const char *)0;
+}
+
 static void fax_hdr_draw(void)
 {
     wefax_info_t in;
@@ -23426,6 +23981,7 @@ static void fax_hdr_draw(void)
     const char *e;
     int32_t ppm;
 
+    img_hdr_limpia();
     wefax_info(&in);
     switch (in.estado) {
     case WEFAX_BUSCA:  e = tr("Esperando el tono de arranque", "Waiting for the start tone"); break;
@@ -23632,6 +24188,7 @@ static void sstv_hdr_draw(void)
     char *p = s_sstv_txt;
     const char *e;
 
+    img_hdr_limpia();
     sstv_info(&in);
     if (in.estado == SSTV_IMAGEN && in.modo) {
         e = in.modo;
@@ -23886,6 +24443,7 @@ static void hell_hdr_draw(void)
 {
     hell_info_t in;
 
+    img_hdr_limpia();
     hell_info(&in);
     s_digi.chip = (in.columnas > 0UL) ? tr("Recibiendo", "Receiving")
                                       : tr("Esperando señal", "Waiting for signal");
@@ -24420,8 +24978,12 @@ static uint8_t scope_rayas(float nyquist_hz, scope_raya_t r[2])
         if (a < MAIN_W && a != b) { r[n].x = a; r[n].color = PAL_INK_MUTE; n++; }
         if (b < MAIN_W)           { r[n].x = b; r[n].color = PAL_ACCENT;   n++; }
     } else if (ax25_activo()) {
-        a = (uint16_t)((AX25_MARCA_HZ   / nyquist_hz) * (float)MAIN_W);
-        b = (uint16_t)((AX25_ESPACIO_HZ / nyquist_hz) * (float)MAIN_W);
+        /* Los tonos los da ax25.c, no estan copiados aqui: en APRS son
+         * 1200 y 2200 y en PKT300 son 1600 y 1800, y con los del APRS
+         * escritos a mano las dos rayas de PKT300 caian donde no hay
+         * nada. Ver ax25_marca_hz(). */
+        a = (uint16_t)((ax25_marca_hz()   / nyquist_hz) * (float)MAIN_W);
+        b = (uint16_t)((ax25_espacio_hz() / nyquist_hz) * (float)MAIN_W);
         if (a < MAIN_W) { r[n].x = a; r[n].color = PAL_ACCENT; n++; }
         if (b < MAIN_W) { r[n].x = b; r[n].color = PAL_WARN;   n++; }
     } else {
@@ -24485,7 +25047,9 @@ static void rtty_scope_draw(void)
      * exactamente lo que se ve cuando no hay propagacion.
      *
      * En APRS son los dos tonos del AFSK, 1.200 y 2.200, y no los del RTTY:
-     * esos son un ajuste del usuario que en paquete no significa nada.
+     * esos son un ajuste del usuario que en paquete no significa nada. Y en
+     * PKT300 son otros -1.600 y 1.800-, que es por lo que ya no estan
+     * escritos aqui sino que los da ax25.c: ver ax25_marca_hz().
      */
     {
         scope_raya_t r[2];
@@ -25546,7 +26110,7 @@ static void demo_button_callback(void *widget, ui_event_t event, void *user_data
             debug_print(s_nr_on ? "NR: on\n" : "NR: off\n");
             /* Y SE GUARDA - 06/10/2026. Faltaba, y el fallo es viejo: la
              * clave "nr_on" existe desde el 01/10 -se metio justo porque
-             * el usuario vio dos videos con el mismo CONFIG.CSV y el boton
+             * se vieron dos arranques con el mismo CONFIG.CSV y el boton
              * en estados distintos- pero ni este boton ni el chip de la
              * cabecera marcaban nada, asi que el interruptor solo llegaba
              * al fichero si despues tocabas otra cosa. Medio arreglo. */
@@ -26142,6 +26706,37 @@ static void demo_touch_poll(void)
     uint8_t pressed = touch_read(&x, &y);
 
     /*
+     * ==================================================================
+     * EL TOQUE QUE PASO ENTERO MIENTRAS SE PINTABA - 19/10/2026
+     * ==================================================================
+     *
+     * Avisado por el usuario: en STANAG y en IDENT la radio responde al
+     * dedo mas despacio que en los demas modos.
+     *
+     * Un repintado del panel digital son 253.940 accesos al bus de la
+     * pantalla. Mientras dura, el bucle no pasa por aqui, asi que un
+     * toque corto podia entrar y salir sin que esta funcion viera ni la
+     * pulsacion ni la suelta: el dedo se levantaba y no habia pasado
+     * nada.
+     *
+     * Ahora el tactil se mira TAMBIEN desde dentro del dibujo, entre
+     * banda y banda (touch_latido(), colgado de gfx2_set_pump()), y lo
+     * que ve queda apuntado. Si al llegar aqui no hay dedo pero hay un
+     * contacto apuntado, se atiende: se empieza el gesto donde estuvo el
+     * dedo y la vuelta siguiente -que ya no vera dedo- lo cierra con su
+     * suelta. El toque sale una vuelta tarde en vez de no salir.
+     *
+     * SOLO SI NO HAY GESTO EN MARCHA. Con el dedo puesto manda lo que se
+     * acaba de leer, no lo que se apunto antes; y mientras se arrastra, lo
+     * apuntado es el propio arrastre y meterlo seria un salto.
+     */
+    if (!pressed && !s_touch_active) {
+        if (touch_pendiente(&x, &y)) { pressed = 1U; }
+    } else {
+        touch_pendiente_borra();
+    }
+
+    /*
      * LA CAPTURA DE PANTALLA: LA ESQUINA DE ARRIBA A LA IZQUIERDA, MANTENIDA.
      * 05/10/2026.
      *
@@ -26593,34 +27188,23 @@ static void demo_touch_poll(void)
         case UI_TOP_HIT_BW:
             audio_bw_button_callback(0, UI_EVENT_RELEASE, 0);
             break;
-        case UI_TOP_HIT_NR:
-            /* Mismo par de lineas que el boton NR de la barra de abajo
-             * (demo_button_callback()): el estado y el modulo de DSP van
-             * siempre juntos. */
-            s_nr_on = s_nr_on ? 0U : 1U;
-            nr_ss_set_enabled(s_nr_on);
-            settings_mark_dirty();   /* igual que el boton de la barra */
-            badges_draw();
+        case UI_TOP_HIT_ATT:
             /*
-             * ...Y LA CASILLA "RUIDO" DE LA BARRA DE ABAJO. 11/10/2026.
+             * EL CHIP DEL ATENUADOR - 19/10/2026, pedido por el usuario.
              *
-             * Pedido por el usuario.
+             * Se llama al callback de la celda de Ajustes, no a una copia
+             * de lo que hace: ahi dentro estan el cambio de impedancia de
+             * entrada del codec, el silencio de transicion y el nb_reset()
+             * que pide nb.h cada vez que el nivel de entrada se mueve de
+             * golpe. Reimplementar "avanza uno" aqui habria dejado esas
+             * tres fuera, y las tres se notan.
              *
-             * El mismo interruptor se enseña en DOS sitios -el chip NR de
-             * la cabecera y la casilla "Ruido" de la barra- y los dos leen
-             * s_nr_on, asi que el dato nunca estuvo mal. Lo que faltaba era
-             * REPINTAR el segundo: badges_draw() solo toca la cabecera.
-             *
-             * Al reves si funcionaba, y por eso el fallo parecia aleatorio:
-             * tocando abajo, el framework de botones repinta la casilla y
-             * badges_draw() el chip. Tocando arriba, la casilla se quedaba
-             * con lo de antes hasta que algo repintara la barra por otro
-             * motivo.
-             *
-             * Dos sitios que enseñan un interruptor tienen que repintarse
-             * los dos SIEMPRE que se toca, venga el toque de donde venga.
+             * El sucio se marca aqui como en el AGC: el ciclo del suelo no
+             * lo marca por su cuenta, y por la casilla de Ajustes se
+             * guardaba porque lo marca la rejilla.
              */
-            act_draw();
+            menu_tile_att_callback(0, UI_EVENT_RELEASE, 0);
+            settings_mark_dirty();
             break;
         case UI_TOP_HIT_NCO:
             /* Mismo camino que la casilla de ajustes: una sola funcion que

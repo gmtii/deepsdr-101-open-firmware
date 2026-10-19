@@ -19,7 +19,7 @@
  *      el 23 % de la ventana- pero contado AL OTRO LADO: alli sobre los
  *      anillos en grados, aqui sobre los pixeles que acaban en pantalla. Si
  *      el relleno se derrama -un anillo que no cierra, un cruce que falta-
- *      sale el mundo entero, que es exactamente lo que me paso en el
+ *      sale el mundo entero, que es exactamente lo que ocurrio en el
  *      empaquetador y por lo que ese numero esta en los dos sitios.
  *
  *   3. UN MAPA DE CONTORNO NO SE RELLENA. El estilo manda por los dos

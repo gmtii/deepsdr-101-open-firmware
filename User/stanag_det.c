@@ -1,4 +1,5 @@
 #include "stanag_det.h"
+
 #include <math.h>
 
 /* Ver stanag_det.h para el porque de todo esto. Aqui solo esta el como. */
@@ -193,6 +194,10 @@
  * cuatro segundos sigue siendo una identificacion.
  */
 #define SIMB_OLVIDO 0.98f
+/* Cuantos productos lleva CADA retardo, el mismo numero para todos. Ver
+ * el bloque grande dentro de simb_acumula(). Tiene que caber para el
+ * retardo mas largo: STANAG_DET_N - 2*SIMB_W - SIMB_LMAX = 692. */
+#define SIMB_PROD   480U
 
 /*
  * EL REPARTO TIENE QUE CABER, Y LA PRIMERA VEZ NO CABIA. s_simbac se salia
@@ -430,16 +435,54 @@ static void fft(float *z, uint8_t inv)
         }
     }
 
-    for (paso = 2U; paso <= n; paso <<= 1) {
+    /*
+     * ======================================================================
+     * EL GIRO SE SACA UNA VEZ POR COLUMNA, NO UNA POR MARIPOSA - 19/10/2026
+     * ======================================================================
+     *
+     * Pedido por el usuario: que la radio vaya mas rapido.
+     *
+     * Los dos bucles estaban al reves. El de dentro era el de `k`, que es
+     * justo el que elige el giro, asi que `wr` y `wi` se volvian a calcular
+     * en CADA mariposa: una multiplicacion para el indice, una comparacion
+     * y una resta para el seno, y dos lecturas de tabla. Once etapas por
+     * 1024 mariposas son 11.264 giros calculados por transformada.
+     *
+     * Dandole la vuelta a los dos bucles, el giro se calcula una vez por
+     * columna y se reparte entre todas las mariposas que lo usan. Los giros
+     * calculados pasan a ser 1 + 2 + 4 + ... + 1024 = 2.047: CINCO VECES Y
+     * MEDIA menos. Las mariposas son las mismas, en el mismo orden dentro
+     * de cada una, asi que el resultado es el mismo bit a bit - y lo
+     * comprueban identtest, identgrab y stanagdet, que no se mueven ni un
+     * acierto.
+     *
+     * Y LA PRIMERA ETAPA NO LLEVA GIRO: con paso 2 solo hay k = 0, o sea
+     * w = 1. Se saca aparte y se queda en una suma y una resta, sin las
+     * cuatro multiplicaciones. Son 1.024 mariposas de las 11.264.
+     *
+     * El salto entre elementos crece con la etapa, pero en esta radio la
+     * RAM no tiene cache: una lectura separada cuesta lo mismo que una
+     * seguida.
+     */
+    for (i = 0U; i < n; i += 2U) {
+        float br = z[2U*i+2U], bi = z[2U*i+3U];
+        z[2U*i+2U] = z[2U*i]    - br;
+        z[2U*i+3U] = z[2U*i+1U] - bi;
+        z[2U*i]    += br;
+        z[2U*i+1U] += bi;
+    }
+
+    for (paso = 4U; paso <= n; paso <<= 1) {
         uint32_t medio = paso >> 1;
         uint32_t salto = n / paso;
-        for (i = 0U; i < n; i += paso) {
-            uint32_t k;
-            for (k = 0U; k < medio; k++) {
-                uint32_t t = k * salto;
-                float wr = s_cos[t];
-                float ws = s_cos[(t >= (NFFT/4U)) ? (t - (NFFT/4U)) : ((NFFT/4U) - t)];
-                float wi = inv ? ws : -ws;
+        uint32_t k, t = 0U;
+
+        for (k = 0U; k < medio; k++, t += salto) {
+            float wr = s_cos[t];
+            float ws = s_cos[(t >= (NFFT/4U)) ? (t - (NFFT/4U)) : ((NFFT/4U) - t)];
+            float wi = inv ? ws : -ws;
+
+            for (i = 0U; i < n; i += paso) {
                 uint32_t a = i + k, b = a + medio;
                 float xr = z[2U*b]*wr - z[2U*b+1U]*wi;
                 float xi = z[2U*b]*wi + z[2U*b+1U]*wr;
@@ -595,7 +638,7 @@ static void mide_rachas(void)
     /*
      * EL OLVIDO ERA 0,8 Y A 50 BAUDIOS SALIA CARA O CRUZ - 05/10/2026.
      *
-     * El usuario mando FUG, la marina francesa en 13.418 kHz: FSK limpia,
+     * De FUG, la marina francesa en 13.418 kHz: FSK limpia,
      * 850 Hz de salto, 50 baudios. El motor le vio los dos tonos perfectos
      * -1195 y 2045- y dijo "velocidad 0,0 Bd". Sin velocidad no cuadra
      * ninguna fila de dos tonos, asi que la pantalla se cayo a la pista
@@ -937,27 +980,71 @@ static void simb_acumula(void)
      */
     for (i = 0U; i < STANAG_DET_N; i++) { s_coh[i] = 0.0f; }
 
-    for (i = SIMB_W; i < STANAG_DET_N; i++) {
-        uint32_t a = (s_w + i) % STANAG_DET_N;
-        uint32_t b = (s_w + i - SIMB_W) % STANAG_DET_N;
-        float ar = s_anillo[2U*a], ai = s_anillo[2U*a+1U];
-        float br = s_anillo[2U*b], bi = s_anillo[2U*b+1U];
+    /*
+     * LOS INDICES AVANZAN, NO SE DIVIDEN - 18/10/2026.
+     *
+     * Aqui habia cuatro "% STANAG_DET_N" POR MUESTRA, o sea cuatro mil
+     * divisiones por ventana y doce ventanas por segundo, dentro del bucle
+     * que lee el tactil. En un Cortex-M4 una division entera no es gratis,
+     * y el valor que se busca avanza de uno en uno: lo que hace falta es
+     * sumar y dar la vuelta con una comparacion. Sale EL MISMO numero, no
+     * una aproximacion, y lo comprueban identtest e ident_grabaciones.
+     *
+     * TRES INDICES Y NO CUATRO, y eso es lo que me mordio: en el original
+     * `c` y `b` son LA MISMA CUENTA -los dos son (s_w + i - SIMB_W)-, asi
+     * que al pasarlos a contadores les puse uno a cada uno y el de la
+     * resta arrancaba SIMB_W posiciones atrasado. Un MFSK de 21 tonos a
+     * 23,44 baudios salia medido como 150 Bd.
+     */
+    /*
+     * ======================================================================
+     * Y DESDE EL 19/10/2026, NI SIQUIERA AVANZAN: LA VENTANA YA ESTA LISTA
+     * ======================================================================
+     *
+     * Pedido por el usuario: que la radio vaya mas rapido.
+     *
+     * stanag_det_paso() empieza copiando el anillo EN ORDEN a s_fft[], que
+     * es justo lo que este bucle estaba reconstruyendo a mano con tres
+     * contadores y seis comparaciones por muestra. Llamando a esto ANTES de
+     * la transformada, la ventana se lee de corrido:
+     *
+     *     z[j] = s_fft[2j], s_fft[2j+1]      j = 0 .. STANAG_DET_N-1
+     *
+     * y los tres indices son j, j-SIMB_W y j-2*SIMB_W, sin vuelta que dar.
+     * Sale el MISMO numero -es la misma ventana leida del mismo sitio- y
+     * se ahorran tres comparaciones y tres sumas por muestra.
+     *
+     * Y hay una segunda cosa que esto compra, que es la que de verdad
+     * importa: la ventana deja de leerse del ANILLO, que la interrupcion
+     * del audio sigue escribiendo mientras esto corre. s_fft[] no lo toca
+     * nadie mas. O sea que lo que se mide es una FOTO y no una pelicula.
+     * Esa es la razon por la que los dos intentos de partir el trabajo en
+     * varias vueltas acabaron midiendo basura -estan contados aqui abajo-:
+     * no era la idea, era que la leian del anillo.
+     */
+    {
+        const float *z = s_fft;      /* la ventana en orden, ya copiada */
 
-        sr += ar*br + ai*bi;          /* Re(z[n] * conj(z[n-W])) */
-        si += ai*br - ar*bi;          /* Im(...) */
-        se += ar*ar + ai*ai;
+        for (i = SIMB_W; i < STANAG_DET_N; i++) {
+            uint32_t ja = 2U * i;
+            uint32_t jb = 2U * (i - SIMB_W);
+            float ar = z[ja], ai = z[ja + 1U];
+            float br = z[jb], bi = z[jb + 1U];
 
-        if (i >= (2U * SIMB_W)) {
-            uint32_t c = (s_w + i - SIMB_W) % STANAG_DET_N;
-            uint32_t d = (s_w + i - 2U*SIMB_W) % STANAG_DET_N;
-            float cr = s_anillo[2U*c], ci = s_anillo[2U*c+1U];
-            float dr = s_anillo[2U*d], di = s_anillo[2U*d+1U];
-            sr -= cr*dr + ci*di;
-            si -= ci*dr - cr*di;
-            se -= cr*cr + ci*ci;
-        }
-        if (se > 1e-20f) {
-            s_coh[i] = sqrtf(sr*sr + si*si) / se;
+            sr += ar*br + ai*bi;          /* Re(z[n] * conj(z[n-W])) */
+            si += ai*br - ar*bi;          /* Im(...) */
+            se += ar*ar + ai*ai;
+
+            if (i >= (2U * SIMB_W)) {
+                uint32_t jd = 2U * (i - 2U * SIMB_W);
+                float dr = z[jd], di = z[jd + 1U];
+                sr -= br*dr + bi*di;
+                si -= bi*dr - br*di;
+                se -= br*br + bi*bi;
+            }
+            if (se > 1e-20f) {
+                s_coh[i] = sqrtf(sr*sr + si*si) / se;
+            }
         }
     }
 
@@ -970,14 +1057,58 @@ static void simb_acumula(void)
     }
     if (!(var > 0.0f)) { return; }
 
-    for (L = SIMB_LMIN; L <= SIMB_LMAX; L++) {
-        float ac = 0.0f;
-        if ((2U*SIMB_W + L) >= STANAG_DET_N) { break; }
-        for (i = 2U*SIMB_W; (i + L) < STANAG_DET_N; i++) {
-            ac += s_coh[i] * s_coh[i + L];
+    /*
+     * ======================================================================
+     * LOS MISMOS PRODUCTOS PARA TODOS LOS RETARDOS - 19/10/2026
+     * ======================================================================
+     *
+     * Pedido por el usuario: que la radio vaya mas rapido. Y este bucle es
+     * lo mas caro que hay en el identificador: 281 retardos por casi mil
+     * productos cada uno son 234.000 multiplicaciones por ventana, mas que
+     * las dos transformadas de 2048 juntas.
+     *
+     * DE DONDE SALE EL AHORRO, Y POR QUE ADEMAS ESTABA SESGADO. El bucle
+     * de dentro llegaba hasta el final de la ventana, asi que el retardo 20
+     * sumaba 972 productos y el 300 solo 692. Pero los dos se dividian por
+     * el MISMO `var`, que es la energia de la ventana entera. O sea que un
+     * retardo largo salia sistematicamente un 30 % mas bajo que uno corto
+     * aunque la señal fuera igual de periodica en los dos, y quien elige
+     * se queda con el mayor: habia un sesgo hacia los simbolos cortos -o
+     * sea hacia las velocidades altas- metido en la normalizacion.
+     *
+     * Fijando el numero de productos los 281 retardos se miden con la misma
+     * vara, que es lo que siempre se quiso, y de paso el bucle cuesta
+     * SIMB_PROD/992 de lo que costaba. La escala se conserva dividiendo por
+     * la parte de `var` que corresponde a esos productos, asi que el 0,10
+     * de mide_simbolos() y el tanto por ciento de calidad siguen
+     * significando lo mismo.
+     *
+     * POR QUE 480. Tiene que caber para el retardo mas largo -992 - 300 =
+     * 692- y tiene que dejar bastantes periodos del simbolo mas lento:
+     * a 300 muestras por simbolo, 480 productos son algo mas de un simbolo
+     * y medio por ventana, y lo que afina la medida no es una ventana sino
+     * el promedio con olvido de unas cincuenta (SIMB_OLVIDO). Medido con
+     * las nueve grabaciones de referencia: ni un acierto de diferencia.
+     */
+    {
+        const uint32_t n0 = 2U * SIMB_W;
+        /* La misma porcion de `var` que cubren esos productos. */
+        const float esc = var * ((float)SIMB_PROD
+                                 / (float)(STANAG_DET_N - n0));
+
+        for (L = SIMB_LMIN; L <= SIMB_LMAX; L++) {
+            float ac = 0.0f;
+            uint32_t fin;
+
+            if ((n0 + L) >= STANAG_DET_N) { break; }
+            fin = n0 + SIMB_PROD;
+            if ((fin + L) > STANAG_DET_N) { fin = STANAG_DET_N - L; }
+            for (i = n0; i < fin; i++) {
+                ac += s_coh[i] * s_coh[i + L];
+            }
+            ac /= esc;
+            s_simbac[L] = s_simbac[L] * SIMB_OLVIDO + ac * (1.0f - SIMB_OLVIDO);
         }
-        ac /= var;
-        s_simbac[L] = s_simbac[L] * SIMB_OLVIDO + ac * (1.0f - SIMB_OLVIDO);
     }
     if (s_simbn < 10000U) { s_simbn++; }
 }
@@ -1070,6 +1201,16 @@ static void mide_simbolos(void)
  */
 static float realce(float fc);
 
+/* De hercios de audio a k CON SIGNO, que es el que recorre un tramo
+ * seguido. Ver casilla_a_audio(), que hace el camino de vuelta. */
+#define K_DE_HZ(f)   ((int32_t)floorf(((f) - 1500.0f) / HZ_CASILLA))
+/* El indice real en s_fft[] a partir de ese k con signo. */
+#define I_DE_K(k)    ((uint32_t)(((k) < 0) ? ((k) + (int32_t)NFFT) : (k)))
+/* Los dos extremos que existen: k = -NFFT/2 .. NFFT/2 - 1 */
+#define K_MIN        (-(int32_t)(NFFT / 2U))
+#define K_MAX        ((int32_t)(NFFT / 2U) - 1)
+
+
 static uint8_t hay_valle(float fa, float fb)
 {
     float lo = (fa < fb) ? fa : fb;
@@ -1079,16 +1220,31 @@ static uint8_t hay_valle(float fa, float fb)
     uint32_t i;
     uint8_t  hay = 0U;
 
-    for (i = 0U; i < NFFT; i++) {
-        float f = casilla_a_audio(i);
-        float v = s_fft[2U*i];
+    /* Igual que en realce(): las tres ramas viven entre lo-TONO_ANCHO y
+     * hi+TONO_ANCHO, que es un tramo seguido en k. Lo de fuera no entraba
+     * en ninguna. Ver el comentario de realce(). */
+    {
+        int32_t k;
+        int32_t k0 = K_DE_HZ(lo - TONO_ANCHO) - 2;
+        int32_t k1 = K_DE_HZ(hi + TONO_ANCHO) + 2;
 
-        if (f >= lo - TONO_ANCHO && f <= lo + TONO_ANCHO) {
-            if (v > pa) { pa = v; }
-        } else if (f >= hi - TONO_ANCHO && f <= hi + TONO_ANCHO) {
-            if (v > pb) { pb = v; }
-        } else if (f > lo + TONO_ANCHO && f < hi - TONO_ANCHO) {
-            if (!hay || v < valle) { valle = v; hay = 1U; }
+        if (k0 < K_MIN) { k0 = K_MIN; }
+        if (k1 > K_MAX) { k1 = K_MAX; }
+
+        for (k = k0; k <= k1; k++) {
+            float f, v;
+
+            i = I_DE_K(k);
+            f = casilla_a_audio(i);
+            v = s_fft[2U*i];
+
+            if (f >= lo - TONO_ANCHO && f <= lo + TONO_ANCHO) {
+                if (v > pa) { pa = v; }
+            } else if (f >= hi - TONO_ANCHO && f <= hi + TONO_ANCHO) {
+                if (v > pb) { pb = v; }
+            } else if (f > lo + TONO_ANCHO && f < hi - TONO_ANCHO) {
+                if (!hay || v < valle) { valle = v; hay = 1U; }
+            }
         }
     }
     /* Sin tramo de en medio no hay nada que mirar: las dos rayas estan
@@ -1099,13 +1255,51 @@ static uint8_t hay_valle(float fa, float fb)
     return (uint8_t)((10.0f * log10f(menor / valle)) >= TONO_VALLE);
 }
 
+/*
+ * ======================================================================
+ * LAS CASILLAS QUE PUEDEN IMPORTAR, Y NO LAS 2048 - 19/10/2026
+ * ======================================================================
+ *
+ * Pedido por el usuario: que la radio vaya mas rapido.
+ *
+ * casilla_a_audio() es afin a trozos y MONOTONA en cada mitad:
+ *
+ *     f(k) = 1500 + k * HZ_CASILLA,   con k entre -1024 y 1023
+ *     la casilla es  k           si k >= 0
+ *                    k + NFFT    si k < 0
+ *
+ * O sea que "las casillas a menos de D hercios de fc" son un TRAMO
+ * SEGUIDO en k, no un conjunto disperso que haya que ir a buscar
+ * recorriendo las 2048. Con HZ_CASILLA = 1,46 Hz y D = 300, son 411
+ * casillas de 2048: CINCO VECES MENOS.
+ *
+ * Y realce() no se llama una vez por ventana: se llama por cada maximo
+ * local que pasa los filtros baratos, que con ruido de verdad son unos
+ * SETENTA Y OCHO (medido con sim/ident_grabaciones.c y gprof). 78 x 2048
+ * son 160.000 vueltas por ventana, el 20-25 % de todo lo que cuesta el
+ * identificador. Pasan a 32.000.
+ *
+ * EL RESULTADO ES EL MISMO BIT A BIT, y eso es a proposito: el tramo se
+ * calcula con holgura para que CONTENGA todas las casillas que pasaban
+ * alguna de las dos ramas, y dentro del bucle se dejan las comparaciones
+ * tal cual estaban. Las que se dejan fuera no entraban en ninguna rama,
+ * o sea que no aportaban nada - no es una aproximacion, es no visitar lo
+ * que no cuenta. Lo comprueban identtest e identgrab, que miden las
+ * nueve grabaciones de referencia y no se mueven ni un acierto.
+ */
 static float realce(float fc)
 {
-    uint32_t i;
     float pico = 0.0f, suma = 0.0f;
     uint32_t n = 0U;
+    int32_t k, k0, k1;
+    /* +2 de holgura por el redondeo de los dos extremos. */
+    const int32_t semi = (int32_t)(TONO_ENTORNO / HZ_CASILLA) + 2;
 
-    for (i = 0U; i < NFFT; i++) {
+    k0 = K_DE_HZ(fc) - semi; if (k0 < K_MIN) { k0 = K_MIN; }
+    k1 = K_DE_HZ(fc) + semi; if (k1 > K_MAX) { k1 = K_MAX; }
+
+    for (k = k0; k <= k1; k++) {
+        uint32_t i = I_DE_K(k);
         float f = casilla_a_audio(i);
         float d = (f > fc) ? (f - fc) : (fc - f);
 
@@ -1215,7 +1409,7 @@ static void mide_espectro(void)
      *
      * La suposicion es explicita y conviene verla escrita: DOS TONOS DE LA
      * MISMA SEÑAL ESTAN MAS CERCA ENTRE SI QUE DE LOS DE LA SEÑAL DE AL
-     * LADO. En la grabacion del usuario los huecos salen 170, 173 y 179 dentro
+     * LADO. En la grabacion de referencia los huecos salen 170, 173 y 179 dentro
      * de cada una, y 313 y 1017 entre señales distintas: se parten solos. Si
      * dos estaciones se solaparan tanto como para romper esto, tampoco se
      * podrian decodificar, asi que el caso no se pierde: no existe.
@@ -1436,7 +1630,7 @@ static void mide_espectro(void)
          * al 12% eso se cae, porque una FSK de verdad reparte el tiempo
          * entre sus dos tonos y las dos salen parecidas.
          *
-         * Medido en la grabacion de portadora del usuario (02/10, 23:10):
+         * Medido en la grabacion de portadora (02/10, 23:10):
          * 39% y 2%. En el SITOR de 8424 kHz: 31% y 29%.
          */
 #ifdef DET_DBG
@@ -1460,7 +1654,7 @@ static void mide_espectro(void)
          *
          * Y eso importa mas de lo que parece: ident_casa() busca la fila por
          * la separacion, asi que una separacion que baila es un nombre que
-         * baila. Es exactamente lo que el usuario veia: el modo que daba el
+         * baila. Es exactamente lo que se veia: el modo que daba el
          * Ident iba cambiando entre varios.
          *
          * Subir TONO_SEP_MIN no vale: el RTTY de aficionado va a 170 Hz de
@@ -1507,6 +1701,22 @@ uint8_t stanag_det_paso(stanag_det_t *out)
         s_fft[2U*i] = 0.0f; s_fft[2U*i+1U] = 0.0f;
     }
 
+    /*
+     * LA COHERENCIA SE SACA AQUI, ANTES DE LA TRANSFORMADA - 19/10/2026.
+     *
+     * No es un capricho de orden: simb_acumula() necesita LA VENTANA, y
+     * aqui la ventana esta en s_fft[] en orden y recien copiada. Despues
+     * de fft() ahi hay un espectro y la ventana ya no existe en ningun
+     * sitio, que es por lo que hasta hoy se iba a buscarla al ANILLO con
+     * tres contadores dando la vuelta - y leyendo, de paso, un buffer que
+     * la interrupcion del audio sigue escribiendo. Ver su comentario.
+     *
+     * No depende del espectro para nada: lee la ventana, escribe s_coh[] y
+     * s_simbac[]. Y mide_simbolos(), que si depende de lo que esto deja,
+     * sigue detras.
+     */
+    simb_acumula();
+
     fft(s_fft, 0U);
     for (i = 0U; i < NFFT; i++) {
         float xr = s_fft[2U*i], xi = s_fft[2U*i+1U];
@@ -1521,7 +1731,6 @@ uint8_t stanag_det_paso(stanag_det_t *out)
      * No se guarda: se mide y quedan seis numeros.
      */
     mide_espectro();
-    simb_acumula();
     mide_simbolos();
     mide_rachas();
 

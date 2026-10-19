@@ -50,8 +50,10 @@ MAGIA   = 0x52445344
 CAB_OFF = 0x200          # donde el cargador la busca, ver CARGA_CAB_OFF
 POLI    = 0x04C11DB7
 
-# 0x08080000 - 0x0800C000. Tiene que cuadrar con CARGA_TAM_MAX.
-TOPE    = 475136
+# 0x08080000 - 0x08008000. Tiene que cuadrar con CARGA_TAM_MAX.
+# 17/10/2026: eran 475.136 con la aplicacion en 0x0800C000; bajo un sector
+# al recortar la fuente del cargador.
+TOPE    = 491520
 
 
 def crc32_mpeg2(datos, crc=0xFFFFFFFF):

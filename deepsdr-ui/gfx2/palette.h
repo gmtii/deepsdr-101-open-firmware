@@ -95,16 +95,43 @@ typedef struct {
      * esta paleta: mar, rejilla, ecuador, costa, los dos botones de zoom y
      * la casa. Siempre azul oscuro, pusieras el tema que pusieras.
      *
-     * Esto NO se arregla armonizando el mapa para todos: los seis temas de
-     * antes se disenaron con ese mapa azul delante, y cambiarselo de golpe
-     * es cambiarle la pantalla a quien no ha pedido nada. Asi que el mapa
-     * sigue al tema SOLO donde el tema lo pide, y hoy lo pide uno.
+     * Esto NO se arregla armonizando el mapa para todos: los siete temas
+     * oscuros se disenaron con ese mapa azul delante, y cambiarselo de
+     * golpe es cambiarle la pantalla a quien no ha pedido nada. Asi que el
+     * mapa sigue al tema SOLO donde el tema lo pide. Lo piden ONCE: el
+     * Chemistry del 05/10 y los diez claros del 17/10, que nacen con el
+     * campo a 1 porque un mapa azul oscuro dentro de una interfaz clara se
+     * ve peor que en ninguna parte. Los otros siete siguen con el azul.
      *
      * Quien anada un tema claro nuevo pone este 1 y se lleva el mapa
      * detras; quien no lo ponga se queda con el azul de siempre, que es lo
      * que ya tenia.
      */
     uint8_t mapa_sigue;
+
+    /*
+     * EL ESPECTRO SIGUE AL TEMA - 17/10/2026, de un issue: se pedia que
+     * el fondo del espectro fuera claro con los temas claros.
+     *
+     * Y era el MISMO caso que el mapa, palabra por palabra. spectrum.c
+     * llevaba 27 colores escritos a pelo y CERO referencias a esta
+     * paleta -fondo, rejilla, traza, relleno, pico, marca de
+     * demodulacion, tinte de la banda y sus bordes-, asi que el panel
+     * salia negro con el tema que fuera. Los campos para pintarlo bien
+     * estaban aqui desde el principio, con nombre y valor en los ocho
+     * temas: grid dice literalmente "rejilla del espectro". Nadie los
+     * leia.
+     *
+     * Por que tambien va por tema y no para todos: por lo de siempre.
+     * Los temas oscuros se disenaron con ese panel negro delante y el
+     * negro es lo que mas contraste da a una traza. Cambiarselo a quien
+     * no ha pedido nada es el fallo que este proyecto ya ha pagado.
+     *
+     * A 1, spectrum.c pinta el panel y la cascada con los colores de
+     * este tema. A 0 -y es el valor de los ocho de antes- pinta
+     * exactamente lo que pintaba ayer, byte a byte.
+     */
+    uint8_t espectro_claro;
 
 } palette_t;
 
@@ -116,7 +143,8 @@ static const palette_t k_pal_oscura = {
     0xEEF2F7, 0x9AA5B3, 0x646E7C,
     0x17A394, 0xC77A14, 0x3B7FD4,
     0x2F9E52, 0xC77A14, 0xD94040,
-    0U    /* mapa: el azul de siempre */
+    0U,   /* mapa: el azul de siempre */
+    0U    /* espectro: el panel negro de siempre */
 };
 
 /* Revision 2: negro real y saltos ~3 veces mayores. Se conserva porque para
@@ -128,7 +156,8 @@ static const palette_t k_pal_contraste = {
     0xF2F5F8, 0xAEB6C0, 0x868F99,
     0x17A394, 0xC77A14, 0x3B7FD4,
     0x2F9E52, 0xC77A14, 0xD94040,
-    0U    /* mapa: el azul de siempre */
+    0U,   /* mapa: el azul de siempre */
+    0U    /* espectro: el panel negro de siempre */
 };
 
 /*
@@ -171,7 +200,8 @@ static const palette_t k_pal_ambar = {
     0xF8F2E8, 0xB9AB92, 0x7F7360,
     0x17A394, 0xC77A14, 0x3B7FD4,
     0x2F9E52, 0xC77A14, 0xD94040,
-    0U    /* mapa: el azul de siempre */
+    0U,   /* mapa: el azul de siempre */
+    0U    /* espectro: el panel negro de siempre */
 };
 
 /* Grises azulados. Es la mas parecida a la oscura de siempre, un punto
@@ -183,7 +213,8 @@ static const palette_t k_pal_fria = {
     0xEEF4FB, 0x9DABBC, 0x667381,
     0x17A394, 0xC77A14, 0x3B7FD4,
     0x2F9E52, 0xC77A14, 0xD94040,
-    0U    /* mapa: el azul de siempre */
+    0U,   /* mapa: el azul de siempre */
+    0U    /* espectro: el panel negro de siempre */
 };
 
 /*
@@ -249,7 +280,8 @@ static const palette_t k_pal_oliva = {
     0x000000, 0x282A15, 0x3E4321,
     0x095E49, 0xA31010, 0x4E18F0,
     0x1C5E43, 0x664F0A, 0x4F0808,
-    0U    /* mapa: el azul de siempre */
+    0U,   /* mapa: el azul de siempre */
+    0U    /* espectro: el panel negro de siempre */
 };
 
 /* Naranja fuerte con tinta negra. El mas duro de los tres para las marcas:
@@ -261,7 +293,8 @@ static const palette_t k_pal_naranja = {
     0x000000, 0x3A1808, 0x62290D,
     0x214E6E, 0x300530, 0x1313C2,
     0x104F15, 0x301E05, 0x940F30,
-    0U    /* mapa: el azul de siempre */
+    0U,   /* mapa: el azul de siempre */
+    0U    /* espectro: el panel negro de siempre */
 };
 
 /* Fosforo: casi negro con tinta verde, como un terminal. Aqui la rampa va
@@ -272,7 +305,8 @@ static const palette_t k_pal_fosforo = {
     0x27FF9B, 0x1A9D60, 0x167F4D,
     0x388C70, 0xFFD91A, 0x1168A6,
     0x1AFF9F, 0xFFE41A, 0xC91432,
-    0U    /* mapa: el azul de siempre */
+    0U,   /* mapa: el azul de siempre */
+    0U    /* espectro: el panel negro de siempre */
 };
 
 /*
@@ -338,9 +372,10 @@ static const palette_t k_pal_fosforo = {
  *
  * EL MAPA. Es la otra mitad del issue: el mapa del mundo tenia paleta
  * propia y los contornos de los continentes apenas se le veian. Cierto,
- * mapa.c llevaba nueve colores a pelo. Este es el unico tema con
- * mapa_sigue = 1, asi que el mapa se vuelve claro SOLO aqui y los demas
- * temas no se enteran. Ver mapa.c.
+ * mapa.c llevaba nueve colores a pelo. Este fue el PRIMER tema con
+ * mapa_sigue = 1 -desde el 17/10 tambien lo llevan los diez claros-, asi
+ * que el mapa se vuelve claro ahi y los siete oscuros no se enteran. Ver
+ * mapa.c.
  *
  * LO QUE NO SE HA PODIDO COMPROBAR. Ninguno de nosotros dos tiene ese
  * panel. Las superficies y la tinta las ha probado el en el suyo; los dos
@@ -353,8 +388,149 @@ static const palette_t k_pal_chemistry = {
     0x000000, 0x000000, 0x7F7F7F,
     0x919191, 0x6B6B6B, 0x000000,
     0x00A000, 0xC47A00, 0xFF0029,
-    1U    /* el mapa sigue a este tema */
+    1U,   /* el mapa sigue a este tema */
+    0U    /* espectro: el panel negro de siempre. Chemistry se
+           * queda como estaba: la paleta la escribio quien
+           * reporto el problema de su panel y se publico asi;
+           * cambiarsela ahora seria cambiarle la pantalla a
+           * quien ya la tiene puesta. Los diez de hoy nacen
+           * con el espectro claro desde el primer dia. */
 };
+
+
+/*
+ * ======================================================================
+ * LOS DIEZ CLAROS - 17/10/2026
+ * ======================================================================
+ *
+ * De un issue que pedia fondo claro para el espectro con los temas
+ * claros. Hacian falta las dos cosas: que spectrum.c mirase la paleta
+ * -ver espectro_claro arriba- y temas claros donde mirarla, porque los
+ * tres que habia (Oliva, Naranja, Chemistry) son casos particulares:
+ * dos de color saturado y uno de papel blanco para un panel concreto.
+ *
+ * NO ESTAN ELEGIDOS A OJO, y eso es lo unico que los hace publicables.
+ * Cada uno sale de un tono y una claridad de fondo, y el resto se
+ * CALCULA bajando la luminosidad hasta pasar el umbral de contraste
+ * contra ESE fondo. Las tres reglas son las de la casa:
+ *
+ *   tinta sobre su fondo          >= 4,5:1   (salen todas sobre 11:1)
+ *   traza y acento sobre el fondo >= 3,0:1   (5,0 y 4,2)
+ *   ok / warn / crit              >= 3,0:1 Y componente mayor >= 0x7F
+ *
+ * Lo ultimo es la regla que salio con Chemistry: un verde oscuro pasa
+ * el contraste y deja de leerse como verde. El componente mayor por
+ * encima de 0x7F es lo que lo mantiene reconocible.
+ *
+ * VAN AL FINAL, Y ESO NO SE NEGOCIA. El tema se guarda en CONFIG.CSV
+ * por INDICE: meter uno en medio le cambia el tema a todo el que tenga
+ * puesto uno de ese hueco en adelante.
+ *
+ * Los nombres de emisora sobre el espectro NO hay que tocarlos:
+ * spec_rotulos_tinta() ya recibe el fondo y elige la tinta midiendo
+ * (ver spec_rotulos.c). Con estos diez se ha medido, no supuesto.
+ */
+
+static const palette_t k_pal_lino = {
+    "Lino",
+    0xF8F5EF, 0xF2EBDE, 0xEFE6D7, 0xE4D6BE, 0xE0CFB3, 0xF4EEE4, 0xFBFAF7,
+    0x3B3326, 0x625641, 0x8B7E6A,
+    0x296BAE, 0xBA5817, 0x9F917A,
+    0x007F15, 0x7F4C00, 0x7F0011,
+    1U,   /* el mapa sigue a este tema */
+    1U    /* y el espectro */
+};
+
+static const palette_t k_pal_marfil = {
+    "Marfil",
+    0xF9F6E9, 0xF4EED7, 0xF2EBCF, 0xEBDFB2, 0xE7DAA6, 0xF6F1DD, 0xFAF9F3,
+    0x3B3726, 0x5C563D, 0x898267,
+    0x8845D3, 0xA86315, 0x9F977A,
+    0x007F15, 0x7F4C00, 0x7F0011,
+    1U,   /* el mapa sigue a este tema */
+    1U    /* y el espectro */
+};
+
+static const palette_t k_pal_arena = {
+    "Arena",
+    0xF2E9DC, 0xECDFCB, 0xE9DAC3, 0xDFCAA9, 0xDBC39E, 0xEEE2D0, 0xF3EEE6,
+    0x352D22, 0x5C503D, 0x827562,
+    0x21698C, 0xBF4418, 0x9F907A,
+    0x007F15, 0x7F4C00, 0x7F0011,
+    1U,   /* el mapa sigue a este tema */
+    1U    /* y el espectro */
+};
+
+static const palette_t k_pal_pergamino = {
+    "Pergamino",
+    0xF5F0E2, 0xF0E7D1, 0xEDE2C9, 0xE4D4AF, 0xE0CEA3, 0xF2EAD7, 0xF7F4EC,
+    0x383224, 0x5C533D, 0x857C64,
+    0xA14F26, 0xDE1B3C, 0x9F947A,
+    0x007F15, 0x7F4C00, 0x7F0011,
+    1U,   /* el mapa sigue a este tema */
+    1U    /* y el espectro */
+};
+
+static const palette_t k_pal_niebla = {
+    "Niebla",
+    0xF1F4F6, 0xE4E8EC, 0xDEE3E8, 0xC9D1D9, 0xC0C9D3, 0xE8ECEF, 0xF9F9F9,
+    0x2A3641, 0x47596B, 0x6F7E8D,
+    0x3060CF, 0x157CA8, 0x7A8C9F,
+    0x007F15, 0x7F4C00, 0x7F0011,
+    1U,   /* el mapa sigue a este tema */
+    1U    /* y el espectro */
+};
+
+static const palette_t k_pal_almendra = {
+    "Almendra",
+    0xF7ECE6, 0xF2DFD4, 0xEFD9CD, 0xE7C5B1, 0xE3BCA6, 0xF3E3DA, 0xF8F3F0,
+    0x3B2E26, 0x655043, 0x8A7569,
+    0x7945D3, 0xD1381A, 0x9F877A,
+    0x007F15, 0x7F4C00, 0x7F0011,
+    1U,   /* el mapa sigue a este tema */
+    1U    /* y el espectro */
+};
+
+static const palette_t k_pal_menta = {
+    "Menta",
+    0xECF6F1, 0xDCEFE5, 0xD5ECE0, 0xBCE1CF, 0xB2DCC7, 0xE1F2E9, 0xF4F9F7,
+    0x24382E, 0x3D5C4C, 0x658676,
+    0x1E7080, 0x108461, 0x7A9F8C,
+    0x007F15, 0x7F4C00, 0x7F0011,
+    1U,   /* el mapa sigue a este tema */
+    1U    /* y el espectro */
+};
+
+static const palette_t k_pal_cielo = {
+    "Cielo",
+    0xECF3F9, 0xDAE9F3, 0xD2E4F1, 0xB7D4E8, 0xACCDE5, 0xE0ECF5, 0xF5F8FB,
+    0x28353E, 0x435765, 0x6C7E8B,
+    0x3D5BD1, 0x1A72D5, 0x7A8F9F,
+    0x007F15, 0x7F4C00, 0x7F0011,
+    1U,   /* el mapa sigue a este tema */
+    1U    /* y el espectro */
+};
+
+static const palette_t k_pal_trigo = {
+    "Trigo",
+    0xF7F0DC, 0xF2E7C9, 0xF0E4C1, 0xEAD7A4, 0xE7D298, 0xF4EACF, 0xF7F3E7,
+    0x383324, 0x5C543D, 0x857D64,
+    0x4553D3, 0xAC5C15, 0x9F957A,
+    0x007F15, 0x7F4C00, 0x7F0011,
+    1U,   /* el mapa sigue a este tema */
+    1U    /* y el espectro */
+};
+
+static const palette_t k_pal_porcelana = {
+    "Porcelana",
+    0xF4F7F8, 0xE6EDEF, 0xE0E8EB, 0xCAD8DD, 0xC1D1D7, 0xEBF0F2, 0xFBFCFC,
+    0x28383E, 0x435C65, 0x6A838B,
+    0x276EA5, 0x128091, 0x7A959F,
+    0x007F15, 0x7F4C00, 0x7F0011,
+    1U,   /* el mapa sigue a este tema */
+    1U    /* y el espectro */
+};
+
 
 /* La paleta activa. Cambiarla y repintar es todo lo que hace falta. */
 extern const palette_t *g_pal;

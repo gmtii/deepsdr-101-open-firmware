@@ -141,6 +141,11 @@ uint32_t za_tope(void);
  * una segunda lista que cuadrar. */
 #define ZA_TIPO_AVIONES  0x42343249UL   /* 'I','2','4','B' */
 #define ZA_TIPO_EMISORAS 0x53494D45UL   /* 'E','M','I','S' */
+/* 17/10/2026: la fuente de la lluvia del arranque, que vivia en la flash
+ * interna y ocupaba 5.592 bytes para una pantalla de tres segundos. Ver
+ * tools/fuente_pack.py y splash_screen.c. Es la tercera de las cuatro que
+ * admite el directorio. */
+#define ZA_TIPO_SPLASH   0x464C5053UL   /* 'S','P','L','F' */
 
 /*
  * Lee el directorio. Devuelve 1 si hay uno bueno en 0x101000.

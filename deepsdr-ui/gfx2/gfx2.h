@@ -265,6 +265,9 @@ void gfx2_render_screen(void (*draw)(gfx2_surf_t *s, void *ctx), void *ctx);
 /* Registra una funcion que se llama tras volcar cada banda. Pensada para
  * muestrear la entrada durante un repintado largo. 0 la desactiva. */
 void gfx2_set_pump(void (*fn)(void));
+/* Llama al gancho, para quien pinta por bandas sin pasar por
+ * gfx2_render(). Ver su comentario en gfx2.c. */
+void gfx2_pump(void);
 
 /* --- Primitivas ---------------------------------------------------------
  * Todas toman coordenadas de PANTALLA y mezclan segun el alpha del color. */

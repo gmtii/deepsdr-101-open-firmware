@@ -3,6 +3,7 @@
 #include "gfx2.h"
 #include "palette.h"
 #include "splash.h"
+#include "font_rain_16.h"
 #include "font_ui_14.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,8 +31,16 @@ int main(int argc, char **argv)
     static uint8_t ram[4096];
     void *presta = ram;
     uint32_t presta_n = (uint32_t)sizeof ram;
+    const gfx2_font_t *fuente = &font_rain_16;
 
     if (argc > 2 && atoi(argv[2]) == 2) { presta = 0; presta_n = 0U; }
+    /*
+     * LA FUENTE SE LE PASA - 17/10/2026. En la radio sale de BD.BIN (ver
+     * splash_screen.c); aqui se le da la del arbol, que es la misma, para
+     * que el banco siga pintando la lluvia de verdad. Con el modo 3 se le
+     * pasa 0 y se ve lo que sale cuando el BD.BIN no la trae.
+     */
+    if (argc > 2 && atoi(argv[2]) == 3) { fuente = 0; }
     if (presta_n != 0U && presta_n < splash_ram_bytes()) {
         printf("el banco presta %u bytes y la lluvia pide %u   MAL\n",
                (unsigned)presta_n, (unsigned)splash_ram_bytes());
@@ -39,11 +48,12 @@ int main(int argc, char **argv)
     }
 
     lcd_sim_reset(0x0000);
-    splash_reinicia(presta, presta_n);
+    splash_reinicia(presta, presta_n, fuente);
     while (t <= hasta && splash_paso(t)) { t += 10; }
     snprintf(nombre, sizeof nombre, "out/splash_%lu%s.ppm", (unsigned long)hasta,
              (argc > 2 && atoi(argv[2]) == 1) ? "c"
-             : ((argc > 2 && atoi(argv[2]) == 2) ? "f" : ""));
+             : ((argc > 2 && atoi(argv[2]) == 2) ? "f"
+             : ((argc > 2 && atoi(argv[2]) == 3) ? "s" : "")));
     lcd_sim_write_ppm(nombre);
     {
         lcd_cost_t c = lcd_sim_cost();

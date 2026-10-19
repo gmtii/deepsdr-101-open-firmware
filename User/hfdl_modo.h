@@ -131,6 +131,11 @@ uint32_t hfdl_modo_aviones(void);
  * `tope` incluye el cero final y tiene que ser 8 o mas.
  */
 uint8_t hfdl_modo_ident(uint32_t i, char *out, uint8_t tope);
+/* La OACI y el modelo del avion i, para la ficha del mapa: "781F2E A359
+ * Airbus A350-941". No repite la OACI cuando hfdl_modo_ident() ya la ha
+ * devuelto por no saberse el vuelo. Devuelve 0 si no hay nada que decir.
+ * Ver su comentario en hfdl_modo.c. */
+uint8_t hfdl_modo_ficha(uint32_t i, char *out, uint8_t tope);
 void        hfdl_modo_borra(void);
 
 /*

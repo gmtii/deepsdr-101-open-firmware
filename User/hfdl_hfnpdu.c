@@ -9,7 +9,7 @@
  * La cabecera de este fichero decia "FREQUENCY_DATA (0xD5) ... no se
  * tratan". Se trata ahora, porque lleva identificativo de vuelo y posicion
  * exactamente en los mismos sitios que el 0xD1 -comprobado contra cinco
- * tramas reales de la grabacion del usuario- y porque es el que manda el
+ * tramas reales de la grabacion de referencia- y porque es el que manda el
  * avion al darse de alta, que es la trama mas frecuente que hay en bajada.
  *
  * No se afloja nada al admitirlo: pasa las mismas cuatro pruebas que el

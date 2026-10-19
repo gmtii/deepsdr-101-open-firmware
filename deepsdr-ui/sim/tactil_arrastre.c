@@ -236,6 +236,173 @@ static int arrastre(int32_t x0, int32_t y0, int32_t paso, int n, int *seguidas_o
     return arrastre_ms(x0, y0, paso, n, 20U, seguidas_ok);
 }
 
+/*
+ * ======================================================================
+ * EL TOQUE CORTO CONTRA UN BUCLE LENTO - 19/10/2026
+ * ======================================================================
+ *
+ * Avisado por el usuario: en STANAG y en IDENT la radio responde al dedo
+ * mas despacio que en los demas modos.
+ *
+ * Y no es que el tactil este mal: es que el bucle principal lo MUESTREA
+ * pocas veces por segundo cuando el modo trae trabajo pesado. Un toque
+ * solo se ve si, mientras el dedo esta puesto, el bucle pasa por aqui las
+ * veces suficientes:
+ *
+ *   - touch_read() no da contacto hasta que lo CONFIRMA, y la firmeza por
+ *     omision son DOS lecturas seguidas (ver s_confirmar en touch.c);
+ *   - y despues hace falta una lectura mas, ya sin dedo, para que el que
+ *     llama vea la suelta y dispare la accion.
+ *
+ * O sea TRES muestreos dentro de la duracion del toque. Mirando el tactil
+ * cada 20 ms eso son 60 y no se nota; cada 65 ms son 195, y un toque
+ * normal dura menos.
+ *
+ * LO QUE MIDE ESTE BANCO ES EL PERIODO DE MUESTREO, no el del bucle. No
+ * son lo mismo y en eso esta el arreglo: el bucle tarda lo que tarda
+ * -depende del modo y del dibujo- pero el tactil se puede mirar VARIAS
+ * VECES por vuelta, y entonces el periodo que cuenta es el de mirarlo.
+ *
+ * Y NO SE ARREGLA AFLOJANDO LA FIRMEZA. Confirmar con dos lecturas
+ * SEPARADAS EN EL TIEMPO es lo que distingue un toque de un roce o de un
+ * apoyo del canto de la mano, y eso lo pidio el usuario expresamente
+ * (ver el comentario de la firmeza en touch.c). Dos lecturas seguidas
+ * dentro de la misma llamada confirmarian igual de rapido y volverian a
+ * dar por bueno cualquier roce: el filtro mide tiempo, no cuentas.
+ *
+ * Esto lo MIDE, en vez de razonarlo: dedo puesto D milisegundos, el
+ * tactil mirado cada P, y se cuenta en cuantos desfases de los dos
+ * relojes sale el toque. Lo que hay que mirar de la tabla es la columna
+ * de los toques cortos: ahi es donde se pierde.
+ */
+static int toque_visto(uint32_t dur_ms, uint32_t vuelta_ms, uint32_t desfase_ms)
+{
+    uint16_t x, y;
+    uint32_t t;
+    uint8_t  dentro = 0U;   /* el estado que lleva demo_touch_poll() */
+    int      visto = 0;
+
+    quita_dedo();
+    /* El reloj del bucle corre desde antes; el dedo se posa en `desfase`
+     * y se levanta en `desfase + dur`. Se mira un poco mas alla para que
+     * la suelta tenga su pasada. */
+    for (t = 0U; t < desfase_ms + dur_ms + 4U * vuelta_ms; t += vuelta_ms) {
+        uint8_t hay_dedo = (uint8_t)(t >= desfase_ms && t < (desfase_ms + dur_ms));
+        uint8_t leido;
+
+        s_dedo_x = hay_dedo ? 400 : -1;
+        s_dedo_y = hay_dedo ? 240 : -1;
+        g_msticks += vuelta_ms;
+        leido = touch_read(&x, &y);
+
+        if (leido) {
+            dentro = 1U;
+        } else if (dentro) {
+            dentro = 0U;
+            visto = 1;          /* pulsacion + suelta: el toque cuenta */
+        }
+    }
+    quita_dedo();
+    return visto;
+}
+
+/* De cada 20 desfases posibles, cuantos salen. 20 de 20 = el toque SIEMPRE
+ * se coge; 0 de 20 = no se coge nunca. */
+static int cuantos_de_veinte(uint32_t dur_ms, uint32_t vuelta_ms)
+{
+    uint32_t k;
+    int n = 0;
+    for (k = 0U; k < 20U; k++) {
+        if (toque_visto(dur_ms, vuelta_ms, (k * vuelta_ms) / 20U)) { n++; }
+    }
+    return n;
+}
+
+static void mide_toques(void)
+{
+    static const uint32_t k_dur[]    = { 40U, 60U, 80U, 120U, 200U, 300U };
+    static const uint32_t k_vuelta[] = { 10U, 20U, 35U, 50U, 65U, 100U };
+    size_t d, v;
+
+    printf("\n  -- (5) toques cortos contra un muestreo lento --\n");
+    printf("     de cada 20 toques, cuantos ve la radio\n\n");
+    printf("     mirado |");
+    for (d = 0U; d < sizeof k_dur / sizeof k_dur[0]; d++) {
+        printf(" %4u ms", (unsigned)k_dur[d]);
+    }
+    printf("   <- lo que dura el dedo puesto\n");
+    printf("     -------+");
+    for (d = 0U; d < sizeof k_dur / sizeof k_dur[0]; d++) { printf("--------"); }
+    printf("\n");
+
+    for (v = 0U; v < sizeof k_vuelta / sizeof k_vuelta[0]; v++) {
+        printf("     %3u ms |", (unsigned)k_vuelta[v]);
+        for (d = 0U; d < sizeof k_dur / sizeof k_dur[0]; d++) {
+            printf("   %2d/20", cuantos_de_veinte(k_dur[d], k_vuelta[v]));
+        }
+        printf("\n");
+    }
+    printf("\n");
+
+    /*
+     * EL LISTON, Y DE DONDE SALEN LOS DOS NUMEROS.
+     *
+     * 120 ms es lo que dura un toque deliberado de los que la gente hace
+     * de verdad; lo dice el comentario de la firmeza en touch.c, que
+     * cuenta 100-200 ms. 35 ms es el periodo de muestreo que la radio
+     * tiene que garantizar: el bucle de STANAG marcaba 65 ms por vuelta y
+     * el tactil se mira DOS veces en cada una -ver main.c, el segundo
+     * demo_touch_poll() detras de la cadena de polls-, asi que 32,5.
+     *
+     * Si esta linea deja de estar a 20/20, la radio se come toques y
+     * desde fuera parece que no responde. Es lo que paso en STANAG y en
+     * IDENT, donde el tactil se miraba una sola vez por vuelta.
+     */
+    {
+        int n = cuantos_de_veinte(120U, 35U);
+        int m = cuantos_de_veinte(80U, 35U);
+        int c = cuantos_de_veinte(40U, 10U);
+
+        if (n < 20) {
+            printf("     *** mirando el tactil cada 35 ms se pierden %d de\n"
+                   "         cada 20 toques de 120 ms ***\n", 20 - n);
+            fallos++;
+        } else {
+            printf("     mirado cada 35 ms, los toques de 120 ms salen todos"
+                   "  ok\n");
+        }
+        if (m < 20) {
+            printf("     *** y %d de cada 20 de los de 80 ms ***\n", 20 - m);
+            fallos++;
+        } else {
+            printf("     y los de 80 ms tambien  ok\n");
+        }
+        /*
+         * Y EL LISTON DE VERDAD, que es el que pone el gancho del dibujo.
+         *
+         * touch_latido() mira el tactil cada 8 ms desde DENTRO de cada
+         * repintado (gfx2_set_pump()), asi que el periodo real de la radio
+         * ya no lo marca el bucle: lo marca ese reloj. A ese ritmo tiene
+         * que salir hasta el toque mas corto que hace una persona.
+         *
+         * Esta linea ademas vigila lo contrario, y de eso ya se ha caido
+         * una version: mirar MAS DEPRISA que la firmeza no puede dejar el
+         * tactil muerto. La primera version de TOUCH_CONF_MS comparaba el
+         * hueco entre dos lecturas en vez del tiempo desde que se poso el
+         * dedo, y con 10 ms de periodo no confirmaba NUNCA - esta misma
+         * fila salia 0/20 con el dedo puesto trescientos milisegundos.
+         */
+        if (c < 20) {
+            printf("     *** mirando cada 10 ms se pierden %d de cada 20\n"
+                   "         toques de 40 ms: la firmeza no puede depender\n"
+                   "         de cada cuanto se mire ***\n", 20 - c);
+            fallos++;
+        } else {
+            printf("     y mirando cada 10 ms salen hasta los de 40 ms  ok\n");
+        }
+    }
+}
+
 int main(void)
 {
     int paso;
@@ -447,6 +614,8 @@ int main(void)
         if (touch_read(&x, &y)) { mal("el dedo levantado sigue dando contacto"); }
         else { printf("     sin dedo, contacto=0 a la primera\n"); }
     }
+
+    mide_toques();
 
     printf("\n");
     if (fallos == 0) {

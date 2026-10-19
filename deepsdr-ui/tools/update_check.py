@@ -67,7 +67,7 @@ TOPE  = 0x50000    # el "cmp.w r4, #0x50000" del gestor: mas grande, lo ignora
 # --- rama "reload" ---
 MAGIA    = b'DSDR'          # 0x52445344 little-endian
 CAB_OFF  = 0x200
-TOPE_NUE = 475136           # 0x08080000 - 0x0800C000
+TOPE_NUE = 491520           # 0x08080000 - 0x08008000  (17/10/2026)
 POLI     = 0x04C11DB7
 
 

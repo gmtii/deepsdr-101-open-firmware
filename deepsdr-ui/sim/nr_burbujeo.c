@@ -1,7 +1,7 @@
 /*
  * EL BURBUJEO DEL REDUCTOR DE RUIDO: PRIMERO HACERLO APARECER.
  *
- * *** De un aviso recibido el 07/10/2026: con la señal poco por encima del
+ * *** De un aviso del 07/10/2026: con la señal poco por encima del
  * ruido se oye un burbujeo fuerte, y se preguntaba si lo producia el
  * reductor de ruido. Con señales fuertes -las de 40 metros, transmitiendo
  * con mucha potencia- no se oye nada de eso y las voces graves suenan
@@ -44,7 +44,7 @@
  * LO QUE PASO DESPUES, Y POR QUE ESTE BANCO NO "ARREGLA" NADA
  * =====================================================================
  *
- * El usuario mando un video de la radio con el reductor puesto, subiendo el
+ * El material de referencia es la radio con el reductor puesto, subiendo el
  * mando de 800 a 1110 y bajandolo a 1000. Sobre ese audio:
  *
  *   celdas oscuras del fondo    NR  800      8,3 %

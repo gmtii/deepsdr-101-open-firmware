@@ -69,7 +69,7 @@
 /*
  * Cuanto tiene que valer la correlacion para dar un segmento por bueno.
  * La medida esta en docs/STANAG_4415_MEDIDO.md: los veinticuatro segmentos
- * de la grabacion del usuario salieron muy por encima de la mediana del ruido
+ * de la grabacion de referencia salieron muy por encima de la mediana del ruido
  * de fondo. 0,25 deja un factor cinco por debajo y un factor dos por encima.
  */
 #define UMBRAL     0.25f
@@ -123,7 +123,7 @@
  *
  * *** AQUI PONIA "Y QUE NO SE SABE", Y ESO LLEVABA DIAS SIENDO FALSO. ***
  *
- * El razonamiento de antes era: la grabacion del usuario va 85% a ceros -o sea
+ * El razonamiento de antes era: la grabacion de referencia va 85% a ceros -o sea
  * relleno de inactividad-, con todo ceros los dos ordenes dan lo mismo, luego
  * hace falta una grabacion con trafico, luego no se sabe. Las tres primeras
  * son ciertas. La cuarta no se sigue de ellas, y por eso estuvo mal tanto
@@ -370,7 +370,7 @@ typedef struct {
      * quedarse escrito para que el siguiente no repita el intento.
      *
      * EL NUMERO QUE DICE QUE HACE FALTA, que sigue ahi: sim/s4415test.c
-     * imprime el reparto de dibits de la grabacion del usuario y sale
+     * imprime el reparto de dibits de la grabacion de referencia y sale
      *
      *     00/01/10/11:  85%  6%  0%  7%
      *
@@ -416,7 +416,7 @@ static uint8_t     s_on;
  * desplazamientos por simbolo y la salida son b3,b2,b1 como MSB..LSB.
  *
  * Esto se leyo del dibujo del estandar -no viene escrito en texto- y se
- * COMPROBO contra la grabacion del usuario: la coherencia BPSK del tramo de
+ * COMPROBO contra la grabacion de referencia: la coherencia BPSK del tramo de
  * datos pasa de 0,096 a 0,318 al aplicarlo, contra un techo de 0,149 que dan
  * las secuencias al azar. Ver docs/STANAG_4415_MEDIDO.md.
  */

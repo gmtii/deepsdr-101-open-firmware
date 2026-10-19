@@ -103,8 +103,70 @@ def main(ruta):
     if comprueba_entry_active(src):
         return 1
 
+    if comprueba_rama_reinicia(src):
+        return 1
+
     print('Panel digital: sale de la tabla, no de una lista a mano.')
     return 0
+
+
+def comprueba_rama_reinicia(src):
+    """
+    Y QUE EL REPINTADO AL CERRARSE UN MENU NO VUELVA A SER UNA LISTA.
+
+    POR QUE SE ANADE ESTO - 19/10/2026
+    ----------------------------------
+    El bucle principal reparte el repintado al cerrarse un menu encima del
+    panel. Esa rama tenia esto escrito a mano:
+
+        ft8_modo_activo() || hfdl_modo_activo() || wspr_modo_activo() ||
+        ais_modo_activo() || ale_modo_activo() || jtty_modo_activo()
+
+    y le faltaban STANAG e IDENT, que usan EXACTAMENTE el mismo panel.
+    Sexta vez de la misma familia de fallo.
+
+    No se veia porque el panel se repintaba ENTERO en cuanto cambiaba
+    cualquier cosa, varias veces por segundo, y tapaba el menu casi al
+    instante. Desde que solo se repintan los renglones sucios
+    (ui_digi_draw_cambios()), lo que no cambia ya no se repinta: el fallo
+    sale a la luz y el menu se queda puesto.
+
+    La pregunta que contesta esa rama es "¿este modo pinta con
+    ft8_panel_draw()?", que es literalmente modo_panel_entero(). Esto
+    comprueba que lo siga preguntando asi.
+    """
+    m = re.search(r'ft8_panel_reinicia\(\);', src)
+    if not m:
+        print('  nadie llama a ft8_panel_reinicia()  MAL')
+        return 1
+
+    # La rama del bucle principal: el `else if` que la envuelve.
+    i = src.rfind('} else if (', 0, m.start())
+    if i < 0:
+        print('  no encuentro la rama de repintado del bucle  MAL')
+        return 1
+    cond = src[i:src.index(')', i) + 1]
+
+    if 'modo_panel_entero' in cond:
+        return 0
+
+    sueltos = sorted(set(re.findall(r'\b(\w+_activo)\s*\(\)', cond)))
+    print('')
+    print('  LA RAMA QUE REPINTA AL CERRARSE UN MENU VUELVE A SER UNA LISTA:')
+    print('')
+    print('    %s' % cond.strip())
+    print('')
+    if sueltos:
+        print('  nombra %d modos a mano: %s' % (len(sueltos),
+                                                ', '.join(sueltos)))
+        print('')
+    print('  Tiene que preguntar modo_panel_entero(), que es justo "¿este')
+    print('  modo pinta con ft8_panel_draw()?". Escrita a mano se quedo sin')
+    print('  STANAG y sin IDENT, y con el repintado por renglones sucios eso')
+    print('  deja el menu puesto encima del panel.')
+    print('')
+    print('  *** 1 ***')
+    return 1
 
 
 def comprueba_entry_active(src):

@@ -1,4 +1,5 @@
 #include "ui_digi.h"
+#include <stdint.h>
 #include "gfx2.h"
 #include "palette.h"
 #include "font_ui_14.h"
@@ -57,6 +58,37 @@ static uint8_t nfilas(const ui_digi_state_t *st)
  * con el texto. Ver chip_w(). */
 #define UDG_CHIP_SIN5_MAX  (UDG_CHIP_RES + UDG_BTN2_GAP + 92)
 
+/*
+ * LA CHAPA SOLA EN SU MITAD DE LA CABECERA.
+ *
+ * O sea: ni barra, ni tercer boton, ni cuarto, ni quinto. Es la cabecera
+ * de los tres modos que pintan imagen -WEFAX, SSTV y Feld-Hell-, que solo
+ * llevan los dos botones de la izquierda y la chapa.
+ *
+ * Cuando pasa eso, entre donde acaba el segundo boton y donde empieza la
+ * chapa hay 170 px sin nada, y la chapa los puede usar. No es por hacerla
+ * grande: la cabecera del fax dice en que fase va -"Esperando el tono de
+ * arranque"- y eso no cabia en lo que quedaba.
+ *
+ * Se pregunta por los CINCO y no solo por el cuarto a proposito: la franja
+ * que se repinta crece con esto (ver UDG_CHIP_ANCHO_X0), y una franja que
+ * crece por encima de algo que si esta dibujado se lo lleva por delante.
+ * Esa averia ya ha salido cinco veces en este mismo sitio - ver solo_chip().
+ */
+static uint8_t chip_sola(const ui_digi_state_t *st)
+{
+    return (uint8_t)(!st->btn3 && !st->btn4 && !st->btn5
+                     && !st->barra_on && !st->barra_dcha);
+}
+
+/* Hasta donde llega la chapa cuando esta sola: desde el final del hueco
+ * del segundo boton hasta el borde derecho. El segundo acaba en
+ * UDG_BTN2_X + UDG_BTN2_W y se le deja el mismo aire que entre dos
+ * botones; si no hubiera segundo boton, ese tramo se queda vacio y no
+ * pasa nada, que es lo mismo que pasaba antes. */
+#define UDG_CHIP_ANCHO_X0  (UDG_BTN2_X + UDG_BTN2_W + UDG_BTN2_GAP)
+#define UDG_CHIP_ANCHO_W   (GFX2_W - UDG_PAD_X - UDG_CHIP_ANCHO_X0)
+
 static int16_t chip_w(const ui_digi_state_t *st)
 {
     int16_t w;
@@ -68,7 +100,7 @@ static int16_t chip_w(const ui_digi_state_t *st)
      *
      * El minimo ya estaba, y es lo que impide que el borde izquierdo se
      * mueva y arrastre al boton. Faltaba el TOPE, y se vio el 02/10/2026
-     * en una foto del usuario: el estado del demodulador de STANAG pone
+     * visto en pantalla: el estado del demodulador de STANAG pone
      * cosas como "llenando el entrelazador 180/392", la chapa crecia
      * hacia la izquierda y se pintaba ENCIMA del quinto boton.
      *
@@ -107,7 +139,31 @@ static int16_t chip_w(const ui_digi_state_t *st)
          * igual que arriba. Un panel no se queda sin boton porque otro
          * modulo escriba una linea larga.
          */
-        if (w > (int16_t)UDG_CHIP_SIN5_MAX) { w = (int16_t)UDG_CHIP_SIN5_MAX; }
+        /*
+         * Y SI NO HAY CUARTO BOTON, NO HAY NADA QUE RESERVAR - 19/10/2026.
+         *
+         * Avisado por el usuario: en WEFAX, "Esperando el tono de arranque"
+         * salia como "ono de arranque".
+         *
+         * El tope de aqui arriba guarda el sitio del cuarto boton. Pero
+         * btn4_w() devuelve CERO cuando no hay cuarto boton, o sea que en
+         * un panel que no lo tiene el tope estaba guardando el sitio de
+         * algo que no existe: 242 px de chapa, 208 para el texto, y la
+         * cabecera del fax mide 316 con el estado y la velocidad. Lo que
+         * sobraba se iba por delante -que es por donde recorta esta chapa,
+         * y en un contador es lo que menos duele- asi que lo que se perdia
+         * era justo la palabra que dice en que fase va, que es para lo que
+         * existe esa cabecera.
+         *
+         * Lo reservado sigue siendo lo reservado. Lo que cambia es que
+         * cuando no hay nada reservado la chapa se queda con el sitio
+         * entero: ver chip_sola() y UDG_CHIP_ANCHO_W.
+         */
+        if (chip_sola(st)) {
+            if (w > (int16_t)UDG_CHIP_ANCHO_W) { w = (int16_t)UDG_CHIP_ANCHO_W; }
+        } else if (w > (int16_t)UDG_CHIP_SIN5_MAX) {
+            w = (int16_t)UDG_CHIP_SIN5_MAX;
+        }
     }
     return w;
 }
@@ -146,6 +202,33 @@ static void pinta_boton(gfx2_surf_t *s, const ui_digi_state_t *st)
     pinta_uno(s, st, UDG_BTN_X, UDG_BTN_W, st->btn, st->btn_press);
 }
 
+/*
+ * LO QUE DE VERDAD SE VE DE LA CHAPA.
+ *
+ * Recortado a lo que cabe: ver el tope de chip_w(). Se quitan letras POR
+ * DELANTE, que en un contador -que es para lo que nacio esta chapa- es lo
+ * que menos duele.
+ *
+ * Esta en una funcion y no escrito dentro de pinta_chip() porque hay un
+ * banco que comprueba que la cabecera del fax no se recorta
+ * (sim/chapa_fax.c), y lo unico que vale para eso es preguntarle al modulo
+ * que esta sacando por pantalla. Un banco con una copia del recorte mide
+ * su copia.
+ */
+static const char *chip_txt(const ui_digi_state_t *st)
+{
+    const char *txt = st->chip ? st->chip : "";
+    int16_t hueco = (int16_t)(chip_w(st) - 34);
+
+    while (*txt != '\0' && gfx2_text_w(txt, &font_ui_14b) > hueco) { txt++; }
+    return txt;
+}
+
+const char *ui_digi_chip_visible(const ui_digi_state_t *st)
+{
+    return chip_txt(st);
+}
+
 static void pinta_chip(gfx2_surf_t *s, const ui_digi_state_t *st)
 {
     int16_t x, w;
@@ -159,11 +242,7 @@ static void pinta_chip(gfx2_surf_t *s, const ui_digi_state_t *st)
      * con la caja reservada el numero crece hacia la izquierda desde el
      * punto en vez de empujar al boton. Ver chip_w(). */
     {
-        /* Recortado a lo que cabe: ver el tope de chip_w(). Se quitan
-         * letras POR DELANTE, que en un contador es lo que menos duele. */
-        const char *txt = st->chip;
-        int16_t hueco = (int16_t)(w - 34);
-        while (*txt != '\0' && gfx2_text_w(txt, &font_ui_14b) > hueco) { txt++; }
+        const char *txt = chip_txt(st);
         gfx2_text(s, (int16_t)(x + w - 24 - gfx2_text_w(txt, &font_ui_14b)),
                   (int16_t)(btn_y(st) + 4),
                   txt, &font_ui_14b, gfx2_rgb(PAL_INK));
@@ -1116,17 +1195,230 @@ static void una_fila(gfx2_surf_t *s, void *ctx)
     }
 }
 
-void ui_digi_draw_fila(const ui_digi_state_t *st, uint8_t i)
+static uint8_t fila_pinta(const ui_digi_state_t *st, uint8_t i)
 {
     int16_t y;
 
-    if (i >= nfilas(st)) { return; }
+    if (i >= nfilas(st)) { return 0U; }
     y = (int16_t)(st->y + UDG_HDR_H + alto_titulos(st) + i * UDG_LINE_H);
     /* Y que ese renglon quepa en el panel: ver la guarda del bucle de
      * texto(). Aqui importa lo mismo y por lo mismo. */
-    if ((int16_t)(y + UDG_LINE_H) > (int16_t)(st->y + st->h)) { return; }
+    if ((int16_t)(y + UDG_LINE_H) > (int16_t)(st->y + st->h)) { return 0U; }
     s_fila = (int8_t)i;
-    gfx2_render(0, y, GFX2_W, UDG_LINE_H, una_fila, (void *)st);
+    return gfx2_render(0, y, GFX2_W, UDG_LINE_H, una_fila, (void *)st);
+}
+
+void ui_digi_draw_fila(const ui_digi_state_t *st, uint8_t i)
+{
+    (void)fila_pinta(st, i);
+}
+
+/*
+ * ======================================================================
+ * SOLO LOS RENGLONES QUE HAN CAMBIADO - 19/10/2026
+ * ======================================================================
+ *
+ * Pedido por el usuario: que la radio vaya mas rapido.
+ *
+ * ui_digi_draw_texto() repinta los 800 x 317 enteros. Medido con
+ * sim/lcd_sim.c, que cuenta los accesos de verdad al bus del panel:
+ *
+ *     panel entero (800x317) .....  253.940 accesos   11,43 ms a 45 ns
+ *     UN renglon  (800x18) .......   14.434 accesos    0,65 ms
+ *     los OCHO renglones sueltos .  115.472 accesos    5,20 ms
+ *
+ * Mirese por donde se mire, eso esta mal. Repintar los ocho renglones UNO
+ * POR UNO cuesta menos de la mitad que el repintado "entero", y la razon
+ * es que el panel mide 317 px mientras que la cabecera, los titulos y los
+ * ocho renglones ocupan 192: hay 125 px de FONDO VACIO -cien mil accesos
+ * al bus, cuatro milisegundos y medio- que se repintan enteros cada vez
+ * para no dibujar nada.
+ *
+ * Y encima casi nunca cambian los ocho. En el identificador la lista son
+ * candidatos con su tanto por ciento: cambia uno, a veces dos.
+ *
+ * COMO SE DECIDE QUE HA CAMBIADO. Con una huella FNV-1a de 32 bits por
+ * renglon, sobre el TEXTO y no sobre el puntero: los inquilinos de este
+ * panel rehacen sus cadenas en el mismo buffer, asi que el puntero no se
+ * mueve aunque el texto sea otro. La huella lleva ademas la tinta del
+ * renglon y si es el renglon "vivo" -el ultimo con algo-, que es lo que
+ * decide su color: cuando llega una linea nueva cambian DOS, la que deja
+ * de ser la viva y la que lo pasa a ser, y las dos tienen que repintarse.
+ *
+ * Y UNA HUELLA DEL MARCO, aparte, con todo lo que no es el cuerpo de un
+ * renglon: la geometria, los titulos, la chapa, los cinco botones, la
+ * barra, la cebra, las columnas, cuantas filas hay... y el puntero de la
+ * paleta, que es lo que cambia al cambiar de tema. Si el marco cambia se
+ * repinta TODO, sin pensar. Asi cualquier cosa que no se me haya ocurrido
+ * cae del lado seguro: el que repinta de mas, no el que deja basura.
+ *
+ * LO QUE NO SE APUNTA SI NO SE HA PINTADO. gfx2_render() devuelve 0
+ * cuando la banda compositora esta cogida -la captura de pantalla se la
+ * queda veinticinco segundos-. Si en ese caso se apuntara la huella
+ * nueva, el renglon se quedaria con el texto viejo en pantalla y nadie
+ * volveria a repintarlo nunca. Se apunta solo lo que de verdad se pinto.
+ *
+ * ui_digi_olvida() tira todo lo apuntado: el siguiente repintado sera
+ * entero. Lo necesita quien sabe que los pixeles de debajo ya no son los
+ * nuestros - el mapa encima del panel, un menu que se cierra, una foto.
+ */
+static uint32_t s_fir_fila[UDG_ROWS_MAX];
+static uint32_t s_fir_caja;
+static uint32_t s_fir_chapa;
+static uint32_t s_fir_btn[3];  /* el primero, el segundo y el tercero */
+static uint8_t  s_fir_hay;     /* 0 = lo de la pantalla no es nuestro */
+
+#define FNV_INI  2166136261UL
+
+static uint32_t fnv_b(uint32_t h, uint32_t v)
+{
+    h ^= (v & 0xFFUL);  h *= 16777619UL;
+    h ^= ((v >> 8) & 0xFFUL);  h *= 16777619UL;
+    h ^= ((v >> 16) & 0xFFUL); h *= 16777619UL;
+    h ^= ((v >> 24) & 0xFFUL); h *= 16777619UL;
+    return h;
+}
+
+static uint32_t fnv_t(uint32_t h, const char *t)
+{
+    if (t == 0) { return fnv_b(h, 0xA5A5A5A5UL); }
+    while (*t != '\0') {
+        h ^= (uint32_t)(uint8_t)*t++;
+        h *= 16777619UL;
+    }
+    return fnv_b(h, 0x5A5A5A5AUL);   /* marca de fin: "ab"+"c" != "a"+"bc" */
+}
+
+/*
+ * LA CAJA: lo que obliga a repintarlo TODO si cambia.
+ *
+ * Geometria, titulos, cuantas filas, la cebra, las columnas y la paleta.
+ * Y la barra entera, que no se separa: el segundo boton y la barra
+ * comparten el mismo hueco (UDG_BAR_X es UDG_BTN2_X) y el tercer boton se
+ * coloca detras de donde acabe la barra, asi que mover la barra mueve a
+ * los otros dos. Eso ya ha salido mal cinco veces en esta cabecera; aqui
+ * se corta por lo sano.
+ *
+ * Lo que NO esta aqui -la chapa y los cinco botones- tiene cada uno su
+ * propio repintado y su propia huella, mas abajo.
+ */
+static uint32_t firma_caja(const ui_digi_state_t *st)
+{
+    uint32_t h = FNV_INI;
+
+    h = fnv_b(h, (uint32_t)(uint16_t)st->y);
+    h = fnv_b(h, (uint32_t)(uint16_t)st->h);
+    h = fnv_b(h, (uint32_t)nfilas(st));
+    h = fnv_t(h, st->titulos);
+    h = fnv_b(h, (uint32_t)st->barra_dcha);
+    h = fnv_b(h, (uint32_t)st->barra_on);
+    h = fnv_b(h, (uint32_t)(uint16_t)st->barra_w);
+    h = fnv_b(h, (uint32_t)st->barra_v);
+    h = fnv_b(h, (uint32_t)st->barra_max);
+    h = fnv_t(h, st->barra_txt);
+    h = fnv_t(h, st->barra_txt_dcha);
+    h = fnv_b(h, (uint32_t)st->cebra);
+    h = fnv_b(h, (uint32_t)st->ncols);
+    /* El puntero de las columnas y el de la paleta: los dos se cambian
+     * enteros, no se modifican por dentro (ver tema_aplicar() en main.c). */
+    h = fnv_b(h, (uint32_t)(uintptr_t)st->cols);
+    h = fnv_b(h, (uint32_t)(uintptr_t)g_pal);
+    return h;
+}
+
+/*
+ * LA FRANJA DE LA CHAPA, que no es solo la chapa.
+ *
+ * solo_chip() repinta la franja entera y vuelve a dibujar DENTRO el cuarto
+ * y el quinto boton, porque viven ahi. Asi que la huella lleva los tres:
+ * si cambia cualquiera de ellos, una sola llamada los deja bien. Y el
+ * ancho del cuarto se mide contra donde empieza la chapa, o sea que el
+ * texto de la chapa tambien lo mueve - otra razon para que vayan juntos.
+ */
+static uint32_t firma_chapa(const ui_digi_state_t *st)
+{
+    uint32_t h = FNV_INI;
+
+    h = fnv_t(h, st->chip);
+    h = fnv_b(h, (uint32_t)st->enganchado);
+    h = fnv_t(h, st->btn4);  h = fnv_b(h, (uint32_t)st->btn4_press);
+    h = fnv_t(h, st->btn5);  h = fnv_b(h, (uint32_t)st->btn5_press);
+    return h;
+}
+
+static uint32_t firma_rotulo(const char *t, uint8_t press)
+{
+    return fnv_b(fnv_t(FNV_INI, t), (uint32_t)press);
+}
+
+static uint32_t firma_fila(const ui_digi_state_t *st, uint8_t i, uint8_t viva)
+{
+    uint32_t h = FNV_INI;
+
+    h = fnv_b(h, (uint32_t)i);
+    h = fnv_t(h, st->fila[i]);
+    h = fnv_b(h, (uint32_t)st->fila_tinta[i]);
+    h = fnv_b(h, (uint32_t)(i == viva));
+    return h;
+}
+
+void ui_digi_olvida(void)
+{
+    s_fir_hay = 0U;
+}
+
+uint8_t ui_digi_draw_cambios(const ui_digi_state_t *st)
+{
+    uint32_t caja = firma_caja(st);
+    uint8_t  n = nfilas(st);
+    uint8_t  viva = fila_viva(st);
+    uint8_t  i;
+
+    if (!s_fir_hay || caja != s_fir_caja) {
+        if (!ui_digi_draw_texto(st)) { return 0U; }
+        s_fir_caja  = caja;
+        s_fir_chapa = firma_chapa(st);
+        s_fir_btn[0] = firma_rotulo(st->btn,  st->btn_press);
+        s_fir_btn[1] = firma_rotulo(st->btn2, st->btn2_press);
+        s_fir_btn[2] = firma_rotulo(st->btn3, st->btn3_press);
+        for (i = 0U; i < (uint8_t)UDG_ROWS_MAX; i++) {
+            s_fir_fila[i] = (i < n) ? firma_fila(st, i, viva) : 0U;
+        }
+        s_fir_hay = 1U;
+        return 1U;
+    }
+
+    /*
+     * LA CABECERA PRIMERO Y LOS RENGLONES DESPUES, que es el orden en que
+     * los pinta texto(). No se tocan -viven en franjas distintas- pero el
+     * orden se respeta para que lo parcial y lo entero sean la misma
+     * pelicula y no solo la misma foto.
+     */
+    {
+        uint32_t f = firma_chapa(st);
+        if (f != s_fir_chapa) { ui_digi_draw_chip(st); s_fir_chapa = f; }
+    }
+    {
+        uint32_t f = firma_rotulo(st->btn, st->btn_press);
+        if (f != s_fir_btn[0]) { ui_digi_draw_boton(st);  s_fir_btn[0] = f; }
+    }
+    {
+        uint32_t f = firma_rotulo(st->btn2, st->btn2_press);
+        if (f != s_fir_btn[1]) { ui_digi_draw_boton2(st); s_fir_btn[1] = f; }
+    }
+    {
+        uint32_t f = firma_rotulo(st->btn3, st->btn3_press);
+        if (f != s_fir_btn[2]) { ui_digi_draw_boton3(st); s_fir_btn[2] = f; }
+    }
+
+    for (i = 0U; i < n; i++) {
+        uint32_t f = firma_fila(st, i, viva);
+
+        if (f == s_fir_fila[i]) { continue; }
+        if (!fila_pinta(st, i)) { continue; }   /* no se apunta lo no pintado */
+        s_fir_fila[i] = f;
+    }
+    return 1U;
 }
 
 /* Repintados sueltos. Los dos caen FUERA del trazo, asi que repintarlos no
@@ -1164,10 +1456,25 @@ void ui_digi_draw_fila(const ui_digi_state_t *st, uint8_t i)
 _Static_assert(UDG_CHIP_X0 == UDG_CHIP_X0_F,
                "UDG_CHIP_X0 y la copia que usa el cuarto boton se han separado");
 
+/* Donde empieza y cuanto mide la franja que se limpia. Es FIJA para una
+ * cabecera dada -no depende del texto de la chapa, que es de lo que
+ * avisaba el comentario de arriba- pero no es la misma para todas: cuando
+ * la chapa esta sola empieza antes, porque tambien acaba antes a la
+ * izquierda lo ultimo que hay dibujado. Ver chip_sola(). */
+static int16_t chip_franja_x(const ui_digi_state_t *st)
+{
+    return chip_sola(st) ? (int16_t)UDG_CHIP_ANCHO_X0 : (int16_t)UDG_CHIP_X0;
+}
+static int16_t chip_franja_w(const ui_digi_state_t *st)
+{
+    return chip_sola(st) ? (int16_t)UDG_CHIP_ANCHO_W : (int16_t)UDG_CHIP_W;
+}
+
 static void solo_chip(gfx2_surf_t *s, void *ctx)
 {
     const ui_digi_state_t *st = (const ui_digi_state_t *)ctx;
-    gfx2_fill(s, UDG_CHIP_X0, btn_y(st), UDG_CHIP_W, UDG_BTN_H, gfx2_rgb(PAL_SURF_0));
+    gfx2_fill(s, chip_franja_x(st), btn_y(st), chip_franja_w(st), UDG_BTN_H,
+              gfx2_rgb(PAL_SURF_0));
     /*
      * Y LOS BOTONES QUE VIVEN DENTRO DE ESTA FRANJA, detras: el relleno de
      * arriba se los acaba de llevar.
@@ -1192,7 +1499,8 @@ static void solo_chip(gfx2_surf_t *s, void *ctx)
 void ui_digi_draw_chip(const ui_digi_state_t *st)
 {
     if (!st->chip) { return; }
-    gfx2_render(UDG_CHIP_X0, btn_y(st), UDG_CHIP_W, UDG_BTN_H, solo_chip, (void *)st);
+    gfx2_render(chip_franja_x(st), btn_y(st), chip_franja_w(st), UDG_BTN_H,
+                solo_chip, (void *)st);
 }
 
 static void solo_boton(gfx2_surf_t *s, void *ctx)

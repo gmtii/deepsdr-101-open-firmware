@@ -4201,9 +4201,35 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * Ver rtty_scope.h para por que esta FFT es aparte de la del
          * espectro. Barato: aqui solo se acumula en un anillo, la FFT
          * corre luego desde el bucle principal. */
+        /*
+         * Y EL PAQUETE DE HF FALTABA EN ESTA LISTA - 19/10/2026.
+         *
+         * Avisado por el usuario: al elegir PKT300 el espectro se quedaba
+         * sin moverse.
+         *
+         * Y no se movia porque en PKT300 el espectro YA NO ESTA: es un modo
+         * digital, asi que digi_panel_active() dice que si y el bucle
+         * principal pinta el osciloscopio de sintonia en su sitio. Pero el
+         * osciloscopio no estaba nombrado aqui, o sea que no recibia una
+         * sola muestra: rtty_scope_frame_ready() nunca decia que si,
+         * rtty_scope_draw() se volvia sin pintar nada, y en pantalla
+         * quedaba congelado lo ultimo que hubiera dibujado el espectro. El
+         * decodificador funcionaba perfectamente; desde fuera parecia una
+         * radio colgada.
+         *
+         * Es EL MISMO fallo que el del APRS -ver aprs_scope_feed(), unas
+         * cuantas lineas mas arriba- una rama mas alla: aquel era el camino
+         * de FM y este el de banda lateral. El APRS se arreglo alli y esta
+         * lista se quedo como estaba, porque ax25_activo() ya aparecia...
+         * en la otra rama, que en LSB no corre.
+         *
+         * Lo que impide la sexta vez es tools/osci_check.py, que deriva de
+         * k_demod_modes[] que modos ensenan el osciloscopio y exige que
+         * cada uno este nombrado en la rama de audio que le toca.
+         */
         if (rtty_get_enabled() || cw_get_enabled() || navtex_activo()
             || wefax_activo() || sstv_activo() || ft8_modo_activo()
-            || psk31_activo() || dsc_activo()) {
+            || psk31_activo() || dsc_activo() || ax25_activo()) {
             rtty_scope_feed(s_ssb_dec, s_dec_block_samples);
         }
 

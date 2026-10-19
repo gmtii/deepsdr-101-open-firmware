@@ -124,6 +124,27 @@ def main():
 
     secs = []
     for ruta in entradas:
+        #
+        # UN FICHERO QUE NO ESTA SE DICE, NO SE REVIENTA - 17/10/2026.
+        #
+        # Aqui habia un open() pelado, asi que escribir el nombre mal o
+        # lanzar esto desde otra carpeta sacaba un traceback de Python de
+        # seis lineas. Y justo debajo, el fichero vacio y el que no empieza
+        # por cuatro letras SI daban un mensaje en cristiano: el mismo
+        # guion trataba tres errores del mismo tipo de dos maneras
+        # distintas, y la fea era la que mas iba a pasar.
+        #
+        # Ademas dice DONDE buscar: ICAO24.BIN y EMISORAS.BIN viven en
+        # deepsdr-ui/datos/, no en la raiz, que es de donde se lanza esto.
+        #
+        if not os.path.isfile(ruta):
+            print("  MAL: no encuentro %s" % ruta)
+            otro = os.path.join('deepsdr-ui', 'datos', os.path.basename(ruta))
+            if os.path.isfile(otro):
+                print("       pero si esta en %s" % otro)
+                print("       -> python3 tools/datos_pack.py %s %s ..."
+                      % (salida, otro))
+            return 1
         d = open(ruta, 'rb').read()
         if len(d) < 4:
             print("  MAL: %s esta vacio" % ruta)

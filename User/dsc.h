@@ -53,7 +53,7 @@ typedef struct {
  * lo busca solo por cruces por cero igual que el NAVTEX.
  *
  * Hace falta porque el DSC no vive en un sitio fijo del audio: depende de
- * donde tenga el dial quien escucha. En las cuatro grabaciones del usuario los
+ * donde tenga el dial quien escucha. En las cuatro grabaciones de referencia los
  * centros salieron en 995, 1700 y 2214 Hz.
  */
 void    dsc_set_centro_hz(float hz);

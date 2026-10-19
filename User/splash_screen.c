@@ -2,6 +2,8 @@
 #include "splash.h"
 #include "waterfall.h"
 #include "ft8_shared_ram.h"
+#include "spi_flash.h"
+#include "splash_fuente.h"
 
 /*
  * Pantalla de arranque.
@@ -46,8 +48,23 @@ static uint32_t ahora_ms(void)
 
 void splash_screen_draw(void)
 {
+    gfx2_font_t  fuente;
+    uint8_t     *pozo = (uint8_t *)&g_ft8_shared_ram;
+    uint32_t     pozo_n = (uint32_t)sizeof g_ft8_shared_ram;
+    uint32_t     col_n = splash_ram_bytes();
+    const gfx2_font_t *lluvia = 0;
+
     waterfall_presta(1U);
-    splash_run(ahora_ms, &g_ft8_shared_ram, (uint32_t)sizeof g_ft8_shared_ram);
+
+    /* Las columnas al principio del buffer y la fuente detras, cada una con
+     * su trozo: si no cupieran las dos, la fuente se queda fuera y la
+     * pantalla sale fija, que es mejor que pisar las columnas. */
+    if (pozo_n > col_n) {
+        lluvia = splash_fuente_carga(spi_flash_read, pozo + col_n,
+                                     pozo_n - col_n, &fuente);
+    }
+
+    splash_run(ahora_ms, pozo, col_n, lluvia);
     waterfall_presta(0U);
     waterfall_init();   /* devolverlo es dejarlo con pixeles otra vez */
 }

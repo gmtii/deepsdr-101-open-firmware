@@ -150,7 +150,7 @@ int main(int argc, char **argv)
     top.knob_value = "1 kHz";
     top.agc = "MED";
     top.bw = "4,0 k";
-    top.nr_on = 1;
+    top.att = "-06";
     top.nco_on = 1;
     top.ovr = 0;
     top.spk_muted = 0;

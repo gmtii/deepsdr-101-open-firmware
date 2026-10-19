@@ -7,7 +7,7 @@
  * spec_rotulos_selftest(), que es aritmetica-. Comprueba lo otro, que es
  * lo que de verdad decide si la funcion sirve: QUE SE LEAN.
  *
- * Y por eso pinta de verdad y guarda un PNG. En la foto que mando el
+ * Y por eso pinta de verdad y guarda un PNG. En la captura de referencia, el
  * usuario se ve el fallo que hay que no cometer: "BSKSA Holy Quran" y "All
  * India Radio GOS" montados uno encima de otro, ilegibles los dos. Un
  * banco que solo contara carteles aprobaria eso.

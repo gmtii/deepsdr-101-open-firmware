@@ -175,6 +175,21 @@ void gfx2_set_pump(void (*fn)(void))
     s_pump = fn;
 }
 
+/*
+ * El mismo gancho, para quien pinta por bandas SIN pasar por
+ * gfx2_render() - 19/10/2026.
+ *
+ * spectrum_draw() se monta sus bandas el solo: pide la banda con
+ * gfx2_banda_coge() y las vuelca con gfx_blit_arranca(). O sea que no
+ * pasaba por el bucle de aqui abajo y, mientras pintaba el espectro -siete
+ * u once milisegundos de bus en cada fotograma-, el tactil no existia.
+ * Que es justo lo que este gancho esta puesto para evitar.
+ */
+void gfx2_pump(void)
+{
+    if (s_pump) { s_pump(); }
+}
+
 uint8_t gfx2_render(int16_t x, int16_t y, int16_t w, int16_t h,
                     void (*draw)(gfx2_surf_t *s, void *ctx), void *ctx)
 {

@@ -51,6 +51,25 @@ FUERA = ('/build/', '/build_470/', '/out/', '/.git/', '/__pycache__/',
 ATRIB = re.compile(
     r'(usuario del proyecto|project owner|the owner|owner\'s|'
     r'el usuario (dice|dijo|pide|pidio|conto|reporto|veia|vio)|'
+    #
+    # LA ATRIBUCION DE LOS .md, QUE SE NOS ESCAPO ENTERA - 18/10/2026.
+    #
+    # Este banco se colgo de "make comprueba", que mira SOLO la carpeta del
+    # firmware. docs/ y manual/ son repositorios hermanos y quedaron fuera,
+    # asi que en docs/CAMBIOS.md habia 94 citas. Un guardian que no mira
+    # donde esta el problema no es una red: es un fichero, otra vez.
+    #
+    # Y ademas no las habria visto estando alli: la forma que usan los .md
+    # es "*Por el usuario:*" / "*El usuario, con una foto:*", y arriba se
+    # pedia el verbo detras ("el usuario dijo"). Dos agujeros distintos, el
+    # de donde se mira y el de que se busca, y los dos daban verde.
+    #
+    # SIN espacio detras del asterisco, y hace falta: en un comentario de C
+    # la linea empieza por " * " y entonces " * Pedido por el usuario" -que
+    # es la forma correcta y limpia- se daba por atribucion. Lo marco en
+    # sstvtest.c, donde lo entrecomillado es la DEFINICION de un campo. En
+    # markdown el asterisco va pegado a la palabra: *Por el usuario:*.
+    r'\*\*?(el|por el|del|pedido por el)\s+usuario\b|'
     r'de un issue|del issue|the issue|from an issue|de un informe|'
     r'del informe|de un video|por un informe|la otra mitad del|'
     r'nos reportaron|a peticion de|se quejo|transcripcion|por el canal|'
@@ -65,6 +84,39 @@ CHARLA = re.compile(
     r'(la conversacion de|media conversacion|en el chat|nuestras? charlas?|'
     r'conversacion de porte|port conversation|chat log|'
     r'con su transcripcion)', re.I)
+
+#
+# DE DONDE VINO EL MATERIAL - 17/10/2026.
+#
+# No es una cita ni una referencia a una conversacion, asi que las dos de
+# arriba lo dejaban pasar, pero cuenta lo mismo: "el video del usuario",
+# "la grabacion que me paso", "la foto que mando el usuario" dicen COMO
+# llego el dato, y eso es la conversacion. Salieron 45 sitios de una vez.
+#
+# La frase correcta es el HECHO: "la grabacion de referencia", "lo que se
+# veia en pantalla", "los 214 segundos de la grabacion por CAT". El dato
+# medido se queda entero; lo que se va es el recado.
+#
+# LO QUE NO MARCA, Y ES A PROPOSITO: "el disco del usuario", "el QTH del
+# usuario", "el ajuste del usuario", "la radio del usuario". Ahi "el
+# usuario" es quien usa la radio -o su equipo-, no quien escribio pidiendo
+# algo, y son la mitad de los "del usuario" del arbol. La regla pide un
+# SOPORTE (video, foto, grabacion, captura, audio) o un VERBO de traer
+# (mandar, pasar, enseñar), que es lo que distingue una cosa de la otra.
+#
+# AFINADA una vez: pedia el soporte seguido del verbo, y "la fila de audio
+# paso a llevar cuatro numeros" encaja con eso sin ser un recado. Ahora el
+# verbo tiene que venir con "que" o con quien lo trajo: "el video QUE mando",
+# "la grabacion que me paso". Un "paso a" detras de un sustantivo ya no
+# cuenta.
+PROCEDENCIA = re.compile(
+    r'((?:v[ií]deo|foto|captura|grabaci[oó]n|audio|pantallazo)s?'
+    r'\s+que\s+(?:me\s+)?(?:mand[oó]|pas[oó]|ense[nñ][oó]|envi[oó])|'
+    r'(?:v[ií]deo|foto|captura|pantallazo)s?\s+del\s+usuario|'
+    r'el\s+usuario\s+(?:mand[oó]|pas[oó]|ense[nñ][oó]|grab[oó]|envi[oó])|'
+    r'que\s+me\s+(?:mand[oó]|pas[oó]|ense[nñ][oó]|envi[oó])|'
+    r'(?:video|photo|screenshot|recording)\s+(?:the\s+)?(?:user|owner)\s+sent|'
+    r'sent\s+by\s+the\s+(?:user|owner))', re.I)
 
 
 def comentarios_c(t):
@@ -201,6 +253,12 @@ def main():
             t = open(p, encoding='utf-8', errors='replace').read()
         except OSError:
             continue
+        # El propio banco no se mira: sus expresiones y su documentacion
+        # hablan de lo que persigue, asi que se encontraria a si mismo y
+        # sacaria dos fallos que no lo son. Es el unico fichero exento, y
+        # lo es por ser el que define la regla.
+        if os.path.basename(p) == os.path.basename(__file__):
+            continue
         mirados += 1
         es_c = p.endswith(('.c', '.h', '.S', '.inc'))
         for lin, c in (comentarios_c(t) if es_c else comentarios_script(t)):
@@ -208,6 +266,10 @@ def main():
             m = CHARLA.search(pg)
             if m:
                 malos.append((p, lin, 'referencia a una conversacion',
+                              m.group(0)))
+            m = PROCEDENCIA.search(pg)
+            if m:
+                malos.append((p, lin, 'de donde vino el material',
                               m.group(0)))
             if '"' not in c:
                 continue

@@ -794,6 +794,83 @@ temas: sim/temas_tabla.h out/principal
 paletas: ; python3 tools/paleta_check.py gfx2/palette.h
 comprueba: paletas
 
+# ---------------------------------------------------------------------
+# EL ESPECTRO, TEMA POR TEMA - 17/10/2026
+#
+# De un issue que pedia fondo claro para el espectro con los temas
+# claros. Compila el User/spectrum.c DE VERDAD -no la copia de vendor/-
+# porque lo que hay que medir es lo que pinta la radio, y renderiza la
+# escena entera para LEER LOS PIXELES: mirar los #define contestaria a
+# otra pregunta. Ver la cabecera de sim/espectro_tema.c.
+#
+# La mitad que mas importa no es que los diez nuevos se vean: es que los
+# ocho de antes sigan pintando el mismo fondo, bit a bit.
+out/espectrotema: sim/espectro_tema.c sim/lcd_sim.c vendor/gfx.c \
+                  $(FIRMWARE)/User/spectrum.c gfx2/gfx2.c gfx2/fonts_data.c \
+                  sim/temas_tabla.h
+	@mkdir -p out
+	$(CC) -O2 -Wall -I hostinc -I sim -I gfx2 -I $(FIRMWARE)/User -I vendor \
+	      -o $@ $(filter %.c,$^) $(LDLIBS)
+
+#
+# CUELGA DE copiaschk, Y HACE FALTA. gfx2/ y vendor/ tienen COPIAS de
+# palette.h y spectrum.h, y en la orden de arriba -I gfx2 va DELANTE de
+# -I $(FIRMWARE)/User: este banco compila contra la copia, no contra el
+# original.
+#
+# Se vio rompiendolo a proposito. Cuatro roturas seguidas en
+# User/palette.h -el acento de Lino casi igual al fondo, la rejilla negra,
+# la rejilla igual al fondo, la traza del color del fondo- y el banco
+# decia "TODO CORRECTO" a las cuatro, porque estaba midiendo la copia de
+# antes de editarlas.
+#
+# Reordenar los -I NO es el arreglo: se probo y revienta. gfx2/gfx2.c
+# necesita su propia gfx2.h, y mezclarla con la del firmware cambia el
+# tamaño de las estructuras - compila y luego peta por la pila.
+#
+# El arreglo es este: copiaschk compara copia por copia y para en seco si
+# alguna se ha quedado atras, asi que cuando este banco mide, la copia y
+# el original son el mismo fichero.
+.PHONY: espectrotema
+espectrotema: copiaschk out/espectrotema ; ./out/espectrotema
+
+# ---------------------------------------------------------------------
+# LA FUENTE DEL SPLASH, LEIDA DE BD.BIN - 17/10/2026.
+#
+# font_rain_16 eran 5.592 bytes de flash interna para una pantalla de tres
+# segundos y ahora vive en la zona alta, como una seccion mas de BD.BIN.
+# Eso quiere decir que el firmware construye TRES PUNTEROS con numeros que
+# vienen de un fichero que graba el usuario: si uno miente, lo siguiente
+# que hace gfx2_text_in() es leer fuera del buffer, y en una radio eso no
+# se ve como un BD.BIN malo sino como que no enciende.
+#
+# Por eso el banco no prueba que la buena cargue -esa es la mitad facil-
+# sino que las rotas NO: marca cambiada, version desconocida, tamaños que
+# mienten, un rango que apunta fuera de la tabla, la flash en blanco.
+#
+# El BD.BIN se fabrica aqui mismo con las dos herramientas de verdad, asi
+# que si cambia el formato de una de las dos, esto se entera.
+out/SPLF.BIN: $(FIRMWARE)/User/fonts_data.c $(FIRMWARE)/tools/fuente_pack.py
+	@mkdir -p out
+	@cd $(FIRMWARE) && python3 tools/fuente_pack.py font_rain_16 \
+	        deepsdr-ui/out/SPLF.BIN >/dev/null
+
+out/BD_fuente.bin: out/SPLF.BIN $(FIRMWARE)/tools/datos_pack.py
+	@cd $(FIRMWARE) && python3 tools/datos_pack.py \
+	        deepsdr-ui/out/BD_fuente.bin deepsdr-ui/out/SPLF.BIN >/dev/null
+
+out/splashfuente: sim/splash_fuente_test.c $(FIRMWARE)/User/splash_fuente.c \
+                  $(FIRMWARE)/User/zona_alta.c $(FIRMWARE)/User/splash_fuente.h
+	@mkdir -p out
+	$(CC) -O2 -Wall -I hostinc -I sim -I gfx2 -I $(FIRMWARE)/User -I vendor \
+	      -o $@ $(filter %.c,$^) $(LDLIBS)
+
+.PHONY: splashfuente
+splashfuente: out/splashfuente out/BD_fuente.bin
+	./out/splashfuente out/BD_fuente.bin
+comprueba: splashfuente
+comprueba: espectrotema
+
 # Que el update4.bin que se entrega sea el firmware que hay compilado, byte
 # a byte. Ver la cabecera del script: se entrego uno viejo que tenia el
 # tamano, la firma y el puntero de pila correctos. Comprobar la fecha no
@@ -1193,10 +1270,20 @@ out/fat12_pc.img:
 
 # Y EL QUE MOTIVO TODO ESTO (02/10/2026): los 7 MB de un W25Q64 formateados
 # con lo que Windows propone por su cuenta. Los numeros no son inventados,
-# son los de la foto del cuadro de dialogo que mando el usuario: clusters de
+# son los del cuadro de dialogo que se vio en pantalla: clusters de
 # 2048, FAT de 6144 bytes (la de antes solo cabia hasta 4096) y area de
 # datos en el byte 30.720, que es frontera de 2 kB pero NO de los 4 kB del
 # bloque de borrado. Los dos motivos por los que la radio decia que no.
+# Y UN VOLUMEN FORMATEADO MAS GRANDE QUE EL DISCO (18/10/2026). Se formatea
+# a 1,25 MB y se corta a 1 MB: el BPB declara 2.560 sectores y el disco tiene
+# 2.048. Es lo que queda de un formateo hecho cuando la capacidad se media
+# mal, y el driver tiene que dejarlo LEER y no ESCRIBIR. Ver sim/chip_chico.c.
+out/fat12_inflado.img:
+	@mkdir -p out
+	dd if=/dev/zero of=$@ bs=512 count=2560 status=none
+	mkfs.fat -F 12 -R 4 -f 2 -r 512 -s 1 -S 512 -n INFLADO $@ >/dev/null
+	truncate -s 1048576 $@
+
 out/fat12_2k.img:
 	@mkdir -p out
 	dd if=/dev/zero of=$@ bs=512 count=14336 status=none
@@ -1270,6 +1357,99 @@ fattroceado: out/fat12_vacio.img
 comprueba: fattroceado
 
 # ---------------------------------------------------------------------
+# BORRAR BD.BIN DEL DISCO SIN LLEVARSE EL DISCO (18/10/2026)
+#
+# De un issue con cuatro palabras: el mapa se graba bien, BD.BIN da un
+# error al grabarse y despues el disco queda corrupto. El ritual de los dos
+# es el mismo y solo UNO de sus pasos escribe en el volumen -el borrado-,
+# asi que ahi es donde se mira. Ver la cabecera de
+# sim/bd_borra.c: lo que distingue a BD.BIN del mapa son 920 eslabones de
+# cadena contra 16.
+#
+# Se corre sobre las TRES distribuciones que el driver admite, porque la
+# FAT cae en sitio distinto en cada una y cruza las fronteras de borrado
+# por otro sitio. Y a los volumenes que deja les pasa fsck.fat, que no
+# sabe nada de este proyecto - fue el quien encontro lo de las entradas de
+# nombre largo huerfanas.
+out/bdborra: sim/bd_borra.c sim/w25q_sim.c sim/gd32_pines.c \
+             $(FIRMWARE)/User/spi_flash.c $(FIRMWARE)/User/zona_alta.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -Ihostinc -Isim -o $@ \
+	      sim/bd_borra.c sim/w25q_sim.c sim/gd32_pines.c \
+	      $(FIRMWARE)/User/spi_flash.c $(FIRMWARE)/User/zona_alta.c $(LDLIBS)
+
+# El mismo cuidado que fatanade con el arbol: ver alli el porque.
+.PHONY: bdborra
+bdborra: out/fat12_vacio.img out/fat12_2k.img out/fat12_16m.img
+	@if [ "$$(cat out/bdborra.arbol 2>/dev/null)" != "$(FIRMWARE)" ]; then \
+	   rm -f out/bdborra; fi
+	@$(MAKE) --no-print-directory out/bdborra FIRMWARE=$(FIRMWARE)
+	@echo "$(FIRMWARE)" > out/bdborra.arbol
+	@for img in out/fat12_vacio.img out/fat12_2k.img out/fat12_16m.img; do \
+	   ./out/bdborra $$img out/bdborra_despues.img $(FIRMWARE)/BD.BIN || exit 1; \
+	   python3 tools/bdborra_check.py out/bdborra_antes.img \
+	           out/bdborra_despues.img || exit 1; \
+	 done
+
+comprueba: bdborra
+
+# ---------------------------------------------------------------------
+# LA ZONA ALTA NO PUEDE CAER DENTRO DEL DISCO (18/10/2026)
+#
+# Del mismo issue que bdborra, y es la causa de verdad: el suelo de 2 MB
+# de spi_flash_capacidad() subia una medida buena, asi que un chip de
+# 1 MB se anunciaba como de 2 y za_base() daba la vuelta hasta dentro del
+# volumen. Ver la cabecera de sim/chip_chico.c, que hace el ritual entero
+# y cuenta los bytes del disco que cambian: tienen que ser cero.
+out/chipchico: sim/chip_chico.c sim/w25q_sim.c sim/gd32_pines.c \
+               $(FIRMWARE)/User/spi_flash.c $(FIRMWARE)/User/disco.c \
+               $(FIRMWARE)/User/zona_alta.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -Ihostinc -Isim -o $@ \
+	      sim/chip_chico.c sim/w25q_sim.c sim/gd32_pines.c \
+	      $(FIRMWARE)/User/spi_flash.c $(FIRMWARE)/User/disco.c \
+	      $(FIRMWARE)/User/zona_alta.c $(LDLIBS)
+
+.PHONY: chipchico
+chipchico: out/fat12_vacio.img out/fat12_inflado.img
+	@if [ "$$(cat out/chipchico.arbol 2>/dev/null)" != "$(FIRMWARE)" ]; then \
+	   rm -f out/chipchico; fi
+	@$(MAKE) --no-print-directory out/chipchico FIRMWARE=$(FIRMWARE)
+	@echo "$(FIRMWARE)" > out/chipchico.arbol
+	./out/chipchico out/fat12_vacio.img out/fat12_inflado.img
+
+comprueba: chipchico
+
+# ---------------------------------------------------------------------
+# COPIAR UN FICHERO GRANDE DESDE WINDOWS (18/10/2026)
+#
+# La tercera pata del mismo issue. Con el borrado y el ritual de carga ya
+# medidos y limpios, lo que quedaba era el camino por el que el fichero
+# LLEGA al disco: disco_escribe_n(), la clase MSC del cargador. sim/disco.c
+# mira un bloque suelto y una tirada de ocho; esto replica la copia ENTERA
+# de un BD.BIN de verdad en tiradas de longitud y alineacion variables, y
+# exige que el megabyte quede IDENTICO a la referencia. Ver la cabecera de
+# sim/disco_fichero.c.
+out/discofichero: sim/disco_fichero.c sim/w25q_sim.c sim/gd32_pines.c \
+                  $(FIRMWARE)/User/spi_flash.c $(FIRMWARE)/User/disco.c \
+                  $(FIRMWARE)/User/zona_alta.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -Ihostinc -Isim -o $@ \
+	      sim/disco_fichero.c sim/w25q_sim.c sim/gd32_pines.c \
+	      $(FIRMWARE)/User/spi_flash.c $(FIRMWARE)/User/disco.c \
+	      $(FIRMWARE)/User/zona_alta.c $(LDLIBS)
+
+.PHONY: discofichero
+discofichero: out/fat12_vacio.img
+	@if [ "$$(cat out/discofichero.arbol 2>/dev/null)" != "$(FIRMWARE)" ]; then \
+	   rm -f out/discofichero; fi
+	@$(MAKE) --no-print-directory out/discofichero FIRMWARE=$(FIRMWARE)
+	@echo "$(FIRMWARE)" > out/discofichero.arbol
+	./out/discofichero out/fat12_vacio.img $(FIRMWARE)/BD.BIN out/discofichero.img
+
+comprueba: discofichero
+
+# ---------------------------------------------------------------------
 # LA PANTALLA DE ARRANQUE (28/09/2026)
 #
 # Pedido por el usuario.
@@ -1315,6 +1495,51 @@ sim/rotulos_tabla.h: $(FIRMWARE)/User/main.c tools/gen_rotulos.py
 	python3 tools/gen_rotulos.py $(FIRMWARE)/User/main.c $@
 
 out/digi: sim/rotulos_tabla.h
+
+# ---------------------------------------------------------------------
+# EL REPINTADO POR RENGLONES SUCIOS, PIXEL A PIXEL (19/10/2026)
+#
+# ui_digi_draw_cambios() solo repinta lo que ha cambiado, y eso abre la
+# puerta al fallo clasico de los repintados parciales: que lo que queda en
+# pantalla no sea lo que habria quedado repintando entero. No avisa: no
+# sale nada raro, sale lo de antes.
+#
+# Este banco pinta cada escena por los dos caminos y compara los dos
+# lienzos pixel a pixel. Ver la cabecera de sim/digi_sucios.c.
+out/digisucios: sim/digi_sucios.c sim/lcd_sim.c gfx2/gfx2.c gfx2/fonts_data.c \
+                $(FIRMWARE)/User/ui_digi.c gfx2/ui_digi.h
+	@mkdir -p out
+	$(CC) $(CFLAGS) $(GFX2) -I$(FIRMWARE)/User -o $@ $(filter %.c,$^) $(LDLIBS)
+
+.PHONY: digisucios
+digisucios: out/digisucios ; ./out/digisucios
+
+comprueba: digisucios
+
+# ---------------------------------------------------------------------
+# LA CHAPA DE LAS TRES CABECERAS DE IMAGEN (19/10/2026)
+#
+# WEFAX, SSTV y Feld-Hell arman su cabecera a mano, fuera de digi_sync(), y
+# la chapa recorta POR DELANTE lo que no le cabe. En esas tres lo de delante
+# es la palabra que dice en que fase va, asi que recortar la deja diciendo
+# otra cosa sin avisar: "Esperando el tono de arranque" se leia "ono de
+# arranque". Avisado por el usuario.
+#
+# Los estados no estan copiados en el banco: los saca gen_chapas.py de
+# main.c, igual que gen_rotulos.py con los rotulos del segundo boton y por
+# la misma razon. Ver la cabecera de sim/chapa_fax.c.
+sim/chapas_tabla.h: $(FIRMWARE)/User/main.c tools/gen_chapas.py
+	python3 tools/gen_chapas.py $(FIRMWARE)/User/main.c $@
+
+out/chapafax: sim/chapa_fax.c sim/lcd_sim.c gfx2/gfx2.c gfx2/fonts_data.c \
+              $(FIRMWARE)/User/ui_digi.c sim/chapas_tabla.h gfx2/ui_digi.h
+	@mkdir -p out
+	$(CC) $(CFLAGS) $(GFX2) -o $@ $(filter %.c,$^) $(LDLIBS)
+
+.PHONY: chapafax
+chapafax: out/chapafax ; ./out/chapafax
+
+comprueba: chapafax
 
 # ---------------------------------------------------------------------
 # Imagen patron del espectro (24/09/2026). Ver la cabecera de
@@ -2827,7 +3052,7 @@ identgrab: out/identgrab $(IDENT_GRAB_WAV) ; ./out/identgrab
 comprueba: identgrab
 
 # EL IDENT CON VARIAS SEÑALES A LA VEZ. Ver la cabecera de sim/ident_varias.c:
-# el usuario grabo tres RTTY de aficionado en 7 MHz durante un concurso y la
+# se grabaron tres RTTY de aficionado en 7 MHz durante un concurso y la
 # radio contesto "APRS 70%". La grabacion es suya y va en el repositorio
 # porque es el unico material que tenemos de ese caso.
 out/identvarias: sim/ident_varias.c $(FIRMWARE)/User/ident.c \
@@ -2873,7 +3098,7 @@ comprueba: identtest
 # recortaba en silencio y no habia nada que lo midiera.
 # ident.h va de prerequisito a proposito: lo que esta prueba mide es
 # IDENT_LARGO, que vive ahi. Sin esto, tocar el tope no rehace la prueba y
-# la prueba contesta por el binario viejo - que es justo lo que me paso al
+# la prueba contesta por el binario viejo - que es justo lo que ocurrio al
 # escribirla.
 out/identancho: sim/identancho.c $(FIRMWARE)/User/ident.h \
                 $(FIRMWARE)/User/ident.c \
@@ -3524,7 +3749,7 @@ comprueba: stanagfase
 # EL BURBUJEO DEL REDUCTOR DE RUIDO (07/10/2026, de un aviso recibido).
 # Ver la cabecera de sim/nr_burbujeo.c: NO
 # demuestra que el burbujeo exista -no se ha podido reproducir ni en el banco
-# ni en el video que mando el usuario, y alli esta escrito por que- pero deja
+# ni en el video de referencia, y alli esta escrito por que- pero deja
 # fijado lo que el reductor hace HOY, con tope, para que ningun cambio futuro
 # lo empeore sin que salte. Y ensena donde esta la ventana util del mando,
 # que es un 7 % de su recorrido y eso si es un defecto medido.
@@ -3704,7 +3929,7 @@ comprueba: anillo
 # ---------------------------------------------------------------------
 # LA MEMORIA PRESTADA DE HFDL CONTRA LOS OCHO GIROS - 10/10/2026.
 #
-# Nace del "X7" que el usuario vio en 13.312: siete rafagas de 66 que ni se
+# Nace del "X7" que salio en 13.312: siete rafagas de 66 que ni se
 # abren. Lo que pide cada giro estaba en un comentario a mano desde el
 # 28/09; esto lo mide llamando a begin_segment_ex() de verdad, con la
 # capacidad sacada de sizeof(ft8_shared_ram_t). Ver sim/hfdl_memoria.c.
@@ -4079,7 +4304,7 @@ comprueba: rotulos
 out/rotulos_elige: sim/rotulos_elige.c sim/lcd_sim.c gfx2/gfx2.c \
                    gfx2/fonts_data.c $(FIRMWARE)/User/spec_rotulos.c \
                    $(FIRMWARE)/User/emisoras.c $(FIRMWARE)/User/hora_comun.c \
-                   $(FIRMWARE)/User/spec_rotulos.h
+                   $(FIRMWARE)/User/spec_rotulos.h sim/temas_tabla.h
 	@mkdir -p out
 	$(CC) $(CFLAGS) $(GFX2) -I$(FIRMWARE)/User -o $@ $(filter %.c,$^) $(LDLIBS)
 

@@ -25,7 +25,7 @@
  * reparten por todo el circulo. La medida es el modulo de la media de
  * exp(2*pi*j*t*R), entre 0 y 1.
  *
- * Y no es un empate reñido. Sobre la grabacion de 3712 del usuario:
+ * Y no es un empate reñido. Sobre la grabacion de 3712:
  *
  *      45,45 Bd  ->  0,02
  *      50,00 Bd  ->  0,52     <- la buena

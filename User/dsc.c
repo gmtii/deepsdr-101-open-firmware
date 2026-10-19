@@ -572,6 +572,18 @@ void dsc_start(float fs_hz)
     if (fs_hz <= 0.0f) { return; }
     s_fs = fs_hz;
 
+    /*
+     * DUENO DEL PRESTAMO, no prestatario: aqui no se pregunta
+     * waterfall_prestada() y es a proposito. Ver tools/prestamo_check.py.
+     *
+     * Esto se llama SOLO desde el cambio de modo (main.c, la tabla
+     * k_demod_modes), y ahi el modo anterior ya ha pasado por su stop(),
+     * que es quien suelta. Los modos que se reparten esta memoria son
+     * excluyentes entre si: no hay dos vivos a la vez. Quien SI tiene que
+     * preguntar es el que la coge en un poll -stanag, ident, ale, jtty,
+     * ais, wspr, hfdl-, porque esos corren en todas las vueltas pase lo
+     * que pase, tambien mientras este modo la tiene cogida.
+     */
     hfdl_ram_coge();
     b = hfdl_ram_todo(&cap);
     if (b == 0 || cap < (uint32_t)sizeof(dsc_st_t)) {
@@ -613,7 +625,7 @@ void dsc_stop(void)
  * ==========================================================================
  *
  * El DSC no vive en un sitio fijo del audio: depende de donde tenga el dial
- * quien escucha. En las cuatro grabaciones del usuario los centros salieron en
+ * quien escucha. En las cuatro grabaciones de referencia los centros salieron en
  * 995, 1700 y 2214 Hz.
  *
  * La busqueda por cruces por cero que usa el NAVTEX NO VALE AQUI, y esta

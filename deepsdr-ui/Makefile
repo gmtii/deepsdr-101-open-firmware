@@ -182,9 +182,9 @@ clean:
 
 # Comprobaciones y reglas extra, en un fichero aparte (23/09/2026). El "-"
 # de "-include" significa "si no esta, no pasa nada". Esta separado porque
-# el puente con el que Claude escribe en este ordenador no puede escribir
-# ficheros llamados Makefile -son codigo que se ejecuta- pero si un .mk:
-# asi anadir un banco nuevo no obliga a renombrar nada a mano cada vez.
+# el puente con el que se escriben los ficheros de este proyecto no puede
+# escribir ficheros llamados Makefile -son codigo que se ejecuta- pero si un
+# .mk: asi anadir un banco nuevo no obliga a renombrar nada a mano cada vez.
 #
 # Un objetivo puede tener varias reglas mientras solo UNA lleve receta, asi
 # que local.mk puede colgarle requisitos nuevos a "comprueba" sin tener que

@@ -126,6 +126,10 @@ static uint32_t le32(const uint8_t *p)
  * no sujeta nada, un banco si.
  */
 static const uint32_t k_sectores[] = {
+    /* 17/10/2026: entra el S2. Al bajar el cargador a 32 kB la aplicacion
+     * empieza un sector antes, asi que la tabla tambien. Lo caza el
+     * _Static_assert de mas abajo, que es lo que paso al mover la base. */
+    0x08008000UL,   /* S2,  16 kB */
     0x0800C000UL,   /* S3,  16 kB */
     0x08010000UL,   /* S4,  64 kB */
     0x08020000UL,   /* S5, 128 kB */
@@ -146,7 +150,7 @@ static const uint32_t k_sectores[] = {
  * La ultima entrada de la tabla abre el ultimo sector; el tope es donde
  * acaba. Si alguien mueve uno de los dos y no el otro, esto no compila.
  */
-_Static_assert(0x0800C000UL == CARGA_APP_BASE,
+_Static_assert(0x08008000UL == CARGA_APP_BASE,
                "la tabla de sectores no empieza donde empieza la aplicacion");
 
 /*

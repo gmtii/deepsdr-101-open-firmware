@@ -793,6 +793,68 @@ int main(void)
             exige(km > 1900L && km < 2500L,
                   "y la distancia sale de la esfera, no del localizador");
         }
+
+        /*
+         * ==============================================================
+         * LA OACI Y EL MODELO EN LA FICHA - 19/10/2026
+         * ==============================================================
+         *
+         * Avisado por el usuario: en la vista de mapa, la ficha decia
+         * "CCA845 - 864 km - AZ 58" y nada del avion, mientras que la
+         * LISTA del mismo modo enseña la OACI y el modelo en sus dos
+         * primeras columnas. Los dos datos estaban guardados; lo que no
+         * habia era por donde pasarlos a la ficha.
+         *
+         * Se mide aqui el PEOR caso que puede llegar: el nombre de modelo
+         * mas largo que genera tools/icao24.py (23 caracteres) detras de
+         * una OACI de seis, con cinco cifras de kilometros y tres de
+         * rumbo. Si eso no cabe en el hueco de la ficha, se recorta por
+         * la cola y el modelo desaparece a medias.
+         */
+        {
+            mapa_eti_dx_t a2;
+            int16_t qx, qy;
+
+            mapa_eti_empieza(&g_caja, "IN80");
+            memset(&a2, 0, sizeof a2);
+            a2.call[0] = 'C'; a2.call[1] = 'C'; a2.call[2] = 'A';
+            a2.call[3] = '8'; a2.call[4] = '4'; a2.call[5] = '5';
+            a2.call[6] = '\0';
+            a2.hay_pos = 1U; a2.avion = 1U;
+            a2.lat_c = 4440L; a2.lon_c = 560L;
+            a2.extra = "781F2E A359 Airbus A350-941";
+            exige(mapa_eti_pon(&a2) == 1U, "entra un avion con modelo");
+            mapa_eti_cierra();
+
+            (void)mapa_e4_a_px(&g_caja, 560L * 100L, 4440L * 100L, &qx, &qy);
+            exige(mapa_eti_toca(qx, qy) == 1U, "se toca");
+            (void)mapa_eti_texto(buf, (uint8_t)sizeof buf, 700U);
+            printf("     %s\n", buf);
+            exige(strstr(buf, "CCA845") != 0, "la ficha sigue diciendo el vuelo");
+            exige(strstr(buf, "781F2E") != 0, "y ahora tambien la OACI");
+            exige(strstr(buf, "Airbus A350-941") != 0, "y el modelo entero");
+            exige(strstr(buf, " km") != 0, "sin perder los kilometros");
+            exige(strstr(buf, "AZ ") != 0, "ni el rumbo");
+
+            /* Y que el peor caso quepa de ancho. El hueco se mide igual
+             * que en el apartado de los indicativos, mas abajo. */
+            {
+                char peor[96];
+                int16_t w;
+                int16_t hueco_av = mapa_eti_ficha_hueco_dbg();
+
+                snprintf(peor, sizeof peor,
+                         "%s - %s - %u km - AZ %u",
+                         "CCA845", "781F2E ABCD Aerospatiale/BAC Concorde",
+                         19904U, 359U);
+                w = gfx2_text_w(peor, &font_ui_14);
+                printf("     el peor de un avion: %s\n", peor);
+                printf("     mide %d px de los %d que hay\n",
+                       (int)w, (int)hueco_av);
+                exige(w <= hueco_av,
+                      "el peor modelo cabe en la ficha de un avion");
+            }
+        }
     }
 
     /* ---------------------------------------------------------------- */

@@ -462,7 +462,7 @@ void iqbal_ab_lanza(void)
      * de una prueba que ya no existe. Resultado: EL CORRECTOR DE ESPEJO
      * APAGADO PARA SIEMPRE, sin nadie que lo vuelva a encender y sin que
      * la pantalla diga nada, porque iqbal_ab_corriendo() contesta que no
-     * hay prueba. Lo que el usuario vio como un rechazo que desaparecia
+     * hay prueba. Lo que se veia como un rechazo que desaparecia
      * era esto.
      *
      * Poniendo el estado al final, la interrupcion no puede ver la prueba

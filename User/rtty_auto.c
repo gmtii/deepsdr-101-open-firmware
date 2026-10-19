@@ -283,7 +283,7 @@ void rtty_auto_puntos(uint16_t out[4])
  * LOS DOS TONOS, ELEGIDOS POR PAREJAS Y NO DE UNO EN UNO - 06/10/2026.
  *
  * La primera version cogia el pico mas alto y luego el segundo mas alto
- * que estuviera lo bastante lejos. Sobre la grabacion del usuario eligio
+ * que estuviera lo bastante lejos. Sobre la grabacion de referencia eligio
  * 1378 y 780 Hz, y el de 780 NO ES UNA SEÑAL: la grabacion esta hecha con
  * el movil delante del altavoz, y 1374 - 927 = 447... no, 839. El altavoz
  * y el microfono distorsionan y sacan la DIFERENCIA de los dos tonos, 839

@@ -181,8 +181,9 @@ static uint8_t pon_ms(char *b, uint8_t i, uint16_t decenas_us)
  *   peor grande Y poll grande   -> se lo come un decodificador
  *   peor grande y poll pequeño  -> es el dibujo o el tactil, no el decodificador
  */
-uint16_t ui_bucle_peor_us(void);
-uint16_t ui_polls_peor_us(void);
+uint32_t ui_bucle_peor_us(void);
+uint32_t ui_polls_peor_us(void);
+uint32_t ui_dibujo_peor_us(void);
 
 static void linea_nueva(const char *que, uint16_t periodo, uint8_t cal)
 {
@@ -851,7 +852,9 @@ static const char *linea_bucle(void)
     i = pon_u(b, i, (uint32_t)(ui_bucle_peor_us() / 1000U));
     i = pon(b, i, tr(" ms la vuelta\t", " ms the loop\t"));
     i = pon_u(b, i, (uint32_t)(ui_polls_peor_us() / 1000U));
-    i = pon(b, i, tr(" ms los poll", " ms the polls"));
+    i = pon(b, i, tr(" ms poll, ", " ms polls, "));
+    i = pon_u(b, i, (uint32_t)(ui_dibujo_peor_us() / 1000U));
+    i = pon(b, i, tr(" dibujo", " drawing"));
     b[i] = '\0';
     return b;
 }

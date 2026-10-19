@@ -197,7 +197,7 @@ int main(void)
      * manda un transmisor de verdad (sim/hfdl_extremo.c si lo monta).
      *
      * Y no es que me convenga creerlo: en aire real las ráfagas seguidas
-     * salen seguidas -en la grabacion del usuario, t=130,1 y t=132,5 las
+     * salen seguidas -en la grabacion de referencia, t=130,1 y t=132,5 las
      * dos buenas, y t=163,1 / 165,6 / 170,5 tres seguidas-, asi que la
      * alternancia es de este banco y no de la radio.
      *

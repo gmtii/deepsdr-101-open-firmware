@@ -18,9 +18,346 @@ ordered by date, does not spare the detail, and is not published.
 
 ---
 
-## V5.04 · 2026-10-16
+## V5.08 · 2026-10-19
 
 ### Qué cambia
+
+- **El atenuador de entrada sube a la barra de arriba.** La chapa que ponía
+  **NR** ahora pone **ATT**, con su valor al lado y en color: `ATT OFF`,
+  `ATT -06`, `ATT -12`. Las tres de tres caracteres y la chapa con ancho
+  reservado, así que al cambiar de estado no se mueve nada de sitio. Se toca y va pasando por los tres, igual que la
+  casilla de Ajustes → Radio, con el silencio de transición y el reajuste
+  del borrador de ruido incluidos. El reductor de ruido sigue donde
+  siempre: la casilla **Ruido** de la barra de abajo y su ajuste.
+- **La sobrecarga avisa en la pastilla del mando.** Antes tapaba la lectura
+  del S-metro entera, así que para enterarte de que la entrada se satura
+  perdías justo el dato que estabas mirando. Ahora se pone roja la pastilla
+  del centro de la franja —la que suele poner «Sintonía»— con la palabra
+  entera. Mientras dura, no dice qué mueve el mando; en cuanto el control
+  automático de radiofrecuencia se recupera, vuelve sola.
+- **Fuera el cartel «AGC activo».** Ocupaba el sitio del dBm cuando el
+  número no vale, y como el AGC está puesto casi siempre, el cartel estaba
+  casi siempre: un aviso permanente deja de leerse. Ahora el hueco se queda
+  vacío, que ya dice lo mismo, y la chapa **AGC** de la derecha sigue
+  diciendo cuál tienes puesto.
+- **La barra del S-metro suelta cuarenta píxeles** y la lectura y la pastilla
+  se corren a la izquierda, que es lo que hace sitio para el valor del
+  atenuador sin que ninguna chapa se caiga ni el nombre del ajuste
+  enganchado se recorte más que antes: «Sintonía 1 kHz» sigue saliendo
+  entero, igual que en la V5.06.
+
+### What's new
+
+- **The input attenuator moves up to the top strip.** The chip that read
+  **NR** now reads **ATT**, with its value beside it and in colour:
+  `ATT OFF`, `ATT -06`, `ATT -12`. All three are three characters wide and
+  the chip reserves a fixed width, so nothing shifts when the state changes. Tapping it steps through the three, exactly
+  like the Settings → Radio cell, transition mute and noise-blanker reset
+  included. Noise reduction stays where it was: the **Noise** button on the
+  bottom bar and its own setting.
+- **Overload now warns on the knob pill.** It used to cover the whole S-meter
+  reading, so finding out the input is clipping cost you the very number you
+  were looking at. Now the pill in the middle of the strip — the one that
+  usually reads "Tuning" — turns red with the whole word on it. While it
+  lasts it does not say what the knob does; as soon as the RF AGC recovers,
+  it comes back by itself.
+- **The "AGC active" label is gone.** It sat where the dBm goes when the
+  number means nothing, and since the AGC is on almost always, so was the
+  label: a permanent warning stops being read. The slot is now simply empty,
+  which says the same thing, and the **AGC** chip on the right still says
+  which profile is set.
+- **The S-meter bar gives up forty pixels** and the reading and the pill
+  shift left, which is what makes room for the attenuator's value without
+  dropping a chip or truncating the attached setting's name any more than
+  before: «Tuning 1 kHz» still shows in full, just as in V5.06.
+
+---
+
+## V5.06 · 2026-10-19
+
+### Qué cambia
+
+- **En PKT300 el espectro se quedaba sin moverse.** En los modos digitales el
+  espectro de radiofrecuencia deja su sitio al osciloscopio de sintonía, que
+  es lo que enseña dónde caen los dos tonos. Pero a ese osciloscopio hay que
+  darle audio, y la lista de quién se lo da estaba escrita a mano y no
+  nombraba a PKT300: se quedaba sin una sola muestra, no llegaba a pintar
+  nunca, y en pantalla quedaba congelado lo último que hubiera dibujado el
+  espectro. El decodificador funcionaba perfectamente. Es el mismo fallo que
+  el del APRS de hace unos días, una rama más allá: aquél era el camino de
+  FM y éste el de banda lateral.
+- **Y las dos rayas de PKT300 estaban donde no hay nada.** El osciloscopio
+  pintaba siempre los tonos del APRS -1.200 y 2.200 Hz-, que en paquete de
+  onda corta son 1.600 y 1.800. Ahora los da el propio decodificador, así
+  que son los mismos con los que está afinado.
+- **En WEFAX el estado salía recortado:** «Esperando el tono de arranque» se
+  leía «ono de arranque». La chapa de estado guardaba sitio para un botón
+  que en esa cabecera no existe, y lo que no cabía lo quitaba por delante,
+  que es justo donde está la palabra que dice en qué fase va. Afecta igual a
+  SSTV y a Feld-Hell.
+- **Y esa misma cabecera podía salir con un botón de otro modo.** WEFAX,
+  SSTV y Feld-Hell se arman la cabecera ellos, y los campos que no tocan se
+  quedaban con lo que había dejado el modo anterior: viniendo de FT8 o de
+  JTTY aparecía el botón «Mapa» y la chapa se encogía a su ancho reservado.
+- **En STANAG e IDENT la radio se comía toques.** No era el táctil: era cada
+  cuánto se miraba. Y el problema no estaba en la vuelta del bucle sino
+  **dentro del repintado**: un panel digital son 253.940 accesos al bus de la
+  pantalla, y mientras duran, el táctil no existía. Ahora se mira **cada 8 ms
+  pase lo que pase**, desde dentro del propio dibujo —entre banda y banda, y
+  justo mientras el DMA empuja píxeles y la CPU no tiene nada que hacer—.
+  Medido con el código de verdad: antes se perdían 15 de cada 20 toques
+  cortos; ahora salen todos, hasta los de 40 ms.
+- **Y la firmeza del táctil era un tiempo disfrazado de cuenta de lecturas.**
+  Lo que separa un toque de un roce siempre fue que el dedo DURE; lo que
+  había escrito era un número de lecturas que daba ese tiempo al ritmo al que
+  corría el bucle. Por eso la radio se volvía sorda cuando el bucle se
+  alargaba. Ahora son 20 ms de dedo puesto por confirmación, y mirar más
+  deprisa o más despacio ya no cambia lo sensible que es.
+- **El identificador cuesta la mitad: 2,1 veces más rápido**, con los nueve
+  aciertos de referencia idénticos. Y de paso se quitó un sesgo que tenía la
+  medida de velocidad hacia los símbolos cortos.
+- **Las dos transformadas —la del identificador y la del espectro— calculan
+  el giro una vez por columna** en vez de una por mariposa: cinco veces y
+  media menos. Mismo resultado bit a bit.
+- **2.268 bytes de RAM** recuperados del guardado de imágenes.
+- **El panel de los modos digitales sólo repinta lo que ha cambiado.** Antes
+  repintaba los 800×317 enteros siempre —253.940 accesos al bus de la
+  pantalla, varias veces por segundo—, incluidos 125 px de fondo vacío debajo
+  del último renglón. Ahora: un renglón que cambia cuesta el **6 %**, la chapa
+  el **5 %**, un botón pulsado el **1 %**, y si no cambia nada no se toca el
+  bus ni una vez. Comprobado píxel a píxel contra el repintado entero.
+- **En el mapa, la ficha de un avión ya dice su modelo y su OACI.** Antes
+  ponía sólo el vuelo —«CCA845 · 828 km · AZ 56»— mientras que la lista del
+  mismo modo sí enseñaba las dos cosas. Ahora: «CCA845 · 781F2E A359 Airbus
+  A350-941 · 828 km · AZ 56».
+- **Y al dejar de repintar de más salieron dos cosas que eso tapaba:** en
+  STANAG e IDENT, cerrar un menú encima del panel no lo repintaba (la lista
+  que lo decide no nombraba esos dos modos), y el cartel de la captura de
+  pantalla tampoco se borraba del panel al quitarse.
+
+### What's new
+
+- **In PKT300 the spectrum stopped moving.** In digital modes the RF spectrum
+  gives up its place to the tuning scope, which is what shows where the two
+  tones land. That scope has to be fed audio, and the list of who feeds it was
+  written by hand and did not name PKT300: it never received a single sample,
+  never painted, and the screen kept whatever the spectrum had last drawn. The
+  decoder was working perfectly. Same bug as the APRS one a few days ago, one
+  branch further along: that was the FM path, this is the sideband one.
+- **And PKT300's two tone markers pointed at nothing.** The scope always drew
+  the APRS tones -1200 and 2200 Hz- which in HF packet are 1600 and 1800. The
+  decoder now supplies them, so they are the ones it is actually tuned to.
+- **In WEFAX the state was being clipped:** "Waiting for the start tone" read
+  as "start tone". The status chip was reserving room for a button that
+  header does not have, and it drops what does not fit from the FRONT, which
+  is exactly where the word naming the phase lives. Same for SSTV and
+  Feld-Hell.
+- **And that header could show a button belonging to another mode.** WEFAX,
+  SSTV and Feld-Hell build their own header, and the fields they do not touch
+  kept whatever the previous mode left: coming from FT8 or JTTY the "Map"
+  button appeared and the chip shrank to its reserved width.
+- **In STANAG and IDENT the radio dropped taps.** Not the touch panel: how
+  often it was sampled. And the problem was not the loop but **inside the
+  repaint**: one digital panel is 253,940 display-bus writes, and while those
+  run the touch did not exist. It is now sampled **every 8 ms no matter
+  what**, from inside the drawing itself — between bands, and right while DMA
+  is pushing pixels and the CPU has nothing to do. Measured against the real
+  code: 15 in 20 quick taps used to be lost; now every tap lands, down to
+  40 ms.
+- **And touch firmness was a time disguised as a count of readings.** What
+  tells a tap from a brush has always been that the finger LASTS; what was
+  written was a number of readings that happened to equal that time at the
+  rate the loop ran. That is why the radio went deaf when the loop got
+  longer. It is now 20 ms of contact per confirmation, and sampling faster or
+  slower no longer changes how sensitive it is.
+- **The identifier costs half as much: 2.1x faster**, with the nine reference
+  scores identical. It also removed a bias the symbol-rate measurement had
+  toward short symbols.
+- **Both FFTs — the identifier's and the spectrum's — compute the twiddle
+  once per column** instead of once per butterfly: five and a half times
+  fewer. Bit-identical results.
+- **2,268 bytes of RAM** recovered from the image-saving path.
+- **The digital-mode panel now repaints only what changed.** It used to
+  repaint the whole 800×317 every time — 253,940 display-bus writes, several
+  times a second — including 125 px of empty background below the last row.
+  Now: one changed row costs **6 %**, the status chip **5 %**, a pressed
+  button **1 %**, and when nothing changes the bus is not touched at all.
+  Verified pixel for pixel against the full repaint.
+- **On the map, an aircraft's label now shows its model and ICAO address.**
+  It used to show only the flight — "CCA845 · 828 km · AZ 56" — while the list
+  in the same mode showed both. Now: "CCA845 · 781F2E A359 Airbus A350-941 ·
+  828 km · AZ 56".
+- **And dropping the waste exposed two things it had been hiding:** in STANAG
+  and IDENT, closing a menu over the panel did not repaint it (the list that
+  decides did not name those two modes), and the screenshot notice was not
+  cleared from the panel either.
+
+---
+
+## V5.05 · 2026-10-18
+
+### Qué cambia
+
+- **Con un chip de flash mas pequeño que 2 MB, cargar BD.BIN se llevaba el
+  disco por delante.** `spi_flash_capacidad()` cruza dos fuentes y se queda
+  con la pequeña, que es lo correcto; pero detras tenia un suelo de 2 MB que
+  se aplicaba a TODA respuesta, no solo a la que no habia podido medirse. Un
+  chip de 1 MB -uno mas pequeño soldado, o un clon que dice la verdad sobre
+  un tamaño menor- se anunciaba como de 2, y entonces `za_base()` cae en
+  `0x101000`, que en ese chip da la vuelta y aterriza en `0x001000`: encima
+  de la primera copia de la FAT. Las dos guardias de `datos_arranca()`
+  comparan contra ese mismo numero inflado, asi que las dos pasaban, y la
+  copia escribia 204.076 bytes sobre la FAT, el directorio raiz y los datos.
+  El sector de arranque sobrevive, asi que Windows sigue montando el volumen
+  y lo ve destrozado; y como el fichero que se esta leyendo se machaca a si
+  mismo por el camino, lo copiado no cuadra y la pantalla da el error
+  DESPUES de haber roto el disco. El mapa, mientras tanto, parecia ir
+  perfecto: son 8 kB que dan la vuelta a la zona de datos y se verifican
+  leyendo de esa misma direccion. Ahora el suelo solo se aplica cuando
+  ninguna fuente ha dicho nada, y un chip asi se anuncia como lo que es: el
+  disco sale de cero bloques y la zona alta se niega. Medido en
+  `sim/chip_chico.c`, que hace el ritual entero y cuenta los bytes del disco
+  que cambian.
+
+- **Y el cartel de BD.BIN decia la averia equivocada.** Cuando la carga se
+  niega porque la zona alta no cabe hay DOS motivos que no se parecen en
+  nada: que el chip sea mas pequeño de lo que hace falta -problema del
+  equipo- o que el VOLUMEN diga medir mas que el disco, que es un formateo
+  viejo y se arregla desde la propia radio en Informacion -> Formatear
+  disco. El cartel culpaba al chip en los dos casos. Y el segundo se ve
+  justo asi: el mapa se graba perfecto -grabarlo solo LEE el disco, y leer
+  sigue permitido-, BD.BIN da un error, y el disco esta roto para Windows.
+  Ahora el mensaje dice cual de las dos es.
+
+- **STANAG e Ident juntos dejaban la radio congelada.** Los dos salen de la
+  misma memoria prestada -los 60.304 bytes de la cascada- y el cerrojo que la
+  reparte es un bit sin anidamiento: el que suelta, suelta para todos, y
+  ademas borra los 60 kB. Seis de los siete que la cogen en cada vuelta
+  preguntaban antes; el identificador no, y es justo el que el bucle llama
+  pegado a STANAG. Con los dos andando se pisaban la memoria y el memset por
+  vuelta arrastraba el bucle hasta que la radio dejaba de coger las
+  pulsaciones. Dos lineas en `User/ident.c`, y `tools/prestamo_check.py` para
+  que el octavo que llegue no se olvide.
+
+- **Borrar un fichero del disco dejaba sucio el volumen.** Cuando Windows
+  copia un fichero con nombre largo -o con mayusculas y minusculas
+  mezcladas- pone delante de la entrada 8.3 una o varias entradas de nombre
+  largo. El borrado marcaba la de 8.3 y dejaba aquellas colgando sin dueno,
+  que es lo que `chkdsk` enseña como que el disco tiene errores. Ahora se
+  lleva su grupo entero, comprobando la suma que las liga al nombre 8.3 para
+  no tocar las de otro. Lo encontro `fsck.fat` juzgando el volumen que deja
+  el banco nuevo `sim/bd_borra.c`.
+
+- **El eje de nivel del espectro no era lo que decia su comentario.** Ni son
+  dBFS ni son negativos: lo que se pinta es 10·log10 de la potencia de la FFT
+  en cuentas al cuadrado, sin referencia. El rotulo ya estaba quitado; ahora
+  el comentario dice lo que la radio hace. El S-metro si es dBFS y si da dBm,
+  con su offset medido contra generador. Nada cambia en pantalla.
+
+### What's new
+
+- **With a flash chip smaller than 2 MB, loading BD.BIN destroyed the disk.**
+  `spi_flash_capacidad()` crosses two sources and keeps the smaller one,
+  which is right; but behind that sat a 2 MB floor applied to *every* answer,
+  not only to the one that could not be measured. A 1 MB chip was announced
+  as 2 MB, so `za_base()` landed at `0x101000`, which on that chip wraps
+  around to `0x001000` — on top of the first copy of the FAT. Both guards in
+  `datos_arranca()` compare against that same inflated number, so both
+  passed, and the copy wrote 204,076 bytes over the FAT, the root directory
+  and the data. The boot sector survives, so Windows still mounts the volume
+  and sees it wrecked; and since the file being read overwrites itself along
+  the way, the copy fails its checksum and the screen reports an error
+  *after* the disk is already broken. The map looked perfect meanwhile: 8 KB
+  that wrap into the data area and get verified by reading back that same
+  address. The floor now applies only when no source said anything. Measured
+  in `sim/chip_chico.c`.
+
+- **And BD.BIN's message named the wrong fault.** When the load is refused
+  because the upper area does not fit there are two very different reasons:
+  the chip is smaller than needed —a hardware problem— or the *volume*
+  claims to be larger than the disk, which is an old format and is fixed
+  from the radio itself under Information -> Format disk. The message blamed
+  the chip in both cases. The second one looks exactly like this from
+  outside: the map flashes perfectly (flashing it only *reads* the disk, and
+  reading is still allowed), BD.BIN errors out, and the disk is broken as
+  far as Windows is concerned. The message now says which of the two it is.
+
+- **STANAG and Ident together froze the radio.** Both borrow the same
+  60,304-byte waterfall buffer, and the lock that hands it out is a single
+  bit with no nesting: whoever releases it releases it for everyone, and
+  releasing also wipes those 60 KB. Six of the seven pollers asked first; the
+  identifier did not, and it is the one the main loop calls right next to
+  STANAG. Two lines in `User/ident.c`, plus `tools/prestamo_check.py` so the
+  next one cannot forget.
+
+- **Deleting a file from the disk left the volume dirty.** Windows puts long
+  file name entries in front of the 8.3 entry; only the 8.3 one was being
+  marked, so the rest were left orphaned - which is what `chkdsk` reports as
+  a damaged disk. The whole group is removed now, checked against the 8.3
+  checksum so another file's entries are never touched. Found by `fsck.fat`
+  judging the volume left by the new `sim/bd_borra.c` bench.
+
+- **The spectrum level axis was not what its comment claimed.** It is neither
+  dBFS nor negative: what is drawn is 10·log10 of FFT power in raw counts
+  squared, with no reference. Comment fixed; nothing changes on screen.
+
+---
+
+## V5.04 · 2026-10-17
+
+### Qué cambia
+
+- **La aplicacion gana 22.036 bytes, y el cargador pasa a dos sectores.**
+  A la aplicacion le quedaban 2.720 libres de 475.136. El cargador medía
+  41.212 y 11.462 de esos eran UNA fuente: `font_ui_18b` entera, 117 glifos,
+  de los que pinta 68. Recortada a los que usa y bajada a 11 px, el cargador
+  cabe en dos sectores de flash en vez de tres, y el tercero -16.384 bytes-
+  pasa a la aplicacion, que ahora empieza en `0x08008000`. La frontera vive
+  en ocho sitios que no se pueden incluir entre ellos y los vigila
+  `tools/mapa.py`; dos de los ocho los cazaron un `_Static_assert` y la
+  tabla de sectores del cargador, no una revision.
+
+  **El cargador y el `update.bin` se graban JUNTOS.** Un cargador v2.17 salta
+  a `0x08008000` y una aplicacion anterior esta en `0x0800C000`: ninguna de
+  las dos combinaciones cruzadas arranca.
+
+- **La fuente de la lluvia del arranque se va a BD.BIN.** `font_rain_16` eran
+  5.592 bytes de flash interna -45 katakana- para una pantalla que dura tres
+  segundos. Ahora es una seccion mas de la zona alta y se carga al arrancar,
+  en la misma memoria prestada que usan las columnas de la lluvia. Si el
+  BD.BIN no la trae, la radio arranca igual con la pantalla fija, que es lo
+  que ya hacia cuando no habia memoria que prestar. Se genera con
+  `tools/fuente_pack.py` y la lee `User/splash_fuente.c`, que comprueba todo
+  lo que va a usar como indice: `sim/splash_fuente_test.c` le mete dieciseis
+  ficheros rotos distintos y los dieciseis se rechazan.
+
+- **Dos diagnosticos de prueba que llevaban meses encendidos.**
+  `TOUCH_EDGE_DEBUG` desde el 18/08 y `SPI_FLASH_PROBE_TEST` desde la puesta
+  en marcha, los dos con un comentario encima que decia que habia que
+  apagarlos. Escribian por un puerto serie que se compila apagado, asi que
+  no se veian: el primero hacia dos lecturas del tactil cada 150 ms mientras
+  hubiera un dedo en la pantalla, y el segundo volcaba el chip de flash y
+  escaneaba la FAT en cada encendido. 364 bytes de flash, y trabajo en cada
+  arranque y en cada toque. Lo vigila ahora `tools/interruptores_check.py`,
+  que busca un `#define ... 1` cuyo propio comentario prometa apagarlo.
+
+- **Diez temas claros nuevos, y el espectro que los acompaña.** De una
+  petición: con un tema claro, el panel del espectro seguía siendo negro. Los
+  diez nuevos —Lino, Marfil, Arena, Pergamino, Niebla, Almendra, Menta, Cielo,
+  Trigo y Porcelana— pintan el espectro con los colores de su propio tema,
+  llevan el mapa detrás y usan la cascada Humo, que es la única escala clara
+  de las dieciséis. Los ocho de antes no se mueven: su espectro sigue siendo
+  negro bit a bit, Oliva, Naranja y Chemistry incluidos, que son claros de
+  interfaz pero se diseñaron con el espectro oscuro. Los diez van al final de
+  la lista porque el tema se guarda por su posición: meter uno en medio le
+  cambiaría el tema a quien ya tenga uno puesto.
+
+- **Un banco que pinta los temas y mide los píxeles.** `sim/espectro_tema.c`
+  renderiza el espectro con cada uno de los dieciocho temas y lee el marco:
+  fondo, señal, trazo, rejilla y raya de la demodulación, cada uno contra el
+  fondo que de verdad le sale. Comprueba las dos mitades: que los diez nuevos
+  se vean y que los ocho de antes sigan pintando el mismo fondo. Mide píxeles
+  y no constantes porque leer los `#define` contesta a otra pregunta.
 
 - **El mapa vuelve a rellenar al acercarse, y sin rayas.** Desde el segundo
   aumento salían renglones horizontales del color que no tocaba. El relleno
@@ -45,6 +382,58 @@ ordered by date, does not spare the detail, and is not published.
   comprobaba *después* de escribir.
 
 ### What's new
+
+- **The application gains 22,036 bytes, and the bootloader drops to two sectors.**
+  The application had 2,720 bytes left of 475,136. The bootloader was 41,212
+  and 11,462 of those were ONE font: the whole of `font_ui_18b`, 117 glyphs,
+  of which it draws 68. Trimmed to the ones it uses and dropped to 11 px, the
+  bootloader fits in two flash sectors instead of three, and the third one
+  -16,384 bytes- goes to the application, which now starts at `0x08008000`.
+  That boundary lives in eight places that cannot include one another and
+  `tools/mapa.py` watches them; two of the eight were caught by a
+  `_Static_assert` and by the bootloader's sector table, not by review.
+
+  **The bootloader and `update.bin` are flashed TOGETHER.** A v2.17 bootloader
+  jumps to `0x08008000` and an earlier application sits at `0x0800C000`:
+  neither crossed combination boots.
+
+- **The boot rain's font moves to BD.BIN.** `font_rain_16` was 5,592 bytes of
+  internal flash -45 katakana- for a screen that lasts three seconds. It is
+  now one more section of the upper area, loaded at boot into the same
+  borrowed memory the rain's columns use. If BD.BIN does not carry it, the
+  radio boots just the same with the static screen, which is what it already
+  did when there was no memory to borrow. `tools/fuente_pack.py` generates it
+  and `User/splash_fuente.c` reads it, checking everything it will use as an
+  index: `sim/splash_fuente_test.c` feeds it sixteen different broken files
+  and all sixteen are rejected.
+
+- **Two test switches that had been left on for months.**
+  `TOUCH_EDGE_DEBUG` since 18/08 and `SPI_FLASH_PROBE_TEST` since bring-up,
+  both with a comment above them saying they had to go back to 0. They wrote
+  to a serial port that is compiled off, so nobody saw them: the first did
+  two touch reads every 150 ms while a finger was on the screen, and the
+  second dumped the flash chip and scanned the FAT on every boot. 364 bytes
+  of flash, plus work on every boot and every tap. `tools/interruptores_check.py`
+  now watches for a `#define ... 1` whose own comment promises to turn it off.
+
+- **Ten new light themes, and a spectrum to match.** From a request: with a
+  light theme, the spectrum panel was still black. The ten new ones — Linen,
+  Ivory, Sand, Parchment, Mist, Almond, Mint, Sky, Wheat and Porcelain — draw
+  the spectrum in their own theme's colours, take the map with them, and use
+  the Smoke waterfall, the only light scale of the sixteen. The earlier eight
+  do not move: their spectrum stays black bit for bit, Olive, Orange and
+  Chemistry included, which are light in the interface but were designed with
+  a dark spectrum. The ten go at the end of the list because the theme is
+  stored by its position: slotting one into the middle would change the theme
+  of anyone who already had one set.
+
+- **A bench that draws the themes and measures the pixels.**
+  `sim/espectro_tema.c` renders the spectrum with each of the eighteen themes
+  and reads the framebuffer: background, signal, trace, grid and demodulation
+  mark, each against the background that actually comes out. It checks both
+  halves: that the ten new ones are visible, and that the earlier eight still
+  draw the same background. It measures pixels rather than constants, because
+  reading the `#define`s answers a different question.
 
 - **The map fills again when you zoom in, with no stripes.** From the second
   zoom step on, horizontal lines of the wrong colour appeared. The fill was
@@ -3133,7 +3522,7 @@ A thorough review of drawing and refreshes. What you will notice:
   que para el puerto serie es lo correcto pero aquí es veneno: si caben 100 bytes de 128,
   mete 100 — y 100 no es múltiplo de cuatro. A partir de ahí el canal izquierdo son los
   bytes altos de una muestra y los bajos de la siguiente, para siempre. Medido en una
-  grabación del usuario: **los canales diferían hasta 33.226** cuando la radio manda el mismo
+  grabación de referencia: **los canales diferían hasta 33.226** cuando la radio manda el mismo
   valor a los dos, y **el 56,7% de la energía estaba por encima de 8 kHz** cuando este audio
   no pasa de 4. Ahora es todo o nada.
 - **Y se manda lo que haya, no 192 bytes rellenos de silencio.** El endpoint está declarado

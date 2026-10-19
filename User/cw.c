@@ -1836,7 +1836,7 @@ uint8_t cw_get_aprende(void) { return s_aprende; }
  *
  * Pedido por el usuario.
  *
- * Y yo no tengo forma de saber por que: la grabacion que me paso se lee
+ * Y yo no tengo forma de saber por que: la grabacion de referencia se lee
  * bien en el banco, asi que lo que le pasa a su radio en el aire no lo
  * veo. Esto es el instrumento que faltaba, y es la misma leccion que la
  * del renglon BUCLE del STANAG: cuando no puedo ver lo que ve la radio,

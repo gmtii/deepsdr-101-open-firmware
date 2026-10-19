@@ -1,7 +1,6 @@
 #include "splash.h"
 #include "gfx2.h"
 #include "palette.h"
-#include "font_rain_16.h"
 #include "font_ui_14.h"
 #include "font_ui_18b.h"
 
@@ -9,6 +8,26 @@
  * PANTALLA DE ARRANQUE. Ver splash.h para el porque de cada cosa, incluida
  * la ida y vuelta de la lluvia y de donde sale la memoria de las columnas.
  */
+
+/*
+ * LA FUENTE DE LA LLUVIA, PRESTADA COMO LA MEMORIA - 17/10/2026.
+ *
+ * Eran los 5.592 bytes de font_rain_16 enlazados aqui dentro: 45 katakana
+ * para una pantalla que dura tres segundos. En una radio a la que le
+ * quedaban 2.720 bytes libres de flash, eso es el doble de lo que queda.
+ *
+ * Ahora la fuente vive en BD.BIN, en la zona alta de la flash SPI, y se
+ * carga al arrancar (ver splash_screen.c y tools/fuente_pack.py). Este
+ * fichero no sabe de donde sale: se le pasa, igual que el reloj y la
+ * memoria de las columnas, que es lo que permite que el simulador lo
+ * compile tal cual.
+ *
+ * Y SI NO LLEGA, NO FALLA. Un BD.BIN viejo no la trae, y entonces esto
+ * hace lo mismo que cuando no hay memoria que prestar: la pantalla fija,
+ * que es la que hubo entre el 25 y el 28 de septiembre. La radio arranca
+ * igual; lo unico que se pierde es la animacion.
+ */
+static const gfx2_font_t *s_fuente;
 
 /* --- rejilla de la lluvia ------------------------------------------------ */
 #define CELL_W   18
@@ -99,8 +118,9 @@ static uint8_t n_glifos(void)
      * si manana se le anaden o quitan katakana, esto no se queda corto ni se
      * sale de la tabla. */
     uint8_t i, n = 0;
-    for (i = 0; i < font_rain_16.n_ranges; i++) {
-        n = (uint8_t)(n + (font_rain_16.ranges[i].hi - font_rain_16.ranges[i].lo + 1));
+    if (s_fuente == 0) { return 1U; }
+    for (i = 0; i < s_fuente->n_ranges; i++) {
+        n = (uint8_t)(n + (s_fuente->ranges[i].hi - s_fuente->ranges[i].lo + 1));
     }
     return n;
 }
@@ -109,12 +129,13 @@ static uint8_t n_glifos(void)
 static uint16_t glifo_cp(uint8_t k)
 {
     uint8_t i;
-    for (i = 0; i < font_rain_16.n_ranges; i++) {
-        uint16_t n = (uint16_t)(font_rain_16.ranges[i].hi - font_rain_16.ranges[i].lo + 1);
-        if (k < n) { return (uint16_t)(font_rain_16.ranges[i].lo + k); }
+    if (s_fuente == 0) { return (uint16_t)' '; }
+    for (i = 0; i < s_fuente->n_ranges; i++) {
+        uint16_t n = (uint16_t)(s_fuente->ranges[i].hi - s_fuente->ranges[i].lo + 1);
+        if (k < n) { return (uint16_t)(s_fuente->ranges[i].lo + k); }
         k = (uint8_t)(k - n);
     }
-    return font_rain_16.ranges[0].lo;
+    return s_fuente->ranges[0].lo;
 }
 
 /* --- el rotulo, con las letras separadas --------------------------------- */
@@ -171,7 +192,8 @@ static void pinta_celda(gfx2_surf_t *s, void *ctx)
     gfx2_fill(s, c->x, c->y, CELL_W, CELL_H, gfx2_rgb(NEGRO));
     if (c->color == PAL_SP_BG) { return; }
     utf8(c->cp, b);
-    gfx2_text_in(s, c->x, (int16_t)(c->y + 1), CELL_W, b, &font_rain_16,
+    if (s_fuente == 0) { return; }
+    gfx2_text_in(s, c->x, (int16_t)(c->y + 1), CELL_W, b, s_fuente,
                  gfx2_rgb(c->color), GFX2_ALIGN_C);
 }
 
@@ -251,9 +273,11 @@ static void pinta_fija(gfx2_surf_t *s, void *ctx)
     pinta_creditos(s, ctx);
 }
 
-void splash_reinicia(void *ram, uint32_t bytes)
+void splash_reinicia(void *ram, uint32_t bytes, const gfx2_font_t *lluvia)
 {
     uint8_t i, j;
+
+    s_fuente = lluvia;
 
     s_rnd = 0x1234567u;
     s_titulo_hecho = 0U;
@@ -262,7 +286,11 @@ void splash_reinicia(void *ram, uint32_t bytes)
 
     /* Menos de lo que hace falta es lo mismo que nada: media tabla de
      * columnas se sale de ella y escribe donde no debe. Ver splash.h. */
-    s_col = (ram != 0 && bytes >= splash_ram_bytes()) ? (col_t *)ram : 0;
+    /* Sin memoria O sin fuente, no hay lluvia: las dos hacen falta y las
+     * dos pueden faltar por separado. Una sola condicion para las dos
+     * porque el camino de salida es el mismo. */
+    s_col = (ram != 0 && bytes >= splash_ram_bytes() && lluvia != 0)
+          ? (col_t *)ram : 0;
     if (s_col == 0) { return; }
 
     for (i = 0; i < COLS; i++) {
@@ -345,11 +373,12 @@ uint8_t splash_paso(uint32_t t)
     return 1U;
 }
 
-void splash_run(splash_ms_fn ms, void *ram, uint32_t bytes)
+void splash_run(splash_ms_fn ms, void *ram, uint32_t bytes,
+                const gfx2_font_t *lluvia)
 {
     uint32_t t0 = ms();
 
-    splash_reinicia(ram, bytes);
+    splash_reinicia(ram, bytes, lluvia);
     while (splash_paso(ms() - t0)) {
         /* nada que hacer: el arranque esta parado aqui a proposito */
     }
@@ -357,4 +386,5 @@ void splash_run(splash_ms_fn ms, void *ram, uint32_t bytes)
      * recupera en cuanto esto vuelve, y el puntero se suelta para que un
      * splash_paso() despistado no siga escribiendo en memoria de otro. */
     s_col = 0;
+    s_fuente = 0;
 }

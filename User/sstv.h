@@ -107,8 +107,8 @@ typedef struct {
     float       nivel;
     /* Las lineas que tiene ESTE modo, que no son siempre SSTV_ALTO: los
      * Robot son de 240 y los Martin y PD de 256. La pantalla enseñaba
-     * "000/256" con un Robot 72 puesto - 06/10/2026, visto en un video del
-     * usuario. Pequeño, pero es un numero que miente. */
+     * "000/256" con un Robot 72 puesto - 06/10/2026, visto en pantalla.
+     * Pequeño, pero es un numero que miente. */
     uint16_t    alto;
 } sstv_info_t;
 

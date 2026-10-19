@@ -3,7 +3,7 @@
  *
  * Pedido por el usuario.
  *
- * Lo que hace este fichero esta MEDIDO contra la grabacion del usuario, no
+ * Lo que hace este fichero esta MEDIDO contra la grabacion de referencia, no
  * supuesto. El camino entero esta en docs/STANAG_4415_MEDIDO.md; aqui va el
  * resumen de lo que importa para leer el codigo.
  *
@@ -41,7 +41,7 @@
  * Detras van D1 y D2, que dicen la velocidad y el entrelazado (tabla XV), y
  * C1, C2, C3, que son una CUENTA ATRAS de segmentos. Esa cuenta es la mejor
  * prueba que hay de que el enganche es bueno: tiene que bajar de uno en uno
- * hasta cero. En la grabacion del usuario salieron 23, 22, 21 ... 2, 1, 0, los
+ * hasta cero. En la grabacion de referencia salieron 23, 22, 21 ... 2, 1, 0, los
  * veinticuatro, sin un fallo.
  *
  * LO QUE ESTE FICHERO HACE Y LO QUE NO. Hace: engancha con el preambulo, lee

@@ -740,7 +740,7 @@ void DMA0_Channel3_IRQHandler(void)
          * multiplicaciones y una suma.
          *
          * Y LO QUE DAN NO ESTA EN PROPORCION. El estrecho es el que arregla
-         * el espejo que el usuario vio en el video -de 25 a 86 dB de rechazo-.
+         * el espejo que se veia en la radio -de 25 a 86 dB de rechazo-.
          * El ancho solo añade algo EN LOS BORDES de la banda, donde el
          * estrecho se queda en 5,8 dB y el ancho llega a 24,5. Eso es una
          * mejora fina; lo otro era la averia. Pagar nueve veces mas por el

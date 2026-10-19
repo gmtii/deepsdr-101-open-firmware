@@ -177,6 +177,28 @@ int main(void)
     di("ante la duda, el numero pequeño: 2 MB", cap == MB(2), 0);
     di("nunca contesta de mas", cap <= w25q_tam_actual(), 0);
 
+    /*
+     * Y UN CHIP MAS PEQUEÑO QUE EL SUELO - 18/10/2026, de un issue.
+     *
+     * Este caso faltaba, y era el que importaba. El suelo de 2 MB se
+     * aplicaba a TODA respuesta, no solo a la que no habia podido medirse,
+     * asi que un chip de 1 MB -uno mas pequeño soldado, o un clon que dice
+     * la verdad sobre un tamaño menor- se anunciaba como de 2. Y entonces
+     * za_base() cae en 0x101000, que en un chip de 1 MB da la vuelta y
+     * aterriza en 0x001000: encima de la primera copia de la FAT.
+     *
+     * Lo que pasa a partir de ahi esta medido en sim/chip_chico.c. Aqui
+     * solo se mira el numero, que es donde nace.
+     */
+    printf("\n  un chip de 1 MB, por debajo del suelo\n");
+    chip_con_datos(MB(1));
+    cap = spi_flash_capacidad();
+    snprintf(t, sizeof t, "%u", (unsigned)cap);
+    di("se anuncia 1 MB, no el suelo de 2", cap == MB(1), t);
+    di("nunca contesta de mas", cap <= w25q_tam_actual(), 0);
+    snprintf(t, sizeof t, "0x%06X", (unsigned)za_base());
+    di("y za_base() no se sale del chip", za_base() < cap, t);
+
     printf("\n%s (%d fallos)\n\n", fallos ? "HAY FALLOS" : "TODO CORRECTO", fallos);
     return fallos ? 1 : 0;
 }

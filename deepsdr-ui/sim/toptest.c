@@ -33,7 +33,7 @@ int main(void)
     st.knob_value = "1 kHz";
     st.agc        = "MED";
     st.bw         = "4,0 k";
-    st.nr_on      = 0;
+    st.att        = "OFF";
     st.ovr        = 0;
     st.spk_muted  = 0;
     st.sam_ppm    = 0;
@@ -53,7 +53,7 @@ int main(void)
     st.dbm_valid  = 0;
     st.agc        = "OFF";
     st.bw         = "2,3 k";
-    st.nr_on      = 1;
+    st.att        = "-06";
     st.ovr        = 1;
     st.s_units    = 6;
     st.mode       = "USB";
@@ -94,23 +94,30 @@ int main(void)
         printf("pastilla del mando, el mas ancho es \"%s\"\n", quien);
         printf("pastilla del mando, peor caso: %d px (hueco disponible 204)  %s\n",
                peor, peor <= 204 ? "OK" : "SE SALE");
-        printf("lectura S+dBm, peor caso:      %d px (hueco disponible 150)  %s\n",
-               (int)(gfx2_text_w("S9+60", &font_ui_18b) + 12
-                     + gfx2_text_w("-105", &font_ui_14b) + 3
-                     + gfx2_text_w("dBm", &font_ui_14)),
-               (gfx2_text_w("S9+60", &font_ui_18b) + 12
-                + gfx2_text_w("-105", &font_ui_14b) + 3
-                + gfx2_text_w("dBm", &font_ui_14)) <= 150 ? "OK" : "SE SALE");
+        /*
+         * 146 Y NO 150 - 19/10/2026. La franja de la lectura se encogio al
+         * correr la pastilla del mando a la izquierda para que cupiera el
+         * chip ATT; ver ST_READ_W en ui_top.c. Y el peor caso se mide con
+         * "-127", que es el dBm mas ancho que puede salir, no con "-105".
+         */
+        {
+            int16_t lec = (int16_t)(gfx2_text_w("S9+60", &font_ui_18b) + 12
+                                    + gfx2_text_w("-127", &font_ui_14b) + 3
+                                    + gfx2_text_w("dBm", &font_ui_14));
+            printf("lectura S+dBm, peor caso:      %d px (hueco disponible 146)  %s\n",
+                   (int)lec, lec <= 146 ? "OK" : "SE SALE");
+            if (lec > 146) { return 1; }
+        }
     }
     /* variante C: NR encendido y AGC en MED, sin sobrecarga */
-    st.ovr = 0; st.spk_muted = 0; st.sam_ppm = 0; st.nr_on = 1;
+    st.ovr = 0; st.spk_muted = 0; st.sam_ppm = 0; st.att = "-12";
     st.agc = "MED"; st.bw = "4,0 k"; st.mode = "AM"; st.s_units = 7; st.dbm_valid = 1;
     st.dbm = -78; st.knob = UI_KNOB_VOLUME; st.knob_value = "18";
     st.batt_pct = 60;
     lcd_sim_reset(0); ui_top_draw(&st); lcd_sim_write_ppm("out/12_top_c.ppm");
 
     /* variante D: el mando en el destino de nombre mas largo */
-    st.ovr = 0; st.spk_muted = 0; st.sam_ppm = 0; st.nr_on = 0;
+    st.ovr = 0; st.spk_muted = 0; st.sam_ppm = 0; st.att = "OFF";
     st.agc = "MED"; st.bw = "1,8 k"; st.mode = "LSB"; st.s_units = 4; st.dbm_valid = 1;
     st.dbm = -92; st.knob = UI_KNOB_SQUELCH; st.knob_value = "-96 dB";
     st.batt_pct = 90;

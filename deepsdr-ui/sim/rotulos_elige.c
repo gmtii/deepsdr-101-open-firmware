@@ -36,6 +36,8 @@
 #include "palette.h"
 #include "emisoras.h"
 #include "spec_rotulos.h"
+#include "spectrum.h"
+#include "temas_tabla.h"
 
 /* La misma luminancia que usa spec_rotulos.c. Esta aqui a mano y no
  * importada a proposito: si el banco usara la funcion del codigo que mide,
@@ -642,33 +644,46 @@ int main(int argc, char **argv)
      * arreglo que repinta los cinco temas que iban bien no es un arreglo.
      */
     {
-        static const palette_t *k_todas[] = {
-            &k_pal_oscura, &k_pal_contraste, &k_pal_ambar, &k_pal_fria,
-            &k_pal_oliva,  &k_pal_naranja,   &k_pal_fosforo, &k_pal_chemistry
-        };
-        /* El fondo del panel de la traza: SPEC_LINE_BG de spectrum.c en
-         * 565 (0x0043), pasado a 0xRRGGBB con la misma cuenta que usa
-         * spectrum_fondo_rgb(). Si alli cambia, esto se cae. */
-        const uint32_t fondo = ((uint32_t)(( (0x0043U >> 11) & 0x1FU) * 255U / 31U) << 16)
-                             | ((uint32_t)(( (0x0043U >> 5)  & 0x3FU) * 255U / 63U) << 8)
-                             |  (uint32_t)(( (0x0043U)       & 0x1FU) * 255U / 31U);
-        unsigned z;
+        /*
+         * LOS TEMAS SALEN DE k_temas[], NO DE UNA LISTA A MANO - 17/10/2026.
+         *
+         * Aqui habia ocho punteros escritos uno a uno. El dia que entraron
+         * diez temas claros, este banco siguio diciendo "en los ocho temas
+         * el cartel se separa del fondo" sobre los ocho de siempre, que ya
+         * se veian, mientras los diez nuevos no los miraba nadie. Una lista
+         * a mano de algo que crece es una lista que se queda corta sin
+         * avisar; k_sim_temas[] lo genera gen_temas.py del propio main.c.
+         *
+         * Y EL FONDO TAMPOCO ES UNO SOLO. Era SPEC_LINE_BG fijo, el azul
+         * casi negro del panel, que valia cuando el panel era ese para
+         * todos. Los temas con espectro_claro pintan el panel de SU color,
+         * asi que el cartel hay que medirlo contra el fondo que le toca:
+         * una tinta clara calculada contra un fondo negro imaginario es
+         * invisible sobre el papel que de verdad hay debajo.
+         */
+        const uint32_t fondo_oscuro = ((uint32_t)(( (0x0043U >> 11) & 0x1FU) * 255U / 31U) << 16)
+                                    | ((uint32_t)(( (0x0043U >> 5)  & 0x3FU) * 255U / 63U) << 8)
+                                    |  (uint32_t)(( (0x0043U)       & 0x1FU) * 255U / 31U);
+        int z;
         int flojos = 0, tocados = 0;
 
-        printf("     fondo del panel #%06lX (luz %ld)\n",
-               (unsigned long)fondo, (long)LUZ(fondo));
-        printf("     %-14s %8s %8s   %7s %7s\n",
-               "tema", "texto", "rayita", "d.texto", "d.raya");
-        for (z = 0U; z < sizeof k_todas / sizeof k_todas[0]; z++) {
-            const palette_t *p = k_todas[z];
+        printf("     fondo de los temas de siempre #%06lX (luz %ld);"
+               " los claros, el suyo\n",
+               (unsigned long)fondo_oscuro, (long)LUZ(fondo_oscuro));
+        printf("     %-14s %8s %8s %8s   %7s %7s\n",
+               "tema", "fondo", "texto", "rayita", "d.texto", "d.raya");
+        for (z = 0; z < SIM_TEMA_COUNT; z++) {
+            const palette_t *p = k_sim_temas[z].pal;
+            uint32_t fondo = p->espectro_claro ? p->surf_0 : fondo_oscuro;
             uint32_t te = 0UL, ra = 0UL;
             long dt, dr;
 
             spec_rotulos_tinta(fondo, p->ink, p->ink_dim, p->trace, &te, &ra);
             dt = labs(LUZ(te) - LUZ(fondo));
             dr = labs(LUZ(ra) - LUZ(fondo));
-            printf("     %-14s %06lX   %06lX    %5ld   %5ld%s\n",
-                   p->name, (unsigned long)te, (unsigned long)ra, dt, dr,
+            printf("     %-14s %06lX   %06lX   %06lX    %5ld   %5ld%s\n",
+                   p->name, (unsigned long)fondo,
+                   (unsigned long)te, (unsigned long)ra, dt, dr,
                    (dt < SPEC_ROT_CONTRASTE || dr < SPEC_ROT_CONTRASTE)
                        ? "   <-- NO SE VE" : "");
             if (dt < SPEC_ROT_CONTRASTE || dr < SPEC_ROT_CONTRASTE) { flojos++; }
@@ -677,11 +692,12 @@ int main(int argc, char **argv)
                 && te != p->ink) { tocados++; }
         }
         di(flojos == 0,
-           "en los ocho temas el cartel se separa del fondo del panel",
-           "un tema con la tinta negra deja los nombres invisibles");
+           "en los dieciocho temas el cartel se separa del fondo del panel",
+           "un tema con la tinta del color del papel deja los nombres"
+           " invisibles");
         di(tocados == 0,
            "y a los temas que ya se veian no se les ha tocado el color",
-           "arreglar tres temas repintando los otros cinco no es arreglar");
+           "arreglar unos temas repintando los que iban bien no es arreglar");
     }
 
     printf("\n  4. EL RECORTE DE LOS NOMBRES\n");

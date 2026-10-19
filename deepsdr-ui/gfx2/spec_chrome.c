@@ -130,10 +130,31 @@ static void draw_db_gutter(gfx2_surf_t *s, void *ctx)
     gfx2_fill(s, 0, SPC_Y, SPC_GUT_W, (int16_t)(SPC_RULER_Y - SPC_Y),
               gfx2_rgb(PAL_SURF_0));
 
-    /* Sin rotulo de unidad. Lo llevaba ("dBFS") y sobra: una columna de
-     * numeros negativos al lado de un espectro no se confunde con otra cosa,
-     * y el rotulo ocupaba la esquina de arriba, que es justo donde se mete la
-     * traza cuando hay senal fuerte. */
+    /*
+     * SIN ROTULO DE UNIDAD, Y EL QUE LLEVABA ERA MENTIRA - 18/10/2026.
+     *
+     * Llevaba "dBFS", y el motivo escrito para quitarlo era que "una
+     * columna de numeros negativos no se confunde con otra cosa". Las dos
+     * mitades estaban mal:
+     *
+     *   - NO SON NEGATIVOS. El arranque es db_min = 0 y db_max = 90, y la
+     *     autoescala los sube (medido: 60/122 -> 66,9/116,9). La columna
+     *     enseña numeros positivos.
+     *   - NI SON dBFS. Lo que se pinta sale de fft.c y es
+     *     3.0103 * log2_approx(power), con `power` el modulo al cuadrado de
+     *     las muestras ya enventanadas: sin referencia, sin dividir por N y
+     *     sin corregir la ventana. O sea 10*log10 de una potencia en
+     *     cuentas al cuadrado. dBFS de verdad serian negativos, con el 0 en
+     *     saturacion - eso es lo que hace smeter_dbfs_from_peak(), que si
+     *     resta el fondo de escala del int16 y encima lleva su offset
+     *     medido con generador (SMETER_CAL_OFFSET_DB).
+     *
+     * O sea que el eje sirve para COMPARAR casillas entre si, que es para
+     * lo que se usa, y no para decir cuanta señal entra. El rotulo se queda
+     * fuera porque poner una unidad que no es la que se mide es peor que no
+     * poner ninguna; y de paso ocupaba la esquina de arriba, que es justo
+     * donde se mete la traza cuando hay señal fuerte.
+     */
 
     for (gi = 1U; gi <= SPC_GRID_ROWS; gi++) {
         /* misma formula que spectrum.c: row_pos = h*gi/(ROWS+1), medido

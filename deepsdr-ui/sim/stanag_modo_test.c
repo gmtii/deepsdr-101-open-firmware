@@ -52,8 +52,13 @@ volatile uint32_t g_msticks = 0U;
 
 /* Los mide main.c en la radio. Aqui, cero: el banco no dibuja nada, asi que
  * no hay vuelta de bucle que medir. Se cumplen para poder enlazar. */
-uint16_t ui_bucle_peor_us(void) { return 0U; }
-uint16_t ui_polls_peor_us(void) { return 0U; }
+/* uint32_t, que es lo que declara main.c. Estaban como uint16_t: el
+ * enlazador de C no compara tipos entre ficheros, asi que no se quejaba
+ * -y el dia que uno de estos devolviera algo de verdad, el banco habria
+ * leido media palabra-. 19/10/2026. */
+uint32_t ui_bucle_peor_us(void)  { return 0U; }
+uint32_t ui_polls_peor_us(void)  { return 0U; }
+uint32_t ui_dibujo_peor_us(void) { return 0U; }
 
 static unsigned long s_sem = 7777u;
 static float uni(void)

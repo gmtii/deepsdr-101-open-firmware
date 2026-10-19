@@ -22,11 +22,11 @@
  * sustituye por UNA SOLA REGION:
  *
  *     0x08000000  +--------------------------+
- *                 |  cargador (S0,S1,S2)     |  48 kB,  33.768 usados
- *     0x0800C000  +--------------------------+  <- la aplicacion empieza aqui
+ *                 |  cargador (S0,S1)        |  32 kB,  32.616 usados
+ *     0x08008000  +--------------------------+  <- la aplicacion empieza aqui
  *                 |                          |
- *                 |  aplicacion, de una      |  475.136 bytes
- *                 |  pieza: codigo, rodata,  |  (S3 16k, S4 64k, S5..S7 128k)
+ *                 |  aplicacion, de una      |  491.520 bytes
+ *                 |  pieza: codigo, rodata,  |  (S2,S3 16k, S4 64k, S5..S7 128k)
  *                 |  tablas, lo que sea      |
  *                 |                          |
  *     0x08080000  +--------------------------+
@@ -76,20 +76,30 @@ _Min_Stack_Size = 0x1600;
  * DONDE EMPIEZA LA APLICACION. Un solo sitio, y de aqui lo leen tambien la
  * cabecera de mas abajo y (por -D en el Makefile) el cargador.
  *
- * 0x0800C000 es el principio del sector 3. Tiene que ser frontera de sector
+ * 0x08008000 es el principio del sector 2. Tiene que ser frontera de sector
  * porque el cargador borra por sectores y no puede borrarse a si mismo; y
  * tiene que estar alineado a 512 como minimo por el VTOR.
+ *
+ * ERA 0x0800C000 -el sector 3- hasta el 17/10/2026. Bajo un sector entero
+ * al recortar la fuente del cargador, que ocupaba 11.462 de sus 41.212
+ * bytes. La aplicacion gana los 16.384 del sector 2.
+ *
+ * ESTE NUMERO VIVE EN CINCO SITIOS y no se pueden incluir entre ellos:
+ * aqui, en GD32F470VG_FLASH.ld, en CARGA_APP_BASE (User/cargador.h), en el
+ * SCB->VTOR de system_gd32f4xx.c y en la tabla de sectores de fmc_borra()
+ * (boot/boot_main.c). Los cinco los compara tools/mapa.py antes de dejar
+ * sacar un binario. Si mueves este, mueve los cinco.
  */
-_app_base = 0x0800C000;
+_app_base = 0x08008000;
 
 MEMORY
 {
   RAM    (xrw) : ORIGIN = 0x20000000, LENGTH = 192K
   /*
-   * 475.136 = 0x08080000 - 0x0800C000. Toda la flash menos el cargador.
+   * 491.520 = 0x08080000 - 0x08008000. Toda la flash menos el cargador.
    * Ni firma en medio, ni tope de 0x50000, ni desvan.
    */
-  FLASH  (rx)  : ORIGIN = 0x0800C000, LENGTH = 475136
+  FLASH  (rx)  : ORIGIN = 0x08008000, LENGTH = 491520
   TCMRAM (rw)  : ORIGIN = 0x10000000, LENGTH = 64K
 }
 

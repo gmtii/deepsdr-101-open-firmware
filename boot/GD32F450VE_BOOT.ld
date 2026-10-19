@@ -1,20 +1,32 @@
 /*
  * EL CARGADOR DE ARRANQUE NUESTRO - 01/10/2026.
  *
- * RAMA "reload", 02/10/2026: 0x08000000, 48 kB (sectores 0, 1 y 2).
+ * RAMA "reload", 17/10/2026: 0x08000000, 32 kB (sectores 0 y 1).
  *
  * Antes se reservaban 128 kB porque era lo que ocupaba el gestor de
  * fabrica y la aplicacion empezaba en 0x08020000 pasara lo que pasara. Al
- * dejar de depender de aquel gestor, lo que se reserva es lo que hace
- * falta: el cargador ocupa 33.768 bytes, los sectores 0 a 2 son 49.152, y
- * los 79 kB que sobraban se le dan a la aplicacion.
+ * dejar de depender de aquel gestor se bajo a 48 kB -sectores 0, 1 y 2-,
+ * y el 17/10/2026 a 32, que es donde esta ahora.
  *
- * NO SE PUEDE SUBIR DE 48 kB SIN MOVER LA APLICACION. Los sectores 0 a 3
- * miden 16 kB cada uno, asi que el siguiente escalon es 64 kB y se come el
- * sector 3, que es donde empieza ahora la aplicacion (CARGA_APP_BASE). Si
- * algun dia el cargador no cabe, el enlazador lo dice aqui, y lo que hay
- * que mover son LOS DOS a la vez: este LENGTH y CARGA_APP_BASE, y volver a
- * grabar la pareja entera.
+ * POR QUE SE BAJO A 32. Porque el sector 2 son 16.384 bytes y a la
+ * aplicacion le quedaban 2.720 libres de 475.136. El cargador medía
+ * 41.212 y el 27 % de eso era UNA FUENTE: font_ui_18b entera, 117 glifos,
+ * de los que pinta 68. Recortada a los que usa y bajada a 11 px cabe en
+ * dos sectores con 152 bytes de sobra (ver tools/poda_fuente.py y
+ * font_boot.c, que es generado).
+ *
+ * 152 BYTES DE MARGEN SON POCOS, y hay que saberlo: el dia que el
+ * cargador crezca mas que eso, el enlazador para aqui. Entonces hay dos
+ * salidas -adelgazarlo otra vez, o volver a 48 kB y devolverle el sector
+ * a la aplicacion- y las dos piden mover LOS DOS numeros a la vez: este
+ * LENGTH y CARGA_APP_BASE, mas los dos .ld de la aplicacion, el VTOR y la
+ * tabla de sectores de fmc_borra(). Los vigila tools/mapa.py, que no deja
+ * sacar un binario si no cuadran.
+ *
+ * Y LA PAREJA SE GRABA JUNTA. Un cargador de 32 kB salta a 0x08008000 y
+ * una aplicacion vieja esta en 0x0800C000: no arranca ninguna de las dos
+ * combinaciones cruzadas. Al actualizar hay que grabar el cargador Y el
+ * update.bin nuevo.
  *
  * La pila del cargador va en la SRAM, no en el TCM. El TCM se deja
  * intacto a proposito: ahi es donde la aplicacion pone la suya (su
@@ -45,7 +57,7 @@ _Min_Stack_Size = 0x2000;
 MEMORY
 {
   RAM    (xrw) : ORIGIN = 0x20000000, LENGTH = 192K
-  FLASH  (rx)  : ORIGIN = 0x08000000, LENGTH = 48K
+  FLASH  (rx)  : ORIGIN = 0x08000000, LENGTH = 32K
   TCMRAM (rw)  : ORIGIN = 0x10000000, LENGTH = 64K
 }
 

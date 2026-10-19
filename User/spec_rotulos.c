@@ -136,7 +136,7 @@ void spec_rotulos_recorta(char *dest, const char *origen)
  * catorce letras: "Shannon Aeradio I" y "Shannon Aeradio H" son dos
  * emisoras y los dos carteles dirian "Shannon Aeradi".
  *
- * Eso en pantalla no es informacion, es el borron de la foto del usuario.
+ * Eso en pantalla no es informacion, es el borron que se veia en pantalla.
  * Asi que el que llega segundo se apaga -se le deja el texto vacio, que
  * el dibujante ya sabe saltarse-.
  *
@@ -489,7 +489,7 @@ uint8_t spec_rotulos_filtra(spec_rot_cand_t *c, uint8_t n,
  * EL REPARTO, Y POR QUE EN DOS FILAS.
  *
  * Con treinta y dos emisoras en la peor ventana de 96 kHz y 756 pixeles,
- * los nombres se pisan. En la foto que mando el usuario -un receptor de
+ * los nombres se pisan. En la captura de referencia -un receptor de
  * esos de web- se ve el mismo problema sin resolver: "BSKSA Holy Quran"
  * y "All India Radio GOS" montados uno encima de otro.
  *

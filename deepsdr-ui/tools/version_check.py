@@ -276,6 +276,66 @@ def mira_los_binarios(raiz):
     return 0
 
 
+def mira_el_recuento(raiz):
+    """Que el numero de comprobaciones que anuncia el README sea el de verdad.
+
+    POR QUE EXISTE (17/10/2026). El README decia "177 comprobaciones en
+    verde" y los objetivos que cuelgan de `comprueba` eran 205. Nadie lo
+    habia movido en semanas: es el unico dato de la cabecera que no estaba
+    atado a nada, asi que envejecia solo mientras los demas -version,
+    tamaños, CRC- se comprobaban en cada tanda.
+
+    QUE CUENTA, EXACTAMENTE. Las lineas `comprueba: <objetivo>` de los tres
+    makefiles, sin repetir. O sea OBJETIVOS, no asertos: un objetivo puede
+    imprimir veinte comprobaciones por dentro. Se cuentan objetivos porque
+    es lo unico que se puede contar sin ejecutar nada, y porque es la
+    unidad en la que crece el banco: quien anade una comprobacion nueva
+    anade una linea de estas.
+
+    Va en los dos idiomas del README, que son dos frases distintas y ya se
+    han desincronizado una vez.
+    """
+    import glob
+    readme = os.path.join(raiz, 'README.md')
+    if not os.path.isfile(readme):
+        return 0            # ya lo dice mira_los_binarios
+    objetivos = set()
+    for mk in (os.path.join(raiz, 'reglas.mk'),
+               os.path.join(raiz, 'avisos.mk'),
+               os.path.join(raiz, 'deepsdr-ui', 'local.mk')):
+        if not os.path.isfile(mk):
+            continue
+        for lin in open(mk, encoding='utf-8', errors='replace'):
+            # Varios objetivos en una misma linea tambien cuentan: hay dos
+            # lineas asi -"comprueba: persist csvlen qth tapado escala
+            # hfdlcan" y otra con cinco- y contarlas como una dejaba el
+            # recuento en 203 cuando son 205. Un objetivo es un objetivo
+            # este solo en su linea o acompañado.
+            m = re.match(r'^comprueba:\s+(.+?)\s*$', lin.rstrip())
+            if m and not m.group(1).startswith('$'):
+                for nombre in m.group(1).split():
+                    if re.fullmatch(r'[A-Za-z0-9_-]+', nombre):
+                        objetivos.add(nombre)
+    if not objetivos:
+        print('  no he encontrado ningun objetivo de comprueba   MAL')
+        return 1
+    n = len(objetivos)
+    txt = open(readme, encoding='utf-8', errors='replace').read()
+    dichos = [int(x) for x in re.findall(
+        r'\*\*(\d+) (?:comprobaciones en verde|checks green)', txt)]
+    if len(dichos) < 2:
+        print('  el README no anuncia el recuento en los dos idiomas   MAL')
+        return 1
+    mal = [d for d in dichos if d != n]
+    if mal:
+        print('  el README dice %s comprobaciones y los objetivos son %d   MAL'
+              % (' y '.join(str(d) for d in sorted(set(dichos))), n))
+        return 1
+    print('  %d objetivos cuelgan de comprueba, y es lo que dice el README'
+          ' en los dos idiomas  ok' % n)
+    return 0
+
+
 def main():
     # Con DOS argumentos de mas -CAMBIOS.md y el manual- comprueba todo.
     # Con UNO solo comprueba lo que vive dentro del repositorio, que es
@@ -326,6 +386,7 @@ def main():
     raiz = os.path.dirname(os.path.dirname(os.path.abspath(config_h)))
     rc |= barre_la_carpeta(firmware, raiz)
     rc |= mira_los_binarios(raiz)
+    rc |= mira_el_recuento(raiz)
     return rc
 
 

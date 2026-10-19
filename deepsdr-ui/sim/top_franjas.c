@@ -207,10 +207,22 @@ int main(void)
     st.s_units = 7U; st.over_db = 0U;
     st.dbm = -127; st.dbm_valid = 1U;
     mira("repintar solo el S-metro, con dBm", &st, ui_top_draw_smeter);
-    st.dbm_valid = 0U;                    /* "AGC activo", el texto mas ancho */
-    mira("repintar solo el S-metro, con AGC activo", &st, ui_top_draw_smeter);
+    st.dbm_valid = 0U;                    /* sin dBm: el hueco se queda vacio */
+    mira("repintar solo el S-metro, sin lectura en dBm", &st, ui_top_draw_smeter);
+    /*
+     * Y CON LA SOBRECARGA, QUE DESDE EL 19/10/2026 VIVE EN LA PASTILLA DEL
+     * MANDO - o sea, FUERA de donde acababa esta ventana hasta hoy.
+     *
+     * Es justo la razon por la que ST_MOVIL_W crecio: el aviso depende de
+     * la señal igual que la barra de S, asi que si la ventana del repintado
+     * parcial no lo alcanza, aparece y desaparece con retraso o se queda
+     * pegado. Esta fila lo comprueba de la unica forma que vale: pintando
+     * la franja entera y la ventana recortada y comparando pixel a pixel.
+     */
     st.ovr = 1U;
     mira("repintar solo el S-metro, con SOBRECARGA", &st, ui_top_draw_smeter);
+    st.dbm_valid = 1U;
+    mira("repintar solo el S-metro, sobrecarga y dBm", &st, ui_top_draw_smeter);
     st.ovr = 0U; st.dbm_valid = 1U;
 
     /*

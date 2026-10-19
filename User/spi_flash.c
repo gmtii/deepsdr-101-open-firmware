@@ -3019,7 +3019,49 @@ uint32_t spi_flash_capacidad(void)
     if (tam == 0UL)                    { tam = jedec; }
     else if (jedec != 0UL && jedec < tam) { tam = jedec; }
 
-    if (tam < CAP_SUELO) { tam = CAP_SUELO; }
+    /*
+     * EL SUELO SOLO VALE CUANDO NO SE HA PODIDO MEDIR NADA - 18/10/2026.
+     *
+     * *** Aqui ponia `if (tam < CAP_SUELO) { tam = CAP_SUELO; }`, y eso
+     * SUBE una medida buena. ***
+     *
+     * El suelo se puso para el caso de que las dos fuentes fallaran: ante
+     * la nada, contestar lo que la radio ha tenido siempre. Pero escrito
+     * asi se aplicaba tambien cuando las dos fuentes habian contestado y
+     * estaban de acuerdo en un numero MENOR. O sea que hacia justo lo que
+     * el comentario de arriba llama el unico fallo grave: anunciar de mas.
+     *
+     * LO QUE PASA CON UN CHIP DE 1 MB, medido en sim/chip_chico.c:
+     *
+     *   capacidad dice      2 MB   (el chip tiene 1)
+     *   disco USB           1 MB   = el chip entero
+     *   za_base()        0x101000  -> en un chip de 1 MB la direccion da
+     *                                 la vuelta y cae en 0x001000, que es
+     *                                 la primera copia de la FAT
+     *
+     * Y las dos guardias de datos_arranca() en main.c PASAN, porque las
+     * dos comparan contra este mismo numero inflado. Asi que cargar
+     * BD.BIN escribe 200 kB encima de la FAT, del directorio raiz y de
+     * los datos. El sector de arranque sobrevive -esta por debajo del
+     * hueco-, o sea que Windows sigue montando el volumen y lo ve
+     * destrozado. Y como el fichero que se estaba leyendo se machaca a si
+     * mismo por el camino, lo copiado no cuadra y la pantalla da un error
+     * DESPUES de haber roto el disco.
+     *
+     * El mapa, en cambio, parece funcionar: son 8 kB en za_mapa(), que da
+     * la vuelta a 0x0D0000 -zona de datos-, y se verifica leyendo de esa
+     * misma direccion. Escribe donde no debe y dice que todo bien.
+     *
+     * Mapa perfecto, BD.BIN con error, disco corrupto: las tres cosas de
+     * un issue, y las tres salen de esta linea.
+     *
+     * Ahora el suelo solo se aplica cuando NINGUNA fuente ha dicho nada.
+     * Un chip de 1 MB se anuncia como de 1 MB: el disco sale de cero
+     * bloques y la zona alta se niega -ZA_BASE queda por debajo del
+     * sistema de ficheros y la guardia de main.c lo caza-, que es feo y
+     * es honrado. Lo otro era bonito y destruia el volumen.
+     */
+    if (tam == 0UL)      { tam = CAP_SUELO; }
     if (tam > CAP_TECHO) { tam = CAP_TECHO; }
 
     s_cap = tam;
@@ -4626,6 +4668,57 @@ static uint8_t fichero_borra_interno(const char name8[8], const char ext3[3])
     abs = dir_off;                 /* ya es absoluto: ver dir_busca_todo() */
     blq = abs & ~(uint32_t)(FLASH_SECTOR_SIZE - 1U);
     spi_flash_block_read_modify_write(abs, abs - blq, &marca, 1U);
+
+    /* 1b. Y LAS ENTRADAS DE NOMBRE LARGO QUE VAN DELANTE - 18/10/2026.
+     *
+     * Encontrado con el banco nuevo sim/bd_borra.c, y no por mirar el
+     * codigo: lo dijo fsck.fat al juzgar el volumen de despues.
+     *
+     *     Orphaned long file name part ":Fza:FzX:Fzq..."
+     *
+     * Cuando Windows copia un fichero cuyo nombre no cabe en 8.3 -o que
+     * lleva mayusculas y minusculas mezcladas- pone DELANTE de la entrada
+     * normal una o varias entradas de nombre largo, con atributo 0x0F.
+     * dir_busca_todo() se las salta a proposito, que es lo correcto para
+     * BUSCAR; pero borrar solo la de 8.3 deja esas colgando sin dueno, y
+     * eso es exactamente lo que chkdsk le enseña al usuario como "el disco
+     * tiene errores". El fichero esta borrado y el volumen esta sucio.
+     *
+     * Pasa con cualquier fichero que el usuario traiga con nombre largo:
+     * un .MAP llamado "europa detalle.map" se queda como EUROPA~1.MAP con
+     * dos entradas de nombre largo delante.
+     *
+     * SE COMPRUEBA LA SUMA, no solo el atributo. El byte 13 de cada
+     * entrada de nombre largo lleva la suma del nombre 8.3 al que
+     * pertenece; sin mirarla, un huerfano que ya estuviera ahi de antes
+     * -de un borrado hecho por otro- se tomaria por nuestro. Se para en
+     * cuanto una no cuadra, o en la que lleva el bit 0x40, que es la
+     * ultima del grupo.
+     *
+     * CUESTA UN BORRADO DE BLOQUE POR ENTRADA, y se admite: son una o dos
+     * casi siempre, el formato no deja pasar de veinte, y esto solo corre
+     * cuando de verdad hay nombre largo delante.
+     */
+    {
+        uint8_t suma = 0U;
+        uint32_t j, e_abs = abs;
+
+        for (j = 0U; j < 11U; j++) {
+            uint8_t ch = (j < 8U) ? (uint8_t)name8[j] : (uint8_t)ext3[j - 8U];
+            suma = (uint8_t)(((suma & 1U) ? 0x80U : 0U) + (suma >> 1) + ch);
+        }
+        for (j = 0U; j < 20U; j++) {
+            uint8_t ent[32];
+
+            if (e_abs < (ROOT_DIR_LBA * ROOT_DIR_SECTOR_BYTES) + 32UL) { break; }
+            e_abs -= 32UL;
+            spi_flash_read(e_abs, ent, sizeof ent);
+            if (ent[11] != 0x0FU || ent[0] == 0xE5U || ent[13] != suma) { break; }
+            blq = e_abs & ~(uint32_t)(FLASH_SECTOR_SIZE - 1U);
+            spi_flash_block_read_modify_write(e_abs, e_abs - blq, &marca, 1U);
+            if ((ent[0] & 0x40U) != 0U) { break; }   /* la ultima del grupo */
+        }
+    }
 
     /* 2. Y la cadena, si la entrada apuntaba a algun sitio con sentido.
      * Un fichero de 0 bytes no tiene cadena y no es un error. */

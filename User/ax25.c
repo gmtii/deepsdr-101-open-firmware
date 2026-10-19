@@ -161,6 +161,29 @@ void ax25_start_fsk(float fs_hz, float baud, float marca_hz, float espacio_hz)
 void ax25_stop(void)      { s_on = 0U; }
 uint8_t ax25_activo(void) { return s_on; }
 
+/*
+ * LOS DOS TONOS QUE ESTA MIRANDO AHORA MISMO - 19/10/2026.
+ *
+ * Existen porque el osciloscopio de sintonia los pintaba con AX25_MARCA_HZ
+ * y AX25_ESPACIO_HZ escritos a mano, o sea 1200 y 2200, que son los del
+ * APRS. En PKT300 los tonos son otros -1600 y 1800- y las dos rayas caian
+ * donde no hay nada. Y la unica cosa que se hace con ese osciloscopio es
+ * poner los picos encima de las rayas.
+ *
+ * Asi que los da quien los sabe, que es este fichero: son los mismos
+ * numeros con los que ax25_start_fsk() afina los dos correladores, no una
+ * copia al lado.
+ *
+ * Y NO se derivan de los NCO con nco_freq_real(), que seria mas "de
+ * verdad": esos dos valores ya existen en .bss -los usa el arranque- asi
+ * que devolverlos no cuesta memoria, y lo que ganaria la otra forma es el
+ * redondeo al incremento entero del NCO, que a 12 kHz son tres
+ * millonesimas de hercio. No se ve en una raya de 756 pixeles para
+ * 6.000 Hz, donde un pixel son ocho hercios.
+ */
+float ax25_marca_hz(void)   { return s_marca_hz; }
+float ax25_espacio_hz(void) { return s_espacio_hz; }
+
 /* ==========================================================================
  * SALIDA
  * ========================================================================== */

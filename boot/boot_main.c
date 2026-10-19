@@ -29,7 +29,7 @@
 
 extern usb_core_driver g_usb;   /* en soporte.c, compartido con usb_it.c */
 #include "gfx2_font.h"
-#include "font_ui_18b.h"
+#include "font_boot.h"
 #include <string.h>
 
 #define NEGRO   0x0000U
@@ -117,8 +117,16 @@ static uint16_t mezcla(uint16_t fondo, uint16_t tinta, uint8_t a)
     return (uint16_t)((r << 11) | (g << 5) | b);
 }
 
-#define FUENTE   (&font_ui_18b)
-#define ALTO_LIN 23U      /* line_h de font_ui_18b */
+/*
+ * PRUEBA DEL 17/10/2026: la fuente recortada, y el interlineado atado a
+ * ella. Era font_ui_18b entera con ALTO_LIN 23 escrito a mano; ahora la
+ * fuente la genera tools/poda_fuente.py y el alto de linea sale de la
+ * propia fuente, porque con una mas pequena los 28 px de separacion
+ * entre filas dejaban la ficha flotando con medio panel de aire.
+ */
+#define FUENTE   (&font_boot)
+#define ALTO_LIN ((uint16_t)font_boot.line_h)
+#define PASO_FILA ((uint16_t)(ALTO_LIN + 5U))
 
 static uint16_t letra(uint16_t x, uint16_t y, char c, uint16_t tinta, uint16_t fondo)
 {
@@ -236,7 +244,7 @@ static void borra_linea(uint16_t y)
  * SUBIRLA al tocar cualquier cosa del cargador. Si no se sube, miente, y
  * un numero de version que miente es peor que no tenerlo.
  */
-#define CARGADOR_VERSION  "v2.16"
+#define CARGADOR_VERSION  "v2.17"
 
 /*
  * Y CUAL DE LOS DOS, EN LA MISMA LINEA - 16/10/2026.
@@ -472,7 +480,12 @@ static uint8_t fmc_borra(uint32_t addr)
     else if (addr >= 0x08040000UL) { sector = CTL_SECTOR_NUMBER_6; }
     else if (addr >= 0x08020000UL) { sector = CTL_SECTOR_NUMBER_5; }
     else if (addr >= 0x08010000UL) { sector = CTL_SECTOR_NUMBER_4; }
-    else if (addr >= CARGA_APP_BASE) { sector = CTL_SECTOR_NUMBER_3; }
+    /* 17/10/2026: DOS sectores de 16 kB, no uno. Al bajar el cargador a
+     * 32 kB la aplicacion empieza en el sector 2, asi que hay que poder
+     * borrar el 2 Y el 3. Con solo el 3, el primer bloque de la imagen se
+     * escribia sobre flash sin borrar y la cabecera salia corrupta. */
+    else if (addr >= 0x0800C000UL)   { sector = CTL_SECTOR_NUMBER_3; }
+    else if (addr >= CARGA_APP_BASE) { sector = CTL_SECTOR_NUMBER_2; }
     else                           { return 0U; }   /* nunca el del cargador */
 
     return (fmc_sector_erase(sector) == FMC_READY) ? 1U : 0U;
@@ -614,16 +627,16 @@ static uint16_t ficha(void)
 
     p = pega(l, "flash "); p = u2s(p, s_flash_kb);
     p = pega(p, " kB     SRAM "); p = u2s(p, s_sram_kb); p = pega(p, " kB");
-    fila(y, "Chip", l); y = (uint16_t)(y + 28U);
+    fila(y, "Chip", l); y = (uint16_t)(y + PASO_FILA);
 
     p = pega(l, ""); p = x2s(p, *(volatile uint32_t *)0x1FFF7A10UL, 8);
     p = pega(p, " "); p = x2s(p, *(volatile uint32_t *)0x1FFF7A14UL, 8);
     p = pega(p, " "); p = x2s(p, *(volatile uint32_t *)0x1FFF7A18UL, 8);
-    fila(y, "Serie", l); y = (uint16_t)(y + 28U);
+    fila(y, "Serie", l); y = (uint16_t)(y + PASO_FILA);
 
     p = pega(l, ""); p = u2s(p, SystemCoreClock / 1000000UL);
     p = pega(p, " MHz     depuracion "); p = x2s(p, *(volatile uint32_t *)0xE0042000UL, 8);
-    fila(y, "Reloj", l); y = (uint16_t)(y + 28U);
+    fila(y, "Reloj", l); y = (uint16_t)(y + PASO_FILA);
 
     /*
      * Esta linea es el instrumento de medida del asunto de los paneles:
@@ -636,7 +649,7 @@ static uint16_t ficha(void)
     p = pega(p, g_panel_firme ? " firme" : " INESTABLE");
     p = pega(p, "  0x000A="); p = x2s(p, g_panel_id_0a, 4);
     p = pega(p, "  0x3A00=");    p = x2s(p, g_panel_id_3a, 4);
-    fila(y, "Panel", l); y = (uint16_t)(y + 28U);
+    fila(y, "Panel", l); y = (uint16_t)(y + PASO_FILA);
 
     spi_flash_read_jedec_id(&id);
     p = pega(l, ""); p = x2s(p, id.manufacturer_id, 2);
@@ -644,7 +657,7 @@ static uint16_t ficha(void)
     p = pega(p, " "); p = x2s(p, id.capacity_code, 2);
     p = pega(p, "     "); p = u2s(p, (1UL << id.capacity_code) / 1024UL);
     p = pega(p, " kB");
-    fila(y, "Flash SPI", l); y = (uint16_t)(y + 28U);
+    fila(y, "Flash SPI", l); y = (uint16_t)(y + PASO_FILA);
 
     /*
      * Y SI NO SE RECONOCE, POR QUE - 06/10/2026.
@@ -674,17 +687,17 @@ static uint16_t ficha(void)
         p = pega(l, "no se reconoce: ");
         p = pega(p, spi_flash_geo_txt());
     }
-    fila(y, "Volumen", l); y = (uint16_t)(y + 28U);
+    fila(y, "Volumen", l); y = (uint16_t)(y + PASO_FILA);
 
     rect(24U, (uint16_t)(y + 6U), 752U, 1U, SUAVE);
-    y = (uint16_t)(y + 18U);
+    y = (uint16_t)(y + ALTO_LIN - 5U);
 
     if (s_flash_kb > 512U) {
         texto(24U, y, "AVISO: mas de 512 kB de flash; parte de la aplicacion",
               AMBAR);
-        y = (uint16_t)(y + 18U);
+        y = (uint16_t)(y + ALTO_LIN - 5U);
         texto(24U, y, "puede caer fuera de la zona sin esperas.", AMBAR);
-        y = (uint16_t)(y + 18U);
+        y = (uint16_t)(y + ALTO_LIN - 5U);
     }
 
     y = (uint16_t)(y + 10U);
@@ -903,7 +916,7 @@ static void modo_actualizacion(void)
     p = pega(p, " bloques de 512  = "); p = u2s(p, disco_bloques() / 2U);
     p = pega(p, " kB");
     texto(16U, y, l, BLANCO);
-    y = (uint16_t)(y + 34U);
+    y = (uint16_t)(y + ALTO_LIN + 11U);
 
     texto(16U, y,
           "DFU de fabrica: al encender, manten el mando pulsado Y GIRALO.",
@@ -1171,9 +1184,9 @@ int main(void)
         uint16_t y = ficha();
 
         texto(24U, (uint16_t)(y + 4U), cargador_porque_txt(r), ROJO);
-        texto(24U, (uint16_t)(y + 34U),
+        texto(24U, (uint16_t)(y + ALTO_LIN + 11U),
               "Copia un update.bin valido al disco USB:", ETIQUETA);
-        texto(24U, (uint16_t)(y + 52U),
+        texto(24U, (uint16_t)(y + 2U * ALTO_LIN + 18U),
               "enciende con el mando pulsado.", ETIQUETA);
     }
 

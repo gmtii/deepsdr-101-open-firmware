@@ -202,7 +202,7 @@ static uint32_t s_ult_busca;   /* cuando se barrio por ultima vez */
 /*
  * EL ANCHO DEL BARRIDO DE PORTADORA, QUE SE ADAPTA.
  *
- * El desvio normal es pequeño -el de la grabacion del usuario eran 58 Hz-
+ * El desvio normal es pequeño -el de la grabacion de referencia eran 58 Hz-
  * asi que casi siempre basta con +-100. Barrer +-250 desde el primer
  * intento es pagar once pasos para encontrarlo en el tercero. Se arranca
  * en +-100 (cinco pasos) y cada busqueda fallida ensancha uno hasta
@@ -1061,7 +1061,7 @@ static uint8_t busca_rapida(uint32_t desde, uint32_t cuantos,
 /*
  * EMPIEZA ESTRECHO Y ENSANCHA SI NO ENCUENTRA.
  *
- * El desvio normal es pequeño -el de la grabacion del usuario eran 58 Hz-
+ * El desvio normal es pequeño -el de la grabacion de referencia eran 58 Hz-
  * asi que casi siempre basta con +-100. Barrer +-250 desde el primer
  * intento es pagar once pasos para encontrarlo en el tercero. Se
  * arranca en +-100 (cinco pasos) y cada busqueda fallida ensancha uno

@@ -404,7 +404,7 @@ static void chip(gfx2_surf_t *s, int16_t x, int16_t y,
     }
 }
 
-static int16_t chip_w(const char *label, const char *value, int active)
+static int16_t chip_w_crudo(const char *label, const char *value, int active)
 {
     return (int16_t)(gfx2_text_w(label, active ? &font_ui_14b : &font_ui_14)
                      /* 14 y no 18 (23/09/2026): con el chip del NCO, los
@@ -416,6 +416,47 @@ static int16_t chip_w(const char *label, const char *value, int active)
 }
 
 /*
+ * Y EL CHIP DEL ATENUADOR MIDE SIEMPRE LO MISMO - 19/10/2026.
+ *
+ * Pedido por el usuario: que la chapa ATT no cambie de tamaño, para que lo
+ * que hay a su izquierda no se mueva de sitio al cambiar de estado.
+ *
+ * Los chips se colocan de DERECHA A IZQUIERDA desde ST_CHIP_R, asi que el
+ * ancho de uno empuja a todos los de su izquierda. Con "-06" en vez de "-6"
+ * los dos estados encendidos ya miden igual -24 px el valor en los dos-,
+ * pero quedaban 2 px de diferencia con "OFF": el valor apagado es 5 px mas
+ * ancho y el rotulo apagado 3 px mas estrecho, porque "encendido" se pinta
+ * en negrita. Dos pixeles bastan para que la pastilla del mando y los demas
+ * chips den un saltito cada vez que tocas el atenuador.
+ *
+ * Asi que ATT reserva SIEMPRE el ancho de su estado mas ancho, y se mide en
+ * vez de escribirlo: una constante puesta a mano aqui deja de ser verdad el
+ * dia que cambie la fuente, el rotulo o una de las tres siglas.
+ *
+ * Va en chip_w() y no en el bucle que los dibuja porque chip_w() es por
+ * donde pasan TODOS: el reparto de derecha a izquierda, el recuadro que
+ * pinta chip(), la zona de toque que apunta ui_top_hit() y la cuenta que
+ * limita la pastilla del mando. Un solo sitio, imposible de desincronizar.
+ */
+static int16_t chip_w(const char *label, const char *value, int active)
+{
+    if (value != 0 && label[0] == 'A' && label[1] == 'T'
+                   && label[2] == 'T' && label[3] == '\0') {
+        static const char *const k_att[] = UI_TOP_ATT_SIGLAS;
+        int16_t mayor = 0;
+        uint8_t i;
+        for (i = 0U; i < (uint8_t)(sizeof k_att / sizeof k_att[0]); i++) {
+            /* El mismo criterio de "encendido" que usa el bucle de los
+             * chips: "OFF" no cuenta, igual que en el del AGC. */
+            int16_t w = chip_w_crudo(label, k_att[i], k_att[i][0] != 'O');
+            if (w > mayor) { mayor = w; }
+        }
+        return mayor;
+    }
+    return chip_w_crudo(label, value, active);
+}
+
+/*
  * Reparto horizontal de la barra de estado, en franjas fijas.
  *
  * Antes cada elemento se colocaba a partir de donde acababa el anterior, con
@@ -424,10 +465,10 @@ static int16_t chip_w(const char *label, const char *value, int active)
  * lectura en dBm se metia debajo de la pastilla del mando. Con franjas fijas,
  * cada cosa tiene su sitio y el peor caso se comprueba una vez aqui:
  *
- *   10..160   barra del S-meter        (150)
- *  168..318   unidades S + dBm         (150) -> peor caso medido: 141 px
- *  326..530   pastilla del mando       (204) -> peor caso medido: ver abajo
- *  542..790   chips, alineados a la derecha
+ *   10..90    barra del S-meter        (80)
+ *   98..244   unidades S + dBm         (146) -> peor caso medido: 141 px
+ *  244..448   pastilla del mando       (204) -> peor caso medido: ver abajo
+ *  454..790   chips, alineados a la derecha
  *
  * El peor caso de la pastilla NO se estima: sim/toptest.c lo recorre con los
  * nueve nombres de mando y el valor mas largo, y avisa si se sale. La primera
@@ -447,15 +488,41 @@ static int16_t chip_w(const char *label, const char *value, int active)
  * resolucion -la posicion se calcula en milesimas sobre su anchura, sea la
  * que sea-, solo mide 30 px menos.
  */
-#define ST_BAR_W   120
-#define ST_READ_X  138
-#define ST_READ_W  150
-#define ST_KNOB_X  284   /* 284: 314 menos los 30 que suelta la barra. Con la
-                            * sobrecarga fuera
-                            * de la lectura, el peor caso de esta -"S9+60" mas
-                            * "AGC activo"- acaba en x=314, que es donde puede
-                            * empezar la pastilla. Doce pixeles mas para los
-                            * chips de la derecha. */
+/*
+ * Y CUARENTA MENOS, PARA QUE EL ATENUADOR QUEPA - 19/10/2026.
+ *
+ * Pedido por el usuario: la pastilla del mando se mueve "un poco a la
+ * izquierda".
+ *
+ * El motivo no es estetico. El chip NR era un interruptor -rotulo y nada
+ * mas, 35 px- y el que ocupa su sitio, ATT, lleva valor: "ATT OFF" mide 76.
+ * Son 41 px mas de chips fijos, y los chips fijos se los quitan al NOMBRE
+ * del ajuste enganchado, que es lo unico que cede en este reparto. Sin
+ * mover nada, "Autoenganche" se quedaba en "Autoeng." para que ATT cupiera.
+ *
+ * CUARENTA Y NO VEINTE, Y ESO LO DIJO LA PANTALLA. El primer intento movio
+ * la pastilla veinte pixeles y en la foto se veia "Sinto. 1 kHz": con ATT
+ * en OFF -o sea, la mayor parte del tiempo- la pastilla se quedaba en 140
+ * px y "Sintonia 1 kHz" pide 154. El rotulo que mas se lee en toda la
+ * radio, recortado todo el dia. No valia.
+ *
+ * Asi que la barra de S suelta los cuarenta enteros -sigue con sus marcas
+ * de unidad S, y la posicion se calcula en milesimas sobre su anchura, o
+ * sea que no pierde resolucion- y la lectura y la pastilla se corren esos
+ * cuarenta a la izquierda. Con eso la pastilla vuelve EXACTAMENTE a donde
+ * estaba en la V5.06: 162 px contra los 163 de entonces, y 133 contra 134
+ * cuando el BW enseña los dos cortes. Lo que paga la chapa nueva es la
+ * barra, no el rotulo del mando.
+ *
+ * El peor caso de la lectura: "S9+60" (62) + 12 + "-127" (33) + 3 + "dBm"
+ * (31) = 141 px desde ST_READ_X, o sea hasta 239, con la pastilla
+ * empezando en 244. Antes acababa en 279 contra 284.
+ * Lo mide sim/toptest.c y lo vigila sim/top_franjas.c.
+ */
+#define ST_BAR_W    80
+#define ST_READ_X   98
+#define ST_READ_W  146
+#define ST_KNOB_X  244
 #define ST_KNOB_W  204
 #define ST_CHIP_R  790
 /* El hueco entre chips. Es un #define y no un 8 suelto porque lo usan DOS
@@ -512,55 +579,47 @@ static void draw_status(gfx2_surf_t *s, void *ctx)
         }
 
         /* lectura: unidades S grandes, dBm como dato secundario */
+        /*
+         * AQUI YA NO SE AVISA DE LA SOBRECARGA, NI SE EXPLICA EL AGC
+         * - 19/10/2026, pedido por el usuario.
+         *
+         * Se van DOS textos de este hueco y por motivos distintos:
+         *
+         *  - "SOBRECARGA" se muda a la pastilla del mando, que es mas
+         *    ancha, esta en el centro de la franja y se ve de reojo. Aqui
+         *    tapaba la lectura entera, o sea que para enterarte de que la
+         *    entrada se satura perdias el S-metro, que es lo que estabas
+         *    mirando. Ver el bloque de la pastilla, justo debajo.
+         *
+         *  - "AGC activo" ocupaba el sitio del dBm cuando el numero no
+         *    valia. La idea era buena -decir por que no hay numero en vez
+         *    de poner uno falso- pero el AGC esta puesto casi siempre, asi
+         *    que ese texto estaba casi siempre, y un aviso permanente deja
+         *    de leerse a los dos dias. Ademas el chip AGC de la derecha ya
+         *    dice cual tienes puesto, incluido OFF.
+         *
+         * Sin numero y sin texto, el hueco queda vacio: ESO ya dice que no
+         * hay lectura calibrada, y no cuesta un renglon leerlo.
+         */
         x = ST_READ_X;
-        if (st->ovr) {
-            /*
-             * SOBRECARGA, 23/09/2026. Antes era un chip mas, a la derecha del
-             * todo, y ocupaba 101 px de texto de los ~224 que hay como mucho
-             * para chips: empujaba fuera a BW y a NR, o sea que justo cuando
-             * la entrada se satura la pantalla dejaba de decirte que filtro y
-             * que reduccion de ruido tienes puestos. Lo midio sim/chipstest.c.
-             *
-             * Y sustituye a la lectura ENTERA -unidades S y dBm-, no solo al
-             * dBm, porque con la entrada saturada las dos mienten igual: la
-             * barra esta clavada arriba y el numero es basura. El aviso ocupa
-             * el sitio de algo que no vale, en vez de tapar un dato bueno.
-             * Sigue siendo la palabra entera y en rojo, nunca solo el color.
-             */
-            gfx2_text(s, x, (int16_t)(Y + 10), tr("SOBRECARGA", "OVERLOAD"), &font_ui_14b,
-                      gfx2_rgb(PAL_CRIT));
+        if (st->s_units > 9u) {
+            int i2 = 0;
+            buf[i2++] = 'S'; buf[i2++] = '9'; buf[i2++] = '+';
+            u2s(&buf[i2], st->over_db);
         } else {
-            if (st->s_units > 9u) {
-                int i2 = 0;
-                buf[i2++] = 'S'; buf[i2++] = '9'; buf[i2++] = '+';
-                u2s(&buf[i2], st->over_db);
-            } else {
-                buf[0] = 'S';
-                u2s(&buf[1], st->s_units);
-            }
-            /* Se mide el ancho real en vez de saltar una cantidad fija: "S6"
-             * y "S9+14" no ocupan lo mismo, y con el salto fijo el dBm se
-             * pegaba a las unidades S en cuanto la lectura pasaba de S9. */
-            x = (int16_t)(x + gfx2_text(s, x, (int16_t)(Y + 8), buf, &font_ui_18b,
-                                        gfx2_rgb(PAL_INK)) + 12);
-            if (st->dbm_valid) {
-                int16_t w = gfx2_text(s, x, (int16_t)(Y + 12), i2s(buf, st->dbm),
-                                      &font_ui_14b, gfx2_rgb(PAL_INK_DIM));
-                gfx2_text(s, (int16_t)(x + w + 3), (int16_t)(Y + 12), "dBm",
-                          &font_ui_14, gfx2_rgb(PAL_INK_MUTE));
-            } else {
-                /* Con el AGC activo la lectura en dBm no significa nada: se
-                 * dice, en vez de mostrar un numero que parece bueno y no lo
-                 * es. El texto dice lo que pasa, sin abreviaturas: "n/d" no le
-                 * dice nada a nadie, y puesto justo donde iria el numero,
-                 * "AGC activo" ya explica por que no hay numero.
-                 *
-                 * Ojo con el texto: la raya larga (U+2014) NO esta en el juego
-                 * de caracteres de las fuentes generadas, y saldria como un
-                 * hueco. */
-                gfx2_text(s, x, (int16_t)(Y + 12), tr("AGC activo", "AGC active"), &font_ui_14,
-                          gfx2_rgb(PAL_INK_MUTE));
-            }
+            buf[0] = 'S';
+            u2s(&buf[1], st->s_units);
+        }
+        /* Se mide el ancho real en vez de saltar una cantidad fija: "S6"
+         * y "S9+14" no ocupan lo mismo, y con el salto fijo el dBm se
+         * pegaba a las unidades S en cuanto la lectura pasaba de S9. */
+        x = (int16_t)(x + gfx2_text(s, x, (int16_t)(Y + 8), buf, &font_ui_18b,
+                                    gfx2_rgb(PAL_INK)) + 12);
+        if (st->dbm_valid) {
+            int16_t w = gfx2_text(s, x, (int16_t)(Y + 12), i2s(buf, st->dbm),
+                                  &font_ui_14b, gfx2_rgb(PAL_INK_DIM));
+            gfx2_text(s, (int16_t)(x + w + 3), (int16_t)(Y + 12), "dBm",
+                      &font_ui_14, gfx2_rgb(PAL_INK_MUTE));
         }
     }
 
@@ -584,7 +643,7 @@ static void draw_status(gfx2_surf_t *s, void *ctx)
          * "Desplazamiento" el chip del NCO se caia siempre.
          *
          * Asi que se le da la vuelta a la prioridad: los cuatro chips de
-         * ESTADO (AGC, BW, NR, NCO) son fijos y siempre estan, y lo que se
+         * ESTADO (AGC, BW, ATT, NCO) son fijos y siempre estan, y lo que se
          * acorta es el NOMBRE del ajuste enganchado, que es lo que varia de
          * verdad -de "AGC" a "Desplazamiento"- y ademas es temporal. El
          * valor no se toca: es lo que estas mirando mientras giras.
@@ -592,117 +651,157 @@ static void draw_status(gfx2_surf_t *s, void *ctx)
         {
             int16_t fijos = (int16_t)(chip_w("AGC", st->agc,
                                              (st->agc && st->agc[0] != 'O')) + ST_CHIP_GAP
-                                      + chip_w("NR", 0, st->nr_on) + ST_CHIP_GAP
+                                      /* ATT y no NR desde el 19/10/2026, y con
+                                       * valor: ver ui_top_state_t::att. "OFF" no
+                                       * cuenta como encendido, igual que en AGC. */
+                                      + chip_w("ATT", st->att,
+                                               (st->att && st->att[0] != 'O')) + ST_CHIP_GAP
                                       + chip_w("NCO", 0, st->nco_on) + ST_CHIP_GAP
                                       + chip_w("JMP", 0, st->jmp_on) + ST_CHIP_GAP);
             int16_t kw_max;
             if (st->bw) { fijos = (int16_t)(fijos + chip_w("BW", st->bw, 1) + ST_CHIP_GAP); }
             kw_max = (int16_t)(ST_CHIP_R - fijos - 10 - kx);
 
-            kw = (int16_t)(gfx2_text_w(nm, &font_ui_14b)
-                           + (vl ? gfx2_text_w(vl, &font_ui_14b) + 8 : 0)
-                           + 40);   /* 40 y no 44, misma razon que chip_w() */
-            if (kw > kw_max) {
+            if (st->ovr) {
                 /*
-                 * Acortar el nombre hasta que quepa, con un punto al final.
-                 * Se corta por BYTES pero respetando UTF-8: los nombres
-                 * llevan acentos ("Reduccion" no, pero "Inversion" si), y
-                 * partir un caracter por la mitad pinta un hueco raro. Los
-                 * bytes 0x80..0xBF son continuacion, nunca principio.
+                 * LA PASTILLA SE LA QUEDA LA SOBRECARGA - 19/10/2026.
+                 *
+                 * Pedido por el usuario: el aviso vivia en el hueco de la
+                 * lectura, donde tapaba el S-metro entero, y se muda aqui.
+                 *
+                 * Mientras dura, no dice que mueve el mando. Es un cambio con
+                 * precio y conviene tenerlo escrito: sabes menos de tu mando
+                 * durante la sobrecarga. A cambio el aviso ocupa 200 px en el
+                 * centro de la franja en vez de 100 en una esquina, y no te
+                 * cuesta la lectura de señal, que es justo lo que se mira
+                 * cuando algo satura. En cuanto el AGC de RF recupera, el
+                 * nombre del mando vuelve solo.
+                 *
+                 * No se acorta con puntos como el nombre del mando: un aviso a
+                 * medias no es un aviso. Si no cupiera, se recorta en seco al
+                 * pintarlo, igual que el resto.
                  */
-                size_t n = strlen(nm);
-                if (n > sizeof nmbuf - 2U) { n = sizeof nmbuf - 2U; }
-                memcpy(nmbuf, nm, n);
-                /* EL CERO, ANTES DEL BUCLE. 11/10/2026. Lo ponia el bucle de
-                 * abajo, que con un nombre de cero o un caracter no entra
-                 * nunca: nmbuf se pasaba a gfx2_text() sin terminar y se leia
-                 * pila hasta dar con un cero. Hoy no es alcanzable -el nombre
-                 * mas corto es "?"- pero el fallo estaba escrito, y lo que
-                 * sale de ahi es basura de letras en la pastilla del mando,
-                 * ensanchandola hasta tapar los chips. */
-                nmbuf[n] = '\0';
-                while (n > 1U) {
-                    n--;
-                    while (n > 1U && (nmbuf[n] & 0xC0) == 0x80) { n--; }
-                    nmbuf[n] = '.';
-                    nmbuf[n + 1U] = '\0';
-                    kw = (int16_t)(gfx2_text_w(nmbuf, &font_ui_14b)
-                                   + (vl ? gfx2_text_w(vl, &font_ui_14b) + 8 : 0)
-                                   + 40);
-                    if (kw <= kw_max) { break; }
-                }
-                nm = nmbuf;
-
-                /*
-                 * Y SI CON EL NOMBRE EN UNA LETRA TAMPOCO CABE, SE ACORTA
-                 * EL VALOR - 15/10/2026.
-                 *
-                 * Pedido por el usuario.
-                 *
-                 * Al meter el quinto chip fijo, sim/chipstest.c enseño que
-                 * JMP se caia con el mando en "Atenuador" ("-12 dB (-12
-                 * dB)") y en "Autoenganche" ("Fijo en el tono"): el bucle de
-                 * arriba acorta el NOMBRE y se para en una letra, y con un
-                 * valor ancho eso no basta. La pastilla seguia creciendo
-                 * hasta comerse el sitio reservado al chip de mas a la
-                 * izquierda.
-                 *
-                 * O sea que el reparto de prioridad que se escribio el
-                 * 23/09/2026 -"los chips de ESTADO son fijos y lo que se
-                 * acorta es lo del mando"- estaba a medias: reservaba el
-                 * sitio pero no obligaba a respetarlo. Ahora el valor cede
-                 * igual que el nombre, y como ultimo recurso la pastilla se
-                 * recorta en seco.
-                 *
-                 * Que ceda el valor y no el chip no es gratis: el valor es
-                 * lo que estas mirando mientras giras. Pero el valor lo
-                 * estas viendo CAMBIAR -y lo sigues viendo, acortado-,
-                 * mientras que un chip que desaparece no deja rastro de que
-                 * existia. Un indicador que se va miente por omision, y eso
-                 * ya se decidio aqui una vez.
-                 */
-                if (kw > kw_max && vl != 0) {
-                    size_t m = strlen(vl);
-
-                    if (m > sizeof vlbuf - 2U) { m = sizeof vlbuf - 2U; }
-                    memcpy(vlbuf, vl, m);
-                    vlbuf[m] = '\0';
-                    while (m > 1U) {
-                        m--;
-                        while (m > 1U && (vlbuf[m] & 0xC0) == 0x80) { m--; }
-                        vlbuf[m] = '.';
-                        vlbuf[m + 1U] = '\0';
-                        kw = (int16_t)(gfx2_text_w(nm, &font_ui_14b)
-                                       + gfx2_text_w(vlbuf, &font_ui_14b) + 8
+                kw = (int16_t)(gfx2_text_w(tr("SOBRECARGA", "OVERLOAD"),
+                                           &font_ui_14b) + 24);
+                if (kw > kw_max) { kw = kw_max; }
+                if (kw < 44)     { kw = 44; }
+            } else {
+                kw = (int16_t)(gfx2_text_w(nm, &font_ui_14b)
+                               + (vl ? gfx2_text_w(vl, &font_ui_14b) + 8 : 0)
+                               + 40);   /* 40 y no 44, misma razon que chip_w() */
+                if (kw > kw_max) {
+                    /*
+                     * Acortar el nombre hasta que quepa, con un punto al final.
+                     * Se corta por BYTES pero respetando UTF-8: los nombres
+                     * llevan acentos ("Reduccion" no, pero "Inversion" si), y
+                     * partir un caracter por la mitad pinta un hueco raro. Los
+                     * bytes 0x80..0xBF son continuacion, nunca principio.
+                     */
+                    size_t n = strlen(nm);
+                    if (n > sizeof nmbuf - 2U) { n = sizeof nmbuf - 2U; }
+                    memcpy(nmbuf, nm, n);
+                    /* EL CERO, ANTES DEL BUCLE. 11/10/2026. Lo ponia el bucle de
+                     * abajo, que con un nombre de cero o un caracter no entra
+                     * nunca: nmbuf se pasaba a gfx2_text() sin terminar y se leia
+                     * pila hasta dar con un cero. Hoy no es alcanzable -el nombre
+                     * mas corto es "?"- pero el fallo estaba escrito, y lo que
+                     * sale de ahi es basura de letras en la pastilla del mando,
+                     * ensanchandola hasta tapar los chips. */
+                    nmbuf[n] = '\0';
+                    while (n > 1U) {
+                        n--;
+                        while (n > 1U && (nmbuf[n] & 0xC0) == 0x80) { n--; }
+                        nmbuf[n] = '.';
+                        nmbuf[n + 1U] = '\0';
+                        kw = (int16_t)(gfx2_text_w(nmbuf, &font_ui_14b)
+                                       + (vl ? gfx2_text_w(vl, &font_ui_14b) + 8 : 0)
                                        + 40);
                         if (kw <= kw_max) { break; }
                     }
-                    vl = vlbuf;
+                    nm = nmbuf;
+
+                    /*
+                     * Y SI CON EL NOMBRE EN UNA LETRA TAMPOCO CABE, SE ACORTA
+                     * EL VALOR - 15/10/2026.
+                     *
+                     * Pedido por el usuario.
+                     *
+                     * Al meter el quinto chip fijo, sim/chipstest.c enseño que
+                     * JMP se caia con el mando en "Atenuador" ("-12 dB (-12
+                     * dB)") y en "Autoenganche" ("Fijo en el tono"): el bucle de
+                     * arriba acorta el NOMBRE y se para en una letra, y con un
+                     * valor ancho eso no basta. La pastilla seguia creciendo
+                     * hasta comerse el sitio reservado al chip de mas a la
+                     * izquierda.
+                     *
+                     * O sea que el reparto de prioridad que se escribio el
+                     * 23/09/2026 -"los chips de ESTADO son fijos y lo que se
+                     * acorta es lo del mando"- estaba a medias: reservaba el
+                     * sitio pero no obligaba a respetarlo. Ahora el valor cede
+                     * igual que el nombre, y como ultimo recurso la pastilla se
+                     * recorta en seco.
+                     *
+                     * Que ceda el valor y no el chip no es gratis: el valor es
+                     * lo que estas mirando mientras giras. Pero el valor lo
+                     * estas viendo CAMBIAR -y lo sigues viendo, acortado-,
+                     * mientras que un chip que desaparece no deja rastro de que
+                     * existia. Un indicador que se va miente por omision, y eso
+                     * ya se decidio aqui una vez.
+                     */
+                    if (kw > kw_max && vl != 0) {
+                        size_t m = strlen(vl);
+
+                        if (m > sizeof vlbuf - 2U) { m = sizeof vlbuf - 2U; }
+                        memcpy(vlbuf, vl, m);
+                        vlbuf[m] = '\0';
+                        while (m > 1U) {
+                            m--;
+                            while (m > 1U && (vlbuf[m] & 0xC0) == 0x80) { m--; }
+                            vlbuf[m] = '.';
+                            vlbuf[m + 1U] = '\0';
+                            kw = (int16_t)(gfx2_text_w(nm, &font_ui_14b)
+                                           + gfx2_text_w(vlbuf, &font_ui_14b) + 8
+                                           + 40);
+                            if (kw <= kw_max) { break; }
+                        }
+                        vl = vlbuf;
+                    }
+                    /* El tope duro. Si ni asi cabe -una fuente mas ancha, un
+                     * idioma nuevo-, la pastilla se queda en su sitio y lo que
+                     * sobra se sale del rotulo, en vez de empujar los chips. El
+                     * texto se recorta solo al pintarse. */
+                    if (kw > kw_max) { kw = kw_max; }
+                    if (kw < 44) { kw = 44; }   /* el iconito y su aire */
                 }
-                /* El tope duro. Si ni asi cabe -una fuente mas ancha, un
-                 * idioma nuevo-, la pastilla se queda en su sitio y lo que
-                 * sobra se sale del rotulo, en vez de empujar los chips. El
-                 * texto se recorta solo al pintarse. */
-                if (kw > kw_max) { kw = kw_max; }
-                if (kw < 44) { kw = 44; }   /* el iconito y su aire */
             }
         }
         s_knob_right = (int16_t)(kx + kw);
-        gfx2_rrect(s, kx, (int16_t)(Y + 8), kw, 24, 12, gfx2_rgba(PAL_ACCENT, 38));
-        gfx2_rrect_outline(s, kx, (int16_t)(Y + 8), kw, 24, 12, 1,
-                           gfx2_rgba(PAL_ACCENT, 150));
-        /* iconito de mando: circulo con muesca */
-        gfx2_rrect(s, (int16_t)(kx + 8), (int16_t)(Y + 14), 12, 12, 6,
-                   gfx2_rgb(PAL_ACCENT));
-        gfx2_fill(s, (int16_t)(kx + 13), (int16_t)(Y + 14), 2, 4,
-                  gfx2_rgb(PAL_SURF_0));
-        {
-            int16_t tx = (int16_t)(kx + 28);
-            tx = (int16_t)(tx + gfx2_text(s, tx, (int16_t)(Y + 12), nm,
-                                          &font_ui_14b, gfx2_rgb(PAL_ACCENT)));
-            if (vl) {
-                gfx2_text(s, (int16_t)(tx + 8), (int16_t)(Y + 12),
-                          vl, &font_ui_14b, gfx2_rgb(PAL_INK));
+        if (st->ovr) {
+            /* En rojo y con la palabra entera, nunca solo el color: es la
+             * misma regla que seguia el aviso cuando vivia en la lectura. */
+            gfx2_rrect(s, kx, (int16_t)(Y + 8), kw, 24, 12, gfx2_rgba(PAL_CRIT, 48));
+            gfx2_rrect_outline(s, kx, (int16_t)(Y + 8), kw, 24, 12, 1,
+                               gfx2_rgba(PAL_CRIT, 200));
+            gfx2_text(s, (int16_t)(kx + 12), (int16_t)(Y + 12),
+                      tr("SOBRECARGA", "OVERLOAD"), &font_ui_14b,
+                      gfx2_rgb(PAL_CRIT));
+        } else {
+            gfx2_rrect(s, kx, (int16_t)(Y + 8), kw, 24, 12, gfx2_rgba(PAL_ACCENT, 38));
+            gfx2_rrect_outline(s, kx, (int16_t)(Y + 8), kw, 24, 12, 1,
+                               gfx2_rgba(PAL_ACCENT, 150));
+            /* iconito de mando: circulo con muesca */
+            gfx2_rrect(s, (int16_t)(kx + 8), (int16_t)(Y + 14), 12, 12, 6,
+                       gfx2_rgb(PAL_ACCENT));
+            gfx2_fill(s, (int16_t)(kx + 13), (int16_t)(Y + 14), 2, 4,
+                      gfx2_rgb(PAL_SURF_0));
+            {
+                int16_t tx = (int16_t)(kx + 28);
+                tx = (int16_t)(tx + gfx2_text(s, tx, (int16_t)(Y + 12), nm,
+                                              &font_ui_14b, gfx2_rgb(PAL_ACCENT)));
+                if (vl) {
+                    gfx2_text(s, (int16_t)(tx + 8), (int16_t)(Y + 12),
+                              vl, &font_ui_14b, gfx2_rgb(PAL_INK));
+                }
             }
         }
     }
@@ -746,9 +845,18 @@ static void draw_status(gfx2_surf_t *s, void *ctx)
          * te entra. */
         if (st->bw) { lbl[n] = "BW"; val[n] = st->bw; act[n] = 1U;
                       id[n] = UI_TOP_HIT_BW; n++; }
-        lbl[n] = "NR";  val[n] = 0; act[n] = st->nr_on;
-        id[n] = UI_TOP_HIT_NR; n++;
-        /* Justo al lado del NR, que es donde lo pidio el usuario. Igual que
+        /*
+         * ATT, EN EL SITIO QUE OCUPABA NR - 19/10/2026, pedido por el
+         * usuario. Ver ui_top_state_t::att para el porque del cambio.
+         *
+         * Lleva valor, como BW: "OFF", "-6" o "-12". El numero sale en el
+         * color de acento cuando hay atenuacion puesta y apagado cuando
+         * no, que es lo que hace chip() con cualquier valor.
+         */
+        lbl[n] = "ATT"; val[n] = st->att;
+        act[n] = (uint8_t)(st->att && st->att[0] != 'O');
+        id[n] = UI_TOP_HIT_ATT; n++;
+        /* Justo al lado del ATT, que es donde lo pidio el usuario. Igual que
          * el: siempre esta, encendido o apagado, para que el sitio no baile
          * segun el estado. */
         lbl[n] = "NCO"; val[n] = 0; act[n] = st->nco_on;
@@ -971,24 +1079,38 @@ void ui_top_draw_status(const ui_top_state_t *st)
  * gastan. De ahi que con señal el fotograma cueste un 21 % mas.
  *
  * Pero de esa franja, lo unico que cambia con la señal vive a la izquierda
- * de ST_KNOB_X: la barra, las unidades S, el dBm y el aviso de sobrecarga.
- * El destino del mando y los chips de la derecha no se mueven.
+ * de los chips: la barra, las unidades S, el dBm y -desde el 19/10/2026- el
+ * aviso de sobrecarga, que vive en la pastilla del mando. Los chips de la
+ * derecha no se mueven con la señal.
  *
  * Asi que esto pinta el MISMO dibujo con la ventana recortada a esa parte.
  * No hay una segunda funcion de dibujo que mantener al dia: es draw_status()
- * otra vez, y lo que cae fuera de la ventana lo recorta gfx2. 284 de 800 px,
- * o sea 11.379 accesos en vez de 32.051.
+ * otra vez, y lo que cae fuera de la ventana lo recorta gfx2. 472 de 800 px,
+ * o sea 18.900 accesos en vez de 32.051.
  */
 /*
- * El ancho: hasta donde empieza el destino del mando, MAS seis pixeles de
- * aire. El peor caso de la lectura -"S9+60" seguido de "AGC activo" o de
- * "AGC active"- acaba justo en 284, o sea con CERO margen, y una traduccion
- * o una fuente distinta lo recortaria un pixel sin que se notara mas que
- * como una letra rara. Los seis de mas repintan el borde izquierdo de la
- * pastilla del mando, que se dibuja igual de bien recortada. Lo vigila
- * sim/top_franjas.c.
+ * El ancho: la lectura MAS la pastilla del mando entera.
+ *
+ * ANTES ERA SOLO HASTA LA PASTILLA (ST_KNOB_X + 6). Dejo de valer el
+ * 19/10/2026, cuando el aviso de SOBRECARGA se mudo del hueco de la lectura
+ * a la pastilla: el aviso depende de la señal igual que la barra de S, asi
+ * que tiene que entrar en "la parte que se mueve con la señal" o se queda
+ * con lo de antes hasta que algo repinte la franja por otro motivo.
+ *
+ * Hoy no se vería -las dos transiciones de s_top.ovr pasan por badges_draw(),
+ * que repinta la franja entera- pero eso es un detalle de QUIEN llama, y el
+ * fallo quedaba escrito aqui esperando a que alguien cambiara aquello. Es la
+ * misma familia de fallo que este fichero lleva contada cinco veces.
+ *
+ * El coste: la ventana pasa de 268 a 472 px de ancho, o sea de 10.700 a
+ * 18.900 accesos al bus por fotograma con señal. Sigue siendo bastante menos
+ * que los 32.051 de la franja entera, que es lo que se vino a evitar.
+ *
+ * ST_KNOB_W es el ancho de la franja reservada a la pastilla; la pastilla
+ * puede quedarse mas corta, nunca pasarse (ver el tope duro kw_max). Los
+ * seis de mas son aire. Lo vigila sim/top_franjas.c.
  */
-#define ST_MOVIL_W  (ST_KNOB_X + 6)
+#define ST_MOVIL_W  (ST_KNOB_X + ST_KNOB_W + 6)
 
 void ui_top_draw_smeter(const ui_top_state_t *st)
 {

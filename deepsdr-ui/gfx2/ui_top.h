@@ -67,8 +67,7 @@ typedef enum {
      * No los habia, y ENCODER_TARGET_FILTRO se mapeaba a UI_KNOB_SCALE_LO
      * "porque habia que poner algo": ajustando el ancho del filtro, la
      * pastilla naranja decia "Escala min.", que es OTRO ajuste. Lo enseño
-     * una captura del usuario, no un banco: en la pantalla se lee, en el
-     * codigo no se ve. */
+     * la pantalla, no un banco: ahi se lee, y en el codigo no se ve. */
     UI_KNOB_FILTRO_LO,
     UI_KNOB_FILTRO_HI
 } ui_knob_t;
@@ -170,7 +169,27 @@ typedef struct {
      */
     int16_t     rds_nom_off;
 
-    uint8_t     nr_on;
+    /*
+     * ATENUADOR DE ENTRADA, EN EL SITIO QUE OCUPABA EL CHIP NR - 19/10/2026.
+     *
+     * Pedido por el usuario.
+     *
+     * El NR tiene su propia casilla en la barra de abajo ("Ruido") y su
+     * celda en Ajustes; el atenuador solo estaba en Ajustes, y es el mando
+     * al que se va corriendo cuando la banda se satura. De los dos, el que
+     * hay que poder tocar sin abrir un menu es este.
+     *
+     * Es un valor y no un interruptor -0, -6 y -12 dB-, asi que se enseña
+     * como el chip BW: rotulo fijo y numero al lado, y el numero en el
+     * color de acento cuando hay atenuacion puesta. "OFF" no cuenta como
+     * encendido, igual que en el chip del AGC.
+     *
+     * Lo que se enseña es EL SUELO QUE HAS PEDIDO, no lo que el AGC de RF
+     * este haciendo en este segundo. Es la misma decision que tomo la celda
+     * de Ajustes el 09/10/2026 y por la misma razon: si el chip se mueve
+     * solo, parece que el toque no obedece.
+     */
+    const char *att;         /* una de UI_TOP_ATT_SIGLAS */
     /* NCO de sintonia puesto (23/09/2026, pedido por el usuario.). Va aqui y
      * no en la cabecera porque es un modo que se enciende y se apaga, como
      * NR, y porque se mira de reojo: con el puesto, el panorama no se mueve
@@ -307,12 +326,32 @@ typedef enum {
     UI_TOP_HIT_NONE = 0,
     UI_TOP_HIT_AGC,
     UI_TOP_HIT_BW,
-    UI_TOP_HIT_NR,
+    UI_TOP_HIT_ATT,
     UI_TOP_HIT_NCO,
     UI_TOP_HIT_JMP,
     UI_TOP_HIT_SPK,
     UI_TOP_HIT_OVR
 } ui_top_hit_t;
+
+/*
+ * LAS TRES POSICIONES DEL ATENUADOR, EN UN SOLO SITIO - 19/10/2026.
+ *
+ * Las escriben DOS ficheros: main.c, que es quien decide cual toca segun el
+ * suelo que haya pedido el usuario, y ui_top.c, que necesita las tres a la
+ * vez para reservarle al chip un ancho fijo (ver chip_w()). Una lista
+ * escrita a mano en dos sitios es la enfermedad que este proyecto lleva
+ * contada seis veces, asi que se escribe UNA y los dos se la copian.
+ *
+ * Es una macro y no un array con extern porque asi cada fichero se queda
+ * con su propia copia constante -el enlazador no tiene que exportar nada- y
+ * ademas puede medirla con sizeof en un _Static_assert, que es lo que ata
+ * esta lista a la de dB y a la de nombres largos de Ajustes.
+ *
+ * "-06" y no "-6" a proposito, pedido por el usuario: con las tres de tres
+ * caracteres el chip mide siempre lo mismo y lo que hay a su izquierda no
+ * baila al cambiar de estado.
+ */
+#define UI_TOP_ATT_SIGLAS  { "OFF", "-06", "-12" }
 
 /* Que chip hay bajo (x, y), o UI_TOP_HIT_NONE. */
 ui_top_hit_t ui_top_hit(uint16_t x, uint16_t y);

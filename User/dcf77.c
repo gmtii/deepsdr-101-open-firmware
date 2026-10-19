@@ -325,7 +325,7 @@ static uint32_t s_elem_ultimo_ms;
  * mas elementos en un segundo saltaba la rama de "imposible: ruido", se
  * tiraba el bit y no se completaba una trama en la vida.
  *
- * MEDIDO sobre la grabacion de TDF del usuario (ver sim/als_real.c): **4,19
+ * MEDIDO sobre la grabacion de TDF (ver sim/als_real.c): **4,19
  * elementos por segundo** contados con histeresis, 5,73 con umbral unico, y
  * repartidos por todo el segundo -concentracion circular 0,155, o sea
  * uniforme-. El tope de aqui eran dos.

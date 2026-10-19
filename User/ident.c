@@ -125,7 +125,7 @@ static const ident_firma_t k_firmas[] = {
  * comentario de TONO_REALCE en stanag_det.c, que es donde se arreglo.
  *
  * LO BONITO DE ESTA: se midio DOS VECES por caminos que no comparten nada.
- * Yo, con numpy sobre un audio que el usuario grabo con el movil delante del
+ * Con numpy sobre un audio grabado con el movil delante del
  * altavoz; y la radio, con su detector, sobre la señal de verdad:
  *
  *                la radio      yo        diferencia
@@ -422,7 +422,7 @@ static const ident_firma_t k_firmas[] = {
  * de milisegundo-; lo que no distinguia era la TABLA.
  *
  * AQUI HABIA UN SEGUNDO ARGUMENTO Y ERA MALO. Decia que por el ancho
- * tampoco podia ser 110B: sobre las grabaciones del usuario la señal media
+ * tampoco podia ser 110B: sobre las grabaciones de referencia la señal media
  * unos 1450 Hz, y 2400 Bd con raiz de coseno alzado ocupan 3240. Lo retiro,
  * porque una captura de pantalla posterior de la propia radio, con la misma
  * señal mejor centrada en el paso de audio, mide ANCHO 2900 con la trama al
@@ -998,7 +998,7 @@ uint16_t ident_casa(const stanag_det_t *m, const ident_cad_t *c,
             break;
         case IDENT_POR_PICO:
             /* Una raya sola: mas de la mitad de la potencia en +-8 Hz. Con
-             * 57% medido en la grabacion del usuario y 2% en un modem suyo,
+             * 57% medido en la grabacion de referencia y 2% en un modem suyo,
              * el 40% parte la diferencia de sobra. */
             if (!m->hay_esp || m->pico_pc < 40U) { continue; }
             break;
@@ -1409,9 +1409,70 @@ static void ponf(const char *fmt, int a, int b, int c)
     s_nlin++;
 }
 
+/*
+ * SE PREGUNTA ANTES DE COGER, QUE ES LO QUE AQUI FALTABA - 18/10/2026.
+ *
+ * El cerrojo de hfdl_ram.c es UN BIT, sin cuenta de anidamiento: el que
+ * suelta, suelta para todos. Y soltar no es solo bajar el bit, es ademas
+ * waterfall_init(), o sea un memset de 60.304 bytes.
+ *
+ * jtty_modo.c, ale_modo.c y stanag_modo.c preguntan antes -su
+ * "if (waterfall_prestada()) return 0", con el comentario "otro modo la
+ * tiene"-. Este no preguntaba, y es justo el que main.c llama PEGADO a
+ * stanag_modo_poll(), en la misma vuelta del bucle. Asi que con los dos
+ * andando pasaba esto:
+ *
+ *   1. STANAG pregunta, ve libre, coge y empieza.
+ *   2. este coge igual y trabaja ENCIMA del mismo sitio.
+ *   3. el primero que acaba baja el cerrojo y borra los 60 kB.
+ *   4. el otro sigue escribiendo en memoria ya devuelta, que la cascada
+ *      vuelve a tratar como pixeles.
+ *
+ * Desde fuera: la radio deja de coger las pulsaciones. Es el sintoma que
+ * sim/stanag_latido.c ya cuenta tres veces por otra causa -el panel
+ * repintandose-, y por eso costo reconocerlo: esta vez no era el panel,
+ * eran los 60 kB de memset de mas en cada vuelta.
+ *
+ * Lo vigila ahora tools/prestamo_check.py: el que coja esta RAM, que
+ * pregunte.
+ */
 static float *ram_coge(uint32_t floats)
 {
     uint8_t *b; uint32_t cap = 0U;
+    /*
+     * *** AQUI PUSE "if (waterfall_prestada()) { return 0; }" EL 18/10/2026
+     * POR LA MAÑANA, Y ESTABA MAL. Retirado la misma tarde. ***
+     *
+     * El razonamiento era bueno y el sitio no. Esa guardia es la de un
+     * PRESTATARIO -el que coge la memoria en cada vuelta de su poll- y
+     * esto no lo es: ram_coge() se llama desde ident_modo_start(), UNA vez,
+     * al entrar en el modo, y la memoria no se suelta hasta
+     * ident_modo_stop(). O sea que el identificador es DUEÑO, como sstv,
+     * hell y dsc. Lo mire esa misma mañana para los otros tres y con este
+     * no lo mire.
+     *
+     * LO QUE ROMPIO, que es peor que lo que arreglaba: con STANAG puesto,
+     * la memoria ya esta cogida, asi que esto devolvia 0, ident_modo_start()
+     * devolvia 0 y s_activo se quedaba en cero. Y entonces
+     * demod_mode_entry_active() compara TODOS los interruptores de la fila
+     * contra el estado de verdad: la fila dice ident=1 y la radio dice 0,
+     * asi que NO CASA NINGUNA FILA. De ahi el boton de Modo con "?", la
+     * rejilla sin marcar nada y digi_panel_active() devolviendo 0, con lo
+     * que el espectro no cede su sitio y el panel no se pinta. Desde fuera:
+     * la radio frita.
+     *
+     * Es LITERALMENTE el fallo que este proyecto ya documento con el DSC el
+     * 08/10 -ver dsc_stop() en main.c-, y lo volvi a hacer por el otro
+     * extremo. El sintoma de "ninguna fila casa" es el mismo venga de
+     * sobrar un interruptor o de faltar.
+     *
+     * El choque de verdad entre STANAG e IDENT -que comparten el motor y
+     * el prestamo- no se arregla negandole la entrada a uno. Ver
+     * ident_modo_start().
+     *
+     * DUENO DEL PRESTAMO, no prestatario: por eso aqui NO se pregunta
+     * waterfall_prestada(). Esta en la lista de tools/prestamo_check.py.
+     */
     hfdl_ram_coge();
     b = hfdl_ram_todo(&cap);
     if (b == 0 || cap < (floats * 4U)) { hfdl_ram_suelta(); return 0; }
@@ -1984,10 +2045,26 @@ void ident_modo_poll(void)
      * eso cuatro veces por segundo seria tirar el bucle principal por una
      * medida que se mueve cada minuto.
      */
+    /*
+     * Y NO LAS DOS COSAS EN LA MISMA VUELTA - 18/10/2026.
+     *
+     * cad_calcula() son 512 logaritmos y una autocorrelacion de 256
+     * retardos; stanag_det_paso() es un tercio de una ventana (ver su
+     * comentario). Las dos juntas en el mismo poll es el peor caso del
+     * bucle principal, y el bucle principal es el que lee el tactil: un
+     * gesto necesita varias muestras seguidas, asi que una vuelta larga no
+     * se ve como lentitud, se ve como una radio que no coge las
+     * pulsaciones - con el encoder funcionando, que no depende de eso-.
+     *
+     * La cadencia se mide cada cuatro segundos y el detector cada 86 ms:
+     * que la ventana espere UNA vuelta mas no le importa a nadie, y
+     * s_listo se queda puesto esperando.
+     */
     if (s_cad_desde >= 8U) {
         s_cad_desde = 0U;
         cad_calcula();
-        hay_nuevo = 1U;
+        escribe();
+        return;
     }
 
     if (stanag_det_paso(&r)) {

@@ -63,6 +63,15 @@
  */
 
 #define MAPA_ETI_MAX    12U   /* el tope mas alto: 4 + MAPA_ESC_MAX */
+/*
+ * Lo que se sabe de una etiqueta ademas de su nombre. Hoy: la direccion
+ * OACI de un avion y su modelo, "781F2E A359 Airbus A350-941".
+ *
+ * TREINTA Y DOS SALE DE LA CUENTA, no de redondear: el nombre de modelo
+ * mas largo que genera tools/icao24.py mide 23, la OACI 6, el espacio 1 y
+ * el cero final 1. Son 31; 32 deja el array alineado.
+ */
+#define MAPA_ETI_EXTRA  32U
 #define MAPA_ETI_RAYOS   6U   /* cuantas llevan rayo desde el QTH */
 #define MAPA_ETI_PTS    17U   /* puntos del arco: 16 tramos */
 #define MAPA_ETI_CALL   12U   /* indicativo + el cero */
@@ -72,6 +81,24 @@
 typedef struct {
     char     call[MAPA_ETI_CALL];
     char     loc[MAPA_ETI_LOC];
+    /*
+     * LO QUE SE SABE ADEMAS DEL NOMBRE - 19/10/2026.
+     *
+     * Avisado por el usuario: en el mapa, la ficha de un avion no decia ni
+     * el modelo ni la OACI, que la lista si enseña.
+     *
+     * No era que no se supieran: es que no habia por donde pasarlos. `call`
+     * es UN nombre -en un avion, el distintivo de vuelo O la direccion
+     * OACI, nunca los dos- y no habia sitio para nada mas.
+     *
+     * Es un PUNTERO y no un array: lo rellena quien llama, con su propio
+     * buffer, y mapa_eti_pon() solo lo copia si este dx resulta ser el
+     * elegido. Asi no cuesta un byte en los renglones que no lo son - y
+     * son casi todos.
+     *
+     * 0 = no hay nada que añadir, que es lo normal fuera de HFDL.
+     */
+    const char *extra;
     int16_t  snr;        /* dB, como lo da el modo */
     uint16_t minuto;     /* la hora del mensaje en minutos UTC (h*60+m) */
 

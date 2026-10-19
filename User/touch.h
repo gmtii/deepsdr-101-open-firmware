@@ -50,6 +50,19 @@ void touch_init(void);
  * coste, varias transacciones SPI con promediado). */
 uint8_t touch_is_pressed(void);
 
+/*
+ * El latido: una mirada al tactil, con su propio reloj, para colgarla de
+ * gfx2_set_pump() y que la entrada no desaparezca durante un repintado
+ * largo. Solo mira; no despacha nada. Ver su comentario en touch.c.
+ */
+void touch_latido(void);
+/* Si el latido vio un contacto confirmado que el bucle no ha llegado a
+ * atender, lo entrega UNA vez y se olvida. Devuelve 0 si no hay nada. */
+uint8_t touch_pendiente(uint16_t *x, uint16_t *y);
+/* Tirar lo que hubiera: al entrar en una pantalla nueva, un toque de
+ * antes no es suyo. */
+void touch_pendiente_borra(void);
+
 /* 1 si la ISR de PENIRQ ha marcado un flanco de bajada desde la ultima
  * vez que se llamo a esta funcion (y lo limpia al leerlo - "consume" el
  * evento). Pensado para que el bucle principal (o quien invoque el

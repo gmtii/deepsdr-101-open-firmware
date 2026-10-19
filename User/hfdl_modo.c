@@ -685,7 +685,7 @@ static volatile uint32_t s_pk_sin_armar;    /* enganches llegados sin pre-key de
  * despues" -lo escribi yo ahi abajo esta misma manana- ERA FALSO, y
  * encima era el numero sobre el que se estaba decidiendo donde mirar.
  *
- * Medido sobre los 214 segundos que el usuario grabo con su CAT: 43 tonos,
+ * Medido sobre los 214 segundos de la grabacion por CAT: 43 tonos,
  * y solo 18 llevan preambulo detras. Los otros 25 son portadoras limpias
  * de 0,2 a 0,36 segundos, al mismo nivel y en las mismas frecuencias, y
  * detras no hay NADA: ni A1, ni la pareja A1/A2 repetida a 127 simbolos,
@@ -729,7 +729,7 @@ static volatile uint32_t s_pk_gap_min = 0xFFFFFFFFu;
  * QUE PASA CON LOS PRE-KEY QUE NO LLEGAN A ENGANCHAR - 14/10/2026
  * ======================================================================
  *
- * Sobre la grabacion del usuario: 46 tonos de verdad, 28 enganches de A1.
+ * Sobre la grabacion de referencia: 46 tonos de verdad, 28 enganches de A1.
  * Dieciocho ráfagas que el pre-key ve y el preambulo no. La primera
  * sospecha -que el detector partiera un tono en dos- esta DESCARTADA
  * midiendo: de los 46, uno solo cae a menos de un tono del anterior.
@@ -2427,6 +2427,67 @@ uint8_t hfdl_modo_ident(uint32_t i, char *out, uint8_t tope)
     return (uint8_t)(p > 0U);
 }
 
+/*
+ * ======================================================================
+ * LA OACI Y EL MODELO, PARA LA FICHA DEL MAPA - 19/10/2026
+ * ======================================================================
+ *
+ * Avisado por el usuario: en la vista de mapa, la ficha de abajo dice
+ * "CCA845 · 864 km · AZ 58" y no el modelo del avion ni su direccion
+ * OACI, que la LISTA si enseña en sus dos primeras columnas.
+ *
+ * Y no era que no se supieran: es que no se le pasaban. La ficha del mapa
+ * se arma con mapa_eti_dx_t, que para un avion solo llevaba un campo de
+ * nombre -hfdl_modo_ident(), que da el distintivo de vuelo O la OACI, uno
+ * de los dos y nunca los dos-. El modelo ya esta guardado en la tabla
+ * desde que se consulto la base (ver icao24_db_lookup() mas arriba): solo
+ * faltaba una puerta para sacarlo.
+ *
+ * QUE ESCRIBE, Y POR QUE ESE ORDEN. "781F2E A359 Airbus A350-941": la
+ * direccion OACI primero y el modelo detras, que es el mismo orden de las
+ * columnas de la lista, para que quien mire las dos pantallas vea lo
+ * mismo en el mismo sitio.
+ *
+ * Y NO SE REPITE LA OACI. Si el avion no ha dicho todavia su distintivo
+ * de vuelo, hfdl_modo_ident() ya devuelve la OACI, y entonces el nombre
+ * de la ficha ES la OACI: ponerla otra vez aqui saldria "781F2E ·
+ * 781F2E · A359...". Por eso esta decision vive en este fichero y no en
+ * quien llama: es aqui donde se sabe cual de los dos dio ident().
+ *
+ * Devuelve 0 y deja la cadena vacia cuando no hay nada que añadir, que es
+ * lo honrado: un avion recien oido no tiene ni modelo ni nada.
+ */
+uint8_t hfdl_modo_ficha(uint32_t i, char *out, uint8_t tope)
+{
+    const hfdl_ac_rec_t *r;
+    uint8_t p = 0U;
+
+    if (out == 0 || tope < 8U) { return 0U; }
+    out[0] = '\0';
+    if (i >= (uint32_t)s_tabla.count || s_tabla.rec == 0) { return 0U; }
+    r = &s_tabla.rec[i];
+
+    /* La OACI, solo si el nombre de la ficha no es ya ella. Ver arriba. */
+    if ((r->flags & HFDL_AC_R_ICAO) != 0U
+        && (r->flags & HFDL_AC_R_FLIGHT) != 0U && r->flight[0] > ' '
+        && p + 6U < (uint8_t)tope) {
+        p = (uint8_t)(p + hex24(&out[p], r->icao));
+    }
+
+    if (r->model[0] != '\0') {
+        uint8_t c;
+
+        if (p > 0U && p < (uint8_t)(tope - 1U)) { out[p++] = ' '; }
+        for (c = 0U; c < 23U && r->model[c] >= 32 && r->model[c] < 127
+                  && p < (uint8_t)(tope - 1U); c++) {
+            out[p++] = r->model[c];
+        }
+    }
+
+    out[p] = '\0';
+    return (uint8_t)(p > 0U);
+}
+
 /* Cuantos aviones hay en la TABLA, que son mas que los renglones. */
 uint32_t hfdl_modo_aviones(void) { return (uint32_t)s_tabla.count; }
 
@@ -2781,7 +2842,7 @@ void hfdl_modo_simbolo(float ih, float qh, float i_sym, float q_sym)
          * al preambulo con el instante de muestreo corrido. liquid-dsp
          * trae lock()/unlock() justo para eso.
          *
-         * Medido sobre los tres minutos que el usuario grabo con el CAT de
+         * Medido sobre los tres minutos de la grabacion por el CAT de
          * su propia radio: 10 tramas buenas pasaron a 9. Peor. Y en la
          * otra grabacion larga, igual. Asi que o el lazo ya se porta bien
          * con la portadora -tiene sentido: una portadora pura es una

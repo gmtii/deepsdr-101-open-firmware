@@ -65,6 +65,14 @@ void hell_start(float fs_hz)
 
     s_on = 0U; s_st = 0;
 
+    /*
+     * DUENO DEL PRESTAMO, no prestatario: aqui no se pregunta
+     * waterfall_prestada() y es a proposito. Ver tools/prestamo_check.py.
+     *
+     * Mismo caso que dsc_start() y sstv_start(): se entra aqui desde el
+     * cambio de modo, con el modo anterior ya parado y la memoria suelta.
+     * El que la coge en un poll es el que tiene que preguntar antes.
+     */
     hfdl_ram_coge();
     b = hfdl_ram_todo(&cap);
     if (b == 0 || cap < (uint32_t)sizeof(hell_st_t)) {

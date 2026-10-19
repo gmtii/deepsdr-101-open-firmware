@@ -1,9 +1,9 @@
 # Avisos extra SOLO para User/ (23/09/2026). Este fragmento lo incluye el
 # Makefile con "-include avisos.mk", y existe por una razon practica: el
-# puente que usa Claude para escribir en este ordenador se niega a escribir
-# ficheros llamados Makefile (son codigo que se ejecuta), pero si deja
-# escribir un .mk. Asi los cambios de opciones de compilacion no obligan a
-# renombrar nada a mano cada vez.
+# puente con el que se escriben los ficheros de este proyecto se niega a
+# escribir ficheros llamados Makefile (son codigo que se ejecuta), pero si
+# deja escribir un .mk. Asi los cambios de opciones de compilacion no
+# obligan a renombrar nada a mano cada vez.
 #
 # Que cazan: la clase de fallo que en este proyecto ya ha mordido varias
 # veces y que el compilador aceptaba sin rechistar - la misma condicion

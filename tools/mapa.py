@@ -18,9 +18,9 @@ tiene ni idea de que la aplicacion existe.
 import re
 import sys
 
-ESPERADO_APP  = 0x0800C000
+ESPERADO_APP  = 0x08008000
 ESPERADO_BOOT = 0x08000000
-BOOT_LEN      = 48 * 1024       # sectores 0, 1 y 2
+BOOT_LEN      = 32 * 1024       # sectores 0 y 1
 FIN_FLASH     = 0x08080000
 
 
@@ -97,7 +97,7 @@ def vtor_sueltos():
     encuentre sea uno de los tres valores que tienen sentido:
 
         0x08000000     el cargador: su tabla esta en la base
-        0x0800C000     la aplicacion (= CARGA_APP_BASE)
+        0x08008000     la aplicacion (= CARGA_APP_BASE)
         0              el salto a la ROM de fabrica (modo DFU)
 
     Cualquier otro es un fallo, lo haya escrito quien lo haya escrito.
@@ -159,8 +159,20 @@ def main():
         ('User/cargador.h',
          r'#define\s+CARGA_APP_BASE\s+0x([0-9A-Fa-f]+)',
          'CARGA_APP_BASE'),
+        # EL PATRON NO LLEVA LA DIRECCION DENTRO, Y ES A PROPOSITO.
+        # Ponia 0x(0800C[0-9A-Fa-f]{3}), o sea que buscaba el valor que
+        # esperaba encontrar. Al mover la base el 17/10/2026 este guion no
+        # dijo "vale 0x08008000 y se espera 0x0800C000", que es su oficio:
+        # dijo "no encuentro el SCB->VTOR", que es lo que dice tambien
+        # cuando alguien lo borra. Un guardian que no distingue "ha
+        # cambiado" de "ya no esta" obliga a leerle el codigo para saber
+        # cual de las dos cosas pasa.
+        #
+        # Ahora coge el VTOR que sigue al #else -el de la aplicacion, que
+        # el #ifdef CARGADOR_ARRANQUE separa del otro- sea cual sea su
+        # valor, y lo compara aqui.
         ('CMSIS/GD/GD32F4xx/Source/system_gd32f4xx.c',
-         r'SCB->VTOR\s*=\s*0x(0800C[0-9A-Fa-f]{3})',
+         r'#else[\s\S]{0,1200}?SCB->VTOR\s*=\s*0x([0-9A-Fa-f]{8})',
          'el SCB->VTOR de la aplicacion'),
     ]
 

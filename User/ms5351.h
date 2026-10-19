@@ -205,7 +205,7 @@ uint8_t ms5351_set_lo_freq(uint32_t freq_hz);
  * La maniobra de los 90 grados (ver ms5351.c) solo se rehace al CAMBIAR
  * DE ZONA, y la zona 10 va de 3,17 a 4,8 MHz entera: dentro de ella el
  * fVCO se mueve de 600 a 900 MHz con un enganche hecho una sola vez. En
- * el video del usuario la imagen de la emisora de 3.289 ESTA con el LO en
+ * el video de referencia la imagen de la emisora de 3.289 ESTA con el LO en
  * 3.317 y NO esta con el LO en 3.269, sin haber salido de la zona.
  *
  * Esto no se separa discutiendolo: se separa rehaciendo el enganche SIN

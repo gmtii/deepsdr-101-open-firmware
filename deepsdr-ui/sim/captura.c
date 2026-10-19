@@ -100,7 +100,7 @@ static void estado(void)
     top.rds_off     = 70;
     top.s_units = 7; top.over_db = 0; top.dbm = -79; top.dbm_valid = 0;
     top.knob = UI_KNOB_TUNE; top.knob_value = "1 kHz";
-    top.agc = "MED"; top.bw = "0-2,7k"; top.nr_on = 1; top.nco_on = 1;
+    top.agc = "MED"; top.bw = "0-2,7k"; top.att = "-06"; top.nco_on = 1;
 
     for (i = 0; i < UI_ACT_N; i++) {
         act.name[i] = nom[i]; act.value[i] = val[i];

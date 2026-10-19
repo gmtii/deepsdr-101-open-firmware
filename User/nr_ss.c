@@ -161,7 +161,7 @@ static uint32_t s_pt_frm; /* which s_sigf[] row gets written next (mod NR_SS_NFR
  * al azar, que es el ruido musical de toda la vida.
  *
  * NO SE HA PODIDO REPRODUCIR EL BURBUJEO FUERTE que se describia -ni en el
- * banco ni en el video del usuario, y el porque esta en sim/nr_burbujeo.c-. Asi
+ * banco ni en el video de referencia, y el porque esta en sim/nr_burbujeo.c-. Asi
  * que esto NO entra por oido, entra porque las tres medidas salen mejores o
  * iguales y ninguna peor:
  *

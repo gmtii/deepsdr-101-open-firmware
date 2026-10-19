@@ -39,6 +39,22 @@ typedef struct {
     uint8_t  veces;           /* cuantos mensajes suyos hay en la lista */
     uint8_t  elegida;
     uint8_t  avion;           /* ver mapa_eti_dx_t */
+    /*
+     * LO QUE SE SABE ADEMAS DEL NOMBRE - 19/10/2026. En un avion, su OACI
+     * y su modelo. Ver mapa_eti_dx_t::extra.
+     *
+     * SE GUARDA EN LA ENTRADA Y NO SE DEJA UN PUNTERO, aunque el puntero
+     * costaria 48 bytes en vez de 384. Dos razones:
+     *
+     *   - el buffer de quien llama se reutiliza en cada vuelta de su
+     *     bucle, asi que el puntero apuntaria al ultimo avion de la lista
+     *     para todas las etiquetas;
+     *   - y los datos de la ficha tienen que vivir en la entrada, que es
+     *     justo lo que se arreglo el 13/10 (ver el comentario de
+     *     sel_copia()): si no, la ficha sale bien o mal segun el orden en
+     *     que el que llama haga las cosas.
+     */
+    char     extra[MAPA_ETI_EXTRA];
 } eti_t;
 
 static mapa_caja_t s_caja;
@@ -65,6 +81,11 @@ static int16_t  s_sel_az;
 static uint8_t  s_sel_veces;
 /* 1 = el elegido es un avion: ni "DX" delante ni pais. Ver mapa_eti.h. */
 static uint8_t  s_sel_avion;
+/* Lo que se sabe del elegido ademas de su nombre: en un avion, su OACI y
+ * su modelo. Se copia SOLO del elegido - ver mapa_eti_dx_t::extra. Treinta
+ * y dos bytes porque el modelo mas largo que genera tools/icao24.py son 23
+ * mas los seis de la OACI, el espacio y el cero. */
+static char     s_sel_extra[32];
 static uint8_t  s_sel_visto;    /* lo han vuelto a ofrecer en este fotograma */
 
 #define ETI_SEP     6     /* del punto al texto */
@@ -330,6 +351,7 @@ static void sel_copia(const eti_t *e)
     s_sel_min = e->minuto;
     s_sel_veces = e->veces;
     s_sel_avion = e->avion;
+    copia(s_sel_extra, e->extra, (uint8_t)sizeof s_sel_extra);
     s_sel_km = 0U;
     s_sel_az = -1;
 
@@ -485,6 +507,8 @@ uint8_t mapa_eti_pon(const mapa_eti_dx_t *dx)
     s_eti[s_n].lon_c = lon_c;
     s_eti[s_n].lat_c = lat_c;
     s_eti[s_n].avion = dx->avion;
+    copia(s_eti[s_n].extra, dx->extra ? dx->extra : "",
+          (uint8_t)MAPA_ETI_EXTRA);
     s_eti[s_n].snr = dx->snr;
     s_eti[s_n].minuto = dx->minuto;
     s_eti[s_n].px = px;
@@ -652,6 +676,16 @@ uint8_t mapa_eti_texto(char *buf, uint8_t tope, uint16_t ahora)
             i = pon_punto(buf, i, tope);
             i = pon_txt(buf, i, tope, pais);
         }
+    }
+    /*
+     * Y LO QUE SE SEPA ADEMAS, detras del nombre y delante de la
+     * distancia: en un avion, su direccion OACI y su modelo. Va aqui y no
+     * al final porque es QUIEN ES, igual que el pais de una estacion dos
+     * bloques mas arriba; los kilometros y el rumbo son donde esta.
+     */
+    if (s_sel_extra[0] != '\0') {
+        i = pon_punto(buf, i, tope);
+        i = pon_txt(buf, i, tope, s_sel_extra);
     }
     if (s_sel_km > 0U) {
         i = pon_punto(buf, i, tope);
@@ -879,4 +913,5 @@ void mapa_eti_suelta(void)
     s_sel_snr = 0;
     s_sel_min = 0U;
     s_sel_avion = 0U;
+    s_sel_extra[0] = '\0';
 }

@@ -297,7 +297,7 @@ int main(void)
     static const char *k[] = {
         "HFDL-300bps", "HFDL-600bps", "HFDL-1200bps",
         "HFDL", "HFDL_Sound", "Hf-acars",
-        /* La grabacion del usuario, por el CAT de su propia radio: su
+        /* La grabacion de referencia, por el CAT de su propia radio: su
          * antena, su cadena de recepcion, su propagacion. Es la unica
          * que mide lo que el ve. */
         "radio_oscar",

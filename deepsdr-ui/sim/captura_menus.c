@@ -166,7 +166,7 @@ static void estado_comun(void)
     top.rds        = "HOL - NL - 00:00-24:00";
     top.s_units = 7; top.dbm = -79;
     top.knob = UI_KNOB_TUNE; top.knob_value = "1 kHz";
-    top.agc = "MED"; top.bw = "0-2,7k"; top.nr_on = 1; top.nco_on = 1;
+    top.agc = "MED"; top.bw = "0-2,7k"; top.att = "-06"; top.nco_on = 1;
 
     for (i = 0; i < UI_ACT_N; i++) {
         act.name[i] = nom[i]; act.value[i] = val[i];

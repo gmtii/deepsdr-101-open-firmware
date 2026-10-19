@@ -111,13 +111,50 @@ static void fft_run(void)
     uint32_t i, j;
     uint32_t half_size, step;
 
-    for (half_size = 1U, step = FFT_SIZE / 2U; half_size < FFT_SIZE;
+    /*
+     * EL GIRO SE SACA UNA VEZ POR COLUMNA, NO UNA POR MARIPOSA - 19/10/2026.
+     *
+     * Pedido por el usuario: que la radio vaya mas rapido. Y esta
+     * transformada corre en CADA fotograma del espectro, unas 45 veces por
+     * segundo.
+     *
+     * Los dos bucles de dentro estaban al reves: el de `j` -que es el que
+     * elige el giro- era el interior, asi que `tre` y `tim` se volvian a
+     * calcular en cada mariposa. Son ocho etapas por 128 mariposas = 1.024
+     * giros por transformada, cada uno con una multiplicacion para el
+     * indice y dos lecturas de tabla.
+     *
+     * Dandole la vuelta a los dos bucles el giro se calcula una vez por
+     * columna: 1 + 2 + 4 + ... + 128 = 255. CUATRO VECES menos. Y la
+     * primera etapa no lleva giro -solo existe j = 0, o sea w = 1-, asi
+     * que se saca aparte y se queda en una suma y una resta sin las cuatro
+     * multiplicaciones: son 128 mariposas de las 1.024.
+     *
+     * Las mariposas son las mismas y en el mismo orden dentro de cada una,
+     * asi que el resultado es el mismo bit a bit. Lo comprueba
+     * sim/ffttest.c, y el espectro entero lo comprueba sim/espectro_oro.c
+     * contra una imagen patron.
+     *
+     * El mismo cambio, por el mismo motivo, esta en la transformada de
+     * stanag_det.c.
+     */
+    for (i = 0; i < FFT_SIZE; i += 2U) {
+        float br = s_re[i + 1U], bi = s_im[i + 1U];
+        s_re[i + 1U] = s_re[i] - br;
+        s_im[i + 1U] = s_im[i] - bi;
+        s_re[i]      = s_re[i] + br;
+        s_im[i]      = s_im[i] + bi;
+    }
+
+    for (half_size = 2U, step = FFT_SIZE / 4U; half_size < FFT_SIZE;
          half_size <<= 1U, step >>= 1U) {
-        for (i = 0; i < FFT_SIZE; i += (half_size << 1U)) {
-            for (j = 0; j < half_size; j++) {
-                uint32_t tw_idx = j * step;
-                float tre = s_twiddle_cos[tw_idx];
-                float tim = s_twiddle_sin[tw_idx];
+        uint32_t tw_idx = 0U;
+
+        for (j = 0; j < half_size; j++, tw_idx += step) {
+            float tre = s_twiddle_cos[tw_idx];
+            float tim = s_twiddle_sin[tw_idx];
+
+            for (i = 0; i < FFT_SIZE; i += (half_size << 1U)) {
                 uint32_t a = i + j;
                 uint32_t b = a + half_size;
                 float br = s_re[b] * tre - s_im[b] * tim;

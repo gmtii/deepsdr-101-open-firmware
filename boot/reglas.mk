@@ -17,7 +17,7 @@ CFLAGS  := -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
            -Wall -Os -ffunction-sections -fdata-sections -g3
 LDFLAGS := -TGD32F450VE_BOOT.ld -Wl,--gc-sections -nostartfiles -specs=nano.specs
 
-SRC := boot_main.c soporte.c usb_it.c atajo_dfu.c atajo_gesto.c panel_serie.c \
+SRC := boot_main.c font_boot.c soporte.c usb_it.c atajo_dfu.c atajo_gesto.c panel_serie.c \
        disco_msc.c \
        $(wildcard $(FW)/usb/GD32F4xx_usb_library/driver/Source/drv_usb_core.c) \
        $(FW)/usb/GD32F4xx_usb_library/driver/Source/drv_usb_dev.c \

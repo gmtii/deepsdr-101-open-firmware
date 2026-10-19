@@ -4,7 +4,7 @@
  * QUE PRUEBA ESTO Y QUE NO.
  *
  * El CAÑON -los dos tonos, el reloj de bit- se comprueba con señal de verdad:
- * out/dscaire mete las grabaciones del usuario por el mismo dsc.c y saca cuatro
+ * out/dscaire mete las grabaciones de referencia por el mismo dsc.c y saca cuatro
  * llamadas con su comprobacion correcta. Eso aqui no se repite.
  *
  * Lo que se prueba aqui es lo de DETRAS del detector, metiendo los simbolos

@@ -94,7 +94,7 @@ bool hfdl_hfnpdu_parse_performance_data(const uint8_t *buf, uint32_t len, hfdl_h
  * EL OCTETO DE TIPO DEL HFNPDU, Y DONDE EMPIEZA SU CONTENIDO.
  * 14/10/2026, con bytes de verdad por fin.
  *
- * El volcado en pantalla de la radio del usuario enseño dos tramas del mismo
+ * El volcado en pantalla de la radio dio dos tramas del mismo
  * minuto en 17.967 kHz:
  *
  *   FF D1 51 54 52 38 37 51 ...   -> sobre, tipo 0xD1, "QTR87Q"

@@ -271,14 +271,18 @@ void SystemInit (void)
 #ifdef CARGADOR_ARRANQUE
     SCB->VTOR = 0x08000000;     /* el cargador: su tabla esta en la base */
 #else
-    /* 0x0800C000 desde la rama "reload": la aplicacion bajo de 0x08020000
-     * al principio del sector 3 cuando el mapa de flash dejo de imponerlo
-     * el gestor de fabrica. El numero esta ademas en CARGA_APP_BASE
-     * (User/cargador.h) y en el MEMORY del enlazador; aqui no se puede
-     * incluir cargador.h -este fichero lo comparten la aplicacion y el
-     * cargador, y es anterior a todo-, asi que lo comprueba avisos.mk
-     * leyendo los tres sitios. */
-    SCB->VTOR = 0x0800C000;
+    /* 0x08008000 desde el 17/10/2026: la aplicacion bajo otro sector al
+     * recortar la fuente del cargador, que ocupaba el 27 % de lo que
+     * medía. Antes fue 0x0800C000 -el sector 3, desde que el mapa de
+     * flash dejo de imponerlo el gestor de fabrica- y antes 0x08020000.
+     *
+     * El numero esta ademas en CARGA_APP_BASE (User/cargador.h), en el
+     * MEMORY de los dos .ld de la aplicacion y en la tabla de sectores de
+     * fmc_borra() (boot/boot_main.c); aqui no se puede incluir
+     * cargador.h -este fichero lo comparten la aplicacion y el cargador, y
+     * es anterior a todo-, asi que lo comprueba tools/mapa.py leyendo
+     * todos los sitios. */
+    SCB->VTOR = 0x08008000;
 #endif
 
     /* FPU settings */

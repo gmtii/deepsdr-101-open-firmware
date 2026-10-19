@@ -213,7 +213,7 @@ static hfdl_lpdu_result_t lpdu_parse_one(const uint8_t *buf, uint32_t payload_le
 		 * estacion.
 		 *
 		 * Sin esto, el decodificador leia los tres bytes de la direccion y
-		 * tiraba el resto. Medido en los 214 segundos que el usuario grabo:
+		 * tiraba el resto. Medido en los 214 segundos de la grabacion de referencia:
 		 * CINCO posiciones tiradas -ETD123, QTR037, MS0241, VIR209,
 		 * CPA382- de un total de cero decodificadas. Todas caen donde
 		 * tienen que caer: Etihad sobre Turquia, Qatar sobre Irak,

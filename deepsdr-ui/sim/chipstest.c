@@ -30,7 +30,7 @@ static const char *nombre_chip(int id)
     switch (id) {
     case UI_TOP_HIT_AGC: return "AGC";
     case UI_TOP_HIT_BW:  return "BW";
-    case UI_TOP_HIT_NR:  return "NR";
+    case UI_TOP_HIT_ATT: return "ATT";
     case UI_TOP_HIT_NCO: return "NCO";
     case UI_TOP_HIT_JMP: return "JMP";
     case UI_TOP_HIT_SPK: return "MUDO";
@@ -83,7 +83,7 @@ int main(void)
                 t.clock = "23:41";
                 t.s_units = 12; t.over_db = 20; t.dbm = -79; t.dbm_valid = 1;
                 t.agc = "MED"; t.bw = "4,0 k";
-                t.nr_on = 1; t.nco_on = 1;
+                t.att = "-12"; t.nco_on = 1;
                 t.knob = UI_KNOB_TUNE;
                 t.knob_name = k_peores[k].nombre;
                 t.knob_value = k_peores[k].peor;
@@ -117,6 +117,61 @@ int main(void)
     printf("  el caso mas apretado es el mando en \"%s\": %d chips\n",
            peor_nombre, peor_n);
     /* ------------------------------------------------------------------ */
+    /* ------------------------------------------------------------------ */
+    /*
+     * QUE EL CHIP DEL ATENUADOR NO MUEVA A LOS DEMAS - 19/10/2026.
+     *
+     * *** El dueño: "para que la chapa att siempre tenga el mismo tamaño y
+     * no se muevan las cosas de sitio". ***
+     *
+     * Los chips se colocan de DERECHA A IZQUIERDA, asi que si ATT cambia de
+     * ancho al cambiar de estado, todo lo que tiene a su izquierda -los
+     * demas chips y la pastilla del mando- da un saltito cada vez que lo
+     * tocas. Con "-06" en vez de "-6" los dos encendidos ya miden igual;
+     * los 2 px que quedaban contra "OFF" los quita el ancho reservado de
+     * chip_w().
+     *
+     * No se comprueba la cuenta: se dibujan los TRES estados y se mira
+     * donde empieza cada chip preguntandole a ui_top_hit() pixel a pixel,
+     * que es lo que de verdad se ve y se toca.
+     */
+    printf("\nel chip ATT no mueve nada al cambiar de estado\n");
+    {
+        static const char *const estados[3] = { "OFF", "-06", "-12" };
+        int16_t izq[3][8];
+        int e, id, malos = 0;
+
+        for (e = 0; e < 3; e++) {
+            int x;
+            for (id = 0; id < 8; id++) { izq[e][id] = -1; }
+            memset(&t, 0, sizeof t);
+            t.freq = "7.200,00"; t.mode = "AM"; t.band = "40 m";
+            t.clock = "23:41";
+            t.s_units = 7; t.dbm = -79; t.dbm_valid = 1;
+            t.agc = "MED"; t.bw = "4,0 k";
+            t.att = estados[e]; t.nco_on = 1;
+            t.knob = UI_KNOB_TUNE; t.knob_value = "1 kHz";
+            ui_top_draw_status(&t);
+            for (x = 0; x < 800; x++) {
+                int q = (int)ui_top_hit((uint16_t)x, (uint16_t)(UI_STATUS_Y + 20));
+                if (q > 0 && q < 8 && izq[e][q] < 0) { izq[e][q] = (int16_t)x; }
+            }
+        }
+        for (id = 1; id < 8; id++) {
+            if (izq[0][id] < 0 && izq[1][id] < 0 && izq[2][id] < 0) { continue; }
+            printf("    %-5s empieza en  %3d  %3d  %3d",
+                   nombre_chip(id), izq[0][id], izq[1][id], izq[2][id]);
+            if (izq[0][id] == izq[1][id] && izq[1][id] == izq[2][id]) {
+                printf("   ok\n");
+            } else {
+                printf("   *** SE MUEVE ***\n");
+                malos++;
+            }
+        }
+        if (malos) { fallos += malos; }
+        else { printf("    (los tres estados dejan todo en el mismo sitio)\n"); }
+    }
+
     printf("\nla lista de cadenas por codigo de programa\n");
     {
         uint16_t i, j, n = rds_pi_cuantas();
@@ -128,7 +183,7 @@ int main(void)
         memset(&t, 0, sizeof t);
         t.freq = "106.300,00"; t.mode = "WFM"; t.band = "FM";
         t.clock = "00:03"; t.s_units = 9;
-        t.agc = "FST"; t.nr_on = 0; t.nco_on = 1;
+        t.agc = "FST"; t.att = "OFF"; t.nco_on = 1;
         t.knob = UI_KNOB_TUNE; t.knob_value = "100 kHz";
         ui_top_draw(&t);
         hueco = ui_top_rds_ancho();

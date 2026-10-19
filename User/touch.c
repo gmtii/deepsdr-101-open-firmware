@@ -421,8 +421,47 @@ static uint16_t clamp_u16(int32_t v, uint16_t max_exclusive)
 #define TOUCH_JITTER_PX_MAX 400  /* techo: media pantalla */
 #define TOUCH_CONFIRM_MAX  3
 
+/*
+ * ======================================================================
+ * LA FIRMEZA SE MIDE EN MILISEGUNDOS, NO EN LECTURAS - 19/10/2026
+ * ======================================================================
+ *
+ * Avisado por el usuario, que en STANAG y en IDENT la radio responde al
+ * dedo mas despacio que en los demas modos.
+ *
+ * El comentario de arriba ya lo dice casi todo sin darse cuenta: "no se
+ * pone en tiempo porque el bucle principal no corre a ritmo fijo - a 30
+ * fotogramas por segundo, 2 confirmaciones son unos 66 ms, que es menos
+ * que un toque deliberado y mas que un roce".
+ *
+ * O sea que lo que separa un toque de un roce SIEMPRE fue un TIEMPO, y lo
+ * que habia escrito era una CUENTA DE LECTURAS que por casualidad daba ese
+ * tiempo al ritmo al que corria el bucle aquel dia. Cuando el bucle se
+ * alarga -en los dos modos que traen dos transformadas- esa misma cuenta
+ * se convierte en 200 ms y la radio se come los toques. Y en cuanto el
+ * tactil se mira mas veces por vuelta (ver touch_latido()), la misma
+ * cuenta se convierte en dos milisegundos y vuelve a entrar cualquier
+ * roce. La cuenta no significa nada; el tiempo si.
+ *
+ * Asi que se dice con todas las letras: entre dos lecturas que CUENTAN
+ * para confirmar tienen que pasar al menos TOUCH_CONF_MS. Mirar mas
+ * deprisa ya no hace la radio mas sensible, y mirar mas despacio ya no la
+ * hace sorda - solo tarda mas en enterarse, que es lo que pasaba antes.
+ *
+ * VEINTE MILISEGUNDOS es lo que daba la cuenta de dos en los modos donde
+ * el tactil iba bien: el fotograma son 22 ms (SPECTRUM_FRAME_MS_DEF) y el
+ * bucle va a ese ritmo. O sea que esto no cambia el tacto donde ya era
+ * bueno; lo arregla donde no lo era. Con firmeza 3 son 40 ms, y con 1 no
+ * hay espera, que es lo que "sensible" quiere decir.
+ *
+ * Una vez CONFIRMADO el contacto esto no se mira: mientras el dedo siga
+ * puesto, cada lectura vale, que es lo que necesita un arrastre.
+ */
+#define TOUCH_CONF_MS  20U
+
 static uint8_t  s_confirmar = 2U;   /* por defecto, "normal" */
 static uint8_t  s_conf_n    = 0U;   /* lecturas buenas seguidas */
+static uint32_t s_conf_ini_ms = 0U; /* cuando se poso el dedo de esta serie */
 static uint16_t s_conf_x    = 0U;
 static uint16_t s_conf_y    = 0U;
 static uint32_t s_conf_ms   = 0U;   /* cuando se acepto s_conf_x/s_conf_y */
@@ -473,6 +512,7 @@ uint8_t touch_read(uint16_t *x, uint16_t *y)
 {
     uint16_t px, py, tope;
     uint32_t ahora = g_msticks;
+    uint32_t hueco;
 
     if (!touch_read_una(&px, &py)) {
         /* NO HAY DEDO, y eso no se filtra: "soltar tarde es peor que
@@ -483,7 +523,8 @@ uint8_t touch_read(uint16_t *x, uint16_t *y)
         return 0;
     }
 
-    tope = tope_salto(ahora - s_conf_ms);
+    hueco = (uint32_t)(ahora - s_conf_ms);
+    tope = tope_salto(hueco);
 
     if ((s_conf_n != 0U) && lejos(px, py, s_conf_x, s_conf_y, tope)) {
         if (s_conf_n >= s_confirmar) {
@@ -537,7 +578,43 @@ uint8_t touch_read(uint16_t *x, uint16_t *y)
      * se mide contra la distancia que de verdad se compara. Una lectura en
      * cuarentena no mueve ni el sitio ni la hora. */
     s_conf_ms = ahora;
-    if (s_conf_n < 0xFFU) { s_conf_n++; }
+    /*
+     * Y LA CUENTA SOLO SUBE SI HA PASADO TIEMPO. Ver TOUCH_CONF_MS. La
+     * primera de la serie cuenta siempre -es la que arranca el reloj-;
+     * las siguientes, solo cuando el contacto lleva lo suficiente. Una
+     * vez confirmado ya no se mira: mientras el dedo siga puesto, cada
+     * lectura vale.
+     */
+    /*
+     * EL RELOJ CORRE DESDE QUE EL DEDO SE POSO, NO DESDE LA LECTURA
+     * ANTERIOR.
+     *
+     * *** Y esta es la version buena: la primera comparaba `hueco` -el
+     * tiempo desde la lectura aceptada anterior- contra TOUCH_CONF_MS, y
+     * eso deja el tactil MUERTO en cuanto se mira mas deprisa que la
+     * firmeza. Mirando cada 10 ms, el hueco es siempre 10, nunca llega a
+     * 20, y el contacto no se confirma JAMAS por mucho que se aguante el
+     * dedo. Lo cazo sim/tactil_arrastre.c en su tabla de toques: la fila
+     * de 10 ms salia 0/20 entera, con el dedo puesto trescientos
+     * milisegundos. ***
+     *
+     * Lo que tiene que pasar es que el dedo LLEVE puesto su tiempo: una
+     * confirmacion mas por cada TOUCH_CONF_MS desde que se poso, hasta
+     * la firmeza pedida. Asi mirar mas deprisa adelanta el momento en que
+     * uno se entera, pero nunca por debajo del tiempo; y mirar mas
+     * despacio solo lo retrasa.
+     */
+    if (s_conf_n == 0U) {
+        s_conf_n = 1U;
+        s_conf_ini_ms = ahora;
+    } else if (s_conf_n < s_confirmar) {
+        uint32_t llevan = (uint32_t)(ahora - s_conf_ini_ms);
+        uint32_t quiere = 1UL + (llevan / TOUCH_CONF_MS);
+
+        if (quiere > (uint32_t)s_confirmar) { quiere = (uint32_t)s_confirmar; }
+        if (quiere > (uint32_t)s_conf_n)    { s_conf_n = (uint8_t)quiere; }
+    }
+    (void)hueco;
 
     if (s_conf_n < s_confirmar) {
         return 0;
@@ -645,4 +722,73 @@ void touch_debug_stream_poll(void)
         }
         debug_print("\n");
     }
+}
+
+/*
+ * ======================================================================
+ * EL LATIDO DEL TACTIL - 19/10/2026
+ * ======================================================================
+ *
+ * Esto es lo que se engancha a gfx2_set_pump(), el gancho que gfx2.c
+ * llama ENTRE BANDAS de cada repintado. Su propio comentario, escrito
+ * hace tiempo, dice para que existe: "sirve para muestrear el tactil
+ * durante un repintado: sin esto, la entrada solo se lee entre repintados
+ * enteros, y si uno tarda un segundo hay que mantener el dedo puesto todo
+ * ese tiempo para que se note".
+ *
+ * Y no lo llamaba nadie. El gancho estaba montado y sin enchufar, como le
+ * paso a rtty_auto.c. Un repintado del panel digital son 253.940 accesos
+ * al bus; mientras dura, el tactil no existia.
+ *
+ * LO QUE HACE Y LO QUE NO. Solo MIRA: adelanta el filtro de confirmacion
+ * y se apunta donde estaba el dedo. No despacha el toque ni repinta nada,
+ * y eso no es pereza - esto corre DENTRO de gfx2_render(), con la banda
+ * compositora cogida. Un repintado desde aqui se encontraria la banda
+ * ocupada y se iria sin dibujar, que es como desaparece un boton.
+ *
+ * EL PESTILLO. Si el dedo entra y sale entero mientras dura un repintado,
+ * el bucle principal no llega a ver ni la pulsacion ni la suelta. Por eso
+ * esto deja apuntado que HUBO un contacto confirmado y donde, y
+ * demo_touch_poll() lo recoge en la vuelta siguiente. Un toque que paso
+ * se atiende tarde; antes no se atendia nunca.
+ *
+ * EL RITMO. Entre bandas hay menos de un milisegundo, y mirar a ese ritmo
+ * no sirve de nada: lo que confirma un contacto es que dure (ver
+ * TOUCH_CONF_MS), no cuantas veces se mire. Asi que esto tiene su propio
+ * reloj y no mira mas de una vez cada TOUCH_LATIDO_MS. A ocho
+ * milisegundos, un repintado de 11 ms se mira una o dos veces y la
+ * confirmacion sale a los veinte, pase lo que pase con el bucle.
+ */
+#define TOUCH_LATIDO_MS  8U
+
+static uint32_t s_latido_ms;
+static uint8_t  s_lat_hubo;    /* hubo contacto confirmado sin recoger */
+static uint16_t s_lat_x, s_lat_y;
+
+void touch_latido(void)
+{
+    uint16_t x = 0U, y = 0U;
+
+    if ((uint32_t)(g_msticks - s_latido_ms) < TOUCH_LATIDO_MS) { return; }
+    s_latido_ms = g_msticks;
+
+    if (touch_read(&x, &y)) {
+        s_lat_hubo = 1U;
+        s_lat_x = x;
+        s_lat_y = y;
+    }
+}
+
+uint8_t touch_pendiente(uint16_t *x, uint16_t *y)
+{
+    if (!s_lat_hubo) { return 0U; }
+    s_lat_hubo = 0U;
+    if (x) { *x = s_lat_x; }
+    if (y) { *y = s_lat_y; }
+    return 1U;
+}
+
+void touch_pendiente_borra(void)
+{
+    s_lat_hubo = 0U;
 }

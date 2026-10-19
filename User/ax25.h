@@ -104,6 +104,12 @@ void ax25_start(float fs_hz);
 void ax25_start_fsk(float fs_hz, float baud, float marca_hz, float espacio_hz);
 void ax25_stop(void);
 uint8_t ax25_activo(void);
+/* Los dos tonos con los que esta afinado AHORA: 1200/2200 en APRS, 1600/1800
+ * en paquete de HF. Los pide el osciloscopio de sintonia, que antes llevaba
+ * los del APRS escritos a mano y pintaba las rayas donde no habia nada en
+ * cuanto el modo era el otro. Ver su definicion en ax25.c. */
+float ax25_marca_hz(void);
+float ax25_espacio_hz(void);
 
 /* Audio del discriminador de FM, crudo. Se llama desde la interrupcion. */
 void ax25_process(const float *audio, uint32_t n);

@@ -398,7 +398,7 @@ static void audio_manda(usb_dev *udev)
      * SE MANDA LO QUE HAYA, NO SIEMPRE 192 BYTES CON SILENCIO DETRAS.
      *
      * La primera version rellenaba de ceros hasta la trama entera. En la
-     * grabacion del usuario eso salieron 20 rachas de ceros en nueve
+     * grabacion de referencia eso salieron 20 rachas de ceros en nueve
      * segundos, la mayor de 9,33 ms: se oyen.
      *
      * Y rellenar era ademas lo contrario de lo que dice el descriptor. El

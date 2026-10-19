@@ -51,15 +51,15 @@
  * Ya no lo impone el gestor de fabrica, lo imponemos nosotros, asi que es
  * de una pieza: el cargador abajo y TODO lo demas para la aplicacion.
  *
- *   0x08000000  cargador            48 kB   sectores 0, 1 y 2
- *   0x0800C000  aplicacion     475.136 B    sectores 3, 4, 5, 6 y 7
+ *   0x08000000  cargador            32 kB   sectores 0 y 1
+ *   0x08008000  aplicacion     491.520 B    sectores 2, 3, 4, 5, 6 y 7
  *   0x08080000  fin de la flash
  *
  * La base tiene que ser frontera de sector (el borrado es por sectores y
  * el cargador no puede borrarse a si mismo) y estar alineada a 512 por lo
- * menos (el VTOR).  0x0800C000 cumple las dos: es el principio del S3.
+ * menos (el VTOR).  0x08008000 cumple las dos: es el principio del S2.
  */
-#define CARGA_APP_BASE      0x0800C000UL
+#define CARGA_APP_BASE      0x08008000UL
 /*
  * HASTA DONDE BORRA EL CARGADOR, Y DEPENDE DEL CHIP - 16/10/2026.
  *
@@ -90,7 +90,7 @@
 #define CARGA_BORRA_HASTA   0x08080000UL    /*  512 kB: GD32F450VET6 */
 #endif
 #define CARGA_TAM_MAX       (CARGA_BORRA_HASTA - CARGA_APP_BASE)
-/* 475.136 en el 450, 999.424 en el 470. */
+/* 491.520 en el 450, 1.015.808 en el 470. */
 
 /*
  * LA CABECERA DE LA IMAGEN.  Ver User/cabecera_app.c para el formato y

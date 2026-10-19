@@ -58,7 +58,7 @@ int main(void)
     /*
      * Y los renglones de la fila "Sitio para fotos". Van en una celda de
      * rejilla, que mide 192 px: ocho veces menos que el cartel. Es donde
-     * reviento primero -el usuario mando una foto con el valor saliendose
+     * reviento primero -se vio en pantalla el valor saliendose
      * por los dos lados de la celda- y por eso se mide aparte y con SU
      * fuente, que tampoco es la misma.
      */

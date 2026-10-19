@@ -13,10 +13,10 @@ repositorio se tomó midiendo y no a ojo.
 > grabar este firmware y volver al firmware original en cualquier momento.
 > No secuestramos ni bloqueamos ningún dispositivo.**
 
-`V5.04` · cargador `v2.16` · **dos binarios, uno por chip**:
-`update.bin` 470.328 B CRC `90681EDF` (GD32F450VET6, 512 kB) ·
-`update_470.bin` 470.360 B CRC `AC1BE33F` (GD32F470VGT6, 1024 kB) ·
-**177 comprobaciones en verde, 0 fallos** (`make comprueba`)
+`V5.08` · cargador `v2.17` · **dos binarios, uno por chip**:
+`update.bin` 469.164 B CRC `4E2C36C7` (GD32F450VET6, 512 kB) ·
+`update_470.bin` 469.196 B CRC `C1CB013D` (GD32F470VGT6, 1024 kB) ·
+**220 comprobaciones en verde, 0 fallos** (`make comprueba`)
 
 🇬🇧 [English below](#deepsdr-101--open-firmware) · 📘
 [Manual de uso (PDF, ES + EN)](DeepSDR_Reload_Manual-ES-EN.pdf)
@@ -252,8 +252,11 @@ La radio lleva dentro un disco USB. **No hace falta abrirla ni soldar nada.**
 
 1. Enchufa la radio al ordenador. Aparece como una unidad extraíble.
 2. Si vienes del firmware de fábrica o de la rama anterior, graba **primero el
-   cargador**. La aplicación de esta rama empieza en `0x0800C000` y no arranca
-   con el cargador viejo. El cargador se graba por DFU, que el propio chip trae
+   cargador**. La aplicación de esta rama empieza en `0x08008000` y no arranca
+   con el cargador viejo. **El cargador y la aplicación van juntos**: desde el
+   18/10/2026 la frontera entre los dos se movió de 48 kB a 32, así que un
+   `update.bin` de esta rama con un cargador anterior —o al revés— no arranca.
+   Se graban los dos. El cargador se graba por DFU, que el propio chip trae
    de fábrica y sale por el mismo USB-C, **sin abrir la radio y sin soldar**:
 
    Para entrar en DFU: enciende la radio con el mando pulsado y girándolo, o,
@@ -455,21 +458,23 @@ comprobar.
 ## Estado
 
 ```
-  VERSION V5.04          CARGADOR v2.16
+  VERSION V5.08          CARGADOR v2.17
   update.bin  +  update_470.bin      <- 450VET6 (512 kB)  /  470VGT6 (1024 kB)
   customboot.bin  +  customboot_470.bin                   BD.BIN
-  ZONA ALTA  733.184 de  847.872   libre 114.688  (101.432 aviones)
-  FLASH   469.690 de 475.136   libre   5.446   <- UNA region, sin desvan
-  FLASH 470  469.722 de 999.424  libre 529.702  <- el mismo codigo, otro .ld
-  CARGADOR 41.228 de  49.152   libre   7.924
-  RAM     196.576 de 196.608   libre      32   <- .bss + .data + .noinit; TREINTA Y DOS
-  RAM 470    196.576 de 458.752  libre 262.176  <- 448 kB contiguos
+  ZONA ALTA  520.192 de  847.872   libre 327.680  (294.909 aviones,
+                                     211.387 emisoras, 5.592 la fuente)
+  FLASH   469.032 de 491.520   libre  22.488   <- UNA region, sin desvan
+  FLASH 470  469.064 de 1.015.808 libre 546.744 <- el mismo codigo, otro .ld
+  CARGADOR 32.632 de  32.768   libre     136   <- DOS sectores, no tres
+  RAM     194.876 de 196.608   libre   1.732   <- .bss + .data + .noinit
+  RAM 470    194.876 de 458.752  libre 263.876  <- 448 kB contiguos
   TCM      64.400 de  65.536   libre   1.136   <- y eso ES la pila
-  PILA      5.584 de  6.768    margen  1.184 (17%)  <- CON anidamiento
+  PILA      5.672 de  6.768    margen  1.096 (16%)  <- CON anidamiento
   avisos del compilador  0     comprobaciones  todas en verde
 ```
 
-La RAM va al 98,5 %. Eso no es un descuido: es el techo real del chip, y cada
+La RAM va al 99,98 % —treinta y dos bytes libres de 192 kB, los que pone la
+tabla—. Eso no es un descuido: es el techo real del chip, y cada
 modo nuevo de los últimos meses ha tenido que pagar su sitio quitándoselo a
 otro. Los giros 6 y 7 de HFDL, por ejemplo, **no caben** y están documentados
 como tal en vez de prometidos.
@@ -533,10 +538,10 @@ in this repository was made by measuring rather than by eye.
 > It is also entirely reversible: anyone can flash this firmware and go back
 > to the original one at any time. We do not hold or lock any device.**
 
-`V5.04` · bootloader `v2.16` · **two builds, one per chip**:
-`update.bin` 470,328 B CRC `90681EDF` (GD32F450VET6, 512 kB) ·
-`update_470.bin` 470,360 B CRC `AC1BE33F` (GD32F470VGT6, 1024 kB) ·
-**177 checks green, 0 failures** (`make comprueba`)
+`V5.08` · bootloader `v2.17` · **two builds, one per chip**:
+`update.bin` 469,164 B CRC `4E2C36C7` (GD32F450VET6, 512 kB) ·
+`update_470.bin` 469,196 B CRC `C1CB013D` (GD32F470VGT6, 1024 kB) ·
+**220 checks green, 0 failures** (`make comprueba`)
 
 📘 [User manual (PDF, ES + EN)](DeepSDR_Reload_Manual-ES-EN.pdf)
 
@@ -636,8 +641,11 @@ The radio exposes a USB disk. **No need to open it or to solder anything.**
 
 1. Plug the radio into a computer; it shows up as a removable drive.
 2. Coming from the factory firmware or from the previous branch, **flash the
-   bootloader first**. This branch's application starts at `0x0800C000` and
-   will not boot under the old loader. The loader goes in over DFU, which the
+   bootloader first**. This branch's application starts at `0x08008000` and
+   will not boot under the old loader. **Loader and application go together**:
+   since 18/10/2026 the boundary between them moved from 48 KB down to 32, so
+   an `update.bin` from this branch under an older loader — or the other way
+   round — will not boot. Flash both. The loader goes in over DFU, which the
    chip provides in ROM over the same USB-C — **no opening the radio, no
    soldering**:
 
