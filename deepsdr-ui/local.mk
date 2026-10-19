@@ -3575,10 +3575,14 @@ comprueba: ecualiz
 # ---------------------------------------------------------------------------
 # EL ESPEJO I/Q: CUANTO LO BAJA EL CORRECTOR.
 # Ver la cabecera de sim/iqbaltest.c y la de $(FIRMWARE)/User/iqbal.h.
-out/iqbaltest: sim/iqbaltest.c $(FIRMWARE)/User/iqbal.c $(FIRMWARE)/User/iqbal.h
+# fft.c entra desde el 19/10/2026: el FIR del espejo se calibra DENTRO de
+# fft_compute_db_iq(), que es el unico sitio donde existe el espectro
+# complejo. El banco prueba ese camino entero, no iqbal.c a solas.
+out/iqbaltest: sim/iqbaltest.c $(FIRMWARE)/User/iqbal.c $(FIRMWARE)/User/iqbal.h \
+               $(FIRMWARE)/User/fft.c $(FIRMWARE)/User/fft.h
 	@mkdir -p out
 	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ sim/iqbaltest.c \
-	      $(FIRMWARE)/User/iqbal.c -lm
+	      $(FIRMWARE)/User/iqbal.c $(FIRMWARE)/User/fft.c -lm
 
 .PHONY: iqbal
 iqbal: out/iqbaltest ; ./out/iqbaltest

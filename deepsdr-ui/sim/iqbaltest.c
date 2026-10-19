@@ -18,6 +18,7 @@
  * veintidos modos que funcionan.
  */
 #include "iqbal.h"
+#include "fft.h"   /* el FIR se calibra desde el panadaptador: ver abajo */
 #include "iqancho.h"
 #include <stdio.h>
 #include <math.h>
@@ -189,6 +190,147 @@ static void asienta(void)
 static int g_iqa_on = -1, g_iqa_veces = 0;
 void    iqa_set_on(uint8_t on) { g_iqa_on = on ? 1 : 0; g_iqa_veces++; }
 uint8_t iqa_get_on(void)       { return (uint8_t)(g_iqa_on > 0); }
+
+
+/* --- el banco del FIR del espejo (ver la seccion del final de main) ------ */
+
+#define FIR_N  FFT_SIZE
+
+static double g_fir_hi[2], g_fir_hq[2];
+static double g_fir_fase[5], g_fir_zi, g_fir_zq;
+static unsigned g_fir_sem;
+
+static double fir_rnd(void)
+{
+    g_fir_sem = g_fir_sem * 1103515245u + 12345u;
+    return (double)((g_fir_sem >> 8) & 0xFFFFu) / 32768.0 - 1.0;
+}
+
+/* I y Q por caminos analogicos distintos: dos FIR cortos y reales. Ese es
+ * el desequilibrio que se quiere corregir. */
+static void fir_desq(double i, double q, double *io, double *qo)
+{
+    *io = g_fir_hi[0] * i + g_fir_hi[1] * g_fir_zi;
+    *qo = g_fir_hq[0] * q + g_fir_hq[1] * g_fir_zq;
+    g_fir_zi = i; g_fir_zq = q;
+}
+
+static void fir_escena_init(double a, double b, double c, double d)
+{
+    unsigned k;
+    g_fir_hi[0] = a; g_fir_hi[1] = b;
+    g_fir_hq[0] = c; g_fir_hq[1] = d;
+    for (k = 0U; k < 5U; k++) { g_fir_fase[k] = 0.0; }
+    g_fir_zi = 0.0; g_fir_zq = 0.0; g_fir_sem = 12345u;
+    fft_init();
+    fft_set_bins_hook(iqbal_calibra);
+    iqbal_init();
+    iqbal_set_on(1U);
+    iqbal_fir_olvida();
+}
+
+/* Un bloque de la escena: cinco emisoras repartidas por la banda, mas ruido. */
+static void fir_bloque(int16_t *raw)
+{
+    static const double fp[5] = { -31000.0, -17000.0, 5000.0, 19000.0, 33000.0 };
+    int n, c;
+    for (n = 0; n < FIR_N; n++) {
+        double i = 0.0, q = 0.0, io, qo;
+        for (c = 0; c < 5; c++) {
+            i += 3000.0 * cos(g_fir_fase[c]);
+            q += 3000.0 * sin(g_fir_fase[c]);
+            g_fir_fase[c] += 2.0 * M_PI * fp[c] / 96000.0;
+        }
+        i += 300.0 * fir_rnd(); q += 300.0 * fir_rnd();
+        fir_desq(i, q, &io, &qo);
+        if (io >  32767.0) { io =  32767.0; }
+        if (io < -32768.0) { io = -32768.0; }
+        if (qo >  32767.0) { qo =  32767.0; }
+        if (qo < -32768.0) { qo = -32768.0; }
+        raw[2 * n]     = (int16_t)io;
+        raw[2 * n + 1] = (int16_t)qo;
+    }
+}
+
+/* Rechazo de imagen con un tono, PASANDO POR EL CORRECTOR. */
+static double fir_rechazo(double f)
+{
+    static int16_t raw[2 * FIR_N];
+    double cr = 0.0, ci = 0.0, mr = 0.0, mi = 0.0, ph = 0.0, s, m;
+    int b, n, B = 200;
+
+    g_fir_zi = 0.0; g_fir_zq = 0.0;
+    for (b = 0; b < B; b++) {
+        for (n = 0; n < FIR_N; n++) {
+            double i = 6000.0 * cos(ph), q = 6000.0 * sin(ph), io, qo;
+            ph += 2.0 * M_PI * f / 96000.0;
+            fir_desq(i, q, &io, &qo);
+            if (io >  32767.0) { io =  32767.0; }
+            if (io < -32768.0) { io = -32768.0; }
+            if (qo >  32767.0) { qo =  32767.0; }
+            if (qo < -32768.0) { qo = -32768.0; }
+            raw[2 * n]     = (int16_t)io;
+            raw[2 * n + 1] = (int16_t)qo;
+        }
+        iqbal_bloque(raw, (uint32_t)FIR_N);
+        if (b >= B / 2) {
+            for (n = 0; n < FIR_N; n++) {
+                double t = (double)((b - B / 2) * FIR_N + n);
+                double w = 2.0 * M_PI * f * t / 96000.0;
+                double I = raw[2 * n], Q = raw[2 * n + 1];
+                cr += I * cos(w) + Q * sin(w);  ci += -I * sin(w) + Q * cos(w);
+                mr += I * cos(w) - Q * sin(w);  mi +=  I * sin(w) + Q * cos(w);
+            }
+        }
+    }
+    s = sqrt(cr * cr + ci * ci);
+    m = sqrt(mr * mr + mi * mi);
+    return 20.0 * log10(s / (m > 1e-9 ? m : 1e-9));
+}
+
+static double fir_peor(void)
+{
+    double f, p = 1e9;
+    for (f = -40000.0; f <= 40000.0; f += 8000.0) {
+        double r;
+        if (fabs(f) < 5000.0) { continue; }
+        r = fir_rechazo(f);
+        if (r < p) { p = r; }
+    }
+    return p;
+}
+
+/* Deja que el corrector de un coeficiente se asiente, SIN panadaptador. */
+static double fir_asienta_y_mide(void)
+{
+    static int16_t raw[2 * FIR_N];
+    int b;
+    for (b = 0; b < 4000; b++) { fir_bloque(raw); iqbal_bloque(raw, (uint32_t)FIR_N); }
+    return fir_peor();
+}
+
+/* Y ahora con el panadaptador mirando: calibra y resuelve, varias vueltas. */
+static double fir_calibra_y_mide(void)
+{
+    static int16_t raw[2 * FIR_N];
+    static int16_t ii[FIR_N], qq[FIR_N];
+    static float   db[FIR_N];
+    int ronda, b, n;
+
+    for (ronda = 0; ronda < 14; ronda++) {
+        for (b = 0; b < 600; b++) {
+            fir_bloque(raw);
+            iqbal_bloque(raw, (uint32_t)FIR_N);
+            for (n = 0; n < FIR_N; n++) {
+                ii[n] = raw[2 * n];
+                qq[n] = raw[2 * n + 1];
+            }
+            fft_compute_db_iq(ii, qq, db);
+        }
+        (void)iqbal_resuelve();
+    }
+    return fir_peor();
+}
 
 int main(void)
 {
@@ -480,6 +622,56 @@ int main(void)
         di("y devuelve el corrector a como estaba", iqbal_get_on() == 1U, 0);
         di("y el de banda ancha tambien", g_iqa_on == 1, 0);
         di("sin dejar un resultado inventado", !iqbal_ab_hay(), 0);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*
+     * EL FIR DEL ESPEJO, CALIBRADO DESDE EL PANADAPTADOR - 19/10/2026.
+     *
+     * *** De un probador: "The mirror channel is suppressed by about 24 dB. If we
+     * could add another 10 dB to that, it would be just right." ***
+     *
+     * Esto no mide el corrector de un coeficiente -eso lo hacen las secciones
+     * de arriba- sino lo que se le ha añadido: un FIR de cuatro tomas sobre
+     * el conjugado, calibrado con las portadoras que haya en el panorama.
+     * Ver iqbal.h para el porque entero.
+     *
+     * Y se mide con el camino COMPLETO: escena -> iqbal_bloque() ->
+     * fft_compute_db_iq() (que es quien llama a iqbal_calibra()) ->
+     * iqbal_resuelve(). Si el enganche de fft.c se cayera, esto se pondria
+     * rojo, que es justo lo que tiene que pasar.
+     */
+    printf("\n  el FIR del espejo, calibrado desde el panadaptador\n");
+    {
+        static const double fp[5] = { -31000.0, -17000.0, 5000.0, 19000.0, 33000.0 };
+        struct { const char *n; double a, b, c, d; double min_antes, min_despues; } cs[3] = {
+            { "plano (un coeficiente ya basta)", 1.0, 0.0,  1.096, 0.0,   60.0, 60.0 },
+            { "con pendiente (el del aviso)",    1.0, 0.0,  0.93,  0.115,  0.0, 32.0 },
+            { "pendiente fuerte",                1.0, 0.05, 0.88,  0.21,   0.0, 30.0 }
+        };
+        unsigned k;
+
+        for (k = 0U; k < 3U; k++) {
+            double antes, despues;
+            char det[96];
+
+            fir_escena_init(cs[k].a, cs[k].b, cs[k].c, cs[k].d);
+            antes   = fir_asienta_y_mide();
+            despues = fir_calibra_y_mide();
+
+            snprintf(det, sizeof det, "%.1f -> %.1f dB, %u ranuras",
+                     antes, despues, (unsigned)iqbal_cal_ranuras());
+            printf("    %-34s %s\n", cs[k].n, det);
+            di("    el rechazo queda donde tiene que quedar",
+               despues >= cs[k].min_despues, 0);
+            if (cs[k].min_antes > 0.0) {
+                /* Y en el caso plano, que NO lo destroce: el estimador tiene
+                 * su propio suelo de ruido y corregir donde ya no hay nada
+                 * que corregir cuesta unos dB. Se admite perder hasta 6. */
+                di("    y en el caso plano no pierde mas de 6 dB",
+                   despues > antes - 6.0, 0);
+            }
+        }
     }
 
     printf("\n  %s\n\n", fallos ? "*** HAY FALLOS ***" : "todo bien");

@@ -18,6 +18,131 @@ ordered by date, does not spare the detail, and is not published.
 
 ---
 
+## V5.11 · 2026-10-19
+
+### Qué cambia
+
+- **El rechazo de imagen sube donde antes no podía subir.** El corrector de
+  I/Q llevaba un solo coeficiente, y eso sólo sirve cuando el desequilibrio
+  es el mismo en toda la banda. Cuando varía con la frecuencia —y varía,
+  porque lo que descuadra las dos ramas es un retardo— ese coeficiente sólo
+  puede cancelar su media, y lo que queda son los 22-24 dB que estaba midiendo
+  un usuario. Ahora se le añade un **filtro de cuatro tomas** que corrige
+  cada frecuencia por separado.
+- **Y se calibra solo, con lo que entra por la antena.** Cuando en el
+  panorama hay una emisora fuerte, su imagen está en el punto simétrico y el
+  cociente entre las dos es el desequilibrio a esa frecuencia. La radio lo
+  mide en la FFT que ya hace para el panadaptador, junta puntos en dieciséis
+  casillas repartidas por la banda, y cada dos segundos ajusta el filtro.
+  Moviendo el dial, la calibración se completa sola.
+- **Medido de punta a punta:** con el desequilibrio que reproduce el caso
+  real, el rechazo pasa de **22,6 a 38,3 dB**. En el caso extremo, de 17,9 a
+  37,3. Donde el corrector de siempre ya era bueno (78 dB) se pierden 3,6,
+  que es el ruido del propio estimador y queda muy por encima de los 45-50 dB
+  a partir de los cuales la imagen no se ve.
+- **Mientras no haya calibración, la radio se comporta exactamente como
+  antes.** El filtro no entra hasta tener medidas suficientes, y sus
+  coeficientes están acotados.
+
+### What's new
+
+- **Image rejection now improves where it previously could not.** The I/Q
+  corrector used a single coefficient, which only works when the imbalance is
+  the same across the band. When it varies with frequency — and it does,
+  because what unbalances the two branches is a delay — that coefficient can
+  only cancel its average, and what is left is the 22-24 dB a user was
+  measuring. A **four-tap filter** now corrects each frequency separately.
+- **And it calibrates itself from whatever is on the air.** When a strong
+  station is on the panadapter, its image sits at the mirror point and the
+  ratio between the two is the imbalance at that frequency. The radio
+  measures it in the FFT it already computes for the display, collects points
+  into sixteen slots across the band, and fits the filter every two seconds.
+  Tuning around completes the calibration by itself.
+- **Measured end to end:** with the imbalance that reproduces the real case,
+  rejection goes from **22.6 to 38.3 dB**. In the extreme case, from 17.9 to
+  37.3. Where the old corrector was already good (78 dB) it loses 3.6, which
+  is the estimator's own noise and still far above the 45-50 dB beyond which
+  the image is invisible.
+- **Until it has calibrated, the radio behaves exactly as before.** The
+  filter does not engage without enough measurements, and its coefficients
+  are bounded.
+
+---
+
+## V5.10 · 2026-10-19
+
+### Qué cambia
+
+- **El detector síncrono (SAM) ya no suelta las emisoras que se mueven.** El
+  margen de enganche por omisión pasa de **100 a 250 Hz**. Una portadora de
+  onda corta real no está quieta: en una grabación sobre China Radio en
+  15.560 kHz la traza serpentea del orden de ±150 Hz, y con 100 Hz el lazo se
+  quedaba contra el tope y la pantalla ponía «buscando» cada pocos segundos.
+  Medido: con ±150 Hz de vaivén, 100 Hz engancha el 81 % del tiempo y 250 Hz
+  el 100 %.
+- **Y tiene un precio, que conviene saber:** con 250 Hz una portadora intrusa
+  a menos de esa distancia puede llevarse el lazo; con 100 Hz no podía. A
+  300 Hz y más sigue protegido, que es donde estaban los casos que motivaron
+  el margen estrecho. Quien prefiera el comportamiento de antes tiene **100**
+  en la lista de Ajustes → Radio → Margen SAM.
+- **El indicador de enganche ya no parpadea:** entra por encima de 0,60 y no
+  sale hasta bajar de 0,45, en vez de un solo umbral que basta rozar.
+
+### What's new
+
+- **Synchronous AM no longer drops stations that move.** The default lock
+  margin goes from **100 to 250 Hz**. A real shortwave carrier does not sit
+  still: on a recording of China Radio on 15,560 kHz the trace wanders by
+  something like ±150 Hz, and at 100 Hz the loop sat against its limit and
+  the screen read "searching" every few seconds. Measured: with ±150 Hz of
+  wander, 100 Hz holds lock 81 % of the time and 250 Hz holds it 100 %.
+- **It has a price, worth knowing:** at 250 Hz an interfering carrier closer
+  than that can capture the loop, which it could not at 100 Hz. At 300 Hz and
+  beyond it is still protected, which is where the cases that motivated the
+  narrow margin were. Anyone who prefers the old behaviour still has **100**
+  in Settings → Radio → SAM range.
+- **The lock indicator no longer flickers:** it engages above 0.60 and does
+  not disengage until it falls below 0.45, instead of a single threshold that
+  only had to be grazed.
+
+---
+
+## V5.09 · 2026-10-19
+
+### Qué cambia
+
+- **La barra del S-metro recupera su tamaño.** En la V5.08 se había encogido
+  de 120 a 80 píxeles para hacerle sitio al valor del atenuador. Era el pago
+  equivocado: el sitio ya estaba hecho.
+- **La pastilla del mando se mete en el hueco que dejó «AGC activo»,** tiene
+  **ancho fijo** y ya no recorta su rótulo. «Sintonía 1 kHz» —y «Sintonía
+  12,5 kHz», que es el paso más ancho que existe— salen enteros siempre, con
+  el mando enganchado a lo que sea.
+- **La lectura en dBm sale de la franja de estado.** Sólo valía con el AGC en
+  OFF y obligaba a reservarle setenta y nueve píxeles los otros cinco
+  perfiles. Sigue estando, con los dos rechazos de imagen, en Ajustes →
+  Equipo → Información.
+- **Con eso la franja deja de bailar:** ni la barra, ni la pastilla, ni las
+  chapas cambian de sitio o de tamaño con la señal ni con el perfil del AGC.
+
+### What's new
+
+- **The S-meter bar gets its size back.** V5.08 had shrunk it from 120 to 80
+  pixels to make room for the attenuator's value. That was the wrong thing to
+  charge: the room was already there.
+- **The knob pill moves into the space "AGC active" used to occupy,** has a
+  **fixed width** and no longer truncates its label. "Tuning 1 kHz" — and
+  "Tuning 12.5 kHz", the widest step there is — always show in full, whatever
+  the knob is attached to.
+- **The dBm reading leaves the status strip.** It only meant anything with
+  the AGC in OFF, and it was reserving seventy-nine pixels for the other five
+  profiles. It is still there, with both image-rejection figures, under
+  Settings → Equipment → Information.
+- **With that the strip stops moving:** neither the bar, nor the pill, nor the
+  chips change place or size with the signal or with the AGC profile.
+
+---
+
 ## V5.08 · 2026-10-19
 
 ### Qué cambia

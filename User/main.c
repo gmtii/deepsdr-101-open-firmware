@@ -1478,6 +1478,10 @@ int main(void)
      * unserviced gap to just the few lines of DMA setup itself.
      */
     fft_init();
+    /* Y quien quiere los bins COMPLEJOS de cada FFT del panadaptador: la
+     * calibracion del corrector de imagen. Ver fft_set_bins_hook() en fft.h
+     * y el bloque del FIR en iqbal.h. */
+    fft_set_bins_hook(iqbal_calibra);
     spectrum_init(); /* palette LUT for spectrum + waterfall */
     zoom_decimators_init(); /* spectrum ZOOM cascaded decimators - see spec_zoom_t's comment */
     /* El corrector de espejo I/Q, antes de que empiece a llegar un solo
@@ -28756,6 +28760,27 @@ static void sdr_spectrum_waterfall_tick(void)
     /* Un paso de la prueba A/B, si hay alguna. Cuenta CUADROS DE PANTALLA,
      * que es lo que tarda el promedio en asentarse. */
     iqbal_ab_paso();
+
+    /*
+     * Y RESOLVER EL FIR DEL ESPEJO, CADA DOS SEGUNDOS - 19/10/2026.
+     *
+     * Las ranuras las rellena fft.c en cada FFT; esto es lo caro -un sistema
+     * de cuatro incognitas complejas, con sus senos y cosenos- y por eso no
+     * va ahi ni, desde luego, en la interrupcion del DMA.
+     *
+     * Dos segundos y no cada cuadro por dos motivos: el sistema cuesta medio
+     * millar de llamadas a cosf/sinf, y porque antes de resolver conviene
+     * que las ranuras hayan juntado medidas de varias FFT. Si no hay
+     * portadoras suficientes no hace nada y lo ultimo que se midio sigue
+     * valiendo, que es lo correcto.
+     */
+    {
+        static uint8_t s_iqfir_cuenta = 0U;
+        if (++s_iqfir_cuenta >= 60U) {
+            s_iqfir_cuenta = 0U;
+            (void)iqbal_resuelve();
+        }
+    }
 
     if (!s_menu_open) {
 

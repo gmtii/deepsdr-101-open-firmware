@@ -308,6 +308,9 @@ void ui_top_draw_sam(const ui_top_state_t *st);
 void ui_top_draw_freq(const ui_top_state_t *st);
 int16_t ui_top_movil_w_dbg(void);
 int16_t ui_top_read_x_dbg(void);
+/* Donde empieza la pastilla del mando con y sin lectura en dBm: son dos
+ * sitios fijos, no uno. Lo usa sim/toptest.c. */
+int16_t ui_top_knob_x_dbg(uint8_t con_dbm);
 
 /*
  * --- toques en la barra de estado ---------------------------------------

@@ -31,6 +31,14 @@ static float s_twiddle_sin[FFT_SIZE / 2U] TCMRAM_BSS;
 static float s_hann[FFT_SIZE] TCMRAM_BSS;
 static uint16_t s_bitrev[FFT_SIZE] TCMRAM_BSS;
 
+/* Quien quiera los bins complejos. Ver fft_set_bins_hook() en fft.h. */
+static void (*s_bins_hook)(const float *re, const float *im, uint32_t n);
+
+void fft_set_bins_hook(void (*f)(const float *re, const float *im, uint32_t n))
+{
+    s_bins_hook = f;
+}
+
 /* Sine approximation with no libm dependency - same method (Bhaskara
  * I) as gd32_i2s.c, reimplemented locally to keep the two modules
  * decoupled. */
@@ -205,6 +213,22 @@ void fft_compute_db_iq(const int16_t *i_samples, const int16_t *q_samples,
     }
 
     fft_run();
+
+    /*
+     * EL GANCHO DE LOS BINS COMPLEJOS - 19/10/2026. Ver fft_set_bins_hook().
+     *
+     * Este es el unico sitio del firmware donde existe el espectro COMPLEJO:
+     * dos lineas mas abajo se pasa a dB y la fase se tira. Quien necesite la
+     * fase -hoy, la calibracion del corrector de imagen- se engancha aqui en
+     * vez de hacer una segunda FFT solo para el.
+     *
+     * Es un PUNTERO y no una llamada directa a proposito, igual que
+     * gfx2_set_pump(): fft.c es una transformada y no tiene por que saber
+     * que existe un corrector de I/Q. El primer intento llamaba a
+     * iqbal_calibra() por su nombre, y con eso media docena de bancos que
+     * enlazan fft.c a solas dejaron de enlazar.
+     */
+    if (s_bins_hook != 0) { s_bins_hook(s_re, s_im, (uint32_t)FFT_SIZE); }
 
     /* All FFT_SIZE bins are meaningful now. Output in fftshift order:
      * db_out[0] = -Fs/2 ... db_out[N/2] = DC (the VFO) ...

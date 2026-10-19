@@ -78,6 +78,32 @@ static void bloque(int16_t *raw, double f_w, double a_w, double f_i, double a_i)
     }
 }
 
+/*
+ * Igual que bloque(), pero con la portadora MOVIENDOSE: vaiven senoidal y
+ * desvanecimiento lento. Es lo que hace una emisora de onda corta de verdad,
+ * y es lo que este banco no probaba hasta el 19/10/2026.
+ */
+static void bloque_mueve(int16_t *raw, double off, double vaiven, double v_hz)
+{
+    uint32_t n;
+    for (n = 0; n < (uint32_t)NBLK; n++) {
+        double s = g_t / g_fs;
+        double f = off + vaiven * sin(2.0 * M_PI * v_hz * s);
+        double a = 6000.0 * (0.55 + 0.45 * sin(2.0 * M_PI * 0.07 * s));
+        double m = 1.0 + 0.5 * sin(2.0 * M_PI * 800.0 * g_t / g_fs);
+        double i = a * m * cos(g_fase_w);
+        double q = a * m * sin(g_fase_w);
+        g_fase_w += 2.0 * M_PI * f / g_fs;
+        g_t += 1.0;
+        if (i >  32767.0) { i =  32767.0; }
+        if (i < -32768.0) { i = -32768.0; }
+        if (q >  32767.0) { q =  32767.0; }
+        if (q < -32768.0) { q = -32768.0; }
+        raw[2U * n]      = (int16_t)lrint(i);
+        raw[2U * n + 1U] = (int16_t)lrint(q);
+    }
+}
+
 static void arranca(uint16_t margen_hz)
 {
     demod_am_init();
@@ -402,6 +428,83 @@ int main(void)
             di("la modulacion de la emisora llega entera", aud > 5000.0);
             di("y no hay pitido: 20 dB por debajo del tono", db < -20.0);
         }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*
+     * 8) UNA PORTADORA QUE SE MUEVE, que es como son las de verdad
+     *
+     * *** El usuario, con un video de su radio en SAM-U sobre China Radio en
+     * 15.560 kHz: la lectura se iba a "buscando" cada pocos segundos. ***
+     *
+     * El margen se eligio el 12/10 mirando SOLO el lado de la intrusa. Este
+     * es el otro lado: en la cascada de ese video la traza de la portadora
+     * serpentea del orden de +-150 Hz, y con 100 Hz de margen el lazo se
+     * queda contra el tope buena parte del tiempo.
+     *
+     * Y ojo con el banco: demod_am_sam_margen_set() SOLO admite los cuatro
+     * valores de k_sam_margen_hz[] y descarta el resto EN SILENCIO. Mi
+     * primer barrido metia 150, 400, 700... y todos caian en 100, asi que
+     * la tabla salia plana y parecia decir que el margen daba igual. Aqui
+     * se usan los cuatro de verdad y nada mas.
+     */
+    printf("  8) UNA PORTADORA QUE SE MUEVE (+-150 Hz, 0,1 Hz), 20 s\n\n");
+    {
+        static const uint16_t mg[2] = { 100U, 250U };
+        unsigned m;
+        int pct[2];
+
+        printf("     margen   enganchado\n");
+        for (m = 0U; m < 2U; m++) {
+            static int16_t raw[2 * NBLK];
+            int b, n, eng = 0, tot = 0;
+
+            arranca(mg[m]);
+            n = (int)(20.0 * g_fs / (double)NBLK);
+            for (b = 0; b < n; b++) {
+                bloque_mueve(raw, 40.0, 150.0, 0.10);
+                demod_am_process_raw(raw);
+                if ((g_t / g_fs) > 4.0) {
+                    tot++;
+                    if (demod_am_sam_enganchado()) { eng++; }
+                }
+            }
+            pct[m] = tot ? (100 * eng / tot) : 0;
+            printf("     %4u Hz     %3d %%\n", (unsigned)mg[m], pct[m]);
+        }
+        printf("\n");
+        di("con 250 Hz no suelta la portadora que se mueve", pct[1] >= 95);
+        di("y con 100 Hz si la soltaba (por eso cambio el de por omision)",
+           pct[0] < 90);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*
+     * 9) LO QUE CUESTA ESE MARGEN, dicho con numeros
+     *
+     * Subir de 100 a 250 NO es gratis: una intrusa a menos de 250 Hz ahora
+     * puede llevarse el lazo. Se escribe aqui para que el dia que alguien
+     * se lo encuentre en la radio sepa que no es un descubrimiento, es una
+     * decision - y para que si alguien vuelve a bajar el margen, estas dos
+     * filas se pongan rojas y le obliguen a leer por que estaba en 250.
+     */
+    printf("  9) EL PRECIO: UNA INTRUSA MUY CERCA\n\n");
+    {
+        static const double cerca[3] = { 150.0, 300.0, 500.0 };
+        unsigned i2;
+
+        printf("     intrusa     el lazo se queda en   dice estar\n");
+        for (i2 = 0U; i2 < 3U; i2++) {
+            secuencia((uint16_t)SAM_MARGEN_DEF_HZ, cerca[i2], &hz, &eng);
+            printf("     %+7.0f Hz   %+14.1f Hz   %s\n", cerca[i2], (double)hz,
+                   eng ? "ENGANCHADO" : "suelto");
+            if (i2 == 0U) {
+                di("a 150 Hz SE LA LLEVA: es el precio, y esta documentado", eng == 1);
+            } else {
+                di("pero a 300 y a 500 sigue sin poder llegar", eng == 0);
+            }
+        }
+        printf("\n");
     }
 
     printf("\n%s (%d fallos)\n\n", fallos ? "HAY FALLOS" : "TODO CORRECTO", fallos);

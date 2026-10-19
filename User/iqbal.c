@@ -249,6 +249,395 @@ void iqbal_aplica(int16_t *i, int16_t *q, uint32_t n)
     }
 }
 
+/* ======================================================================
+ * CALIBRACION POR PORTADORAS IDENTIFICADAS, Y EL FIR QUE SALE DE ELLA
+ * ======================================================================
+ * El porque entero esta en iqbal.h. Aqui solo el como.
+ */
+
+/* Cuanto tiene que sobresalir un bin sobre la potencia media para que se le
+ * considere una portadora: 20 dB. Mas bajo entran picos de ruido, y un pico
+ * de ruido comparado con otro pico de ruido da un numero perfectamente
+ * formado que no significa nada. */
+#define IQB_PICO_SOBRE   100.0f
+
+/* Bins pegados a la continua que se saltan: ahi viven el desplazamiento del
+ * ADC y la fuga del propio LO, que no son señal y cuyo "espejo" son ellos
+ * mismos. Es el mismo numero que usa iqbal_mira_espectro() mas abajo, y por
+ * la misma razon; se escribe aparte porque aquel vive en el array YA
+ * desplazado (centro en n/2) y este en el orden natural de la FFT. */
+#define IQB_CAL_GUARDA   4U
+
+/* Y el bin de enfrente tiene que estar al menos 6 dB por debajo. Si no, lo
+ * que hay ahi no es una imagen: son dos emisoras, y medirlas contamina el
+ * ajuste. Es uno de los dos fallos que el banco encontro en el estimador. */
+#define IQB_ESPEJO_BAJO  0.25f
+
+/* Medidas minimas en una ranura para fiarse de ella, y ranuras minimas para
+ * poder resolver. Cuatro incognitas piden al menos cuatro puntos; se exigen
+ * seis para que el ajuste no pase exactamente por todos y copie su ruido. */
+#define IQB_CAL_MIN_N    4U
+#define IQB_RANURAS_MIN  5U
+
+/*
+ * LAS RANURAS VIVEN EN LA SRAM Y EL FIR EN EL TCM, y no es indiferente: de
+ * las ranuras se escribe una vez por FFT -en el bucle de pantalla- y del FIR
+ * se lee UNA VEZ POR MUESTRA dentro de la interrupcion del DMA. El TCM es la
+ * RAM rapida del nucleo y es donde tiene que estar lo segundo. Son 288 bytes
+ * de SRAM y 72 de TCM; ver el comentario de arriba sobre por que no se
+ * acumula un numero por bin.
+ */
+static float    s_cal_nre[IQB_RANURAS];
+static float    s_cal_nim[IQB_RANURAS];
+static float    s_cal_den[IQB_RANURAS];
+static float    s_cal_fs[IQB_RANURAS];   /* suma de frecuencias, ciclos/muestra */
+static uint16_t s_cal_n[IQB_RANURAS];
+
+static float   s_fir_re[IQB_FIR_TOMAS] TCMRAM_BSS;
+static float   s_fir_im[IQB_FIR_TOMAS] TCMRAM_BSS;
+static float   s_hre[IQB_FIR_TOMAS]    TCMRAM_BSS;  /* historia entre bloques */
+static float   s_him[IQB_FIR_TOMAS]    TCMRAM_BSS;
+static uint8_t s_fir_hay               TCMRAM_BSS;
+
+uint8_t iqbal_fir_hay(void) { return s_fir_hay; }
+
+void iqbal_fir_olvida(void)
+{
+    uint8_t m;
+    for (m = 0U; m < (uint8_t)IQB_RANURAS; m++) {
+        s_cal_nre[m] = 0.0f; s_cal_nim[m] = 0.0f;
+        s_cal_den[m] = 0.0f; s_cal_fs[m] = 0.0f; s_cal_n[m] = 0U;
+    }
+    for (m = 0U; m < (uint8_t)IQB_FIR_TOMAS; m++) {
+        s_fir_re[m] = 0.0f; s_fir_im[m] = 0.0f;
+        s_hre[m] = 0.0f;    s_him[m] = 0.0f;
+    }
+    s_fir_hay = 0U;
+}
+
+uint8_t iqbal_cal_ranuras(void)
+{
+    uint8_t m, c = 0U;
+    for (m = 0U; m < (uint8_t)IQB_RANURAS; m++) {
+        if (s_cal_n[m] >= (uint16_t)IQB_CAL_MIN_N) { c++; }
+    }
+    return c;
+}
+
+void iqbal_calibra(const float *re, const float *im, uint32_t n)
+{
+    uint32_t k, mitad;
+    float media = 0.0f, umbral;
+
+    if (re == 0 || im == 0 || n < 64U) { return; }
+    mitad = n / 2U;
+
+    /*
+     * EL SUELO, CON LA MEDIA RECORTADA - y no con la media a secas, que fue
+     * el primer intento y no encontraba NI UNA portadora.
+     *
+     * Con cinco emisoras fuertes dentro de 256 bins, las propias emisoras
+     * levantan la media hasta que ninguna la supera por 20 dB: en el banco
+     * salian cero ranuras y el FIR no llegaba a existir. iqbal_mira_espectro()
+     * ya tropezo con esto en su dia y lo resolvio con una mediana aproximada
+     * por biseccion; aqui sale mas barato -esto corre en CADA FFT, aquello
+     * una vez por cuadro- con dos pasadas: la media de todo, y despues la
+     * media de lo que no pase de diez veces la primera. Las portadoras se
+     * caen de la segunda y lo que queda es el suelo de ruido.
+     */
+    for (k = 0U; k < n; k++) {
+        media += re[k] * re[k] + im[k] * im[k];
+    }
+    media /= (float)n;
+    if (media <= 0.0f) { return; }
+    {
+        float tope = media * 10.0f, suma = 0.0f;
+        uint32_t cuenta = 0U;
+        for (k = 0U; k < n; k++) {
+            float p = re[k] * re[k] + im[k] * im[k];
+            if (p <= tope) { suma += p; cuenta++; }
+        }
+        if (cuenta >= (n / 2U)) { media = suma / (float)cuenta; }
+    }
+    umbral = media * IQB_PICO_SOBRE;
+
+    /* Se empieza en 2 y se acaba en n-2 para poder mirar los vecinos sin
+     * salirse; los bins de la continua se saltan aparte, mas abajo. */
+    for (k = 2U; k + 2U < n; k++) {
+        float pk = re[k] * re[k] + im[k] * im[k];
+        float pa, pb, pe, dr, di, fq;
+        uint32_t ki, r;
+
+        if (pk < umbral) { continue; }
+
+        /* SOLO EL PICO. Las faldas de la ventana a los lados de una
+         * portadora pasan el umbral de sobra, y lo que miden es basura. */
+        pa = re[k - 1U] * re[k - 1U] + im[k - 1U] * im[k - 1U];
+        pb = re[k + 1U] * re[k + 1U] + im[k + 1U] * im[k + 1U];
+        if (pk < pa || pk < pb) { continue; }
+
+        ki = (n - k) % n;                 /* el bin espejo */
+        /* La continua y sus vecinos no son señal, y su "espejo" son ellos
+         * mismos. */
+        if (k < IQB_CAL_GUARDA || (n - k) < IQB_CAL_GUARDA) { continue; }
+        if (ki < 2U || ki + 2U >= n) { continue; }
+
+        pe = re[ki] * re[ki] + im[ki] * im[ki];
+        if (pe > pk * IQB_ESPEJO_BAJO) { continue; }   /* enfrente hay señal */
+
+        /*
+         * W(-k) = -Z(-k)/conj(Z(k)) = -Z(-k)*Z(k)/|Z(k)|^2.
+         * Se acumulan numerador y denominador por separado para que el
+         * promedio entre medidas sea COHERENTE: promediar cocientes le da
+         * el mismo peso a una portadora fuerte y a una que apenas pasa el
+         * umbral, y la segunda trae mucho mas ruido.
+         */
+        dr = -(re[ki] * re[k] - im[ki] * im[k]);
+        di = -(re[ki] * im[k] + im[ki] * re[k]);
+
+        r = (ki * (uint32_t)IQB_RANURAS) / n;
+        if (r >= (uint32_t)IQB_RANURAS) { r = (uint32_t)IQB_RANURAS - 1U; }
+
+        /* La frecuencia del bin espejo, en ciclos por muestra y con signo. */
+        fq = (ki < mitad) ? ((float)ki / (float)n)
+                          : (((float)ki - (float)n) / (float)n);
+
+        s_cal_nre[r] += dr;
+        s_cal_nim[r] += di;
+        s_cal_den[r] += pk;
+        s_cal_fs[r]  += fq;
+        if (s_cal_n[r] < 60000U) { s_cal_n[r]++; }
+    }
+}
+
+/*
+ * El sistema de IQB_FIR_TOMAS incognitas complejas, por eliminacion de Gauss
+ * con pivoteo parcial. Cuatro por cuatro: no merece una biblioteca, y una
+ * biblioteca de algebra lineal en un firmware de 475 kB tampoco.
+ */
+static uint8_t resuelve_sistema(float ar[IQB_FIR_TOMAS][IQB_FIR_TOMAS + 1U],
+                                float ai[IQB_FIR_TOMAS][IQB_FIR_TOMAS + 1U],
+                                float *xr, float *xi)
+{
+    const uint8_t L = (uint8_t)IQB_FIR_TOMAS;
+    uint8_t c, f, p;
+
+    for (c = 0U; c < L; c++) {
+        float mejor = -1.0f;
+        p = c;
+        for (f = c; f < L; f++) {
+            float v = ar[f][c] * ar[f][c] + ai[f][c] * ai[f][c];
+            if (v > mejor) { mejor = v; p = f; }
+        }
+        /* Un pivote a cero quiere decir que las medidas no dan para tantas
+         * incognitas -por ejemplo, todas las portadanas en el mismo sitio-.
+         * No se inventa una solucion: se dice que no. */
+        if (mejor <= 1e-20f) { return 0U; }
+        if (p != c) {
+            for (f = 0U; f <= L; f++) {
+                float t = ar[c][f]; ar[c][f] = ar[p][f]; ar[p][f] = t;
+                t = ai[c][f]; ai[c][f] = ai[p][f]; ai[p][f] = t;
+            }
+        }
+        {
+            float dr = ar[c][c], di = ai[c][c];
+            float inv = 1.0f / (dr * dr + di * di);
+            for (f = c; f <= L; f++) {
+                float zr = ar[c][f], zi = ai[c][f];
+                ar[c][f] = (zr * dr + zi * di) * inv;
+                ai[c][f] = (zi * dr - zr * di) * inv;
+            }
+        }
+        for (f = 0U; f < L; f++) {
+            float mr, mi;
+            if (f == c) { continue; }
+            mr = ar[f][c]; mi = ai[f][c];
+            if (mr == 0.0f && mi == 0.0f) { continue; }
+            {
+                uint8_t j;
+                for (j = c; j <= L; j++) {
+                    ar[f][j] -= mr * ar[c][j] - mi * ai[c][j];
+                    ai[f][j] -= mr * ai[c][j] + mi * ar[c][j];
+                }
+            }
+        }
+    }
+    for (c = 0U; c < L; c++) { xr[c] = ar[c][L]; xi[c] = ai[c][L]; }
+    return 1U;
+}
+
+uint8_t iqbal_resuelve(void)
+{
+    const uint8_t L = (uint8_t)IQB_FIR_TOMAS;
+    float ar[IQB_FIR_TOMAS][IQB_FIR_TOMAS + 1U];
+    float ai[IQB_FIR_TOMAS][IQB_FIR_TOMAS + 1U];
+    float xr[IQB_FIR_TOMAS], xi[IQB_FIR_TOMAS];
+    uint8_t r, m, j, usadas = 0U;
+
+    for (m = 0U; m < L; m++) {
+        for (j = 0U; j <= L; j++) { ar[m][j] = 0.0f; ai[m][j] = 0.0f; }
+    }
+
+    for (r = 0U; r < (uint8_t)IQB_RANURAS; r++) {
+        float wr, wi, fq, peso;
+        if (s_cal_n[r] < (uint16_t)IQB_CAL_MIN_N) { continue; }
+        if (s_cal_den[r] <= 0.0f) { continue; }
+        usadas++;
+
+        wr = s_cal_nre[r] / s_cal_den[r];
+        wi = s_cal_nim[r] / s_cal_den[r];
+        fq = s_cal_fs[r] / (float)s_cal_n[r];
+        peso = (float)s_cal_n[r];
+
+        /*
+         * Fila de las ecuaciones normales: A^H W A h = A^H W d, con
+         * A[m] = exp(-j 2 pi f m) (CAUSAL; ver iqbal.h para por que no
+         * centrado). Se acumula directamente, sin montar A entera.
+         */
+        for (m = 0U; m < L; m++) {
+            float am_r = cosf(-6.2831853f * fq * (float)m);
+            float am_i = sinf(-6.2831853f * fq * (float)m);
+            for (j = 0U; j < L; j++) {
+                float aj_r = cosf(-6.2831853f * fq * (float)j);
+                float aj_i = sinf(-6.2831853f * fq * (float)j);
+                /* conj(A[m]) * A[j] * peso */
+                ar[m][j] += peso * (am_r * aj_r + am_i * aj_i);
+                ai[m][j] += peso * (am_r * aj_i - am_i * aj_r);
+            }
+            /* conj(A[m]) * d * peso */
+            ar[m][L] += peso * (am_r * wr + am_i * wi);
+            ai[m][L] += peso * (am_r * wi - am_i * wr);
+        }
+    }
+
+    if (usadas < (uint8_t)IQB_RANURAS_MIN) { return 0U; }
+
+    /*
+     * SI YA NO HAY ESPEJO, NO SE TOCA NADA - y esto no es prudencia, es un
+     * fallo que el banco encontro.
+     *
+     * Con el desequilibrio PLANO, el corrector de un coeficiente deja el
+     * espejo en 78 dB. El FIR, ajustado sobre cinco puntos ruidosos, metia
+     * SU PROPIO ruido y lo dejaba en 59: diecinueve dB peor que no hacer
+     * nada. El estimador tiene un techo de precision y, por encima de el,
+     * corregir es estropear.
+     *
+     * Asi que primero se mira CUANTO espejo queda: |W| es la relacion
+     * imagen/señal medida.
+     *
+     * EL UMBRAL ES -42 dB, y conviene saber que NO basta. El estimador
+     * tiene su propio suelo -FFT de 256 puntos y señal cuantizada a 16
+     * bits-, y en el caso plano, con el espejo real en 78 dB, sigue
+     * midiendo residuo por encima de esto. O sea que la guarda no llega a
+     * dispararse ahi y el FIR mete algo de ruido igualmente: 78 -> 74,6 dB
+     * medido en el banco.
+     *
+     * Se deja asi a proposito, con el numero delante: 74 dB de rechazo
+     * siguen estando muy por encima de lo que se ve en pantalla (45-50), y
+     * a cambio los casos que de verdad duelen -22 dB- suben a 38. Subir el
+     * umbral a -35 arregla menos de lo que estropea: el lazo se para antes
+     * y el caso con pendiente se queda en 34,5 en vez de 38,5. Medido
+     * tambien.
+     */
+    {
+        float suma = 0.0f, pesos = 0.0f;
+        for (r = 0U; r < (uint8_t)IQB_RANURAS; r++) {
+            float wr, wi, pw;
+            if (s_cal_n[r] < (uint16_t)IQB_CAL_MIN_N) { continue; }
+            if (s_cal_den[r] <= 0.0f) { continue; }
+            wr = s_cal_nre[r] / s_cal_den[r];
+            wi = s_cal_nim[r] / s_cal_den[r];
+            pw = (float)s_cal_n[r];
+            suma  += pw * (wr * wr + wi * wi);
+            pesos += pw;
+        }
+        /* (10^(-42/20))^2 = 6,3e-5 */
+        if (pesos <= 0.0f || (suma / pesos) < 6.3e-5f) { return 0U; }
+    }
+
+    if (!resuelve_sistema(ar, ai, xr, xi)) { return 0U; }
+
+    /*
+     * EL TOPE. Lo mismo que hacen theta y g mas arriba, y por lo mismo: un
+     * coeficiente disparatado solo puede querer decir que lo que se ha
+     * medido no es el desequilibrio. Una imagen a 0 dB de la señal seria
+     * |w| = 1; por encima de 0,5 ya no hay nada que corregir, hay otra cosa.
+     */
+    for (m = 0U; m < L; m++) {
+        float mag = xr[m] * xr[m] + xi[m] * xi[m];
+        if (!(mag < 0.25f)) { return 0U; }
+    }
+
+    /*
+     * SE SUMA, no se sustituye: el panadaptador mide sobre lo ya corregido,
+     * asi que esto es el residuo. Ver iqbal.h.
+     *
+     * Y SE SUMA A MEDIAS. El paso completo mete de golpe todo el ruido de
+     * una sola estimacion; con medio paso, el lazo tarda una vuelta mas en
+     * llegar -son dos segundos- y el ruido de cada estimacion se promedia
+     * con el de las siguientes en vez de acumularse. Es amortiguacion de
+     * toda la vida, y aqui se nota porque el lazo corre muchas veces y la
+     * prisa no sirve de nada.
+     */
+    for (m = 0U; m < L; m++) {
+        s_fir_re[m] += 0.5f * xr[m];
+        s_fir_im[m] += 0.5f * xi[m];
+    }
+    s_fir_hay = 1U;
+
+    /* Y las ranuras a cero: la proxima vuelta tiene que medir el residuo
+     * nuevo, no volver a sumar el de antes. */
+    for (r = 0U; r < (uint8_t)IQB_RANURAS; r++) {
+        s_cal_nre[r] = 0.0f; s_cal_nim[r] = 0.0f;
+        s_cal_den[r] = 0.0f; s_cal_fs[r] = 0.0f; s_cal_n[r] = 0U;
+    }
+    return 1U;
+}
+
+/*
+ * El FIR sobre el conjugado, en el sitio y sobre el bloque entrelazado.
+ *
+ *     y(n) = z(n) + suma_m w[m] * conj(z(n-m))
+ *
+ * La historia se guarda entre bloques: sin eso, las IQB_FIR_TOMAS-1 primeras
+ * muestras de cada bloque se corregirian con ceros y el resultado seria un
+ * chasquido cada 2,7 ms, que es justo la clase de fallo que se oye y no se
+ * ve en ninguna medida de rechazo.
+ */
+static void fir_aplica(int16_t *crudo, uint32_t n)
+{
+    const uint8_t L = (uint8_t)IQB_FIR_TOMAS;
+    uint32_t k;
+    uint8_t m;
+
+    for (k = 0U; k < n; k++) {
+        float zr = (float)crudo[2U * k];
+        float zi = (float)crudo[2U * k + 1U];
+        float yr, yi;
+
+        /* La mas nueva entra la primera; las demas se corren. */
+        for (m = (uint8_t)(L - 1U); m > 0U; m--) {
+            s_hre[m] = s_hre[m - 1U];
+            s_him[m] = s_him[m - 1U];
+        }
+        s_hre[0] = zr; s_him[0] = zi;
+
+        yr = zr; yi = zi;
+        for (m = 0U; m < L; m++) {
+            /* w[m] * conj(h[m]) */
+            yr += s_fir_re[m] * s_hre[m] + s_fir_im[m] * s_him[m];
+            yi += s_fir_im[m] * s_hre[m] - s_fir_re[m] * s_him[m];
+        }
+
+        if (yr >  32767.0f) { yr =  32767.0f; }
+        if (yr < -32768.0f) { yr = -32768.0f; }
+        if (yi >  32767.0f) { yi =  32767.0f; }
+        if (yi < -32768.0f) { yi = -32768.0f; }
+        crudo[2U * k]      = (int16_t)yr;
+        crudo[2U * k + 1U] = (int16_t)yi;
+    }
+}
+
 /* Uno de cada ocho. Ver iqbal.h. */
 #define IQB_UNO_DE   8U
 
@@ -311,15 +700,30 @@ void iqbal_bloque(int16_t *crudo, uint32_t n)
     }
     s_turno = (uint8_t)((s_turno + 1U) % IQB_UNO_DE);
 
-    if (!s_on || !s_hay) { return; }
-    th = s_theta;
-    g  = s_g;
-    for (k = 0U; k < n; k++) {
-        float v = g * ((float)crudo[2U * k + 1U] - th * (float)crudo[2U * k]);
-        if (v >  32767.0f) { v =  32767.0f; }
-        if (v < -32768.0f) { v = -32768.0f; }
-        crudo[2U * k + 1U] = (int16_t)v;
+    if (!s_on) { return; }
+
+    if (s_hay) {
+        th = s_theta;
+        g  = s_g;
+        for (k = 0U; k < n; k++) {
+            float v = g * ((float)crudo[2U * k + 1U] - th * (float)crudo[2U * k]);
+            if (v >  32767.0f) { v =  32767.0f; }
+            if (v < -32768.0f) { v = -32768.0f; }
+            crudo[2U * k + 1U] = (int16_t)v;
+        }
     }
+
+    /*
+     * Y DESPUES EL FIR, sobre lo que el de un coeficiente ha dejado.
+     *
+     * El orden importa y es el que hace que esto sea un añadido y no un
+     * reemplazo: el corrector plano quita la parte del desequilibrio que es
+     * igual en toda la banda -que es la mayor- y el FIR se ocupa de lo que
+     * varia con la frecuencia, que es lo que aquel no puede. Mientras no
+     * haya calibracion, s_fir_hay vale cero y la radio se comporta
+     * EXACTAMENTE como antes.
+     */
+    if (s_fir_hay) { fir_aplica(crudo, n); }
 }
 
 /* --- el espejo leido del espectro (ver iqbal.h) ------------------------- */

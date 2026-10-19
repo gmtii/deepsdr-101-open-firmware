@@ -32,6 +32,26 @@
 void fft_init(void);
 
 /*
+ * EL ESPECTRO COMPLEJO, PARA QUIEN LO NECESITE - 19/10/2026.
+ *
+ * fft_compute_db_iq() calcula el espectro complejo y lo convierte a dB en el
+ * mismo bucle, asi que la FASE solo existe durante unas lineas. Quien la
+ * necesite se engancha aqui y recibe los dos arrays -parte real e
+ * imaginaria, FFT_SIZE puntos, en ORDEN NATURAL (bin 0 = continua), no
+ * desplazado- justo despues de las mariposas.
+ *
+ * Hoy lo usa la calibracion del corrector de imagen (iqbal_calibra), que
+ * mide el cociente complejo entre una portadora y su bin espejo. Va por
+ * puntero y no por llamada directa para que fft.c siga siendo una
+ * transformada y nada mas: con la llamada escrita por su nombre, los bancos
+ * que enlazan fft.c a solas dejan de enlazar.
+ *
+ * El gancho corre DENTRO del bucle de pantalla, una vez por FFT. No puede
+ * bloquear ni llamar a nada que espere.
+ */
+void fft_set_bins_hook(void (*f)(const float *re, const float *im, uint32_t n));
+
+/*
  * Input: `samples` (FFT_SIZE real samples, e.g. int16_t already
  * de-interleaved from sdr_rx). Output: `db_out` (FFT_BINS_USEFUL
  * values, uncalibrated relative "dB" - higher means more energy).

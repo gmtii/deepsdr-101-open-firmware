@@ -11,7 +11,16 @@
 /* Y el umbral de enganche, en UN solo sitio. 0,6 sale de medir: con
  * portadora limpia sam_enganche() pasa de 0,9; con ruido solo se queda por
  * debajo de 0,1. Ver sim/samtest.c. */
-#define SAM_ENG_MIN  0.6f
+/*
+ * Los dos umbrales del si/no. Ver sam_t::eng en sam.h.
+ *
+ * El de entrada es el de siempre (0,6). El de salida se pone en 0,45 y no
+ * mas abajo porque por debajo de ahi el detector ya esta repartido por media
+ * vuelta y el numero de PPM deja de significar nada - que es justo lo que
+ * esta medida existe para no enseñar.
+ */
+#define SAM_ENG_ENTRA  0.6f
+#define SAM_ENG_SALE   0.45f
 
 void sam_init(sam_t *s, float32_t sample_rate_hz, float32_t pll_fmax_hz,
         float32_t omega_n_hz, float32_t zeta)
@@ -87,6 +96,7 @@ void sam_reset(sam_t *s)
      * cuando no hay nada. Al reves, la pantalla diria "enganchado" durante
      * el medio segundo que tarda la media en enterarse de que no lo esta. */
     s->det_med = SAM_TPI * 0.25f;
+    s->eng = 0U;
     s->corr0 = 0.0f;
     s->corr1 = 0.0f;
     s->audio = 0.0f;
@@ -270,6 +280,16 @@ static void sam_lectura(sam_t *s, uint32_t n, float32_t sample_rate_hz)
     a = (float32_t)n / (sample_rate_hz * SAM_TAU_S);
     if (a > 1.0f) { a = 1.0f; }
     s->carrier_hz += a * (s->carrier_hz_raw - s->carrier_hz);
+
+    /* Y el si/no, con sus dos umbrales. Va aqui y no en sam_enganchado()
+     * porque aquella la llama la pantalla -y una consulta no puede cambiar
+     * el estado de nada-, mientras que esto corre una vez por bloque, que es
+     * al ritmo al que el dato se produce. */
+    {
+        float32_t v = sam_enganche(s);
+        if (s->eng) { if (v < SAM_ENG_SALE)  { s->eng = 0U; } }
+        else        { if (v >= SAM_ENG_ENTRA) { s->eng = 1U; } }
+    }
 }
 
 void sam_bloque(sam_t *s, const float32_t *i_in, const float32_t *q_in,
@@ -317,5 +337,5 @@ float32_t sam_enganche(const sam_t *s)
 
 uint8_t sam_enganchado(const sam_t *s)
 {
-    return (uint8_t)(sam_enganche(s) >= SAM_ENG_MIN);
+    return s->eng;
 }

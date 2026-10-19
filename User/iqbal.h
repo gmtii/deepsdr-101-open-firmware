@@ -206,4 +206,127 @@ float iqbal_gan_db(void);       /* g en dB */
 float iqbal_rechazo_db(void);
 uint32_t iqbal_bloques(void);   /* bloques medidos desde el arranque */
 
+/*
+ * ===========================================================================
+ * EL ESPEJO QUE DEPENDE DE LA FRECUENCIA, Y POR QUE UN COEFICIENTE NO PUEDE
+ * ===========================================================================
+ *
+ * *** De un probador, 19/10/2026: "The mirror channel is suppressed by about
+ * 24 dB. If we could add another 10 dB to that, it would be just right." ***
+ *
+ * Y el numero es exactamente el que sale del banco. Medido en el simulador,
+ * con el corrector de arriba -un solo coeficiente complejo-:
+ *
+ *     desequilibrio PLANO (3 grados, 0,8 dB)        26,8 dB  ->  105 dB
+ *     desequilibrio CON PENDIENTE (retardo I/Q)     20,0 dB  ->   22 dB
+ *
+ * O sea: cuando el desequilibrio es el mismo en toda la banda, un coeficiente
+ * lo borra. Cuando VARIA con la frecuencia -y varia, porque el retardo entre
+ * las dos ramas analogicas es un retardo y no un angulo- un coeficiente solo
+ * puede cancelar su media, y lo que queda son los 22-24 dB que se midieron.
+ *
+ * LA SALIDA ES UN FIR CORTO sobre el conjugado, que es lo mismo pero con un
+ * valor distinto en cada frecuencia:
+ *
+ *     y(n) = z(n) + suma_m  w[m] * conj(z(n-m))        (z = I + jQ)
+ *
+ * CAUSAL, y eso NO es un detalle de implementacion: el primer intento uso un
+ * filtro centrado -tomas a ambos lados, que obliga ademas a retrasar la
+ * señal- y rendia mucho PEOR. El banco lo dijo: 59 dB el centrado contra 75
+ * el causal en el mismo caso. Tiene sentido visto a posteriori; lo que
+ * desequilibra las dos ramas es un RETARDO, que es causal, y el filtro
+ * centrado malgastaba la mitad de las tomas en adelantos que no hacen falta.
+ *
+ * CUANTAS TOMAS. Medido, que es la unica forma:
+ *
+ *                        sin nada  1 coef   2     3     4     5
+ *     plano                 26,8   105,7   93,9  90,4  88,0  76,7
+ *     con pendiente         20,0    22,1   44,8  66,4  79,9  75,2
+ *     pendiente fuerte      15,5    17,5   33,1  47,8  61,9  73,2
+ *
+ * CUATRO. Es la fila que mejor se porta en los tres casos a la vez: en el
+ * arriba es el mejor de todos (+58 dB sobre lo que hay hoy), en el plano
+ * sigue dando 88 dB -de sobra: por encima de 50 el espejo no se ve- y en el
+ * peor caso saca 62. Cinco tomas solo ganan en el caso extremo y pierden en
+ * los otros dos, ademas de costar una multiplicacion compleja mas por
+ * muestra dentro de la interrupcion.
+ *
+ * ===========================================================================
+ * COMO SE ESTIMA, Y POR QUE NO A CIEGAS
+ * ===========================================================================
+ *
+ * Hubo tres intentos de deducir el filtro de la estadistica del ruido, como
+ * hace el corrector de un coeficiente. Los tres salieron MAL -uno llego a
+ * empeorar el rechazo de 26 a 22 dB- y el motivo no es un despiste: con
+ * entrada blanca, la estadistica de segundo orden NO determina el filtro
+ * entero. Queda una ambiguedad que ninguna cantidad de promediado quita.
+ *
+ * Asi que esto no deduce: MIDE. Cuando en el panorama hay una portadora
+ * fuerte, su imagen esta en el bin simetrico, y el cociente complejo entre
+ * los dos ES el desequilibrio a esa frecuencia, sin ambiguedad ninguna:
+ *
+ *     W(-k) = - Z(-k) / conj(Z(k))
+ *
+ * Sintonizando por la banda se juntan puntos a distintas frecuencias y por
+ * ellos pasa el FIR, por minimos cuadrados.
+ *
+ * DOS COSAS QUE LO ROMPEN SI SE OLVIDAN, y las dos se aprendieron midiendo:
+ *
+ *   - SOLO LOS PICOS, no todo lo que pase un umbral. Las faldas de la
+ *     ventana a los lados de una portadora pasan el umbral de sobra y la
+ *     medida que dan es basura.
+ *   - SOLO SI ENFRENTE NO HAY NADA. Si el bin espejo esta a menos de 6 dB
+ *     del pico, eso no es una imagen: son dos emisoras, y medirlo contamina
+ *     el ajuste.
+ *
+ * Y LAS RANURAS, que es lo que hace que esto quepa: acumular un numero por
+ * bin serian 2.048 complejos, 16 kB, y en esta radio quedan 1.732 bytes de
+ * SRAM. Se acumula en DIECISEIS casillas repartidas por la banda -288
+ * bytes-, y el banco dice que el resultado es el mismo al decimal.
+ *
+ * EL LAZO ES CERRADO, y no por elegancia: el panadaptador hace la FFT sobre
+ * las muestras YA CORREGIDAS -tiene que ser asi, ver iqbal_bloque()-, o sea
+ * que lo que se mide es el RESIDUO. Por eso iqbal_resuelve() SUMA lo que
+ * encuentra a las tomas que ya hay, en vez de sustituirlas. Medido: converge
+ * en una vuelta y se queda quieto (59,2 -> 58,7 -> 58,7 -> 58,7 en la
+ * version centrada con la que se midio), sin oscilar.
+ */
+#define IQB_FIR_TOMAS    4U
+#define IQB_RANURAS     16U
+
+/*
+ * Un cuadro del panadaptador, en COMPLEJO y en orden natural de la FFT (bin
+ * 0 = continua). Lo llama fft.c justo despues de las mariposas, antes de
+ * pasar a dB: ahi los numeros ya estan y la fase todavia no se ha tirado.
+ *
+ * No corrige nada ni resuelve nada: solo rellena las ranuras. Es barato -un
+ * recorrido del array- y se puede llamar en cada FFT.
+ */
+void iqbal_calibra(const float *re, const float *im, uint32_t n);
+
+/*
+ * Resuelve el FIR con lo que haya en las ranuras y lo SUMA a lo que ya hay.
+ * Devuelve 1 si ha cambiado algo.
+ *
+ * NO se llama desde la interrupcion: lleva un sistema de cinco incognitas y
+ * se resuelve en el bucle de pantalla, una vez cada varios segundos. Si no
+ * hay ranuras suficientes -hacen falta IQB_RANURAS_MIN con medidas- no toca
+ * nada y devuelve 0, que es lo correcto: sin portadoras no hay con que medir,
+ * y lo ultimo que se midio sigue siendo lo mejor que se sabe.
+ */
+uint8_t iqbal_resuelve(void);
+
+/* 1 si el FIR esta en uso. Mientras sea 0 la radio se comporta EXACTAMENTE
+ * como antes: el corrector de un coeficiente y nada mas. */
+uint8_t iqbal_fir_hay(void);
+
+/* Tira el FIR y las ranuras. Para cuando se cambia de banda: el
+ * desequilibrio depende de la frecuencia del LO, asi que lo medido en 15 MHz
+ * no vale en 145. */
+void iqbal_fir_olvida(void);
+
+/* Cuantas ranuras tienen medida ahora mismo, para la pagina de Informacion:
+ * es lo que dice si la calibracion esta hecha o le falta banda por recorrer. */
+uint8_t iqbal_cal_ranuras(void);
+
 #endif /* IQBAL_H */

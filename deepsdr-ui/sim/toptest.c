@@ -91,22 +91,47 @@ int main(void)
                                   + gfx2_text_w(pares[i].peor, &font_ui_14b) + 44 + 8);
             if (w > peor) { peor = w; quien = pares[i].nombre; }
         }
+        /*
+         * LA PASTILLA: ANCHO FIJO, Y METIDA EN EL HUECO - 19/10/2026.
+         *
+         * *** El usuario, con una foto y una raya roja sobre el hueco:
+         * "vuelve a poner el s-meter a su tamaño", "hazle un ancho fijo a
+         * la chapa de sintonia", "usa el hueco de la raya roja". ***
+         *
+         * Dos cosas que comprobar, y las dos se ven en la pantalla:
+         *   - que la pastilla se mete de verdad en el hueco que dejo "AGC
+         *     activo" (si no, el agujero de la foto sigue ahi);
+         *   - que "Sintonia" con el paso mas ancho de los diez cabe ENTERO
+         *     en el ancho fijo, sin un solo punto de recorte.
+         */
+        {
+            int16_t sin_dbm = ui_top_knob_x_dbg(0);
+            int16_t con_dbm = ui_top_knob_x_dbg(1);
+            int16_t anc     = ui_top_knob_w_dbg();
+            int16_t pide    = (int16_t)(gfx2_text_w("Sintonía", &font_ui_14b)
+                                        + gfx2_text_w("12,5 kHz", &font_ui_14b) + 8 + 40);
+            printf("pastilla: empieza en %d (con dBm, en %d), ancho fijo %d\n",
+                   sin_dbm, con_dbm, anc);
+            printf("  aprovecha el hueco de \"AGC activo\"            %s\n",
+                   (sin_dbm <= 215) ? "OK" : "*** NO ***");
+            printf("  \"Sintonía 12,5 kHz\" cabe entera (%d de %d)   %s\n",
+                   pide, anc, (pide <= anc) ? "OK" : "*** SE RECORTA ***");
+            if (sin_dbm > 215 || pide > anc) { return 1; }
+        }
         printf("pastilla del mando, el mas ancho es \"%s\"\n", quien);
         printf("pastilla del mando, peor caso: %d px (hueco disponible 204)  %s\n",
                peor, peor <= 204 ? "OK" : "SE SALE");
         /*
-         * 146 Y NO 150 - 19/10/2026. La franja de la lectura se encogio al
-         * correr la pastilla del mando a la izquierda para que cupiera el
-         * chip ATT; ver ST_READ_W en ui_top.c. Y el peor caso se mide con
-         * "-127", que es el dBm mas ancho que puede salir, no con "-105".
+         * El peor caso se mide con "-127", que es el dBm mas ancho que
+         * puede salir, no con "-105".
          */
         {
             int16_t lec = (int16_t)(gfx2_text_w("S9+60", &font_ui_18b) + 12
                                     + gfx2_text_w("-127", &font_ui_14b) + 3
                                     + gfx2_text_w("dBm", &font_ui_14));
-            printf("lectura S+dBm, peor caso:      %d px (hueco disponible 146)  %s\n",
-                   (int)lec, lec <= 146 ? "OK" : "SE SALE");
-            if (lec > 146) { return 1; }
+            printf("lectura S+dBm, peor caso:      %d px (hueco disponible 150)  %s\n",
+                   (int)lec, lec <= 150 ? "OK" : "SE SALE");
+            if (lec > 150) { return 1; }
         }
     }
     /* variante C: NR encendido y AGC en MED, sin sobrecarga */

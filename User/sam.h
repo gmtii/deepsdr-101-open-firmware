@@ -112,6 +112,32 @@ typedef struct {
     float32_t det_med;
     float32_t a_det;             /* constante de la media de arriba */
 
+    /*
+     * EL SI/NO, CON HISTERESIS - 19/10/2026.
+     *
+     * *** Pedido por el usuario con un video de la radio delante: en SAM-U,
+     * con una emisora de onda corta normal y corriente, la lectura ponia
+     * "buscando" a ratos y el numero de PPM a ratos. ***
+     *
+     * El si/no salia de comparar sam_enganche() con UN umbral, y ahi esta
+     * el fallo: una portadora de onda corta se mueve -desvanecimiento,
+     * Doppler, el propio error de sintonia- y el enganche la sigue, asi que
+     * rozar el umbral significa parpadear. Medido en sim/sam_captura.c: con
+     * la portadora oscilando +-150 Hz, el 23 % del tiempo decia que no.
+     *
+     * Y NO SE ARREGLABA ENSANCHANDO EL MARGEN: con 4.000 Hz pasaba
+     * exactamente lo mismo que con 100. Esa era mi primera idea y el banco
+     * la tumbo, que es justo para lo que esta.
+     *
+     * Asi que el si/no se guarda, y tiene dos umbrales: entra alto y sale
+     * bajo. Entre uno y otro se queda como estaba, que es lo que hace que
+     * una portadora que respira no mueva el cartel.
+     *
+     * Lo que NO cambia: ni el lazo, ni el margen de captura, ni el audio.
+     * Esto es solo lo que la radio DICE de si misma.
+     */
+    uint8_t   eng;               /* 0/1 con histeresis; ver sam_enganchado() */
+
     /* fade leveler */
     float32_t tauR;
     float32_t tauI;
@@ -277,8 +303,10 @@ void sam_bloque_cuad(sam_t *s, const float32_t *i_in, const float32_t *q_in,
  */
 float32_t sam_enganche(const sam_t *s);
 
-/* El si/no, con el umbral en UN solo sitio. Ver sim/samtest.c, que lo mide
- * con portadora, con portadora debil y con ruido solo. */
+/* El si/no, CON HISTERESIS: entra por encima de SAM_ENG_ENTRA y no sale
+ * hasta bajar de SAM_ENG_SALE. Ver sam_t::eng para el porque, y
+ * sim/samtest.c y sim/sam_captura.c, que lo miden con portadora, con
+ * portadora debil, con ruido solo y con una portadora que se mueve. */
 uint8_t sam_enganchado(const sam_t *s);
 
 #endif /* SAM_H */

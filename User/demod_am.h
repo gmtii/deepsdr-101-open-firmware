@@ -546,7 +546,9 @@ int8_t demod_am_banda_lado(void);
  * El porque esta entero en sam.h, encima de sam_margen_pon(): en dos
  * lineas, con los 4.000 Hz del original una portadora intrusa dentro del
  * filtro de canal se lleva el lazo y ademas lo deja diciendo que esta
- * enganchado. Con 100 Hz no puede.
+ * enganchado. Con 250 Hz solo puede si esta MUY cerca; ver el bloque de
+ * SAM_MARGEN_DEF_HZ, justo debajo, para el porque de ese numero y su
+ * precio.
  *
  * Las opciones son estas cuatro y no un numero libre: lo que se elige aqui
  * no es un gusto, es cuanto error de sintonia se admite, y esos cuatro
@@ -557,8 +559,43 @@ int8_t demod_am_banda_lado(void);
  * siguiente dentro de la interrupcion (una comparacion por bloque), sin
  * tocar el estado del lazo ni reiniciar el modo.
  */
+/*
+ * Y POR OMISION 250 Hz, NO 100 - 19/10/2026.
+ *
+ * *** Pedido por el usuario con un video de su radio: en SAM-U, con China
+ * Radio en 15.560 kHz, la lectura se iba a "buscando" cada pocos segundos. ***
+ *
+ * Los 100 Hz se eligieron el 12/10 contra la intrusa, y para eso siguen
+ * siendo lo correcto. Lo que no se midio entonces es el otro lado: una
+ * portadora de onda corta de verdad NO esta quieta. En la cascada de ese
+ * video la traza serpentea unos tres pixeles de los 68 Hz que mide cada uno,
+ * o sea del orden de +-150 Hz, y con 100 de margen el lazo se queda contra
+ * el tope el 21 % del tiempo.
+ *
+ * Lo mide sim/sam_captura.c, y las dos caras:
+ *
+ *   portadora con vaiven de +-150 Hz     100 Hz: engancha el 79 % del tiempo
+ *                                        250 Hz: el 100 %
+ *
+ *   una intrusa 20 dB mas fuerte a...    100 Hz      250 Hz
+ *                              +150 Hz   no la pilla SE LA LLEVA
+ *                              +200 Hz   no la pilla SE LA LLEVA
+ *                              +300 Hz   no la pilla no la pilla
+ *                              +500 Hz   no la pilla no la pilla
+ *
+ * O sea que esto NO es gratis y conviene tenerlo escrito: con 250 una
+ * intrusa a menos de 250 Hz puede llevarse el lazo, cosa que con 100 no
+ * pasaba. A cambio, la radio engancha emisoras reales que antes soltaba.
+ * Se elige lo segundo porque lo primero -dos portadoras a menos de 250 Hz
+ * dentro del mismo filtro- ya suena a batido y tiene su salida propia, que
+ * es SAM-U/SAM-L o estrechar el filtro; y porque el caso que rompia de
+ * verdad, el del probador, estaba a 500 y 1.000 Hz y sigue cubierto.
+ *
+ * Quien quiera el comportamiento de antes lo tiene en la lista: 100 sigue
+ * siendo una de las cuatro opciones.
+ */
 #define SAM_MARGEN_OPCIONES 4U
-#define SAM_MARGEN_DEF_HZ   100U
+#define SAM_MARGEN_DEF_HZ   250U
 extern const uint16_t k_sam_margen_hz[SAM_MARGEN_OPCIONES];
 
 void     demod_am_sam_margen_set(uint16_t hz);
