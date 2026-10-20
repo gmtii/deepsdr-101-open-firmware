@@ -1,8 +1,6 @@
 /*
  * EL OSCILADOR DE POR DEBAJO DE 300 kHz, MEDIDO SIN OSCILOSCOPIO.
  *
- * Pedido por el usuario.
- *
  * Las dos cosas que pide -exactitud de frecuencia y de cuadratura- NO hacen
  * falta medirlas con un osciloscopio: salen de la aritmetica del
  * temporizador, que es entera y por tanto exacta de calcular. Lo unico que

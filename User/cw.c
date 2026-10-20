@@ -408,8 +408,6 @@ _Static_assert(CW_BLOCK_SAMPLES == 32U, "cw.c da por supuesto bloques de 32 mues
 /*
  * Y CON EL APRENDIZAJE ENCENDIDO, LAS DOS MAS ABAJO - 08/10/2026.
  *
- * Pedido por el usuario.
- *
  * Esta era la pieza que me faltaba y la tenia delante desde el primer
  * dia: cuando decodifique la grabacion a mano, mi cortador no estaba en
  * 0,60 del recorrido sino mas abajo. Con el umbral alto cada elemento
@@ -827,8 +825,6 @@ static float    s_frac_dash;  /* fraccion reciente de rayas */
 static uint8_t  s_gate;       /* 1 = lo que llega tiene forma de Morse */
 /*
  * EL APRENDIZAJE: DOS MANERAS DE LEER, Y LA ELIGE EL DUEÑO - 08/10/2026.
- *
- * Pedido por el usuario.
  *
  * Y es la salida correcta, porque no hay una buena y una mala: hay dos
  * suposiciones distintas sobre quien teclea, y cada una acierta con unas
@@ -1833,8 +1829,6 @@ uint8_t cw_get_aprende(void) { return s_aprende; }
 /*
  * LA RELACION RAYA/PUNTO QUE HA MEDIDO, x10. Cero si todavia no hay dos
  * montones que medir.
- *
- * Pedido por el usuario.
  *
  * Y yo no tengo forma de saber por que: la grabacion de referencia se lee
  * bien en el banco, asi que lo que le pasa a su radio en el aire no lo

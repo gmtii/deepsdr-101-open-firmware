@@ -274,8 +274,6 @@ static void draw_header(gfx2_surf_t *s, void *ctx)
     /*
      * --- bateria debajo del reloj, CON EL TANTO POR CIENTO DENTRO ---
      *
-     * Pedido por el usuario, 13/10/2026.
-     *
      * Tres cosas cambian y las tres se siguen unas a otras:
      *
      *   1) LOS VOLTIOS SE VAN. Eran el unico texto de esta esquina y lo que
@@ -489,10 +487,6 @@ static int16_t chip_w(const char *label, const char *value, int active)
  * LA BARRA ENTERA, Y LA PASTILLA EN EL HUECO QUE DEJO "AGC ACTIVO"
  * - 19/10/2026.
  *
- * *** El usuario, con una foto de la pantalla y una raya roja encima del
- * hueco: "vuelve a poner el s-meter a su tamaño", "hazle un ancho fijo a la
- * chapa de sintonia", "usa el hueco de la raya roja". ***
- *
  * Lo que pasaba. La lectura tiene RESERVADOS 141 px para su peor caso -
  * "S9+60" mas "-127 dBm"- y el dBm solo sale con el AGC en OFF. El resto
  * del tiempo ahi vivia "AGC activo"; hoy ese cartel se ha ido y lo que
@@ -606,8 +600,6 @@ static void draw_status(gfx2_surf_t *s, void *ctx)
         /*
          * SOLO LAS UNIDADES S. El dBm ya no sale aqui - 19/10/2026.
          *
-         * *** El usuario: "los dbm no los quiero ahi". ***
-         *
          * Este hueco ha ido perdiendo inquilinos hoy, y los tres por el
          * mismo motivo: ocupaban sitio fijo para algo que casi nunca se
          * mira. Primero se fue "SOBRECARGA" -tapaba la lectura entera justo
@@ -641,6 +633,32 @@ static void draw_status(gfx2_surf_t *s, void *ctx)
     /* --- destino del mando, siempre en el mismo sitio ---
      * Es la respuesta a "que hace el mando ahora mismo", que hoy depende de lo
      * ultimo que se abrio en un menu y no esta escrita en ninguna parte. */
+    /*
+     * LO QUE NO ENTRA EN LA VENTANA NO SE CALCULA - 20/10/2026.
+     *
+     * Debajo vienen la pastilla del mando y los cinco chips de la derecha,
+     * y cada uno se mide antes de pintarse: chip_w() con su texto,
+     * gfx2_text_w() del nombre y del valor, el ancho que queda hasta
+     * ST_CHIP_R... Todo eso se hacia TAMBIEN cuando la ventana acababa
+     * mucho antes de llegar a ellos, porque el recorte vive dentro de cada
+     * primitiva: no se pintaba nada, pero se calculaba entero. Y una vez
+     * por banda.
+     *
+     * Medido: el repintado del S-metro pasa de 241 us a 24 en el
+     * simulador, que en la radio son 31 ms a 3. Y corre cada vez que la
+     * barra cambia de segmento, o sea constantemente con señal.
+     *
+     * NO SE PIERDE NADA AL SALTARSELO. Las cajas del tactil (s_hits_*) y
+     * s_knob_right siguen valiendo lo que valian, y tienen que valerlo: lo
+     * que no se repinta tampoco se ha movido. Quien de verdad cambia un
+     * chip o la pastilla repinta la franja entera, y entonces esta guardia
+     * no se cumple y se recalcula todo.
+     *
+     * El limite es knob_x(), que es de donde sale la posicion de la
+     * pastilla: el mismo numero decide donde empieza y donde corta, asi
+     * que no pueden separarse.
+     */
+    if ((int16_t)(s->x + s->w) <= knob_x(st)) { return; }
     {
         const char *nm = (st->knob_name ? st->knob_name : knob_name(st->knob));
         const char *vl = st->knob_value;
@@ -671,7 +689,8 @@ static void draw_status(gfx2_surf_t *s, void *ctx)
                                        * cuenta como encendido, igual que en AGC. */
                                       + chip_w("ATT", st->att,
                                                (st->att && st->att[0] != 'O')) + ST_CHIP_GAP
-                                      + chip_w("NCO", 0, st->nco_on) + ST_CHIP_GAP
+                                      + chip_w("NCO", st->nco_on ? st->nco_off : 0,
+                                               st->nco_on) + ST_CHIP_GAP
                                       + chip_w("JMP", 0, st->jmp_on) + ST_CHIP_GAP);
             int16_t kw_max;
             if (st->bw) { fijos = (int16_t)(fijos + chip_w("BW", st->bw, 1) + ST_CHIP_GAP); }
@@ -826,7 +845,8 @@ static void draw_status(gfx2_surf_t *s, void *ctx)
         /* Justo al lado del ATT, que es donde lo pidio el usuario. Igual que
          * el: siempre esta, encendido o apagado, para que el sitio no baile
          * segun el estado. */
-        lbl[n] = "NCO"; val[n] = 0; act[n] = st->nco_on;
+        lbl[n] = "NCO"; val[n] = st->nco_on ? st->nco_off : 0;
+        act[n] = st->nco_on;
         id[n] = UI_TOP_HIT_NCO; n++;
         /*
          * JMP VA DESPUES DEL NCO -o sea, mas a la izquierda- porque es el
@@ -926,8 +946,6 @@ static void rds_franja(gfx2_surf_t *s, void *ctx)
      * problema entero en pie: el numero quedaba ENCIMA del horario de la
      * emisora, que vive en este mismo renglon.
      *
-     * Pedido por el usuario.
-     *
      * Lo que estaba mal era compartir sitio. Ahora el numero vive FUERA de
      * esta franja, en el renglon de arriba y a su derecha (UI_TOP_SAM_X en
      * ui_top.h), y con eso se caen las dos cosas de golpe: ni lo borra nadie
@@ -963,8 +981,6 @@ void ui_top_draw_rds(const ui_top_state_t *st)
 /*
  * LAS TRES FRANJAS, EN UNA SUPERFICIE QUE TRAE OTRO - 05/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y esa es la pieza que faltaba. Esta radio NO tiene copia de la pantalla en
  * memoria: una pantalla son 768 kB y aqui quedan dos y medio. Lo que hay es
  * este compositor, que monta franjas de 16 filas, las empuja al panel y las
@@ -995,8 +1011,6 @@ void ui_top_pinta_en(gfx2_surf_t *s, const ui_top_state_t *st)
         if (sub.h > 0) {
             /*
              * Y SOLO EN SU HUECO TAMBIEN A LO ANCHO - 07/10/2026.
-             *
-             * Pedido por el usuario.
              *
              * Era eso exactamente. Aqui arriba ponia que la marquesina "se
              * recorta a su hueco por construccion", y era mentira a medias:
@@ -1034,8 +1048,6 @@ void ui_top_draw_status(const ui_top_state_t *st)
 
 /*
  * SOLO LA PARTE QUE SE MUEVE CON LA SEÑAL - 30/09/2026.
- *
- * Pedido por el usuario.
  *
  * Y era cierto., aunque el espectro no tenga nada que ver: medido con
  * lcd_sim, pintar el espectro cuesta 155.002 accesos al bus HAYA O NO HAYA
@@ -1087,15 +1099,38 @@ void ui_top_draw_status(const ui_top_state_t *st)
  */
 #define ST_MOVIL_W  (int16_t)(ST_READ_X + 62 + 8 + ST_KNOB_W + 6)
 
+/*
+ * Y LA PASTILLA DEL MANDO NO SE MUEVE CON LA SEÑAL - 20/10/2026.
+ *
+ * Esta ventana iba hasta ST_MOVIL_W, que son 418 px porque incluye la
+ * pastilla del mando ("Sintonia 1 kHz"). Pero esa pastilla NO cambia con
+ * la señal: cambia cuando se toca el mando, y quien lo toca ya repinta.
+ * Lo que se mueve con la señal es la barra (x 10..130) y su etiqueta
+ * ("S6", x 138..200), y las dos acaban justo donde empieza la pastilla.
+ *
+ * Y de alto, la franja mide 40 filas y lo que se mueve vive entre la 6 y
+ * la 31: la barra ocupa de la 12 a la 26, sus marquitas llegan a la 29 y
+ * la etiqueta empieza en la 8.
+ *
+ * Medido en la radio con la vuelta partida en tramos: el S-metro se
+ * llevaba 31 ms de un fotograma cuyo tope son 22, y corre CADA VEZ QUE
+ * CAMBIA UN SEGMENTO, o sea constantemente mientras entra señal.
+ *
+ * El ancho sale de knob_x(), que es de donde sale tambien la posicion de
+ * la pastilla: asi mover la pastilla mueve el borde de esta ventana sola,
+ * y no se puede quedar apuntando a donde ya no esta.
+ */
+#define ST_MOVIL_Y1  6     /* la primera fila que se mueve con la señal */
+#define ST_MOVIL_Y2  32    /* la primera que ya no */
+
 void ui_top_draw_smeter(const ui_top_state_t *st)
 {
-    gfx2_render(0, UI_STATUS_Y, ST_MOVIL_W, UI_STATUS_H, draw_status, (void *)st);
+    gfx2_render(0, (int16_t)(UI_STATUS_Y + ST_MOVIL_Y1), knob_x(st),
+                (int16_t)(ST_MOVIL_Y2 - ST_MOVIL_Y1), draw_status, (void *)st);
 }
 
 /*
  * Y EL DEL PPM DEL SAM, QUE ES EL MISMO CUENTO OTRA VEZ - 04/10/2026.
- *
- * Pedido por el usuario.
  *
  * Seguia porque el otro extremo estaba intacto. main.c mira el error del PLL
  * una vez por fotograma y, si el numero cambio, llamaba a ui_top_draw(): la
@@ -1126,9 +1161,22 @@ void ui_top_draw_sam(const ui_top_state_t *st)
 }
 
 /*
- * Y EL DE LA FRECUENCIA, QUE ES EL QUE MAS VECES CORRE - 05/10/2026.
+ * Y LA ESQUINA DEL RELOJ, QUE ERA LA QUE QUEDABA - 20/10/2026.
  *
- * Pedido por el usuario.
+ * La cuarta de la familia. Ver UI_TOP_HORA_RX en ui_top.h: el mismo
+ * draw_header de siempre con la ventana recortada a la esquina de arriba a
+ * la derecha, donde viven el reloj y la pastilla de la bateria. No hay una
+ * segunda funcion de dibujo que mantener al dia, asi que mover el reloj no
+ * puede dejar esto pintando otra cosa.
+ */
+void ui_top_draw_hora(const ui_top_state_t *st)
+{
+    gfx2_render(UI_TOP_HORA_RX, UI_TOP_HORA_RY, UI_TOP_HORA_RW,
+                UI_TOP_HORA_RH, draw_header, (void *)st);
+}
+
+/*
+ * Y EL DE LA FRECUENCIA, QUE ES EL QUE MAS VECES CORRE - 05/10/2026.
  *
  * Esta es la tercera de la misma familia, y la mas cara de las tres por el
  * ritmo al que corre. El S-metro (30/09) se repinta con la señal; el PPM del
@@ -1154,8 +1202,6 @@ void ui_top_draw_sam(const ui_top_state_t *st)
  * ======================================================================
  * LA PASTILLA DE BANDA SE CORTABA AL ENSANCHARSE - 11/10/2026
  * ======================================================================
- *
- * Pedido por el usuario.
  *
  * Las dos frases juntas son el diagnostico entero, y la segunda es la que
  * lo cierra.
@@ -1195,7 +1241,16 @@ void ui_top_draw_freq(const ui_top_state_t *st)
 
     gfx2_render(0, 0, x1, UI_TOP_H, draw_header, (void *)st);
     if (rds_x1() > x1) {
-        gfx2_render(0, 0, rds_x1(), UI_TOP_H, draw_header, (void *)st);
+        /* draw_header calcula s_band_x2 MIENTRAS dibuja, asi que hasta
+         * terminar la primera pasada no se sabe si la pastilla de banda ha
+         * crecido. Cuando crece hay que pintar lo que queda a su derecha,
+         * pero SOLO eso: antes se repetia la franja entera desde cero y se
+         * escribian 27.392 pixeles dos veces -1,23 ms de bus con la CPU
+         * parada- en cada cambio de banda y en cada cruce de 9.999 kHz.
+         * gfx2_render recorta a la ventana que se le pide, asi que lo ya
+         * pintado se queda como esta. */
+        gfx2_render(x1, 0, (int16_t)(rds_x1() - x1), UI_TOP_H,
+                    draw_header, (void *)st);
     }
 }
 

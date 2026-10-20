@@ -1,8 +1,6 @@
 /*
  * JTTY EN EL AIRE: del audio al texto, con ruido de verdad.
  *
- * Pedido por el usuario.
- *
  * LO QUE MIDE ESTO, Y POR QUE NO VALE NADA MENOS
  * -----------------------------------------------
  * jtty_fec.c y jtty_msg.c ya estaban comprobados contra el Fortran de

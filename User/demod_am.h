@@ -514,9 +514,6 @@ typedef enum {
 /*
  * LA BANDA DEL DETECTOR SINCRONO - 11/10/2026.
  *
- * *** De un issue: se pedia que el detector sincrono de AM pudiera trabajar sobre una
- * sola banda lateral, para escapar de una interferencia. ***
- *
  * Y para eso es: con una emisora pisando por un lado, quedarse con el otro
  * recupera la escucha. En AM normal no se puede -el detector de envolvente
  * ve las dos bandas sumadas- y por eso esto es de SAM.
@@ -562,9 +559,6 @@ int8_t demod_am_banda_lado(void);
 /*
  * Y POR OMISION 250 Hz, NO 100 - 19/10/2026.
  *
- * *** Pedido por el usuario con un video de su radio: en SAM-U, con China
- * Radio en 15.560 kHz, la lectura se iba a "buscando" cada pocos segundos. ***
- *
  * Los 100 Hz se eligieron el 12/10 contra la intrusa, y para eso siguen
  * siendo lo correcto. Lo que no se midio entonces es el otro lado: una
  * portadora de onda corta de verdad NO esta quieta. En la cascada de ese
@@ -589,7 +583,7 @@ int8_t demod_am_banda_lado(void);
  * Se elige lo segundo porque lo primero -dos portadoras a menos de 250 Hz
  * dentro del mismo filtro- ya suena a batido y tiene su salida propia, que
  * es SAM-U/SAM-L o estrechar el filtro; y porque el caso que rompia de
- * verdad, el del probador, estaba a 500 y 1.000 Hz y sigue cubierto.
+ * verdad, el medido, estaba a 500 y 1.000 Hz y sigue cubierto.
  *
  * Quien quiera el comportamiento de antes lo tiene en la lista: 100 sigue
  * siendo una de las cuatro opciones.

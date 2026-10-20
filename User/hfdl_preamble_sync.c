@@ -130,8 +130,6 @@ void hfdl_preamble_sync_init(hfdl_preamble_sync_t *p)
 	 * A1 VUELVE A SER COHERENTE - 14/10/2026
 	 * ======================================================================
 	 *
-	 * Pedido por el usuario.
-	 *
 	 * Doscientos cincuenta y seis enganches de A1 para cincuenta y dos
 	 * ráfagas reales. El troceado en ocho bloques con suma de valores
 	 * absolutos es el culpable, y el propio comentario de arriba ya lo
@@ -339,8 +337,6 @@ hfdl_preamble_state_t hfdl_preamble_sync_process_symbol_ex(hfdl_preamble_sync_t 
 		} else {
 			/*
 			 * LA MEJOR DE LAS OCHO, NO LA PRIMERA. 14/10/2026.
-			 *
-			 * Pedido por el usuario.
 			 *
 			 * Aqui habia un "la primera que cruce el umbral gana", con un
 			 * comentario que lo llamaba "una simplificacion razonable".

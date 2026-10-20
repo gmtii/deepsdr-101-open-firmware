@@ -3,8 +3,6 @@
  * QUE LA TIERRA SE RELLENE TAMBIEN AL ACERCARSE - 15/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * sim/mapa_tierra.c mide el relleno DEL ZOOM 1, y estaba verde mientras la
  * radio enseñaba el mapa sin rellenar en cuanto te acercabas. No mentia: es
  * que al zoom 1 el par-impar arranca solo -toda fila empieza en el borde

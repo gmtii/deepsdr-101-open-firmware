@@ -3,8 +3,6 @@
  * LO QUE COSTARIA RELLENAR LA TIERRA - 13/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * EL COLOR YA ESTA. MAPA_COL_TIERRA es el hueco 1 de los quince colores que
  * lleva CADA uno de los cien .map, esta en el enum y esta en
  * tools/mapa_pack.py... y no lo lee nadie. mapa.c rellena el panel entero

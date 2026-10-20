@@ -53,7 +53,7 @@ static uint32_t s_dirty_since_ms = 0U;
  * spi_flash_async_save_start() only references it, doesn't copy it -
  * see spi_flash.h's comment. A stack-local buffer would be gone the
  * instant settings_poll() returns, so this has to be static. */
-/* 23/09/2026: 1024, y hoy 1600 (ver s_async_csv_buf justo debajo; el fichero
+/* 23/09/2026: 1024, luego 1600, y hoy 2112 (ver s_async_csv_buf justo debajo; el fichero
  * en si mide CSV_TAMANO = 1536 y el buffer lleva sitio para el cero y para el
  * aviso). El "1024" de esta linea se quedo escrito cuando se subio, y a dos
  * lineas de aqui el mismo comentario ya cuenta la subida a 1536: corregido el
@@ -65,7 +65,7 @@ static uint32_t s_dirty_since_ms = 0U;
  * ahi 1536. Y build_csv() avisa por UART si
  * alguna vez trunca. Las tres subidas anteriores (256 -> 384 -> 512) fueron
  * cuentas a ojo, y las tres se quedaron cortas a la siguiente clave. */
-static uint8_t s_async_csv_buf[1600];
+static uint8_t s_async_csv_buf[2112];
 static uint8_t s_async_save_in_progress = 0U;
 
 /* --- manual CSV building/parsing - no sprintf/strtol, same policy as
@@ -210,7 +210,9 @@ static const char *const k_extra_claves[] = {
     "vcalib_mv",        /* SET_X_VCALIB      */
     "sam_margen_hz",    /* SET_X_SAM_MARG    */
     "bd_espectro",      /* SET_X_BD_ESPECTRO */
-    "jmp"               /* SET_X_JMP         */
+    "jmp",              /* SET_X_JMP         */
+    "iq_inv",           /* SET_X_IQ_INV      */
+    "wefax_centro"      /* SET_X_WFX_CENTRO  */
 };
 _Static_assert(sizeof(k_extra_claves) / sizeof(k_extra_claves[0]) == (size_t)SET_X_N,
                "k_extra_claves[] y settings_extra_id_t se han desincronizado");
@@ -224,7 +226,19 @@ _Static_assert((int)SET_X_N <= 64, "settings_extra_t.presentes es un uint64_t: c
  * tools/csvlen_check.py comprueba en cada compilacion que el peor caso de
  * todas las claves sigue cabiendo aqui.
  */
-#define CSV_TAMANO 1536U
+/*
+ * SUBIDO DE 1536 A 2048 - 20/10/2026.
+ *
+ * Con la clave nueva del sentido de la cuadratura (iq_inv), el peor caso de
+ * todas las claves juntas pasa a 1.544 bytes y ya no cabia. Lo canto
+ * tools/csvlen_check.py al compilar, que para eso esta: el fichero tiene
+ * que medir SIEMPRE lo mismo, y uno que a veces cabe y a veces no es un
+ * fichero que un dia se trunca.
+ *
+ * 2048 son cuatro sectores de 512 justos, y deja 504 bytes de holgura para
+ * las proximas claves sin volver a tocar esto.
+ */
+#define CSV_TAMANO 2048U
 
 static uint32_t build_csv(uint8_t *buf, uint32_t buf_size,
                            const touch_calibration_t *cal, uint32_t vfo_hz, demod_mode_t mode,
@@ -429,8 +443,15 @@ static uint8_t key_is(const uint8_t *key, uint32_t key_len, const char *literal)
 
 uint8_t settings_load(settings_loaded_t *out)
 {
-    /* Ver s_async_csv_buf, arriba, para por que 1600 y no una cuenta a ojo. */
-    uint8_t buf[1600];
+    /* SE USA s_async_csv_buf Y NO UNA COPIA EN PILA - 19/10/2026.
+     *
+     * Aqui habia un uint8_t buf[1600] local. Esta funcion corre UNA VEZ en el
+     * arranque, antes de que pueda haber ningun guardado asincrono en vuelo,
+     * asi que el buffer estatico esta libre por construccion y 1.600 bytes de
+     * pila se quedan sin pedir. Ver s_async_csv_buf, arriba, para por que
+     * 1600 y no una cuenta a ojo. */
+    uint8_t *buf = s_async_csv_buf;
+    const uint32_t buf_cap = (uint32_t)sizeof s_async_csv_buf;
     uint32_t n;
     uint32_t pos = 0U;
     uint8_t got_any = 0U;
@@ -451,7 +472,7 @@ uint8_t settings_load(settings_loaded_t *out)
     out->have_tema_idx = 0U;
     out->have_spectrum_palette = 0U;
 
-    n = spi_flash_read_file_by_name(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3, buf, sizeof(buf));
+    n = spi_flash_read_file_by_name(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3, buf, buf_cap);
     if (n == 0U) {
         debug_print("settings_load: CONFIG.CSV not found or empty - using firmware defaults\n");
         return 0U;
@@ -687,11 +708,27 @@ void settings_save_now(uint32_t vfo_hz, demod_mode_t mode, uint32_t tune_step_hz
                         const settings_extra_t *extra)
 {
     touch_calibration_t cal;
-    uint8_t csv[1600]; /* ver s_async_csv_buf */
+    /* SE USA s_async_csv_buf Y NO UNA COPIA EN PILA - 19/10/2026.
+     *
+     * Eran otros 1.600 bytes de pila, y esta funcion SI esta en el camino
+     * del peor caso (main -> tactil -> ajuste -> aqui). La guarda es que el
+     * buffer estatico solo lo usa el guardado ASINCRONO, y ese no puede
+     * estar en vuelo mientras corre esto: settings_poll() vuelve pronto si
+     * s_async_save_in_progress, y los dos sitios de main.c que llaman aqui
+     * lo hacen desde el bucle principal, en la misma vuelta en la que
+     * settings_poll() ya ha decidido que no hay nada en vuelo. Por si acaso
+     * se comprueba, que es gratis y evita un guardado pisado en silencio. */
+    uint8_t *csv = s_async_csv_buf;
     uint32_t len;
 
+    if (s_async_save_in_progress) {
+        debug_print("settings_save_now: hay un guardado en vuelo, se deja para settings_poll()\n");
+        s_dirty = 1U;
+        return;
+    }
+
     touch_get_calibration(&cal);
-    len = build_csv(csv, sizeof(csv), &cal, vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2, nonwfm_use_48k,
+    len = build_csv(csv, (uint32_t)sizeof s_async_csv_buf, &cal, vfo_hz, mode, tune_step_hz, audio_bw, volume_db_x2, nonwfm_use_48k,
                      pga_gain_db_x2, spectrum_smooth_pct, speaker_enabled, att_rin_level, tema_idx, extra);
 
     if (spi_flash_write_or_update_file(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3, csv, len)) {

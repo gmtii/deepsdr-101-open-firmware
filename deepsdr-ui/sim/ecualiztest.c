@@ -1,8 +1,6 @@
 /*
  * EL ECUALIZADOR CONTRA UN CANAL CON ECO.
  *
- * Pedido por el usuario.
- *
  * Un ecualizador que no se mide no sirve de nada, porque CONVERGER NO ES
  * LO MISMO QUE ACERTAR: un lazo puede quedarse quieto en una solucion mala
  * y parecer que ha enganchado. Asi que aqui no se mira si los coeficientes

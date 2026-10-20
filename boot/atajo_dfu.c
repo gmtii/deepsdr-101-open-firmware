@@ -119,7 +119,6 @@ static void salta_a_la_rom(void)
     /*
      * EL UNICO AVISO POSIBLE: EL LED - 01/10/2026.
      *
-     * Pedido por el usuario.
      * Deberia, pero no se puede, y el motivo es el mismo que hace que esto
      * funcione: la ROM de fabrica exige llegar con el reloj como lo deja un
      * reset y sin periféricos montados. Encender el panel aqui dentro

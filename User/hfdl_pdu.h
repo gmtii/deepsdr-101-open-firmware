@@ -149,8 +149,6 @@ typedef struct {
 	/*
 	 * LA CARGA AUNQUE EL CRC DEL LPDU HAYA FALLADO - 14/10/2026.
 	 *
-	 * Pedido por el usuario.
-	 *
 	 * `user_data` de arriba solo se rellena si el LPDU paso su CRC, y eso
 	 * es lo correcto por defecto. Pero el 14/10/2026 se destripo byte a
 	 * byte una trama real de las que no daban coordenadas y salio esto:
@@ -184,8 +182,6 @@ typedef struct {
 /*
  * EL SQUITTER (SPDU), QUE NO ESTABA - 14/10/2026
  * ==============================================
- *
- * Pedido por el usuario.
  *
  * La primera ranura de cada trama TDMA de 32 segundos la manda la
  * estacion de tierra y NO es un MPDU: es un SPDU, con otra estructura y,

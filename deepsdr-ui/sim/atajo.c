@@ -1,8 +1,6 @@
 /*
  * EL GESTO DE LA SALIDA DE EMERGENCIA, PROBADO EN EL PC.
  *
- * Pedido por el usuario.
- *
  * Esto corre el boot/atajo_gesto.c del cargador -el de verdad, no una
  * copia- contra secuencias de patas inventadas a mano. El criterio no es
  * "no revienta", son dos cosas que tienen que cumplirse A LA VEZ:

@@ -54,6 +54,11 @@ typedef struct {
     const char *l3;   /* tercer renglon, o 0 si la celda solo tiene dos */
 } ui_grid_cell_t;
 
+/* Renglones de celda que NO han cabido desde el arranque. Tiene que ser
+ * cero: gfx2_text_in() recorta sin avisar, asi que sin esto un dato se
+ * pierde en silencio. Ver el comentario de mide() en ui_grid.c. */
+uint16_t ui_grid_recortes(void);
+
 typedef struct {
     const char     *titulo;               /* cabecera de la pagina */
     uint8_t         pagina;               /* 0..paginas-1 */

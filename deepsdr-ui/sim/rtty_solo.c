@@ -1,8 +1,6 @@
 /*
  * EL RTTY, AJUSTANDOSE SOLO.
  *
- * Pedido por el usuario.
- *
  * Se arranca el decodificador MAL PUESTO a proposito -tonos donde no
  * estan, velocidad que no es, polaridad del reves- y se mira si llega el
  * solo a sacar el boletin. Que es lo que le va a pasar al usuario cada vez

@@ -1,8 +1,6 @@
 /*
  * EL EJE DE dB SE REPINTABA EN TODOS LOS FOTOGRAMAS - 05/10/2026.
  *
- * Pedido por el usuario.
- *
  * Esta era una de ellas, y es de las que no se ven leyendo ninguno de los
  * dos ficheros implicados, porque los dos son correctos por separado:
  *
@@ -34,6 +32,7 @@
 #include "spectrum.h"
 #include "spec_agc.h"
 #include <stdio.h>
+#include <string.h>
 #include <math.h>
 
 const palette_t *g_pal = &k_pal_oscura;
@@ -180,6 +179,50 @@ int main(void)
         snprintf(det, sizeof det, "%d divisiones", (int)SPECTRUM_GRID_ROWS);
         di("la canaleta usa las lineas que dibuja el espectro",
            spec_chrome_divisiones() == (int)SPECTRUM_GRID_ROWS, det);
+    }
+
+    /*
+     * Y LO MISMO PARA LA REGLA DE FRECUENCIA - 19/10/2026.
+     *
+     * spec_chrome_ruler_changed() comparaba center_hz EN HERCIOS mientras la
+     * regla imprime kHz: con el span de serie un pixel son 127 Hz, asi que
+     * cualquier clic pequeño repintaba 20.834 accesos al bus para dejar la
+     * pantalla igual. Es el mismo fallo que el eje tenia arreglado desde el
+     * 05/10 y que aqui no se habia mirado.
+     */
+    printf("\n  la regla se repinta cuando cambia lo que se LEE\n");
+    {
+        spec_chrome_t a, b;
+
+        memset(&a, 0, sizeof a);
+        a.center_hz  = 7100000UL;
+        a.span_hz    = 96000UL;
+        a.demod_px   = 378;
+        a.en_banda   = 1U;
+        a.fam_banda  = 0U;
+        a.eje_en_hz  = 0U;
+
+        b = a; b.center_hz = a.center_hz + 1UL;
+        di("un hercio, que no se lee, NO repinta",
+           spec_chrome_ruler_changed(&a, &b) == 0U, 0);
+        b = a; b.center_hz = a.center_hz + 100UL;
+        di("cien hercios tampoco",
+           spec_chrome_ruler_changed(&a, &b) == 0U, 0);
+        b = a; b.center_hz = a.center_hz + 1000UL;
+        di("un kilohercio SI, que ahi cambia el numero",
+           spec_chrome_ruler_changed(&a, &b) != 0U, 0);
+        b = a; b.span_hz = 48000UL;
+        di("cambiar el span SI",
+           spec_chrome_ruler_changed(&a, &b) != 0U, 0);
+        b = a; b.demod_px = a.demod_px + 200;
+        di("mover el punto de demodulacion SI",
+           spec_chrome_ruler_changed(&a, &b) != 0U, 0);
+        b = a; b.fam_banda = 2U;
+        di("cambiar de clase de banda SI, que la raya es de otro color",
+           spec_chrome_ruler_changed(&a, &b) != 0U, 0);
+        b = a; b.eje_en_hz = 1U;
+        di("y pasar el eje a hercios SI",
+           spec_chrome_ruler_changed(&a, &b) != 0U, 0);
     }
 
     printf("\n  %s\n\n", fallos ? "HAY FALLOS" : "TODO CORRECTO (0 fallos)");

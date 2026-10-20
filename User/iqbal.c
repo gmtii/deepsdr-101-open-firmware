@@ -604,38 +604,98 @@ uint8_t iqbal_resuelve(void)
  * chasquido cada 2,7 ms, que es justo la clase de fallo que se oye y no se
  * ve en ninguna medida de rechazo.
  */
-static void fir_aplica(int16_t *crudo, uint32_t n)
+/*
+ * EL FIR DEL ESPEJO, FUNDIDO CON EL CORRECTOR PLANO.
+ *
+ * Una sola pasada sobre el bloque. La primera version hacia dos -el plano
+ * escribia el bloque entero de vuelta en int16 y el FIR lo volvia a leer- y
+ * ademas corria el historial en memoria para cada muestra. Las dos cosas se
+ * pagan dentro de la interrupcion del ADC, que es por donde pasan TODAS las
+ * muestras de TODOS los modos. Medido con sim/iq_coste.c: asi costaba 5,1
+ * veces el corrector plano solo, por encima del tope de ese banco.
+ *
+ * El historial vive en registros mientras dura el bloque y solo se guarda al
+ * salir. Por eso va desenrollado y por eso hay un _Static_assert: si alguien
+ * cambia el numero de tomas, esto tiene que cambiar con el.
+ *
+ * El corrector plano entra aqui como th y g en vez de como una pasada
+ * aparte; cuando no hay medida plana se llama con th=0 y g=1, que es la
+ * identidad, y asi no hace falta un if por muestra. De paso el FIR ve la Q
+ * corregida SIN recortar a int16 en medio, que es un redondeo menos.
+ */
+/*
+ * RECORTE A 16 BITS.
+ *
+ * En el Cortex-M4 es UNA instruccion, SSAT; escrita a mano en vez de traer
+ * core_cm4.h porque ese arrastra medio CMSIS hasta el simulador y alli se
+ * pelea con las intrinsecas del anfitrion (ver hostinc/arm_math.h). En el
+ * PC son dos comparaciones y el resultado es el mismo numero.
+ *
+ * El paso por int32 es seguro y no hace falta comprobarlo en caliente: la
+ * entrada es int16, el corrector plano la multiplica por g <= IQB_G_MAX con
+ * un sesgo de th <= IQB_THETA_MAX, y el FIR suma cuatro tomas de modulo
+ * menor que 0,5 (iqbal_resuelve() rechaza las que no lo cumplan). El mayor
+ * valor posible es 32768 * 2 * 1,5 * 3 = 294.912, que cabe de sobra.
+ */
+#if defined(__ARM_FEATURE_SAT) && (__ARM_FEATURE_SAT == 1)
+static inline int16_t sat16(int32_t v)
 {
-    const uint8_t L = (uint8_t)IQB_FIR_TOMAS;
+    int32_t r;
+    __asm volatile ("ssat %0, #16, %1" : "=r" (r) : "r" (v));
+    return (int16_t)r;
+}
+#else
+static inline int16_t sat16(int32_t v)
+{
+    if (v >  32767)  { v =  32767; }
+    if (v < -32768)  { v = -32768; }
+    return (int16_t)v;
+}
+#endif
+
+_Static_assert(IQB_FIR_TOMAS == 4U, "fir_aplica() va desenrollada a cuatro tomas");
+
+static void fir_aplica(int16_t *crudo, uint32_t n, float th, float g)
+{
+    const float w0r = s_fir_re[0], w0i = s_fir_im[0];
+    const float w1r = s_fir_re[1], w1i = s_fir_im[1];
+    const float w2r = s_fir_re[2], w2i = s_fir_im[2];
+    const float w3r = s_fir_re[3], w3i = s_fir_im[3];
+    float h0r = s_hre[0], h0i = s_him[0];
+    float h1r = s_hre[1], h1i = s_him[1];
+    float h2r = s_hre[2], h2i = s_him[2];
+    float h3r = s_hre[3], h3i = s_him[3];
     uint32_t k;
-    uint8_t m;
 
     for (k = 0U; k < n; k++) {
         float zr = (float)crudo[2U * k];
-        float zi = (float)crudo[2U * k + 1U];
+        float zi = g * ((float)crudo[2U * k + 1U] - th * zr);
         float yr, yi;
 
         /* La mas nueva entra la primera; las demas se corren. */
-        for (m = (uint8_t)(L - 1U); m > 0U; m--) {
-            s_hre[m] = s_hre[m - 1U];
-            s_him[m] = s_him[m - 1U];
-        }
-        s_hre[0] = zr; s_him[0] = zi;
+        h3r = h2r; h3i = h2i;
+        h2r = h1r; h2i = h1i;
+        h1r = h0r; h1i = h0i;
+        h0r = zr;  h0i = zi;
 
-        yr = zr; yi = zi;
-        for (m = 0U; m < L; m++) {
-            /* w[m] * conj(h[m]) */
-            yr += s_fir_re[m] * s_hre[m] + s_fir_im[m] * s_him[m];
-            yi += s_fir_im[m] * s_hre[m] - s_fir_re[m] * s_him[m];
-        }
+        /* y = z + suma de w[m] * conj(h[m]) */
+        yr = zr + w0r * h0r + w0i * h0i
+                + w1r * h1r + w1i * h1i
+                + w2r * h2r + w2i * h2i
+                + w3r * h3r + w3i * h3i;
+        yi = zi + w0i * h0r - w0r * h0i
+                + w1i * h1r - w1r * h1i
+                + w2i * h2r - w2r * h2i
+                + w3i * h3r - w3r * h3i;
 
-        if (yr >  32767.0f) { yr =  32767.0f; }
-        if (yr < -32768.0f) { yr = -32768.0f; }
-        if (yi >  32767.0f) { yi =  32767.0f; }
-        if (yi < -32768.0f) { yi = -32768.0f; }
-        crudo[2U * k]      = (int16_t)yr;
-        crudo[2U * k + 1U] = (int16_t)yi;
+        crudo[2U * k]      = sat16((int32_t)yr);
+        crudo[2U * k + 1U] = sat16((int32_t)yi);
     }
+
+    s_hre[0] = h0r; s_him[0] = h0i;
+    s_hre[1] = h1r; s_him[1] = h1i;
+    s_hre[2] = h2r; s_him[2] = h2i;
+    s_hre[3] = h3r; s_him[3] = h3i;
 }
 
 /* Uno de cada ocho. Ver iqbal.h. */
@@ -702,28 +762,34 @@ void iqbal_bloque(int16_t *crudo, uint32_t n)
 
     if (!s_on) { return; }
 
-    if (s_hay) {
-        th = s_theta;
-        g  = s_g;
-        for (k = 0U; k < n; k++) {
-            float v = g * ((float)crudo[2U * k + 1U] - th * (float)crudo[2U * k]);
-            if (v >  32767.0f) { v =  32767.0f; }
-            if (v < -32768.0f) { v = -32768.0f; }
-            crudo[2U * k + 1U] = (int16_t)v;
-        }
-    }
+    th = s_hay ? s_theta : 0.0f;
+    g  = s_hay ? s_g     : 1.0f;
 
     /*
-     * Y DESPUES EL FIR, sobre lo que el de un coeficiente ha dejado.
+     * EL CORRECTOR PLANO Y EL FIR, QUE SON UNO SOLO.
      *
-     * El orden importa y es el que hace que esto sea un añadido y no un
-     * reemplazo: el corrector plano quita la parte del desequilibrio que es
-     * igual en toda la banda -que es la mayor- y el FIR se ocupa de lo que
-     * varia con la frecuencia, que es lo que aquel no puede. Mientras no
-     * haya calibracion, s_fir_hay vale cero y la radio se comporta
-     * EXACTAMENTE como antes.
+     * El plano quita la parte del desequilibrio que es igual en toda la
+     * banda -que es la mayor- y el FIR se ocupa de lo que varia con la
+     * frecuencia, que es lo que aquel no puede. Por eso el FIR es un
+     * añadido y no un reemplazo, y por eso va despues: trabaja sobre lo que
+     * el plano ha dejado.
+     *
+     * Van fundidos en una sola pasada porque esto corre dentro de la
+     * interrupcion del ADC. Mientras no haya calibracion, s_fir_hay vale
+     * cero, se toma la rama de abajo y la radio se comporta EXACTAMENTE
+     * como antes de que el FIR existiera.
      */
-    if (s_fir_hay) { fir_aplica(crudo, n); }
+    if (s_fir_hay) {
+        fir_aplica(crudo, n, th, g);
+        return;
+    }
+
+    if (s_hay) {
+        for (k = 0U; k < n; k++) {
+            float v = g * ((float)crudo[2U * k + 1U] - th * (float)crudo[2U * k]);
+            crudo[2U * k + 1U] = sat16((int32_t)v);
+        }
+    }
 }
 
 /* --- el espejo leido del espectro (ver iqbal.h) ------------------------- */

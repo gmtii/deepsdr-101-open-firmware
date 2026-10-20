@@ -104,6 +104,17 @@ uint16_t wefax_lpm_opcion(uint8_t i);   /* la lista, para la interfaz */
 
 /* El mismo ajuste por indice (0..WEFAX_LPM_N-1, creciente). Es lo que
  * recorre el mando y lo que se guarda en CONFIG.CSV; ver wefax.c. */
+/* --- EL CENTRADO ---------------------------------------------------
+ *
+ * Corre el renglon ya terminado tantos puntos como se le diga, dando la
+ * vuelta por el otro lado: positivo hacia la derecha. Sirve para cuadrar
+ * el margen cuando el pulso de fase de la emisora no cae donde este
+ * decodificador supone. NO toca el enganche: ver su comentario en el .c.
+ */
+void     wefax_set_centro(int16_t px);
+int16_t  wefax_centro(void);
+
+
 uint8_t  wefax_get_lpm_idx(void);
 void     wefax_set_lpm_idx(uint8_t i);
 

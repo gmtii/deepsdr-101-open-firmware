@@ -1,8 +1,6 @@
 /*
  * EL IDENT CONTRA LAS GRABACIONES, CONTANDO VENTANAS. 10/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y mirando eso salio algo mas gordo que una fila mal puesta.
  *
  * LO QUE PASABA. ident_modo_poll() publicaba `s_m = r`, o sea LA ULTIMA

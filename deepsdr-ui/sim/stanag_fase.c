@@ -1,8 +1,6 @@
 /*
  * LA FASE DE BYTE DEL 4285: EL FALLO QUE DEJABA EL TEXTO ILEGIBLE.
  *
- * Pedido por el usuario, 07/10/2026.
- *
  * El Viterbi suelta bits, uno detras de otro, sin principio. Hasta el
  * 08/10/2026 el demodulador los partia en bytes de ocho empezando por
  * donde cayera el primero, y eso es acertar una de ocho.

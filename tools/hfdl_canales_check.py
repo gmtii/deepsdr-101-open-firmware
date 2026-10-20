@@ -2,8 +2,6 @@
 """
 LA TABLA DE CANALES DE HFDL, Y LO QUE LA REJILLA DA POR HECHO.
 
-Pedido por el usuario.
-
 De ahi salio que Bahrein no estaba en las presintonias -no hace falta que
 este para decodificar, el nombre de la estacion viaja dentro de la trama,
 pero teclear la frecuencia a mano es un estorbo- y se añadio como un tercer

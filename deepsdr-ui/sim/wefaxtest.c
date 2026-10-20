@@ -47,7 +47,8 @@ static uint8_t patron(int x, int y)
     if (x < 180 || x > 460) {
         if (((x / 30) & 1) && (y % 40) < 20) { v = 255 - v; }
     }
-    if (v < 0) v = 0; if (v > 255) v = 255;
+    if (v < 0)   { v = 0; }
+    if (v > 255) { v = 255; }
     return (uint8_t)v;
 }
 
@@ -84,17 +85,103 @@ static double emite(tx_t *t, double hz, double sigma)
 static uint8_t g_img[MAX_LIN][WEFAX_ANCHO];
 static int g_nlin = 0;
 
+/*
+ * EL BUCLE PRINCIPAL PUEDE ESTAR OCUPADO, Y ESO HAY QUE PODER SIMULARLO.
+ *
+ * g_atasco = cuantas tandas de 64 muestras seguidas NO se recogen lineas.
+ * Es lo que pasa de verdad cuando el bucle esta escribiendo un bloque en la
+ * flash: el decodificador sigue corriendo en la interrupcion y va cerrando
+ * lineas que nadie recoge.
+ *
+ * Con DOS buffers -lo que habia- la primera linea sin recoger la machaca la
+ * siguiente. Con el anillo, se acumulan y se recogen despues.
+ */
+static int g_atasco = 0;      /* 0 = recoge siempre; N = se atasca N de cada 2N */
+static int g_atasco_c = 0;
+#define PEND_N 16
+static const uint8_t *g_pend[PEND_N];   /* lineas cogidas y aun no copiadas */
+static int g_pend_t[PEND_N];
+static int g_pq_cab = 0, g_pq_n = 0;
+static long g_tandas = 0;
+static float g_buf[64];
+static int   g_bj = 0;
+
+/* Las tandas de 64 muestras son estaticas: si una prueba acaba a medias, la
+ * siguiente empieza corrida y sale otra imagen. Hay que reiniciarlas. */
+static void mete_reset(void)
+{
+    int q;
+    g_bj = 0; g_atasco_c = 0;
+    for (q = 0; q < PEND_N; q++) { g_pend[q] = 0; g_pend_t[q] = 0; }
+    g_pq_cab = 0; g_pq_n = 0; g_tandas = 0;
+}
+
 static void mete(float v, double sigma, tx_t *t)
 {
-    static float buf[64];
-    static int j = 0;
+    float *buf = g_buf;
+    int   *jp  = &g_bj;
+    int    j;
     const uint8_t *l;
     (void)t; (void)sigma;
 
+    j = *jp;
     buf[j++] = v;
+    *jp = j;
     if (j == 64) {
         wefax_process(buf, 64U);
-        j = 0;
+        *jp = 0;
+        /*
+         * Y LO QUE DE VERDAD PASA NO ES QUE NO RECOJA: ES QUE TARDA CON LA
+         * LINEA EN LA MANO.
+         *
+         * El bucle llama a wefax_linea(), se queda con el PUNTERO y se va a
+         * escribir 4 kB en la flash, que son decenas de milisegundos. Hasta
+         * que no acaba no ha terminado de leer esa linea. Mientras tanto la
+         * interrupcion sigue cerrando lineas.
+         *
+         * Con dos buffers, a la segunda linea cerrada la interrupcion
+         * vuelve a ESE buffer y escribe encima de lo que el bucle todavia
+         * esta leyendo: sale un renglon con media linea de otro momento.
+         *
+         * Asi que aqui se coge el puntero y se copia g_atasco tandas MAS
+         * TARDE, que es lo que hace el bucle de verdad.
+         */
+        if (g_atasco > 0) {
+            /*
+             * El bucle coge TODAS las lineas en cuanto estan -eso lo hace
+             * bien- pero tarda g_atasco tandas en acabar de leer cada una,
+             * porque mientras tanto esta escribiendo en la flash. O sea que
+             * tiene varios punteros en la mano a la vez.
+             *
+             * Con el anillo de ocho eso es seguro mientras el retraso sea
+             * menor que ocho lineas. Con los dos buffers de antes, basta
+             * con que pase de dos.
+             */
+            /*
+             * Cola de verdad, con RELOJ ABSOLUTO: cada linea cogida lleva
+             * apuntada la tanda en la que el bucle acabara de leerla. Con
+             * cuentas atras relativas el banco se equivocaba solo y media
+             * su propio fallo.
+             */
+            g_tandas++;
+            while (g_pq_n > 0 && g_pend_t[g_pq_cab] <= g_tandas) {
+                if (g_nlin < MAX_LIN) {
+                    memcpy(g_img[g_nlin], g_pend[g_pq_cab], WEFAX_ANCHO);
+                    g_nlin++;
+                }
+                g_pq_cab = (g_pq_cab + 1) % PEND_N;
+                g_pq_n--;
+            }
+            while ((l = wefax_linea()) != 0) {
+                if (g_pq_n < PEND_N) {
+                    int q2 = (g_pq_cab + g_pq_n) % PEND_N;
+                    g_pend[q2] = l;
+                    g_pend_t[q2] = g_tandas + g_atasco;
+                    g_pq_n++;
+                }
+            }
+            return;
+        }
         while ((l = wefax_linea()) != 0) {
             if (g_nlin < MAX_LIN) { memcpy(g_img[g_nlin], l, WEFAX_ANCHO); g_nlin++; }
         }
@@ -196,6 +283,7 @@ static double prueba(double lpm_nom, double lpm_real, double sigma,
     memset(&t, 0, sizeof t);
     t.lpm = lpm_real; t.semilla = 1234UL;
     g_nlin = 0;
+    mete_reset();
 
     wefax_start((float)FS);
     wefax_set_lpm((uint16_t)(lpm_nom + 0.5));
@@ -350,6 +438,236 @@ int main(void)
             prueba(120.0, 120.0 * (1.0 + 0.001), 0.02, 0, 1);
         }
         g_desfase = 0.0;
+    }
+
+    /*
+     * ======================================================================
+     * 8. EL BUCLE SE ATASCA: NI SE PIERDEN LINEAS NI SE PARTEN
+     * ======================================================================
+     *
+     * *** El decodificador tenia DOS buffers de linea y una bandera. El
+     * bucle recibia el puntero a la linea cerrada y se iba a escribirla en
+     * la flash -decenas de milisegundos-; dos lineas despues la
+     * interrupcion volvia a ESE MISMO buffer y escribia encima. Y si se
+     * cerraban dos lineas antes de que el bucle pasara, la primera
+     * desaparecia sin que nadie se enterara. ***
+     *
+     * En el fichero guardado eso sale como renglones partidos por la mitad
+     * y como renglones que faltan. Es lo mismo que ya se arreglo en sstv.c
+     * subiendo su anillo de 4 a 12; el fax se habia quedado con dos.
+     *
+     * Aqui se mete el mismo tren de lineas dos veces: una recogiendo
+     * siempre, y otra con el bucle ATASCADO a ratos, que es lo que pasa de
+     * verdad. Tienen que salir las mismas lineas.
+     */
+    printf("\n8. el bucle atascado escribiendo en la flash\n");
+    {
+        static uint8_t limpio[MAX_LIN][WEFAX_ANCHO];
+        int n_limpio, i, distintas = 0, min_n;
+
+        g_atasco = 0;
+        (void)prueba(120.0, 120.0, 0.0, 0, 0);
+        n_limpio = g_nlin;
+        memcpy(limpio, g_img, sizeof limpio);
+
+        /* Antes de comparar nada: ¿se repite a si misma? Si dos pasadas
+         * iguales ya salen distintas, el banco arrastra estado y lo que
+         * mida despues no vale. */
+        (void)prueba(120.0, 120.0, 0.0, 0, 0);
+        {
+            int d2 = 0, q3;
+            for (q3 = 0; q3 < ((g_nlin < n_limpio) ? g_nlin : n_limpio); q3++) {
+                if (memcmp(limpio[q3], g_img[q3], WEFAX_ANCHO) != 0) { d2++; }
+            }
+            char dd[48];
+            snprintf(dd, sizeof dd, "%d distintas de %d", d2, n_limpio);
+            comprueba(d2 == 0, "dos pasadas iguales dan lo mismo");
+        }
+
+        /*
+         * Y ahora igual, pero soltando un atasco cada poco: seis tandas de
+         * 64 muestras sin recoger nada. A 120 lpm y 48 kHz, una linea son
+         * 375 tandas, asi que esto NO llena el anillo -son microsegundos de
+         * linea- pero si basta para que el buffer que el bucle tiene en la
+         * mano sea reutilizado por la interrupcion con el esquema de dos.
+         */
+        /*
+         * 300 tandas de 64 muestras a 12 kHz son 1,6 segundos, o sea algo
+         * mas de TRES lineas a 120 lpm. Elegido asi a proposito:
+         *
+         *   - pasa de DOS lineas, que es lo que aguantaba el esquema de dos
+         *     buffers. Con aquel, esto sale partido;
+         *   - y no llega a OCHO, que es lo que aguanta el anillo. Con este,
+         *     sale intacto.
+         *
+         * En la radio de verdad el bucle tiene una linea en la mano unos
+         * 51 ms -lo que cuesta escribir un bloque de 4 kB, medido en
+         * sim/fax_bloqueo.c- sobre lineas de 500 ms. O sea 0,1 lineas: el
+         * anillo tiene ochenta veces mas margen del que hace falta.
+         */
+        g_atasco = 300;
+        (void)prueba(120.0, 120.0, 0.0, 0, 0);
+
+        min_n = (g_nlin < n_limpio) ? g_nlin : n_limpio;
+        if (min_n > 4) { min_n -= 4; }   /* las ultimas quedan en vuelo */
+        printf("    sin atasco %d lineas, con atasco %d\n", n_limpio, g_nlin);
+        for (i = 0; i < min_n; i++) {
+            if (memcmp(limpio[i], g_img[i], WEFAX_ANCHO) != 0) {
+                if (distintas == 0) {
+                    int b;
+                    for (b = 0; b < WEFAX_ANCHO; b++) {
+                        if (limpio[i][b] != g_img[i][b]) { break; }
+                    }
+                    printf("    primera distinta: linea %d, byte %d\n", i, b);
+                }
+                distintas++;
+            }
+        }
+        {
+            char d[64];
+            snprintf(d, sizeof d, "faltan %d", n_limpio - g_nlin);
+            comprueba(g_nlin >= n_limpio - PEND_N,
+                      "no se pierden lineas por el camino");
+            snprintf(d, sizeof d, "%d lineas distintas", distintas);
+            comprueba(distintas == 0, "y ninguna sale partida");
+        }
+        g_atasco = 0;
+    }
+
+    /*
+     * ======================================================================
+     * 9. Y QUE LA CARTA SALGA EN SU SITIO, NO SOLO RECTA
+     * ======================================================================
+     *
+     * Y era verdad: un trozo de unos 20 puntos del margen izquierdo
+     * aparecia pegado al borde derecho, o sea que la carta entera estaba
+     * corrida. No se perdia nada - rodando la imagen 21 puntos volvia a su
+     * sitio - pero sale fea y el texto del margen queda partido.
+     *
+     * Este banco medía la PENDIENTE del borde -si la carta sale recta o
+     * torcida- y eso es media pregunta. La otra media es DONDE empieza la
+     * linea, y no la miraba nadie: una carta corrida 20 puntos sale
+     * perfectamente recta y el banco la daba por buena.
+     *
+     * El patron tiene un escalon nitido en x = 300 -oscuro a la izquierda,
+     * claro a la derecha-. Si el decodificador engancha bien, ese escalon
+     * tiene que salir en x = 300.
+     * ====================================================================== */
+    printf("\n9. la carta sale en su sitio, no solo recta\n");
+    {
+        static const double k_d[] = { 0.0, 0.25, 0.5, 0.75 };
+        unsigned i;
+        int peor = 0;
+
+        for (i = 0; i < sizeof k_d / sizeof k_d[0]; i++) {
+            int x, mejor_x = 0, y, n = 0;
+            double mejor = 0.0, perfil[WEFAX_ANCHO];
+
+            g_desfase = k_d[i];
+            prueba(120.0, 120.0, 0.02, 0, 0);
+            g_desfase = 0.0;
+
+            /* El perfil medio de las lineas de imagen ya enganchadas. */
+            for (x = 0; x < (int)WEFAX_ANCHO; x++) { perfil[x] = 0.0; }
+            for (y = 20; y < g_nlin; y++) {
+                for (x = 0; x < (int)WEFAX_ANCHO; x++) {
+                    perfil[x] += (double)g_img[y][x];
+                }
+                n++;
+            }
+            if (n == 0) { comprueba(0, "no han salido lineas que mirar"); continue; }
+            for (x = 0; x < (int)WEFAX_ANCHO; x++) { perfil[x] /= (double)n; }
+
+            /* El salto mas grande del perfil: el escalon de x = 300. Se mira
+             * sobre ocho puntos para que una raya del adorno no gane. */
+            for (x = 8; x < (int)WEFAX_ANCHO - 8; x++) {
+                double d = perfil[x + 8] - perfil[x - 8];
+                if (d > mejor) { mejor = d; mejor_x = x; }
+            }
+            printf("    empieza %.0f%% de linea tarde: el escalon de x=300 sale en x=%d"
+                   " (corrido %+d)\n", k_d[i] * 100.0, mejor_x, mejor_x - 300);
+            if (mejor_x - 300 > peor)  { peor = mejor_x - 300; }
+            if (300 - mejor_x > peor)  { peor = 300 - mejor_x; }
+        }
+        {
+            char d[64];
+            snprintf(d, sizeof d, "el peor se va %d puntos", peor);
+            /* Ocho puntos es un 1% de la linea: por debajo de eso nadie ve
+             * un margen partido. Veinte -lo que traia- se ve a simple vista. */
+            comprueba(peor <= 8, "la carta no sale corrida de lado");
+        }
+    }
+
+    /*
+     * ======================================================================
+     * 10. EL CENTRADO A MANO
+     * ======================================================================
+     *
+     * El caso 9 dice que contra la señal de ESTE banco el decodificador
+     * engancha bien. La carta del DWD salia corrida 21 puntos, o sea que
+     * la suposicion sobre donde va el pulso de fase no es la misma en los
+     * dos sitios - y el banco no puede arbitrar, porque cree lo mismo que
+     * el codigo.
+     *
+     * Asi que hay un mando. Lo que se prueba aqui es lo unico que se puede
+     * prometer de el: que corre la imagen exactamente lo que se le dice,
+     * en el sentido que se le dice, sin perder un punto y SIN TOCAR EL
+     * ENGANCHE - el escalon tiene que seguir saliendo donde salia, mas el
+     * desplazamiento pedido, y la carta tiene que seguir igual de recta.
+     * ====================================================================== */
+    printf("\n10. el centrado a mano\n");
+    {
+        /* Lo que el usuario midio en sus dos cartas -21 y 269- y los
+         * extremos del recorrido, que ahora es la linea entera. */
+        static const int k_px[] = { 0, 21, -21, 269, -269, 378, -378 };
+        unsigned i;
+        int base = 0;
+        int ok_sitio = 1, ok_nada = 1;
+
+        for (i = 0; i < sizeof k_px / sizeof k_px[0]; i++) {
+            int x, mejor_x = 0, y, n = 0;
+            double mejor = 0.0, perfil[WEFAX_ANCHO], suma = 0.0;
+
+            wefax_set_centro((int16_t)k_px[i]);
+            prueba(120.0, 120.0, 0.02, 0, 0);
+
+            for (x = 0; x < (int)WEFAX_ANCHO; x++) { perfil[x] = 0.0; }
+            for (y = 20; y < g_nlin; y++) {
+                for (x = 0; x < (int)WEFAX_ANCHO; x++) {
+                    perfil[x] += (double)g_img[y][x];
+                    suma += (double)g_img[y][x];
+                }
+                n++;
+            }
+            if (n == 0) { comprueba(0, "no han salido lineas que mirar"); break; }
+            for (x = 0; x < (int)WEFAX_ANCHO; x++) { perfil[x] /= (double)n; }
+            for (x = 8; x < (int)WEFAX_ANCHO - 8; x++) {
+                double d = perfil[x + 8] - perfil[x - 8];
+                if (d > mejor) { mejor = d; mejor_x = x; }
+            }
+            if (i == 0) { base = mejor_x; }
+            {
+                int quiero = base + k_px[i];
+                while (quiero >= (int)WEFAX_ANCHO) { quiero -= WEFAX_ANCHO; }
+                while (quiero < 0)                 { quiero += WEFAX_ANCHO; }
+                printf("    centrado %+3d: el escalon sale en x=%d, se esperaba %d\n",
+                       k_px[i], mejor_x, quiero);
+                if (mejor_x - quiero > 3 || quiero - mejor_x > 3) { ok_sitio = 0; }
+            }
+            /* Y que no se pierda ni se invente nada: la suma de los grises
+             * de la imagen no puede cambiar al rodarla. */
+            {
+                static double suma0 = 0.0;
+                if (i == 0) { suma0 = suma / (double)n; }
+                else {
+                    double d = suma / (double)n - suma0;
+                    if (d < -600.0 || d > 600.0) { ok_nada = 0; }
+                }
+            }
+        }
+        wefax_set_centro(0);
+        comprueba(ok_sitio, "corre la imagen exactamente lo que se le pide");
+        comprueba(ok_nada,  "y da la vuelta por el otro lado sin perder nada");
     }
 
     printf("\n  %s\n", fallos ? "HAY FALLOS" : "TODO CORRECTO (0 fallos)");

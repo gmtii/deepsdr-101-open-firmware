@@ -10,8 +10,6 @@ static float    s_w[ANOTCH_TOMAS_MAX];
 /*
  * LA LINEA DE RETARDO, POR DUPLICADO - 05/10/2026.
  *
- * Pedido por el usuario.
- *
  * Este predictor recorre la linea DOS VECES por muestra -una para predecir
  * y otra para corregir los pesos-, con 48 tomas cada una, y cada paso
  * llevaba un `% LINEA`. LINEA son 129, que no es potencia de dos: cada uno

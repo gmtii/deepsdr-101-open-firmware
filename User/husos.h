@@ -8,8 +8,6 @@
  * LA TABLA DE CIUDADES, Y LAS CINCO REGLAS DE HORARIO DE VERANO
  * ======================================================================
  *
- * Pedido por el usuario, 10/10/2026.
- *
  * POR QUE UNA TABLA Y NO EL LOCALIZADOR A SECAS
  * ---------------------------------------------
  * Del localizador sale la LONGITUD, y de la longitud sale el huso SOLAR -15

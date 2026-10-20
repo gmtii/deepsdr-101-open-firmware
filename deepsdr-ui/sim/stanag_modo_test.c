@@ -165,8 +165,6 @@ int main(void)
         /*
          * EL BOTON BORRAR LLEGA HASTA EL DEMODULADOR.
          *
-         * Pedido por el usuario, 02/10/2026.
-         *
          * stanag_modo_borra() vaciaba los renglones del identificador,
          * que demodulando no se pintan. Aqui se comprueba el cable:
          * se le mete señal hasta que el demodulador cuenta algo, y

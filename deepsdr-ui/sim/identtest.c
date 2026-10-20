@@ -1,8 +1,6 @@
 /*
  * LA TABLA DE FIRMAS DEL MODO IDENT.
  *
- * Pedido por el usuario.
- *
  * ident_casa() es una funcion PURA -cinco numeros entran, una lista de
  * nombres sale- y por eso se puede probar la tabla entera sin fabricar una
  * sola señal. Lo que se prueba contra grabaciones de verdad es el motor
@@ -303,8 +301,6 @@ int main(void)
         /*
          * Y LA BANDA DE FT8 DE VERDAD, que es por donde empezo todo.
          *
-         * Pedido por el usuario.
-         *
          * En 7.074 no hay una señal de 50 Hz, hay cuarenta repartidas por
          * los 3 kHz del canal: el ancho medido es el del monton y la fila
          * del ancho no puede cuadrar. Lo que identifica es el reloj.
@@ -461,7 +457,6 @@ int main(void)
      * Y EL MEDIDOR DE VELOCIDAD DE SIMBOLO, con audio: un MFSK sintetico de
      * veintiun tonos a 23,44 baudios, que es la señal que mando el usuario.
      *
-     * Pedido por el usuario.
      */
     {
         ident_cad_t cd;
@@ -569,8 +564,6 @@ int main(void)
      * ==================================================================
      * EL ENCAJE - 08/10/2026
      * ==================================================================
-     *
-     * Pedido por el usuario.
      *
      * ident_encaje() es una funcion PURA, asi que aqui no se le mete señal:
      * se le meten medidas inventadas y se comprueba que se comporta como

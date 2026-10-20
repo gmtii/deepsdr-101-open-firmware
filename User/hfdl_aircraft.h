@@ -43,8 +43,6 @@
 /*
  * EL SQUITTER DE LA ESTACION DE TIERRA - 14/10/2026.
  *
- * Pedido por el usuario.
- *
  * La ranura 0 de cada trama de 32 segundos la manda la estacion y no
  * habla de ningun avion: habla de ella misma. Hasta hoy no llegaba
  * siquiera a pasar el CRC (ver hfdl_pdu.h), y ahora que pasa hace falta

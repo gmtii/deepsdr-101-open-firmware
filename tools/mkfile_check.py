@@ -2,8 +2,6 @@
 """
 QUE EL TRAMPOLIN SIGA SIENDO UN TRAMPOLIN.
 
-Pedido por el usuario, 09/10/2026.
-
 LO QUE PASABA
 -------------
 El puente que escribe en el disco del usuario RECHAZA cualquier fichero que se

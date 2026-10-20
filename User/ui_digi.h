@@ -72,8 +72,6 @@
 /*
  * SEGUNDO BOTON, a la derecha del primero - 24/09/2026.
  *
- * Pedido por el usuario.
- *
  * Lo usa SSTV para elegir en que formato se guardan las fotos en el
  * pendrive (o si no se guardan). Entre el primer boton y la chapa de
  * estado hay casi 500 px libres en los 800 de pantalla, asi que cabe sin
@@ -115,8 +113,6 @@ typedef struct {
     /*
      * TERCER BOTON, entre la barra y la chapa - 25/09/2026.
      *
-     * Pedido por el usuario.
-     *
      * Los otros dos no valian: el segundo comparte sitio con la barra (ver
      * UDG_BAR_X, que es literalmente UDG_BTN2_X) y en HFDL la barra SI se
      * usa. Asi que este vive en el hueco que queda cuando la barra se acorta
@@ -132,8 +128,6 @@ typedef struct {
 
     /*
      * CUARTO BOTON, entre la barra y la chapa - 25/09/2026.
-     *
-     * Pedido por el usuario.
      *
      * Son dos gestos distintos y por eso son dos botones: el tercero es
      * "elige una", con su lista; este es "la siguiente", sin levantar el
@@ -151,8 +145,6 @@ typedef struct {
 
     /*
      * QUINTO BOTON: EL MAPA - 28/09/2026.
-     *
-     * Pedido por el usuario.
      *
      * Y ese hueco existe de verdad: el cuarto boton empieza en 430 y no
      * pasa de 150 px de ancho (ver UDG_BTN4_MAX_W), asi que de 590 a la
@@ -175,8 +167,6 @@ typedef struct {
 
     /*
      * COLOR POR FILA - 27/09/2026.
-     *
-     * Pedido por el usuario.
      *
      * Son dos cosas distintas y por eso son dos campos:
      *
@@ -238,8 +228,6 @@ typedef struct {
      * DERECHA DEL TODO - 13/10/2026
      * ======================================================================
      *
-     * Pedido por el usuario.
-     *
      * Se podia, y lo que lo hacia posible es que la chapa de FT8 decia
      * "8/15" -el segundo dentro de la ranura- que es EXACTAMENTE lo que ya
      * dibuja el RELLENO de la barra. Dos sitios de la cabecera contando lo
@@ -279,8 +267,6 @@ typedef struct {
 
     /*
      * LO QUE VA PEGADO AL PUNTO VERDE - 13/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * El segundo de la ranura y el punto cuentan la misma historia -como
      * va la tanda-, y los numeros de diagnostico cuentan otra. Metidos

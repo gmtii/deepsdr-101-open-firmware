@@ -724,8 +724,6 @@ static void banda_base(float i_in, float q_in)
      *
      * DE LA TABLA DEL NCO, NO DE LA BIBLIOTECA - 05/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Aqui habia cosf() y sinf() de la biblioteca, UNA VEZ POR MUESTRA de
      * banda base. Este lazo corre a 12 kHz -192 kHz divididos por 16-, o sea
      * 24.000 llamadas por segundo a dos rutinas de software de un par de

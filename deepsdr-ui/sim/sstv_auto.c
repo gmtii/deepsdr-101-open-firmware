@@ -1,8 +1,6 @@
 /*
  * ADIVINAR EL MODO DE SSTV SIN CABECERA, MEDIDO.
  *
- * Pedido por el usuario, 11/10/2026.
- *
  * LO QUE SE MIDE AQUI, Y POR QUE ES ESTO Y NO OTRA COSA.
  *
  * El decodificador ya sabia leer la cabecera VIS, que dice el modo. Pero la
@@ -30,7 +28,7 @@
  *      manda sobre cualquier medida; y si el usuario elige un modo a dedo, la
  *      deteccion automatica apagada no debe tocarlo.
  *
- * Y la quinta, que es la que de verdad pedia el issue: si estabas pintando
+ * Y la quinta, que es la que de verdad hacia falta: si estabas pintando
  * con el modo EQUIVOCADO -porque lo forzaste o porque la medida anterior
  * fallo-, ¿se corrige sola?
  */

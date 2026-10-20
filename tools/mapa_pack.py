@@ -335,8 +335,6 @@ def cuantiza(trazos):
 
 # EL BIT QUE DICE "ESTO ES UNA FRONTERA" - 12/10/2026.
 #
-# Pedido por el usuario.
-#
 # Porque el dibujante no las distinguia: pintaba TODOS los trazos con el
 # color de la costa. El .map traia desde el principio un color propio
 # para las fronteras -MAPA_COL_FRONTERA, y cada uno de los cien tipos lo
@@ -349,8 +347,6 @@ FRONTERA_BIT = 0x8000
 RELLENO_BIT  = 0x4000   # anillos de relleno: no se dibujan
 
 # EL BIT QUE DICE "ESTO ES UN ANILLO DE TIERRA" - 14/10/2026.
-#
-# Pedido por el usuario.
 #
 # MAPA_COL_TIERRA es el hueco 1 de los quince colores que lleva cada .map
 # desde el primer dia, y no lo lee nadie: mapa.c rellena el panel con el
@@ -548,8 +544,6 @@ def a_presupuesto(costa, fronteras, tope, con_fronteras=True):
 #
 # EL FORMATO v2: TRES NIVELES, Y LOS DE ARRIBA TROCEADOS - 12/10/2026.
 #
-# Pedido por el usuario.
-#
 # Ayudaba, y mucho. Lo dijo la medida y la decision salio de su pregunta:
 #
 #   - CUATRO niveles piden 263.000 B de flash -hay que subir el hueco de
@@ -603,8 +597,6 @@ CAS_CAB = 16        # lo que mide una entrada de la tabla de casillas
 # --------------------------------------------- la paridad de cada casilla
 #
 # PARA QUE LA TIERRA SE RELLENE TAMBIEN AL ACERCARSE - 15/10/2026.
-#
-# Pedido por el usuario.
 #
 # El relleno de la radio es par-impar sobre los cruces de cada fila. Al
 # zoom 1 eso basta porque la ventana ES el mundo: toda fila empieza en el

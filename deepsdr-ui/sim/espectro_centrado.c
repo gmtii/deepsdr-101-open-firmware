@@ -1,12 +1,6 @@
 /*
  * LO QUE COSTARIA CENTRAR EL ESPECTRO EN LA SINTONIA A 1X - 13/10/2026.
  *
- * *** De dos usuarios: "con el NCO activado en Spectrum, el indicador de la
- * frecuencia de sintonia solo se desplaza desde el centro hacia el borde
- * derecho"; y "it's possible to configure the NCO button so that pressing it
- * moves the aiming reticle ... to the top. In principle, that would probably
- * be the correct way to do it". ***
- *
  * POR QUE ESTA DESCENTRADO. A 1X el espectro se dibuja centrado en el
  * OSCILADOR, y la marca de sintonia se pinta a la distancia real
  * (center_mark_offset_px = mix_hz * W / span, en main.c). Sin NCO esa

@@ -134,8 +134,6 @@
 /*
  * 64 -> 96 BINS, o sea 400 -> 600 Hz de ventana. 25/09/2026.
  *
- * Pedido por el usuario.
- *
  * Y es exactamente lo que tiene que pasar: en 40 m las emisiones de FT8 se
  * reparten por unos 2,4 kHz de audio, y el decodificador miraba 400. Se oye
  * todo y se lee un sexto.

@@ -1,8 +1,6 @@
 /*
  * EL IDENT CON VARIAS SEÑALES EN EL PASO DE BANDA. 10/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y el "aprs?" no era una suposicion suya: ES LO QUE LE DIJO LA RADIO. El
  * Ident contesto "APRS / paquete AFSK 1200, 70%" sobre tres RTTY de
  * aficionado. Esta grabacion es la suya, 12 s del tramo donde se oyen las

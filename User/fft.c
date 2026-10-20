@@ -167,10 +167,18 @@ static void fft_run(void)
                 uint32_t b = a + half_size;
                 float br = s_re[b] * tre - s_im[b] * tim;
                 float bi = s_re[b] * tim + s_im[b] * tre;
-                s_re[b] = s_re[a] - br;
-                s_im[b] = s_im[a] - bi;
-                s_re[a] = s_re[a] + br;
-                s_im[a] = s_im[a] + bi;
+                /* ar/ai se guardan ANTES de escribir en [b]. El compilador no
+                 * puede demostrar que a != b, asi que sin esto vuelve a leer
+                 * s_re[a] y s_im[a] de memoria despues de cada escritura:
+                 * medido, dos cargas de mas por mariposa (25 -> 23
+                 * instrucciones). nr_ss.c ya lo hacia asi. Bit a bit igual:
+                 * son los mismos valores, leidos del registro. */
+                float ar = s_re[a];
+                float ai = s_im[a];
+                s_re[b] = ar - br;
+                s_im[b] = ai - bi;
+                s_re[a] = ar + br;
+                s_im[a] = ai + bi;
             }
         }
     }

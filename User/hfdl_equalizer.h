@@ -146,8 +146,6 @@
  * 0,1 ESTABA A UN PASO DEL PRECIPICIO - 14/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * Valia 0,1 porque es lo que usa dumphfdl, y eso nunca se habia medido
  * aqui: nuestro puerto del LMS no normaliza igual que su eqlms_cccf, asi
  * que el mismo numero no quiere decir el mismo paso. Barrido sobre las

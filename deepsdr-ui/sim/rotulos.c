@@ -1,8 +1,6 @@
 /*
  * LOS NOMBRES SOBRE EL ESPECTRO: QUE SE LEAN - 15/10/2026
  *
- * Pedido por el usuario.
- *
  * Esto NO comprueba que la cuenta sea correcta -de eso se encarga
  * spec_rotulos_selftest(), que es aritmetica-. Comprueba lo otro, que es
  * lo que de verdad decide si la funcion sirve: QUE SE LEAN.

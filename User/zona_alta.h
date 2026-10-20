@@ -6,8 +6,6 @@
 /*
  * EL DIRECTORIO DE LA ZONA ALTA - 28/09/2026.
  *
- * Pedido por el usuario.
- *
  * La zona alta de la flash SPI -medio megabyte que el modo USB no enseña-
  * la comparten dos bases de datos: los modelos de avion y las emisoras de
  * onda corta. Hasta hoy eran dos ficheros, cada uno con su direccion fija:
@@ -47,8 +45,6 @@
  * DONDE ESTA LA ZONA ALTA: EL ULTIMO MEGABYTE DEL CHIP, SEA EL QUE SEA.
  * 02/10/2026.
  *
- * Pedido por el usuario.
- *
  * Esto eran dos constantes, 0x101000 y 0x180000 (y luego 0x200000). Ahora
  * son dos cuentas sobre spi_flash_capacidad():
  *
@@ -81,9 +77,61 @@
 #define ZA_HUECO         0x1000UL     /* un bloque de borrado de margen */
 
 /*
- * EL HUECO DEL MAPA, ARRIBA DEL TODO - 12/10/2026.
+ * ...PERO NUNCA MAS DE LA MITAD DEL CHIP - 20/10/2026.
  *
- * Pedido por el usuario.
+ * El mega de arriba se escribio dando por hecho que el chip tiene dos o
+ * mas. Una unidad con un chip de 1 MB existe, y en ella la cuenta de
+ * arriba se lo lleva ENTERO:
+ *
+ *     disco USB = 1 MB - 1 MB = 0 bloques
+ *
+ * O sea ningun disco. Y a partir de ahi, en cadena: BD.BIN no se puede
+ * copiar porque no hay donde dejarlo, el sitio para fotos no se puede
+ * leer, el volumen de fabrica -1 MB, el chip entero- dice medir mas que
+ * el disco, y la pantalla manda formatear. Pero formatear tampoco podia:
+ * disco_bloques() valia cero y el formateador contestaba "no se ve la
+ * flash" con el chip delante, su numero de serie en pantalla y el mapa
+ * cargado. Un callejon sin salida, y encima con un cartel que mandaba a
+ * mirar el soldador.
+ *
+ * La regla nueva es de una linea: la zona alta se queda con el ultimo
+ * mega O con la mitad del chip, lo que sea MENOS.
+ *
+ *     chip de 1 MB  -> region 512 kB, disco 512 kB
+ *     chip de 2 MB  -> region   1 MB, disco   1 MB   <- lo de siempre
+ *     chip de 8 MB  -> region   1 MB, disco   7 MB   <- lo de siempre
+ *
+ * Con 2 MB o mas no cambia un solo byte de sitio: la mitad de 2 MB es
+ * justo un mega. O sea que ninguna radio de las que hay funcionando se
+ * entera, y la unica poblacion a la que esto le mueve la zona alta es la
+ * de los chips de menos de 2 MB, donde hoy la zona alta NO SE PUEDE USAR
+ * -la guardia de main.c la rechaza- y por tanto no hay nada guardado que
+ * perder.
+ *
+ * LO QUE CABE EN UNA REGION DE 512 kB: el hueco del mapa son 196.608 y el
+ * directorio 4.096, asi que a las bases les quedan unos 319 kB. Las
+ * emisoras solas andan por 211 kB y entran; las dos juntas, no. Un chip
+ * de la mitad guarda la mitad de cosas, y eso se dice y ya esta.
+ *
+ * Se pasa la capacidad como argumento en vez de preguntarla aqui para no
+ * meter spi_flash.h en esta cabecera: spi_flash.c la incluye, y los
+ * bancos que prueban ese fichero no enlazan zona_alta.c.
+ */
+static inline uint32_t za_region_de(uint32_t cap)
+{
+    uint32_t mitad = cap / 2UL;
+    return (mitad < ZA_BYTES_REGION) ? mitad : ZA_BYTES_REGION;
+}
+
+/* Lo que le queda al disco USB. UNA cuenta, y la hacen los cuatro sitios
+ * que la necesitaban por su cuenta. */
+static inline uint32_t za_disco_de(uint32_t cap)
+{
+    return cap - za_region_de(cap);
+}
+
+/*
+ * EL HUECO DEL MAPA, ARRIBA DEL TODO - 12/10/2026.
  *
  * POR QUE NO ES UNA SECCION MAS DEL DIRECTORIO, que es lo primero que uno
  * piensa. Porque el directorio lo escribe ENTERO el empaquetador del PC
@@ -188,8 +236,6 @@ uint8_t zona_alta_verifica(void);
 
 /*
  * LA MISMA, PERO AVISANDO DE POR DONDE VA - 28/09/2026.
- *
- * Pedido por el usuario.
  *
  * No estaba colgada: estaba comprobando las sumas. Pero la pantalla se
  * quedaba en el 100 % de "Copiando" con el cartel de "No apagues la radio

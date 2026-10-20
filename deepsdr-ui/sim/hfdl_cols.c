@@ -102,8 +102,6 @@ int main(void)
     /*
      * EL BOTON DE "LA SIGUIENTE FRECUENCIA" (25/09/2026).
      *
-     * Pedido por el usuario.
-     *
      * Su rotulo es la frecuencia en la que estas, y la mas ancha de las 21
      * de la lista es "21.955". El boton se topa a 150 px y pinta_uno() se
      * queda 34 de aire, asi que lo que le queda al texto son 116.

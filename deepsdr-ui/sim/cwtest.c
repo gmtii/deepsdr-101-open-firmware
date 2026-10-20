@@ -409,8 +409,6 @@ int main(void)
     /*
      * SOLO RUIDO, Y DURANTE UN RATO LARGO - 06/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Esta prueba existia y pasaba en verde... con VEINTE SEGUNDOS de
      * ruido. Con sesenta salian 41 caracteres. O sea que la prueba no
      * estaba midiendo si el decodificador calla: estaba midiendo si calla

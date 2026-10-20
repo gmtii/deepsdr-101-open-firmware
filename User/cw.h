@@ -60,8 +60,6 @@
  *
  * NO LO COMPRUEBA NINGUN _Static_assert, y aqui se decia que si - 11/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y este era de ese tipo: una cabecera que promete una red que no existe.
  * El assert que decia esta linea NO ESTA en ningun sitio del arbol, y no
  * puede estar: desde que hay opcion de 48 kHz, el bloque de la cadena vale

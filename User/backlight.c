@@ -29,8 +29,6 @@
 /*
  * BRILLO AL ARRANCAR. 50 -> 80 el 25/09/2026.
  *
- * Pedido por el usuario.
- *
  * Este numero solo manda cuando el CONFIG.CSV no trae brillo guardado - o
  * sea, la primera vez, o despues de borrarlo. Y el usuario acababa de
  * borrarlo para que la radio lo creara de nuevo. Asi que
@@ -147,8 +145,6 @@ void backlight_set_percent(uint8_t percent)
     /*
      * EL 100% ES 100%, Y EL RECORTE QUE HABIA AQUI FUE UN ERROR MIO.
      * 28/09/2026.
-     *
-     * Pedido por el usuario.
      *
      * Era cierto, y la unica diferencia funcional entre este fichero y el
      * del proyecto padre era esta linea, que yo añadi el 25/09:

@@ -49,8 +49,6 @@ bool hfdl_descrambler_selftest(void)
 	/*
 	 * LOS 120 BITS DE LA NORMA, LITERALES - 14/10/2026.
 	 *
-	 * Pedido por el usuario.
-	 *
 	 * Aqui habia 25 bits "cross-checked against an independent Python
 	 * re-implementation of the same liquid-dsp algorithm". O sea: se
 	 * comprobaba el algoritmo contra el mismo algoritmo escrito otra vez.

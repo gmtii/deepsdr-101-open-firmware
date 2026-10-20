@@ -231,8 +231,6 @@ int main(void)
     /*
      * EL INDICATIVO DENTRO DE UN MENSAJE DE TEXTO LIBRE.
      *
-     * Pedido por el usuario.
-     *
      * En FT8 el decodificador SABE que campo es un indicativo porque se lo
      * dice el protocolo. Aqui no: un mensaje son varios atomos de texto
      * pegados y hay que reconocerlo por su forma, o sea que lo unico que

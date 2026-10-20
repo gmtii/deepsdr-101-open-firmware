@@ -2,8 +2,6 @@
 """
 QUE NO HAYA UN CARGADOR VIEJO RONDANDO POR EL ARBOL.
 
-Pedido por el usuario, 08/10/2026.
-
 LO QUE PASO
 -----------
 customboot.bin vive en TRES sitios:
@@ -61,6 +59,23 @@ que aparezca por el arbol, aunque no se sepa contra que compararlo: un
 cargador suelto sin dueno es justo lo que no debe haber, porque el dia que
 alguien busque "el cargador del 470" lo va a encontrar a el.
 
+Y UNO DE ESOS SUELTOS NO SE TOCA - 19/10/2026
+----------------------------------------------
+*** El dueño, y es su decision: customboot_f470vg.bin NO SE TOCA. ***
+
+Lo propuse para borrar el mismo dia que amplie esto, razonando que era un
+cargador del 470 de antes del 17/10 que no nombraba nadie. El razonamiento
+estaba hecho desde el arbol, no desde la radio, y la decision no era mia.
+
+Asi que entra en la MISMA categoria que update4.bin: esta ahi a proposito.
+No se escribe, no se sincroniza, no se "pone al dia", no se borra y no se
+vuelve a proponer borrarlo. Se nombra en la salida -con su tamaño- para que
+se vea que esta y que esta bien que este, igual que se hace con rescate/.
+
+Si no estuviera exento aqui, la guarda que acabo de ampliar lo marcaria en
+rojo en cada "make comprueba", que es la forma mas rapida de que una guarda
+deje de leerse.
+
 LA EXCEPCION, QUE ES DE VERDAD
 ------------------------------
 rescate/ esta exenta A PROPOSITO y no por comodidad: es la copia CONGELADA,
@@ -83,6 +98,11 @@ PAREJAS = (
 )
 BUENO  = PAREJAS[0][1]
 NOMBRE = PAREJAS[0][0]
+
+# Cargadores sueltos que estan ahi A PROPOSITO y por decision del dueño. No
+# se comparan con nada, no se tocan y no se avisa de ellos como si sobraran:
+# se nombran, que es distinto. Ver la cabecera.
+INTOCABLES = ("customboot_f470vg.bin",)
 
 # Carpetas que no se miran. rescate/ por el motivo de arriba; las otras
 # porque son obra del compilador o de otro proyecto.
@@ -149,8 +169,12 @@ def sueltos(conocidos):
                 continue
             if f in conocidos:
                 continue
-            fuera.append((os.path.relpath(os.path.join(dd, f), RAIZ),
-                          os.path.getsize(os.path.join(dd, f))))
+            rel = os.path.relpath(os.path.join(dd, f), RAIZ)
+            n   = os.path.getsize(os.path.join(dd, f))
+            if f in INTOCABLES:
+                print("  %-34s INTOCABLE (del dueño), %d bytes" % (rel, n))
+                continue
+            fuera.append((rel, n))
     return fuera
 
 

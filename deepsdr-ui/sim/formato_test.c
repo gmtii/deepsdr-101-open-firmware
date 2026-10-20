@@ -1,14 +1,12 @@
 /*
  * EL FORMATEADOR, CONTRA EL LECTOR DE VERDAD.
  *
- * Pedido por el usuario.
- *
  * Lo que se mide aqui no es que el formateador escriba "algo con pinta de
  * FAT": es que lo que escribe LO ACEPTE EL MISMO spi_flash.c que no
- * aceptaba el volumen del issue. Un formateador comprobado contra su
+ * aceptaba ese volumen. Un formateador comprobado contra su
  * propia idea de lo que es correcto no vale para nada.
  *
- * Se prueban los dos chips que hay en la calle -el de 2 MB del issue y el
+ * Se prueban los dos chips que hay en la calle -el de 2 MB y el
  * de 8 MB soldado- y ademas el reparto se comprueba a mano: cluster que
  * divida al borrado de 4 kB, dos tablas, y datos alineados.
  */
@@ -86,7 +84,7 @@ static void prueba(uint32_t mb)
 int main(void)
 {
     printf("\n  FORMATEAR EL DISCO DESDE LA RADIO\n");
-    prueba(2U);    /* el del issue */
+    prueba(2U);    /* el de 2 MB */
     prueba(8U);    /* el soldado en la radio del usuario */
     printf("\n  %s\n\n", fallos ? "*** HAY FALLOS ***" : "todo bien");
     return fallos ? 1 : 0;

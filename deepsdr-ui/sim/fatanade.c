@@ -27,6 +27,7 @@
 #include "spi_flash.h"
 #include "bmp.h"
 #include "w25q_sim.h"
+#include "wfx_tabla.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,6 +75,22 @@ static uint32_t bps(void)   { return (uint32_t)(g_chip[11] | (g_chip[12] << 8));
 static uint32_t fat1(void)  { return (uint32_t)(g_chip[14] | (g_chip[15] << 8)) * bps(); }
 static uint32_t fatsz(void) { return (uint32_t)(g_chip[22] | (g_chip[23] << 8)) * bps(); }
 static uint32_t raiz(void)  { return fat1() + (uint32_t)g_chip[16] * fatsz(); }
+/*
+ * UN CLUSTER NO SON 512 BYTES - 20/10/2026.
+ *
+ * Esto lo descubri escribiendo la prueba de la carta de fax: el lector de
+ * cadenas daba 24 kB de un fichero de 160 y parecia que el firmware se
+ * dejaba bloques por encadenar. No se los dejaba. El volumen de 15 MB de
+ * mas arriba tiene clusters de 4096, y el lector avanzaba 512 por
+ * eslabon, asi que leia una octava parte y en la direccion equivocada.
+ *
+ * Es el mismo descuido que spi_flash.c ya tuvo el 02/10 y que alli esta
+ * comentado. Aqui lo heredo vecino_suma(), que es quien vigila que no se
+ * estropee ningun fichero del volumen: con la cuenta mal, comparaba una
+ * suma mala con otra suma mala y decia que todo bien.
+ */
+static uint32_t spc(void)   { return (uint32_t)g_chip[13] ? (uint32_t)g_chip[13] : 1U; }
+static uint32_t clus_tam(void) { return spc() * bps(); }
 
 /*
  * OJO: esto reparte clusters de verdad, uno detras de otro.
@@ -131,7 +148,7 @@ static void pc_pone_gordo(const char *n11, uint32_t bytes)
 {
     uint32_t rde = (uint32_t)(g_chip[17] | (g_chip[18] << 8));
     uint32_t datos = raiz() + rde * 32U;
-    uint32_t clus = (bytes + bps() - 1U) / bps();
+    uint32_t clus = (bytes + clus_tam() - 1U) / clus_tam();
     uint32_t primero = pc_hueco(clus), off, c;
     uint8_t *e;
 
@@ -231,7 +248,6 @@ static void pc_borra(const char *n11)
 /*
  * LOS VECINOS SIGUEN AHI
  * ----------------------
- * Pedido por el usuario, 24/09/2026.
  *
  * Este banco comprobaba que el fichero nuevo saliera bien y que no se
  * tocara el megabyte de arriba, y daba eso por suficiente. No lo era: un
@@ -278,8 +294,8 @@ static uint32_t vecino_suma(const char *n11, uint32_t *tam_out)
             uint32_t o = c + (c / 2U), i;
             uint8_t *f = &g_chip[fat1() + o];
             uint16_t v = (uint16_t)(f[0] | (f[1] << 8));
-            uint32_t ini = datos + (c - 2U) * bps();
-            for (i = 0U; i < bps() && leidos < tam; i++, leidos++) {
+            uint32_t ini = datos + (c - 2U) * clus_tam();
+            for (i = 0U; i < clus_tam() && leidos < tam; i++, leidos++) {
                 suma = (suma * 31U) + g_chip[ini + i];
             }
             c = (c & 1U) ? (uint32_t)(v >> 4) : (uint32_t)(v & 0x0FFFU);
@@ -648,8 +664,6 @@ int main(int argc, char **argv)
     /*
      * ===== BORRAR UN FICHERO DEL DISCO (25/09/2026) =====
      *
-     * Pedido por el usuario.
-     *
      * ICAO24.BIN son medio mega, y una vez esta en la zona alta sobra en
      * el disco. spi_flash_fichero_borra() es codigo destructivo sobre la
      * FAT del usuario, asi que se mide aqui antes de que toque un disco de
@@ -735,8 +749,6 @@ int main(int argc, char **argv)
         /*
          * CUANTO CUESTA MIRAR SI ESTA, EN CADA ARRANQUE.
          *
-         * Pedido por el usuario.
-         *
          * No se contesta a ojo. El W25Q de aqui esta simulado a nivel de
          * pin y g_bits cuenta los bits que pasan por el bus, asi que el
          * coste sale de multiplicar por lo que tarda un bit en este bus
@@ -810,8 +822,6 @@ int main(int argc, char **argv)
      * ------------------------------------------------------------------
      * VOLUMENES QUE NO EMPIEZAN DONDE SOLIAN: TIENEN QUE FUNCIONAR
      * ------------------------------------------------------------------
-     * Pedido por el usuario, 24/09/2026.
-     * Pedido por el usuario, 02/10/2026.
      *
      * ESTE BANCO PEDIA LO CONTRARIO HASTA HOY, y era cierto entonces: el
      * driver llevaba la geometria escrita a fuego y lo unico decente que
@@ -951,6 +961,335 @@ int main(int argc, char **argv)
                 else { fwrite(g_chip, 1, vol, o); fclose(o); }
             }
         }
+    }
+
+    /* ==================================================================
+     * REHACER LA CABECERA DE UN FICHERO MONTADO A TROZOS
+     * ==================================================================
+     *
+     * Es lo que hace una carta de fax al cerrarse: el BMP lleva la altura
+     * delante y no se sabe hasta el final, asi que se escribe con el tope y
+     * al acabar se rehace con la de verdad.
+     *
+     * Y el fichero esta REPARTIDO, asi que para rehacerla hay que
+     * localizar su primer cluster por la entrada de directorio. Eso lo hace
+     * spi_flash_escribe_cabecera(), que es codigo nuevo y era la unica
+     * pieza del camino nuevo sin banco.
+     *
+     * Lo que se exige: que la cabecera vieja desaparezca, que la nueva este
+     * EXACTAMENTE una vez, que los bloques de datos sigan donde estaban, y
+     * que no se toque nada fuera del volumen.
+     * ================================================================== */
+    /* ==================================================================
+     * CUANTO CUESTA CADA TROZO, QUE ES LO QUE NO MEDI
+     * ==================================================================
+     *
+     * Al pasar la carta de fax a fichero-que-crece, cada bloque de 4 kB
+     * pasa por spi_flash_anade_trozo(), que recorre la tabla de asignacion
+     * entera, asigna clusters y reescribe las DOS copias de la FAT y la
+     * entrada de directorio. Antes era una escritura en una direccion ya
+     * conocida.
+     *
+     * Lo cambie sin medirlo. Esto lo mide: los microsegundos que el
+     * firmware se queda esperando al chip, que es exactamente el tiempo que
+     * el bucle principal no avanza - ni tacto, ni pantalla.
+     * ================================================================== */
+    /* ==================================================================
+     * LA CARTA DE FAX, COMO LA GRABA LA RADIO
+     * ------------------------------------------------------------------
+     *
+     * Las dos cosas salian del mismo sitio. El fichero crecia llamando a
+     * spi_flash_anade_trozo() una vez por bloque de 4 kB, y eso cuesta
+     * 303 ms de media -lo medi aqui mismo, DESPUES de haberlo puesto en la
+     * radio, que es justo el orden que no hay que seguir-. Con el bucle
+     * principal parado trescientos milisegundos cada dos segundos y medio,
+     * el tactil no se mira.
+     *
+     * Esto graba una carta como la graba el fax -un tramo cuando hace
+     * falta, y dentro bloques sueltos- y mide los dos tiempos por
+     * separado: lo que para un bloque normal y lo que para pedir tramo.
+     * ================================================================== */
+    printf("\n  grabar una carta como la graba el fax\n");
+    {
+/*
+ * EL TAMAÑO DE VERDAD, no uno de muestra - 20/10/2026.
+ *
+ * Esto nacio con 40 bloques "que ya ejercita varios tramos". Pero lo que
+ * el usuario graba es una carta de WFX_ALTO_MAX = 1024 renglones de 756
+ * bytes mas la cabecera, o sea 190 bloques y DOCE tramos. Y lo que hay que
+ * probar es eso, porque el tope de spi_flash_amplia() y la cuenta de
+ * tramos solo se tocan al final: con 40 bloques no se llega a rozar.
+ */
+/*
+ * Y EL 1024 TAMPOCO SE ESCRIBE AQUI - 20/10/2026.
+ *
+ * Ponia 1024 a mano. WFX_ALTO_MAX ya ha cambiado tres veces hoy -1024,
+ * 1280, 1536- y este banco se habria quedado probando la primera mientras
+ * la radio graba la tercera: justo la familia de fallo que gen_wfx.py vino
+ * a cerrar en sim/fax_guarda.c. Sale del mismo sitio.
+ */
+#define CARTA_BLOQUES ((756U * WFX_ALTO_MAX + 4096U + 4095U) / 4096U)
+        static uint8_t bloque[4096];
+        static uint8_t escrito[CARTA_BLOQUES][4096];
+        static uint8_t leido[CARTA_BLOQUES * 4096U];
+        spi_anade_r_t porque = SPI_ANADE_OK;
+        uint64_t peor_blq = 0ULL, peor_tramo = 0ULL, total = 0ULL;
+        uint32_t ext_addr = 0U, ext_n = 0U, ext_i = 0U;
+        uint32_t cab_addr = 0U;
+        uint32_t k, i, tramos = 0U, n_ent = 0U;
+        uint8_t  ok = 1U;
+        int fallos_antes = g_fallos_chip;
+
+        g_us_sector = 45000U; g_us_bloque = 150000U;
+        g_us_pagina = 400U;   g_us_espera = 100U;
+
+        vecinos_apunta();
+
+        for (k = 0U; k < CARTA_BLOQUES && ok; k++) {
+            uint64_t t0 = g_us_bloqueado, d;
+
+            /* Cada bloque, distinto de todos los demas: un patron que se
+             * repite deja que un barrido lo encuentre donde no esta, y eso
+             * ya me hizo perder un rato con el caso de antes. */
+            for (i = 0U; i < 4096U; i++) {
+                bloque[i] = (uint8_t)((i * 7U) + (k * 101U) + (i >> 5));
+            }
+            memcpy(escrito[k], bloque, 4096U);
+
+            if (ext_i >= ext_n) {
+                uint32_t dados = 0U;
+                if (!spi_flash_amplia("WFAX001 ", "BMP", 16U,
+                                      &ext_addr, &dados, &porque)) {
+                    printf("      no cabe el tramo %u: %s\n",
+                           (unsigned)tramos, spi_flash_anade_porque_txt(porque));
+                    ok = 0U;
+                    break;
+                }
+                ext_n = dados;
+                ext_i = 0U;
+                tramos++;
+                d = g_us_bloqueado - t0;
+                if (d > peor_tramo) { peor_tramo = d; }
+                t0 = g_us_bloqueado;   /* el bloque se mide aparte del tramo */
+            }
+            if (k == 0U) { cab_addr = ext_addr; }
+            spi_flash_write_block_4k(ext_addr + ext_i * 4096U, bloque);
+            ext_i++;
+
+            d = g_us_bloqueado - t0;
+            total += d;
+            if (d > peor_blq) { peor_blq = d; }
+        }
+        comprueba(ok == 1U, "la carta entera entra en el pendrive");
+        printf("      %u bloques en %u tramos: bloque peor %llu ms, "
+               "media %llu ms; pedir tramo %llu ms\n",
+               (unsigned)k, (unsigned)tramos,
+               (unsigned long long)(peor_blq / 1000ULL),
+               (unsigned long long)(total / (k ? k : 1) / 1000ULL),
+               (unsigned long long)(peor_tramo / 1000ULL));
+
+        /*
+         * El numero que importa. Un bloque entra cada dos segundos y medio
+         * a 120 lineas por minuto: lo que no puede es parar el bucle un
+         * cuarto de ese rato.
+         */
+        comprueba(peor_blq < 100000ULL,
+                  "un bloque no para el bucle mas de 100 ms");
+        /*
+         * Y el tramo, que es el caro, solo cae una vez cada dieciseis
+         * bloques: cuarenta segundos a 120 lpm.
+         */
+        comprueba(peor_tramo < 400000ULL,
+                  "pedir un tramo no para el bucle mas de 400 ms");
+        comprueba(tramos == (CARTA_BLOQUES + 15U) / 16U,
+                  "y se piden los tramos justos, ni uno de mas");
+
+        /* UN fichero, no cuarenta. Se cuentan las entradas del directorio
+         * que se llaman asi: el sintoma del usuario era justo esto. */
+        {
+            uint32_t rde = (uint32_t)(g_chip[17] | (g_chip[18] << 8));
+            uint32_t datos = raiz() + rde * 32U, off;
+            for (off = raiz(); off < datos; off += 32U) {
+                if ((g_chip[off + 11] & 0x0FU) == 0x0FU) { continue; }
+                if (memcmp(&g_chip[off], "WFAX001 BMP", 11) == 0) { n_ent++; }
+            }
+        }
+        comprueba(n_ent == 1U, "y la carta es UN fichero, no uno por bloque");
+
+        /* Y lo escrito se vuelve a leer, en orden, siguiendo la cadena. */
+        {
+            uint32_t rde = (uint32_t)(g_chip[17] | (g_chip[18] << 8));
+            uint32_t datos = raiz() + rde * 32U, off, c = 0U, tam = 0U;
+            uint32_t leidos = 0U, vueltas = 0U;
+
+            for (off = raiz(); off < datos; off += 32U) {
+                if (memcmp(&g_chip[off], "WFAX001 BMP", 11) != 0) { continue; }
+                c = (uint32_t)(g_chip[off + 26] | (g_chip[off + 27] << 8));
+                tam = (uint32_t)(g_chip[off + 28] | (g_chip[off + 29] << 8) |
+                                ((uint32_t)g_chip[off + 30] << 16) |
+                                ((uint32_t)g_chip[off + 31] << 24));
+                break;
+            }
+            comprueba(tam >= CARTA_BLOQUES * 4096U,
+                      "la entrada de directorio cuenta todo lo escrito");
+            while (c >= 2U && c < 0x0FF8U && leidos < sizeof leido) {
+                uint32_t o = c + (c / 2U), j;
+                uint8_t *f = &g_chip[fat1() + o];
+                uint16_t v = (uint16_t)(f[0] | (f[1] << 8));
+                uint32_t base = datos + (c - 2U) * clus_tam();
+
+                for (j = 0U; j < clus_tam() && leidos < sizeof leido; j++) {
+                    leido[leidos++] = g_chip[base + j];
+                }
+                c = (c & 1U) ? (uint32_t)(v >> 4) : (uint32_t)(v & 0x0FFFU);
+                if (++vueltas > 4096U) { break; }
+            }
+            comprueba(leidos == sizeof leido,
+                      "y la cadena tiene todos los bloques");
+            comprueba(leidos == sizeof leido &&
+                      memcmp(leido, escrito, sizeof leido) == 0,
+                      "con los renglones en su sitio y en su orden");
+        }
+
+        /*
+         * LA CABECERA. El BMP se escribio con la altura tope y al cerrar
+         * se rehace con la de verdad, en el bloque 0 - cuya direccion se
+         * guardo al escribirlo, sin ir a buscarla al directorio.
+         */
+        for (i = 0U; i < 4096U; i++) { bloque[i] = (uint8_t)(0x50U + (i & 63U)); }
+        spi_flash_write_block_4k(cab_addr, bloque);
+        comprueba(memcmp(&g_chip[cab_addr], bloque, 4096U) == 0,
+                  "la cabecera se rehace donde cayo el bloque 0");
+
+        /*
+         * Y EL RECORTE. Media carta deja medio tramo sin usar: hasta
+         * quince bloques por fichero. Tiene que volver al volumen, y
+         * siguiendo la cadena - un fichero a tramos no es seguido, y
+         * recortarlo como si lo fuera libera clusters del vecino.
+         */
+        {
+            uint32_t sobra = (CARTA_BLOQUES - 10U) * 4096U;
+            comprueba(spi_flash_recorta_cadena("WFAX001 ", "BMP", sobra) == 1U,
+                      "el recorte que sigue la cadena dice que si");
+            {
+                uint32_t rde = (uint32_t)(g_chip[17] | (g_chip[18] << 8));
+                uint32_t datos = raiz() + rde * 32U, off, tam = 0U;
+                for (off = raiz(); off < datos; off += 32U) {
+                    if (memcmp(&g_chip[off], "WFAX001 BMP", 11) != 0) { continue; }
+                    tam = (uint32_t)(g_chip[off + 28] | (g_chip[off + 29] << 8) |
+                                    ((uint32_t)g_chip[off + 30] << 16) |
+                                    ((uint32_t)g_chip[off + 31] << 24));
+                    break;
+                }
+                comprueba(tam == sobra, "y el fichero mide lo que se uso");
+            }
+            {
+                uint32_t tam = 0U;
+                comprueba(vecino_suma("WFAX001 BMP", &tam) != 0U && tam == sobra,
+                          "y su cadena sigue cuadrando con el tamano");
+            }
+        }
+
+        {
+            const char *roto = vecinos_mira(0);
+            if (roto) { printf("      se ha estropeado %s\n", roto); }
+            comprueba(roto == 0, "y no se ha llevado por delante a ningun vecino");
+        }
+        comprueba(g_fallos_chip == fallos_antes,
+                  "y no se ha tocado nada fuera del volumen");
+#undef CARTA_BLOQUES
+    }
+
+    /* ==================================================================
+     * LA MISMA CARTA, EN UN PENDRIVE REPARTIDO
+     * ------------------------------------------------------------------
+     * El caso de arriba sale contiguo porque el volumen iba en orden. Un
+     * pendrive con meses de uso no va en orden: al borrar un fichero queda
+     * un agujero POR DEBAJO de lo ya escrito, y el tramo siguiente se mete
+     * ahi. La cadena salta hacia atras.
+     *
+     * Y ahi es donde spi_flash_recorta() -la de siempre- hace daño: libera
+     * "del cluster primero + n en adelante", o sea los que van detras del
+     * PRIMER tramo, que son del vecino. Es exactamente la familia de fallo
+     * que se llevo por delante el CONFIG.CSV del usuario.
+     *
+     * Por eso el fax recorta con spi_flash_recorta_cadena(). Esto lo
+     * comprueba con un vecino puesto justo donde dolería.
+     * ================================================================== */
+    printf("\n  y la misma carta en un pendrive repartido\n");
+    {
+        static uint8_t bloque[4096];
+        spi_anade_r_t porque = SPI_ANADE_OK;
+        uint32_t ext_addr = 0U, ext_n = 0U, ext_i = 0U, dados = 0U;
+        uint32_t k, c, primero = 0U, atras = 0U, vueltas = 0U;
+        uint8_t  ok = 1U;
+        int fallos_antes = g_fallos_chip;
+
+        pc_pone_gordo("HUECO   BIN", 32U * 1024U);
+        pc_pone_gordo("VECINO  BIN", 32U * 1024U);
+        vecinos_apunta();
+
+        for (k = 0U; k < 8U && ok; k++) {
+            uint32_t i;
+            for (i = 0U; i < 4096U; i++) {
+                bloque[i] = (uint8_t)((i * 13U) + (k * 71U) + (i >> 4));
+            }
+            if (ext_i >= ext_n) {
+                if (!spi_flash_amplia("WFAX002 ", "BMP", 4U,
+                                      &ext_addr, &dados, &porque)) {
+                    printf("      no cabe: %s\n", spi_flash_anade_porque_txt(porque));
+                    ok = 0U;
+                    break;
+                }
+                ext_n = dados;
+                ext_i = 0U;
+            }
+            spi_flash_write_block_4k(ext_addr + ext_i * 4096U, bloque);
+            ext_i++;
+            /* En mitad de la carta, el PC borra un fichero de mas abajo:
+             * el tramo siguiente caera en ese agujero. */
+            if (k == 3U) { pc_borra("HUECO   BIN"); }
+        }
+        comprueba(ok == 1U, "la carta cabe aunque el disco este repartido");
+
+        /* ¿Salta de verdad hacia atras? Si no, esta prueba no esta
+         * probando lo que dice probar y mas vale saberlo. */
+        {
+            uint32_t rde = (uint32_t)(g_chip[17] | (g_chip[18] << 8));
+            uint32_t datos = raiz() + rde * 32U, off;
+            for (off = raiz(); off < datos; off += 32U) {
+                if (memcmp(&g_chip[off], "WFAX002 BMP", 11) != 0) { continue; }
+                primero = (uint32_t)(g_chip[off + 26] | (g_chip[off + 27] << 8));
+                break;
+            }
+            c = primero;
+            while (c >= 2U && c < 0x0FF8U && vueltas < 4096U) {
+                uint32_t o = c + (c / 2U);
+                uint8_t *f = &g_chip[fat1() + o];
+                uint16_t v = (uint16_t)(f[0] | (f[1] << 8));
+                uint32_t sig = (c & 1U) ? (uint32_t)(v >> 4) : (uint32_t)(v & 0x0FFFU);
+                if (sig >= 2U && sig < 0x0FF8U && sig < c) { atras++; }
+                c = sig;
+                vueltas++;
+            }
+        }
+        comprueba(atras > 0U, "y su cadena salta hacia atras, que es el caso malo");
+
+        /* Y AHORA EL RECORTE, que es donde la de siempre haria daño. */
+        comprueba(spi_flash_recorta_cadena("WFAX002 ", "BMP", 5U * 4096U) == 1U,
+                  "el recorte que sigue la cadena dice que si");
+        {
+            uint32_t tam = 0U;
+            comprueba(vecino_suma("WFAX002 BMP", &tam) != 0U && tam == 5U * 4096U,
+                      "y la carta recortada sigue cuadrando");
+        }
+        {
+            const char *roto = vecinos_mira("HUECO   BIN");
+            if (roto) { printf("      se ha estropeado %s\n", roto); }
+            comprueba(roto == 0, "y el vecino de debajo sigue entero");
+        }
+        comprueba(g_fallos_chip == fallos_antes,
+                  "y no se ha tocado nada fuera del volumen");
     }
 
     printf("\n  %s\n\n", fallos ? "HAY FALLOS" : "hasta aqui bien "

@@ -521,8 +521,6 @@ static void prueba_ciclos(void)
 /*
  * QUE LADO DE LA PORTADORA SE OYE, Y QUE EL ESPECTRO LO SEPA - 15/10/2026.
  *
- * Pedido por el usuario.
- *
  * El sombreado del espectro se decidia con una cadena de if sobre el MODO,
  * dentro de main.c. SAM-U y SAM-L son un AJUSTE de SAM, no modos propios,
  * asi que caian en el `else` de "doble banda lateral" y se pintaban a dos

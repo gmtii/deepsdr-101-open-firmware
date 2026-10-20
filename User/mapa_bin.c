@@ -378,8 +378,6 @@ mapa_bin_r_t mapa_bin_abre_flash(mapa_bin_lee_t lee, uint32_t base, uint32_t n)
     /*
      * Y EL ESTILO, QUE ESTE CAMINO NO LEIA - 14/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Hay DOS puertas para cargar un mapa: mapa_bin_pon(), con el fichero
      * entero en RAM, y esta, que lo lee a trozos de la flash interna. La
      * radio entra SIEMPRE por esta -el .map se graba en la flash al
@@ -746,8 +744,6 @@ uint8_t mapa_bin_trazo(mapa_bin_iter_t *it)
     /*
      * EL BIT ALTO DICE SI ES UNA FRONTERA - 12/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Porque el dibujante no las distinguia: todos los trazos salian con
      * el color de la costa. El .map traia un color propio para las
      * fronteras desde el principio -y los cien tipos lo tienen puesto- y
@@ -768,8 +764,6 @@ uint8_t mapa_bin_trazo(mapa_bin_iter_t *it)
     n &= 0x3FFFU;
     /*
      * Y LOS ANILLOS DE TIERRA VIENEN DE FUERA DE LA CUENTA - 14/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Un anillo es un trazo CERRADO cuyo interior es tierra. Quien lo
      * decide es tools/mapa_pack.py, no la radio: un Cortex-M4 no tiene que
@@ -846,8 +840,6 @@ uint8_t mapa_bin_punto(mapa_bin_iter_t *it, int32_t *lon_c, int32_t *lat_c)
 /* ------------------------------------------------ LA PARIDAD POR CASILLA
  *
  * PARA QUE LA TIERRA SE RELLENE TAMBIEN AL ACERCARSE - 15/10/2026.
- *
- * Pedido por el usuario.
  *
  * El relleno es par-impar sobre los cruces de cada fila. Al zoom 1 basta
  * porque la ventana ES el mundo y toda fila empieza en el borde, que es

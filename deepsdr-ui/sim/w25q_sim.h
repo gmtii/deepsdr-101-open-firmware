@@ -17,7 +17,18 @@ void     w25q_tam(uint32_t bytes);
  * Ver el comentario de w25q_sin_alias() en w25q_sim.c. */
 void     w25q_sin_alias(uint8_t si);
 uint32_t w25q_tam_actual(void);
+
+/* Hace que el identificador JEDEC mienta sobre la capacidad: 0 = que diga
+ * la verdad. Hay chips que lo hacen - ver sim/capacidad.c. */
+void     w25q_jedec_capacidad(uint8_t codigo);
 extern uint32_t g_borrados, g_grabados;
+
+/* Lo que tarda el chip por dentro. Ver el comentario del .c: por omision
+ * los tres a 0 -nunca ocupado, como siempre-, y g_us_bloqueado sale lo
+ * que el bucle principal se ha quedado parado esperandolo. */
+extern uint32_t g_us_sector, g_us_bloque, g_us_pagina, g_us_espera;
+extern uint64_t g_us_bloqueado;
+extern uint32_t g_miradas;
 extern uint64_t g_bits;
 extern int      g_fallos_chip;
 extern uint32_t g_intocable_ini, g_intocable_fin;

@@ -4,8 +4,6 @@
 /*
  * DE QUE PAIS ES UN INDICATIVO - 25/09/2026.
  *
- * Pedido por el usuario.
- *
  * LO QUE ESTO NO ES, dicho antes que nada: no es la lista DXCC. La de verdad
  * (cty.dat) son unas 340 entidades con cientos de rangos de prefijos y
  * excepciones por indicativo, y ocupa del orden de medio megabyte. En esta

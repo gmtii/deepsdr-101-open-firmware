@@ -81,7 +81,6 @@ KATAKANA = ("アイウエオカキクケコサシスセソタチツテト"
 FONTS = [
     # (nombre C, ruta ttf, px, charset, comentario)
     ("font_ui_14",    DEJAVU_C,  15, ASCII + SPANISH, "UI normal: etiquetas, unidades, texto secundario"),
-    # Pedido por el usuario.
     #
     # Y cabian. Con font_ui_14 (line_height 18) tres filas son 54 px y la
     # franja que hay encima de la primera raya de la rejilla mide menos;

@@ -1,8 +1,6 @@
 /*
  * EL UPDATE.BIN PUESTO POR ALGO QUE NO SOMOS NOSOTROS - 02/10/2026.
  *
- * Pedido por el usuario.
- *
  * POR QUE HACIA FALTA ESTE BANCO, HABIENDO YA UNO DEL CARGADOR
  * ------------------------------------------------------------
  * sim/cargador.c prueba el cargador contra un volumen en el que EL PROPIO

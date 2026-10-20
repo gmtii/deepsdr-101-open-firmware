@@ -1,8 +1,6 @@
 /*
  * QUIEN EMITE EN ESTA FRECUENCIA, CONTRA EL FICHERO DE VERDAD.
  *
- * Pedido por el usuario.
- *
  * Este banco NO usa datos inventados: abre el EMISORAS.BIN de verdad -los
  * 206 kB que salen de las dos listas publicas- y le pregunta a
  * User/emisoras.c, el mismo que corre en la radio, por un puñado de

@@ -3,8 +3,6 @@
  * (spi_flash_borrado_paso() y spi_flash_write_block_4k_borrado(), del
  * User/spi_flash.c del firmware).
  *
- * Pedido por el usuario.
- *
  * De esos 10 s, ocho y medio eran borrar sector a sector: 45 ms de chip
  * parado por cada uno de los 189 sectores de la foto. El mismo chip borra
  * 64 kB de golpe en 150 ms, asi que ahora la zona se prepara entera antes

@@ -465,8 +465,6 @@ def i24b(tam):
 def mide_techo(tmp):
     """EL MEGA DE BD.BIN.
 
-    Pedido por el usuario.
-
     Lo avisaba, pero por el camino equivocado: el limite se escribia como
     0x200000 - 0x101000, el final menos el principio de la zona alta EN EL
     CHIP DE 2 MB DE FABRICA. Daba el numero bueno de casualidad. La regla

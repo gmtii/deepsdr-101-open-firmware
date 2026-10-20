@@ -7,8 +7,6 @@
 /*
  * EL MAPA GUARDADO EN LA FLASH - 12/10/2026.
  *
- * Pedido por el usuario.
- *
  * LA VERSION DE ANTES LEIA EL .map DEL DISCO EN CADA ARRANQUE y lo dejaba
  * alli. Funcionaba, pero no era lo que se habia pedido ni lo que hace
  * BD.BIN, y tenia dos pegas de verdad: el fichero se quedaba ocupando el
@@ -119,8 +117,6 @@ mapa_flash_r_t mapa_flash_graba_cierra(const char name8[8],
 
 /*
  * BORRA EL MAPA GUARDADO y vuelve el de serie.
- *
- * Pedido por el usuario.
  *
  * Borra SOLO la cabecera del hueco, no los 192 kB enteros. Un mapa sin
  * cabecera no se carga, que es lo que se pedia, y borrar un bloque de

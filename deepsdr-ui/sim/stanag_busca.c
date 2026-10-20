@@ -1,8 +1,6 @@
 /*
  * LA BUSQUEDA AUTOMATICA DE VELOCIDAD Y ENTRELAZADO DEL 4285.
  *
- * Pedido por el usuario, 07/10/2026.
- *
  * La corazonada era buena. La velocidad y el entrelazado NO VAN EN LA
  * SEÑAL -el preambulo de 80 simbolos es identico a 75 y a 2400 bps- y
  * son once combinaciones que hay que acertar a mano con dos botones.

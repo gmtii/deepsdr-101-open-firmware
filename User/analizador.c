@@ -41,8 +41,6 @@ static const float k_fir[FIR_N] = {
 /*
  * LA HISTORIA, POR DUPLICADO - 05/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y el analizador de audio, con el zoom de 300 Hz, era la cosa mas cara de
  * toda la interrupcion de audio: ocho etapas en cascada, veintitres tomas
  * cada una... y un MODULO POR 23 en el bucle interno, una vez por toma. 23

@@ -1,10 +1,6 @@
 /*
  * EL SNR DE FT8, MEDIDO CONTRA UNA SEÑAL DE SNR CONOCIDO - 13/10/2026.
  *
- * *** De un issue: el SNR del decodificador propio salia desviado frente
- * al de WSJT-X: casi nunca bajaba de +5 dB, con una media cerca de +11.
- * ***
- *
  * POR QUE ESTE BANCO Y NO AJUSTARLO MIRANDO WSJT-X. Entre la antena y ese
  * numero hay el AGC, el FT8_ADAPTER_DB_OFFSET de -112, la ganancia coherente
  * de la ventana de Hann y su ancho de banda equivalente de ruido. Varias se

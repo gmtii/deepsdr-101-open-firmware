@@ -176,8 +176,6 @@ _Static_assert(CARGA_BORRA_HASTA == 0x08080000UL,
 /*
  * EL NOMBRE 8.3 TAL Y COMO ESTA EN EL DIRECTORIO.
  *
- * Pedido por el usuario, 02/10/2026.
- *
  * El "4" venia del gestor de fabrica, que abre "update4.bin" por FatFs.
  * Nuestro cargador no tiene por que heredar su nomenclatura, y en la rama
  * "reload" ya no hereda nada mas suyo.
@@ -211,10 +209,6 @@ static uint8_t geo(void)
     if (!s_geo_ok) {
         /*
          * LECTURA, NO ESCRITURA - 06/10/2026.
-         *
-         * *** De un issue: el cargador no veia update.bin en el disco,
-         * con una ficha que decia "Volumen: no se reconoce". Y la radio con
-         * el formateo DE FABRICA, sin tocar. ***
          *
          * Este cargador SOLO LEE: busca un fichero, lo copia a la flash
          * interna y se aparta. spi_flash_geometria() contesta a otra
@@ -591,8 +585,8 @@ uint32_t cargador_grabados(void) { return s_grabados; }
  * Esto sale en la pantalla de MODO ACTUALIZACION y era la otra tanda de
  * cadenas de interfaz que no pasaba por tr(). Y es de las peores donde
  * dejarlo sin traducir: son exactamente las frases que lee alguien cuando
- * algo no le ha funcionado, y el que abrio el issue de "the loader doesn't
- * see update.bin" escribe en ingles.
+ * algo no le ha funcionado, y quien se encuentra con que el cargador no ve
+ * update.bin suele escribir en ingles.
  */
 const char *cargador_porque_txt(carga_r_t r)
 {

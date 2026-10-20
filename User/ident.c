@@ -36,8 +36,6 @@ static const ident_firma_t k_firmas[] = {
 /*
  * EL CW ES LA MISMA RAYA, PERO PARPADEANDO - 05/10/2026.
  *
- * Pedido por el usuario.
- *
  * Un tono de Morse y un heterodino son LO MISMO para el espectro: toda la
  * potencia en una raya estrecha. Lo unico que los separa con lo que aqui se
  * mide es el ciclo de trabajo: una portadora esta siempre, y el Morse se
@@ -118,8 +116,6 @@ static const ident_firma_t k_firmas[] = {
  * COMPROBADA EN ANTENA - 06/10/2026, la cuarta. Y la fila YA ESTABA: lo que
  * fallaba era el detector de dos tonos, no la tabla.
  *
- * Pedido por el usuario.
- *
  * La señal de 5339 kHz. El detector no veia el par de tonos porque los
  * comparaba entre si y la ionosfera los desvanece por separado - ver el
  * comentario de TONO_REALCE en stanag_det.c, que es donde se arreglo.
@@ -160,8 +156,6 @@ static const ident_firma_t k_firmas[] = {
 },
 /*
  * COMPROBADA EN ANTENA - 05/10/2026, la tercera. Y la fila NO EXISTIA.
- *
- * Pedido por el usuario.
  *
  * 850 Hz de salto con 50 baudios es de lo mas visto en trafico naval y
  * diplomatico, y entre las dos filas de al lado se escapaba por los dos
@@ -246,8 +240,6 @@ static const ident_firma_t k_firmas[] = {
 /*
  * POR SEPARACION Y POR VELOCIDAD DE SIMBOLO, NO POR LA DE DOS TONOS.
  *
- * Pedido por el usuario.
- *
  * Y la fila estaba bien; lo que no servia era el numero que le estaba
  * pidiendo. Metiendo sus dos grabaciones por el motor de verdad
  * (sim/identaire.c):
@@ -267,8 +259,6 @@ static const ident_firma_t k_firmas[] = {
  */
 /*
  * Y EL MEDIDOR DE SIMBOLO TAMPOCO DABA EL NUMERO - 08/10/2026.
- *
- * Pedido por el usuario.
  *
  * Era esta misma señal otra vez: 50,00 Bd, 201 Hz de salto, tonos 935 y
  * 1137. El motor la midio bien de salto y de velocidad y la fila NO cuadro,
@@ -404,8 +394,6 @@ static const ident_firma_t k_firmas[] = {
 /*
  * EL MARGEN DE ESTA FILA ERA DEMASIADO ANCHO - 06/10/2026.
  *
- * Pedido por el usuario.
- *
  * El margen de antes -11841 a 12081, o sea 118,41 a 120,81 ms- es el +-1%
  * con el que nacio la fila. Parece prudente hasta que uno mira cuanto se
  * separan las tramas que hay que distinguir:
@@ -517,7 +505,6 @@ static const ident_firma_t k_firmas[] = {
 
 /* --- los que se reconocen por el reloj --------------------------------- */
 /*
- * Pedido por el usuario.
  *
  * Estas tres filas son la respuesta, y no miran el espectro: miran el
  * RELOJ. Ver ident_cad_t en ident.h para por que hacia falta otro
@@ -568,7 +555,6 @@ static const ident_firma_t k_firmas[] = {
 
 /* --- los que se reconocen por el ritmo del simbolo --------------------- */
 /*
- * Pedido por el usuario.
  *
  * Estas filas son la respuesta. No miran cuantos tonos hay ni donde estan
  * -eso no se puede medir con esta ventana, ver SIMB_W en stanag_det.c-,
@@ -1151,8 +1137,6 @@ static uint32_t s_medidas;
  * ==========================================================================
  * EL MEDIDOR DE CADENCIA
  * ==========================================================================
- *
- * Pedido por el usuario.
  *
  * Un cuaderno de energia: una anotacion cada medio segundo, 512 de ellas,
  * o sea los ULTIMOS CUATRO MINUTOS Y PICO. Con eso se ve lo que no cabe en
@@ -1894,8 +1878,6 @@ static void escribe(void)
          * Y ESTE RENGLON NO PUEDE DECIR "NI TONOS" CUANDO HAY TONOS -
          * 06/10/2026.
          *
-         * Pedido por el usuario.
-         *
          * Se reia con razon: la cabecera decia que no se habia podido medir
          * nada y tres renglones mas abajo estaban los numeros medidos. Una
          * pantalla que se contradice consigo misma es peor que una que no
@@ -1963,8 +1945,6 @@ static void escribe(void)
 
     /*
      * SI HAY MAS DE UNA, ESO VA PRIMERO - 10/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Y la radio le contesto "APRS 70%" sobre tres RTTY, porque el detector
      * juntaba el tono de arriba de una con el de abajo de otra (ver
@@ -2104,8 +2084,6 @@ void ident_modo_poll(void)
         s_m.baudios_x10 = bd_mediana();
         /*
          * LA SEPARACION QUE SE USA ES LA MEDIANA, NO LA ULTIMA - 06/10/2026.
-         *
-         * Pedido por el usuario.
          *
          * ident_casa() busca la fila por la separacion entre tonos, asi que
          * una separacion que baila es un NOMBRE que baila. Y baila por algo

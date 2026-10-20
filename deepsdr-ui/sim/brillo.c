@@ -84,8 +84,6 @@ int main(void)
     /*
      * EL TECHO, Y ESTE BANCO EXIGIA LO CONTRARIO DE LO QUE HAY QUE EXIGIR.
      *
-     * Pedido por el usuario.
-     *
      * Aqui ponia esto:
      *
      *     exige(s_ccr <= ARR, "el 100% vuelve a dejar el pin sin flancos");

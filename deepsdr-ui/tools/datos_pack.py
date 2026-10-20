@@ -4,8 +4,6 @@ Junta las bases de datos de la radio en un solo BD.BIN.
 
   python3 datos_pack.py BD.BIN ICAO24.BIN EMISORAS.BIN
 
-Pedido por el usuario.
-
 Y no es solo comodidad. Antes cada base tenia su direccion FIJA en el
 firmware:
 

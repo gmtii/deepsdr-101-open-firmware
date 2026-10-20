@@ -3,8 +3,6 @@
  *
  * POR QUE EXISTE.
  *
- * Pedido por el usuario.
- *
  * rapido_atan2() sustituye a atan2f() en el discriminador de FM, que la
  * llama una vez POR MUESTRA: 96.000 veces por segundo en NFM y 192.000 en
  * WFM. El atajo esta justificado -atan2f() son un par de cientos de ciclos

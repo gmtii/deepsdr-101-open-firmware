@@ -468,7 +468,7 @@ uint8_t sdr_rx_last_block_corrupted(void)
 /*
  * ESTE CHEQUEO NO VALE PARA WFM, Y HAY QUE PODER APAGARLO - 05/10/2026.
  *
- * De un issue: en WFM se oye un siseo mientras el espectro y la cascada se
+ * En WFM se oia un siseo mientras el espectro y la cascada se
  * repintan; al abrir FUNC desaparece al instante. Repasando el camino
  * entero, la unica cosa que se para al abrir FUNC es DIBUJAR -la FFT y el
  * poll de bloques quedan fuera de esa guarda-, asi que lo audible tenia
@@ -687,8 +687,6 @@ void DMA0_Channel3_IRQHandler(void)
     /*
      * EL CORRECTOR DE ESPEJO, AQUI Y EN NINGUN OTRO SITIO - 07/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Esa señal es el espejo de otra, y el espejo sale del desequilibrio
      * entre I y Q. El porque esta entero en iqbal.h.
      *
@@ -719,8 +717,6 @@ void DMA0_Channel3_IRQHandler(void)
          */
         /*
          * SOLO EL ESTRECHO. EL ANCHO SE QUEDA FUERA - 08/10/2026.
-         *
-         * Pedido por el usuario.
          *
          * ERA CIERTO Y YO LLEVABA TRES HIPOTESIS FALLADAS. Mire el coste de
          * la interrupcion del 4415, el de los repintados del panel y el del

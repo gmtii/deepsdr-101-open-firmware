@@ -101,8 +101,6 @@ static uint8_t lut_pon(const uint16_t *cmap)
     /*
      * EL PUNTERO PRIMERO, LA FIRMA DESPUES - 05/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * La firma es un FNV-1a sobre las 256 entradas de la paleta, y se
      * calculaba ANTES de mirar si hacia falta. Esto se llama una o dos veces
      * por cada tira de la cascada -nueve tiras por fotograma-, asi que eran

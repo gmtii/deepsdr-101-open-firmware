@@ -1,8 +1,6 @@
 /*
  * LA TABLA DE PAISES - 25/09/2026.
  *
- * Pedido por el usuario.
- *
  * Lo que comprueba, y por que cada cosa:
  *
  *  1. QUE GANE EL PREFIJO MAS LARGO. "EA8ABC" empieza por "EA" y tambien por

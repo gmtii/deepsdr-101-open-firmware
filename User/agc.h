@@ -6,8 +6,6 @@
 /*
  * EL CONTROL AUTOMATICO DE GANANCIA, UNO SOLO Y PARA LOS DOS CAMINOS.
  *
- * Pedido por el usuario, 08/10/2026.
- *
  * POR QUE EXISTE ESTE FICHERO
  * ---------------------------
  * Habia DOS bucles de AGC copiados en demod_am.c: el de AM/BLU/FM

@@ -1,8 +1,6 @@
 /*
  * LOS CARTELES Y LA TRAZA, EN EL MISMO DIBUJO - 15/10/2026
  *
- * Pedido por el usuario.
- *
  * Los tres son el mismo sitio: la franja de carteles y la traza se
  * pintaban por separado. Ahora spectrum_draw() tiene un gancho
  * (spectrum_encima) y los pinta en el mismo buffer. ESTO es lo unico que
@@ -175,7 +173,6 @@ int main(void)
            "las barras del bw siguen atravesando hasta arriba");
         /*
          * Y EMPIEZA JUSTO DEBAJO DE LA PRIMERA RAYA DE LA REJILLA.
-         * Pedido por el usuario.
          * La raya se busca mirando el framebuffer: la primera fila, por
          * debajo de los carteles, en la que una columna LEJOS de la banda
          * deja de ser fondo.

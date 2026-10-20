@@ -3,8 +3,6 @@
  * LO QUE COSTARIA RELLENAR TAMBIEN AL ACERCARSE - 14/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * Hoy el relleno se ve al zoom 1 y no al acercarse. El motivo esta escrito
  * en mapa.c y en mapa_pack.py: el x1 guarda los trazos ENTEROS y el
  * empaquetador marca cuales son anillos; los niveles troceados parten cada

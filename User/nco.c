@@ -58,8 +58,6 @@ static void sen_cos(uint32_t fase, float *sen, float *cos_)
 /*
  * SENO Y COSENO DE UNA FASE EN RADIANES - 04/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y era esto. sam.c llamaba a sinf() y a cosf() de la biblioteca UNA VEZ POR
  * MUESTRA, dentro de la interrupcion de audio y a 96 kHz. En este Cortex-M4
  * esas dos no son instrucciones: son rutinas de software de un par de
@@ -206,11 +204,6 @@ uint32_t nco_lo_aparcado(uint32_t freq_hz, uint32_t lo_actual_hz,
 
     /*
      * PRIMERO, QUE LA CUENTA QUEPA - 09/10/2026.
-     *
-     * *** De un aviso con video: la radio marcaba una frecuencia de FM y no
-     * recibia nada, luego enseñaba otra distinta de la sintonizada y dejaba
-     * de recibir. El dato que lo delata es que se arreglaba yendo a una
-     * frecuencia mas alta y volviendo. ***
      *
      * Irse y volver solo arregla lo que depende de DONDE ESTABA EL
      * OSCILADOR, y lo unico que recuerda eso es esta funcion.

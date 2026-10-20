@@ -724,7 +724,7 @@ uint16_t spectrum_colormap(float db, float db_min, float db_max)
  * parte de la paleta de calor, asi que no se confunde con nada. */
 #define SPEC_COLOR_BAND_EDGE      0x2DFFU /* ~(48,188,255) */
 /*
- * EL ESPECTRO SIGUE AL TEMA - 17/10/2026, de un issue.
+ * EL ESPECTRO SIGUE AL TEMA - 17/10/2026.
  *
  * Todo lo de arriba son colores escritos a pelo, y son los que se usan
  * cuando el tema NO pide espectro claro: los ocho de antes pintan byte a
@@ -1072,8 +1072,6 @@ static void techos_por_tramo(uint16_t w, uint16_t h, uint8_t fill_enabled)
  * EL MONTAJE DE UNA BANDA, EN UN DESTINO CUALQUIERA - 05/10/2026.
  * ===========================================================================
  *
- * Pedido por el usuario.
- *
  * Esto estaba dentro de spectrum_draw(), escribiendo siempre en la banda de
  * gfx2. Sale aqui con el destino y su paso de fila como parametros, y con eso
  * sirve para las dos cosas: para pintar en la pantalla -lo de siempre- y para
@@ -1105,8 +1103,6 @@ void spectrum_encima(void (*fn)(gfx2_surf_t *s))
 
 /*
  * HASTA DONDE LLEGA LA ZONA QUE MANDA EL GANCHO - 15/10/2026.
- *
- * Pedido por el usuario.
  *
  * No son las 38 filas de los carteles: son esas MAS lo que haya hasta la
  * primera raya horizontal de la rejilla. Dejar el sombreado del filtro
@@ -1160,6 +1156,13 @@ static void compon(uint16_t *dst, uint32_t stride, uint16_t row, uint16_t nf,
     const uint8_t  fill_enabled = s_ult.fill_enabled;
     const uint16_t trace_color = s_ult.trace_color;
     const uint8_t  traza_de_fila = s_ult.traza_de_fila;
+#if SPECTRUM_PEAK_HOLD
+    /* El color del pico es invariante del cuadro entero -hace tema_claro() y,
+     * con tema claro, pal565()- y se estaba evaluando dentro del bucle de
+     * columnas, hasta 756 veces por fotograma. Sus tres vecinos -bg_color,
+     * grid_color y trace_color- ya estaban izados; este se quedo. */
+    const uint16_t peak_color = color_pico();
+#endif
     uint16_t col, k;
 
     /* 1. la plantilla de cada fila de la banda */
@@ -1171,8 +1174,6 @@ static void compon(uint16_t *dst, uint32_t stride, uint16_t row, uint16_t nf,
 
         /*
          * Y LA BANDA DE PASO NO SUBE HASTA EL TECHO - 15/10/2026.
-         *
-         * Pedido por el usuario.
          *
          * El sombreado del filtro vive en la PLANTILLA de fila, que es
          * una sola para las 240 filas: por eso llegaba arriba del todo y
@@ -1205,7 +1206,10 @@ static void compon(uint16_t *dst, uint32_t stride, uint16_t row, uint16_t nf,
                                        ((col == band_col_lo) || (col == band_col_hi)));
             uint16_t lo = s_bar_lo[col];
             uint16_t hi = s_bar_hi[col];
-            uint16_t ra, rb, r;
+            uint16_t ra, rb;
+#if SPECTRUM_PEAK_HOLD
+            uint16_t r;
+#endif
 
             if (!borde) {
 #if SPECTRUM_PEAK_HOLD
@@ -1214,7 +1218,7 @@ static void compon(uint16_t *dst, uint32_t stride, uint16_t row, uint16_t nf,
                 if ((s_peak_h[col] >= 1U) && (s_peak_h[col] <= h)) {
                     r = (uint16_t)(h - s_peak_h[col]);
                     if ((r >= row) && (r < (uint16_t)(row + nf))) {
-                        dst[(uint32_t)(r - row) * stride + (col - c0)] = color_pico();
+                        dst[(uint32_t)(r - row) * stride + (col - c0)] = peak_color;
                     }
                 }
 #endif
@@ -1232,10 +1236,31 @@ static void compon(uint16_t *dst, uint32_t stride, uint16_t row, uint16_t nf,
                          * coste del montaje. */
                         uint16_t *pb = &dst[(uint32_t)(ra - row) * stride + (col - c0)];
                         const uint16_t *pc = &s_row_color[ra];
-                        for (r = ra; r <= rb; r++) {
+                        /*
+                         * CUENTA ATRAS Y EN 32 BITS - 20/10/2026.
+                         *
+                         * Este es el bucle mas repetido de toda la radio:
+                         * una vuelta por cada pixel de relleno del
+                         * espectro, hasta 157.248 por cuadro. Con un
+                         * indice uint16_t el compilador mete un `uxth`
+                         * detras de cada incremento -recortar a 16 bits
+                         * es obligatorio en C y el procesador no lo hace
+                         * solo- y ademas un `cmp` contra el final.
+                         *
+                         * Contando hacia atras desde cuantos son, el
+                         * `subs` ya deja la bandera puesta: se van las dos
+                         * instrucciones. Siete por pixel se quedan en
+                         * cinco, medido en el desensamblado de ARM.
+                         *
+                         * Pinta exactamente lo mismo: lo vigila la imagen
+                         * patron (sim/espectro_oro.c), que compara pixel a
+                         * pixel contra la referencia grabada.
+                         */
+                        uint32_t n = (uint32_t)(rb - ra) + 1U;
+                        do {
                             *pb = *pc++;
                             pb += stride;
-                        }
+                        } while (--n != 0U);
                     }
                 }
             }
@@ -1250,11 +1275,14 @@ static void compon(uint16_t *dst, uint32_t stride, uint16_t row, uint16_t nf,
                 if (ra <= rb) {
                     uint16_t *pb = &dst[(uint32_t)(ra - row) * stride + (col - c0)];
 
+                    /* La misma cuenta atras que el relleno, por lo mismo. */
+                    uint32_t n = (uint32_t)(rb - ra) + 1U;
+
                     if (traza_de_fila) {
                         const uint16_t *pc = &s_row_color[ra];
-                        for (r = ra; r <= rb; r++) { *pb = *pc++; pb += stride; }
+                        do { *pb = *pc++; pb += stride; } while (--n != 0U);
                     } else {
-                        for (r = ra; r <= rb; r++) { *pb = trace_color; pb += stride; }
+                        do { *pb = trace_color; pb += stride; } while (--n != 0U);
                     }
                 }
             }
@@ -1747,11 +1775,23 @@ void spectrum_draw(const float *db, uint32_t n_bins,
                         ult = t;
                     }
                 }
-                /* La franja del gancho no se salta nunca, y va de ancho
-                 * completo: ver spectrum.h, "se mueven con retraso". */
-                if (s_encima_fn != 0 && row < rot_techo()) {
-                    c0 = 0U; c1 = (uint16_t)(w - 1U);
-                } else if (pri == s_n_tramos) {
+                /*
+                 * LA FRANJA DEL GANCHO YA NO ES INTOCABLE - 19/10/2026.
+                 *
+                 * Aqui habia un "no se salta nunca y va de ancho completo"
+                 * por lo que cuenta spectrum.h en "se mueven con retraso":
+                 * los carteles se repintaban tarde porque estas bandas se
+                 * saltaban casi siempre. Costaba el 16 % del espectro en
+                 * cada cuadro, y medido en antena con la lista llena eran
+                 * NUEVE milisegundos de los 38 de la traza.
+                 *
+                 * Ya no hace falta: quien pone los carteles invalida el
+                 * cuadro entero cada vez que toca la lista o la posicion
+                 * (ver bd_rotulos_refresca() en main.c), que es lo unico
+                 * que puede moverlos. Si no ha cambiado nada, estas bandas
+                 * son como las demas y se saltan igual.
+                 */
+                if (pri == s_n_tramos) {
                     /* Ningun tramo pinta nada en estas filas: la banda
                      * entera es la misma plantilla que el cuadro anterior. */
                     s_saltadas++;
@@ -1855,8 +1895,6 @@ void spectrum_set_bridge(uint8_t on) { s_bridge = on ? 1U : 0U; }
 
 /*
  * EL FONDO DEL PANEL DE LA TRAZA, EN 0xRRGGBB - 15/10/2026.
- *
- * Pedido por el usuario.
  *
  * Lo que se pinta DENTRO de este panel -los carteles de emisora- no puede
  * elegir su color mirando la paleta del cromo: el panel es casi negro en

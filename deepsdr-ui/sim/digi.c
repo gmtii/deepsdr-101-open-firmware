@@ -86,8 +86,6 @@ int main(int argc, char **argv)
     /*
      * LA CHAPA DE CW, EN SU PEOR CASO - 09/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * La velocidad ya salia; el margen entre las dos medias del umbral no,
      * y se le añadio. Con eso la chapa de CW pasa a tener TRES numeros
      * -velocidad, relacion aprendida y margen- y crece hacia la izquierda
@@ -176,8 +174,6 @@ int main(int argc, char **argv)
         /*
          * EL TERCER BOTON TIENE QUE SOBREVIVIR A UN REPINTADO DE LA BARRA.
          *
-         * Pedido por el usuario.
-         *
          * No estaba porque lo borraba el repintado de la barra: solo_barra()
          * limpiaba UDG_BAR_W fijo -300 px- y con la barra acortada a 170
          * esos 300 incluyen el hueco del boton. En HFDL la barra cambia cada
@@ -213,8 +209,6 @@ int main(int argc, char **argv)
 
         /*
          * Y EL DEL MAPA, AL REPINTADO DE LA CHAPA - 28/09/2026.
-         *
-         * Pedido por el usuario.
          *
          * Respondia al dedo -la zona de toque estaba bien- pero no se
          * dibujaba. Lo borraba solo_chip(), que limpia una franja FIJA
@@ -316,8 +310,6 @@ int main(int argc, char **argv)
     /*
      * EL QUINTO BOTON: EL MAPA - 28/09/2026.
      *
-     * Pedido por el usuario.
-     *
      * Ese hueco es real -el cuarto boton empieza en 430 y no pasa de 150
      * px, y la chapa empieza pasado el 700- pero "es real" era un
      * razonamiento mio leyendo constantes. Aqui se MIDE, con las chapas y
@@ -338,8 +330,6 @@ int main(int argc, char **argv)
             { "1234 ",  0,        "14.090",  "JTTY" },
             /*
              * Y LOS CASOS QUE FALTABAN, que son los que enseño la radio.
-             *
-             * Pedido por el usuario.
              *
              * Esta lista tenia UNA chapa por modo, y con una sola chapa
              * por modo la pregunta "cambia el boton cuando cambia la
@@ -450,8 +440,6 @@ int main(int argc, char **argv)
     /*
      * Y CON QUINTO BOTON, LA CHAPA NO LO INVADE POR LARGO QUE SEA EL TEXTO.
      *
-     * Pedido por el usuario, 02/10/2026.
-     *
      * La chapa se ensancha con su texto, y el que escribe ese texto esta
      * en otro fichero y no sabe nada de botones. Asi que el tope tiene que
      * estar AQUI: con quinto boton, la caja mide UDG_CHIP_RES y punto, y
@@ -489,8 +477,6 @@ int main(int argc, char **argv)
 
     /*
      * EL BOTON "BORRAR" DEL PANEL DE CW, DESPUES DE MUCHO TEXTO - 05/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * El panel de texto de CW se pinta de dos maneras: entero
      * -ui_digi_draw_texto(), que incluye la cabecera y por tanto el boton- o
@@ -606,8 +592,6 @@ int main(int argc, char **argv)
      * LO QUE PONE DENTRO DE LA BARRA TIENE QUE CABER DENTRO DE LA BARRA.
      * 13/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * La barra de FT8 baja de 300 a 200 px para hacerle sitio al boton de
      * CQ, y dentro lleva CUATRO numeros de diagnostico. Acortar una barra
      * con texto dentro sin medir el texto es como se consigue que en el
@@ -659,8 +643,6 @@ int main(int argc, char **argv)
     /*
      * LA SEGUNDA DISPOSICION: BOTONES A LA IZQUIERDA, BARRA A LA DERECHA.
      * 13/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Cinco cajas en una franja de 800 px, puestas por cinco funciones
      * distintas. Lo que hay que medir no es que cada una tenga sitio -eso
@@ -730,8 +712,6 @@ int main(int argc, char **argv)
          * LA BANDA QUE SE REPINTA NO SE PUEDE SALIR DE LA PANTALLA.
          * 13/10/2026.
          *
-         * Pedido por el usuario.
-         *
          * Y se veia como una persiana de rayas naranjas. ui_digi_draw_barra()
          * pedia una ventana de barra + hueco + tercer boton porque en la
          * disposicion de siempre el tercero va a la derecha de la barra. En
@@ -760,8 +740,6 @@ int main(int argc, char **argv)
      * ======================================================================
      * EL "8/15" PEGADO AL PUNTO VERDE - 13/10/2026
      * ======================================================================
-     *
-     * Pedido por el usuario.
      *
      * Estaba al principio de un renglon centrado, o sea en el extremo
      * CONTRARIO al punto que cuenta lo mismo que el. Ahora va en su propio

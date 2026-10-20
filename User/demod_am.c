@@ -1696,8 +1696,6 @@ float32_t demod_am_get_sam_carrier_hz(void)
 /*
  * SI ESE NUMERO SIGNIFICA ALGO - 05/10/2026.
  *
- * Pedido por el usuario.
- *
  * El error de PLL se enseñaba siempre, hubiera portadora o no, y un numero
  * en una pantalla se cree. 269 PPM son 7 kHz de error en un cristal de 26
  * MHz: eso no es un cristal desviado, es un lazo que no esta cogido a nada.
@@ -1845,8 +1843,6 @@ sam_banda_t demod_am_get_sam_banda(void)
 
 /*
  * QUE LADO DE LA PORTADORA SE ESTA OYENDO - 15/10/2026.
- *
- * Pedido por el usuario.
  *
  * Y era cierto. La banda sombreada del espectro se decidia con una cadena
  * de if sobre el MODO, escrita en main.c cuando SAM solo tenia una forma:
@@ -2643,8 +2639,6 @@ uint8_t demod_am_get_active_rate_is_48k(void)
 /*
  * EL OSCILOSCOPIO DE TONO EN APRS - 30/09/2026.
  *
- * Pedido por el usuario.
- *
  * Y era cierto.: en APRS no habia NADA encima del panel de texto. No es que
  * el espectro se parase, es que no lo pintaba nadie.
  *
@@ -2715,8 +2709,6 @@ static void aprs_scope_feed(const float *x, uint32_t n)
  * ======================================================================
  * LA CONTINUA SE QUITA DE LA I Y LA Q, NO DEL AUDIO - 11/10/2026
  * ======================================================================
- *
- * Pedido por el usuario.
  *
  * Esta cadena YA tenia un quitador de continua (s_dcb_x1/y1), pero esta en
  * el AUDIO, DETRAS del discriminador. Y ahi no sirve de nada contra esto,
@@ -2804,8 +2796,6 @@ static void fm_discriminate(const float32_t *i_buf, const float32_t *q_buf,
 
         /*
          * rapido_atan2() y no atan2f() - 04/10/2026.
-         *
-         * Pedido por el usuario.
          *
          * Esta era la segunda de las dos llamadas por muestra que habia en
          * la interrupcion (la otra estaba en sam.c). Aqui cuesta 96.000
@@ -3196,9 +3186,6 @@ void demod_wfm_process_raw(const int16_t *raw_interleaved)
  * EL METODO DE FASES, EN UN SOLO SITIO - 11/10/2026
  * ======================================================================
  *
- * *** De un issue: se pedia que el detector sincrono de AM pudiera trabajar sobre una
- * sola banda lateral, para escapar de una interferencia. ***
- *
  * Esto estaba escrito en linea dentro de la rama de USB/LSB. Ahora lo usan
  * DOS: esa rama y la de SAM, que para elegir banda hace exactamente lo
  * mismo con la senal ya desrotada por la portadora que recupera su PLL
@@ -3531,8 +3518,6 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
     /*
      * AL CUADRADO, Y UNA SOLA RAIZ POR BLOQUE - 05/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Aqui habia una raiz cuadrada POR MUESTRA: 256 por bloque, 96.000 por
      * segundo, en AM, SAM, NFM, USB y LSB -o sea todos los modos que pasan
      * por aqui, sin interruptor que lo apague-. La VSQRT del coprocesador
@@ -3597,8 +3582,6 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
     if (s_mode == (uint8_t)DEMOD_MODE_AM) {
         /*
          * |z| = |I + jQ|, SIN COPIARLOS ANTES - 05/10/2026.
-         *
-         * Pedido por el usuario.
          *
          * Aqui se entrelazaban I y Q en un tercer buffer SOLO para poder
          * llamar a arm_cmplx_mag_f32(), que es lo que pide CMSIS. Son 512
@@ -3713,8 +3696,6 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
         /*
          * EL BLOQUE ENTERO DE UNA LLAMADA - 05/10/2026.
          *
-         * Pedido por el usuario.
-         *
          * Aqui habia un bucle llamando a sam_step() 256 veces. Lo que cuesta
          * eso de mas no es el bucle: es que entre llamada y llamada el
          * compilador tiene que dar por perdido todo lo que tenia en
@@ -3726,10 +3707,6 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * ==============================================================
          * Y UNA SOLA BANDA, SI SE PIDE - 11/10/2026
          * ==============================================================
-         *
-         * *** De un issue: se pedia que el detector sincrono de AM pudiera trabajar
-         * sobre una sola banda lateral, para escapar de una
-         * interferencia. ***
          *
          * sam.h lo tenia escrito como pendiente desde agosto: el codigo
          * del que se porto traia SAML/SAMU y se dejaron fuera porque "no
@@ -4432,8 +4409,6 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * desde el 04/08, que es cuando el NR de banda lateral se metio
          * dentro del paso 2d.
          *
-         * Pedido por el usuario.
-         *
          * Ese 99 es el tope de la celda, o sea un numero disparado. Y la
          * cuenta de por que es corta: "extract" ya lleva restado el NR
          * -justo arriba, para que el NR salga en su propio cajon y no
@@ -4515,9 +4490,6 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
      * ==================================================================
      * Y LA REDUCCION DE RUIDO TAMBIEN EN SAM - 11/10/2026
      * ==================================================================
-     *
-     * *** De un issue: la reduccion de ruido no funcionaba en SAM y se
-     * pedia que lo hiciera. ***
      *
      * Era cierto, y ademas era peor que "no funciona": el boton de Ruido
      * NO esta limitado por modo. En SAM se podia encender, se quedaba

@@ -7,8 +7,6 @@
 /*
  * IDENT: QUE DEMONIOS ES ESTA SEÑAL - 03/10/2026.
  *
- * Pedido por el usuario.
- *
  * Pedido de madrugada, el 03/10 a la una: un modo Ident hecho con todo lo
  * que el firmware ya sabe medir.
  *
@@ -52,7 +50,6 @@
  *
  * COMO SE METE UNA SEÑAL NUEVA
  * ----------------------------
- * Pedido por el usuario.
  *
  * Tres pasos, y ninguno toca logica:
  *   1. el audio a sim/muestras/
@@ -116,8 +113,6 @@ enum {
 
 /*
  * LA CADENCIA: CADA CUANTO SE ENCIENDE Y SE APAGA - 05/10/2026.
- *
- * Pedido por el usuario.
  *
  * Y no podia. La firma del FT8 que habia miraba el ancho de banda: 50 Hz,
  * que son los ocho tonos a 6,25 Hz. Ese numero es correcto PARA UNA SEÑAL
@@ -233,8 +228,6 @@ const ident_firma_t *ident_firmas(uint16_t *n);
 
 /*
  * CUANTO ENCAJA, EN TANTO POR CIENTO - 08/10/2026.
- *
- * Pedido por el usuario.
  *
  * LO PRIMERO, QUE ES LO QUE NO ES. Esto NO es una probabilidad. No hay con
  * que calcularla: haria falta saber cada cuanto aparece cada modo en la

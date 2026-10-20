@@ -78,9 +78,43 @@ static uint32_t s_acc_n;
  * Con dos, la interrupcion cierra uno y sigue por el otro, y el bucle
  * principal se lleva el cerrado entero.
  */
-static TCMRAM_BSS uint8_t s_linea[2][WEFAX_ANCHO];
+/*
+ * EL ANILLO DE LINEAS - DE DOS A OCHO. 20/10/2026.
+ *
+ * *** Aqui habia DOS buffers y una bandera: la interrupcion llenaba uno, al
+ * cerrarse cambiaba al otro, y wefax_linea() devolvia "el que acaba de
+ * cerrarse". ***
+ *
+ * Eso tiene dos agujeros, y los dos se notan en el fichero guardado:
+ *
+ *   - SE PISA. El bucle recibe el puntero a la linea cerrada y se pone a
+ *     escribirla en la flash, que cuesta decenas de milisegundos. Dos
+ *     lineas despues, la interrupcion vuelve a ese MISMO buffer y empieza a
+ *     escribir encima mientras el bucle todavia lo esta leyendo. Sale un
+ *     renglon partido por la mitad, con media linea de otro momento;
+ *   - SE PIERDE. La bandera es una sola. Si se cierran dos lineas antes de
+ *     que el bucle pase, la primera desaparece sin que nadie se entere.
+ *
+ * Es exactamente lo que ya se arreglo en sstv.c, donde el anillo subio de 4
+ * a 12 renglones por este mismo motivo -"las lineas que cierre mientras
+ * tanto hay que poder recogerlas despues"-. El fax se quedo con dos.
+ *
+ * Ocho lineas son 6 kB y cuatro segundos de margen a 120 lpm: de sobra para
+ * el peor bloqueo de la flash que hemos medido (51 ms) con tres ordenes de
+ * magnitud de holgura.
+ */
+#define WFX_ANILLO 8U
+
+/*
+ * Y EL ANILLO SALE DE LA TCM. Estaba ahi por velocidad, y no la necesita:
+ * la interrupcion escribe UN byte por pixel, o sea unos 1,5 kB por segundo
+ * a 120 lpm. Eso lo lleva la RAM normal sin enterarse, y la TCM -que son
+ * 64 kB y estan llenos- hace falta para lo que de verdad corre.
+ */
+static uint8_t s_linea[WFX_ANILLO][WEFAX_ANCHO];
 static volatile uint8_t s_esc;          /* en cual escribe la interrupcion */
-static volatile uint8_t s_linea_lista;
+static volatile uint8_t s_lee;          /* cual toca entregar al bucle */
+static volatile uint8_t s_linea_lista;  /* cuantas hay sin recoger */
 static uint32_t s_lineas;
 
 /* --- 4. señal de fase --- */
@@ -144,6 +178,7 @@ static void linea_reinicia(void)
     s_acc_n = 0U;
     memset(s_linea, 0, sizeof s_linea);
     s_esc = 0U;
+    s_lee = 0U;
     s_linea_lista = 0U;
 }
 
@@ -236,12 +271,82 @@ void wefax_fuerza_imagen(void)
     s_fase_n = 0U;
 }
 
+/*
+ * ======================================================================
+ * EL CENTRADO, A MANO - 20/10/2026
+ * ======================================================================
+ *
+ * Y era verdad: unos veinte puntos del margen izquierdo aparecian pegados
+ * al borde derecho. No se pierde nada -rodando la imagen 21 puntos vuelve
+ * a su sitio- pero sale fea y el texto del margen queda partido.
+ *
+ * POR QUE NO SE ARREGLA EN EL ENGANCHE. Lo primero que hice fue medirlo
+ * en el banco, con un caso nuevo: el patron de prueba tiene un escalon
+ * nitido en x = 300 y ahora se comprueba DONDE sale, no solo si la carta
+ * sale recta -que es lo unico que se miraba, y por eso una carta corrida
+ * veinte puntos pasaba por buena-. Contra la señal del banco el
+ * decodificador engancha bien: se va de dos a seis puntos, no de veinte.
+ *
+ * O sea que el banco y el firmware comparten la misma suposicion sobre
+ * donde va el pulso de fase -el banco lo emite en el primer 5% de la
+ * linea y fase_linea() lo aparca en el 2,5%- y por eso el banco no puede
+ * ver este fallo: cree lo mismo que el codigo. Si el DWD lo manda centrado
+ * en el limite de linea, el firmware lo coloca 19 puntos tarde, que es
+ * casi exactamente lo medido.
+ *
+ * CASI no es MEDIDO. Cambiar el objetivo del enganche porque una carta
+ * cuadre es como se pierde un dia entero, y ya lo he hecho hoy. Asi que
+ * de momento esto es un mando: un desplazamiento en puntos que se aplica
+ * al renglon YA TERMINADO, justo antes de entregarlo.
+ *
+ * Y por eso va aqui y no dentro de la interrupcion: no toca el
+ * acumulador, ni el ritmo, ni el pulso de fase. Lo unico que hace es
+ * rodar bytes de un renglon que ya nadie va a volver a mirar. El modo
+ * normal de decodificar no se entera.
+ *
+ * De regalo es un instrumento: si en diez cartas de emisoras distintas
+ * sale siempre el mismo numero, ese es el dato para cambiar el objetivo
+ * del enganche con fundamento en vez de a ojo.
+ */
+static int16_t s_centro;                      /* puntos que se corre el renglon */
+static uint8_t s_linea_sal[WEFAX_ANCHO];      /* el renglon ya corrido */
+
+void wefax_set_centro(int16_t px)
+{
+    while (px >=  (int16_t)WEFAX_ANCHO) { px = (int16_t)(px - (int16_t)WEFAX_ANCHO); }
+    while (px <= -(int16_t)WEFAX_ANCHO) { px = (int16_t)(px + (int16_t)WEFAX_ANCHO); }
+    s_centro = px;
+}
+
+int16_t wefax_centro(void) { return s_centro; }
+
 const uint8_t *wefax_linea(void)
 {
-    if (!s_linea_lista) { return 0; }
-    s_linea_lista = 0U;
-    return s_linea[s_esc ^ 1U];   /* el que acaba de cerrarse */
+    const uint8_t *p;
+
+    if (s_linea_lista == 0U) { return 0; }
+
+    p = s_linea[s_lee];
+    s_lee = (uint8_t)((s_lee + 1U) % WFX_ANILLO);
+    s_linea_lista--;              /* una menos sin recoger */
+
+    if (s_centro != 0) {
+        uint16_t d, i;
+
+        /* Positivo corre la imagen hacia la DERECHA. Lo que sale por un
+         * lado entra por el otro: no se pierde ni un punto. */
+        d = (uint16_t)((s_centro < 0) ? (int32_t)s_centro + (int32_t)WEFAX_ANCHO
+                                      : (int32_t)s_centro);
+        for (i = 0U; i < (uint16_t)WEFAX_ANCHO; i++) {
+            uint16_t j = (uint16_t)(i + d);
+            if (j >= (uint16_t)WEFAX_ANCHO) { j = (uint16_t)(j - (uint16_t)WEFAX_ANCHO); }
+            s_linea_sal[j] = p[i];
+        }
+        return s_linea_sal;
+    }
+    return p;
 }
+
 
 void wefax_info(wefax_info_t *out)
 {
@@ -638,11 +743,46 @@ void wefax_process(const float *audio, uint32_t n)
                 uint8_t cerrada = s_esc;
 
                 s_lineas++;
-                s_esc ^= 1U;   /* cerrado: lo que entra va ya al otro */
+                s_esc = (uint8_t)((s_esc + 1U) % WFX_ANILLO);
                 if (s_estado == WEFAX_FASE) {
                     fase_linea(s_linea[cerrada]);
+                    /*
+                     * Y EL LECTOR SIGUE AL ESCRITOR MIENTRAS NO HAYA NADA
+                     * QUE RECOGER.
+                     *
+                     * Sin esto, el anillo se descoloca: durante los treinta
+                     * segundos de señal de fase se cierran sesenta lineas
+                     * que NO se encolan, el escritor da siete vueltas al
+                     * anillo y el lector se queda clavado en la ranura
+                     * cero. Cuando empieza la imagen, la primera linea que
+                     * se entrega no es la que se acaba de cerrar sino una
+                     * ranura cualquiera con una linea de la fase dentro.
+                     *
+                     * Lo encontro el banco de sim/wefaxtest.c comparando la
+                     * misma señal recogida al momento y recogida tarde:
+                     * salian imagenes distintas, y no por el retraso.
+                     */
+                    s_lee = s_esc;
                 } else if (s_estado == WEFAX_IMAGEN) {
-                    s_linea_lista = 1U;
+                    /*
+                     * Y SI EL BUCLE NO HA RECOGIDO, SE TIRA LA MAS VIEJA.
+                     *
+                     * Con el anillo lleno -ocho lineas sin recoger, o sea
+                     * cuatro segundos de bucle parado- hay que elegir entre
+                     * perder la vieja o perder la nueva. Se pierde la
+                     * vieja y se adelanta el lector: asi lo que se guarda
+                     * sigue siendo lo ultimo que ha entrado por la antena,
+                     * que es lo que el usuario esta mirando en la pantalla.
+                     */
+                    if (s_linea_lista >= WFX_ANILLO) {
+                        s_lee = (uint8_t)((s_lee + 1U) % WFX_ANILLO);
+                    } else {
+                        s_linea_lista++;
+                    }
+                } else {
+                    /* Ni fase ni imagen: no se encola, asi que el lector se
+                     * pone al dia. Misma razon que arriba. */
+                    s_lee = s_esc;
                 }
             }
             s_px_ant = px;

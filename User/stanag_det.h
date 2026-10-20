@@ -6,8 +6,6 @@
 /*
  * QUE HAY AHI: IDENTIFICAR LA SEÑAL SIN DEMODULARLA - 02/10/2026.
  *
- * Pedido por el usuario.
- *
  * La hay, y no es la que yo propuse primero.
  *
  * MI PRIMERA IDEA ERA MEDIR LA TASA DE SIMBOLO, y es peor. Hay otra mejor
@@ -113,7 +111,6 @@
 /*
  * LO QUE ESTE MODULO MIDE, DESDE EL 03/10/2026, ES MAS QUE LA TRAMA
  * ------------------------------------------------------------------
- * Pedido por el usuario.
  *
  * Nacio para contestar una sola pregunta -cada cuanto se repite la trama-
  * y eso identifica los STANAG, que es para lo que se hizo. Pero la noche
@@ -166,8 +163,6 @@ typedef struct {
     /*
      * CUANTAS SEÑALES HAY EN EL PASO DE BANDA - 10/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Y el "aprs?" se lo dijo LA RADIO: el Ident contestaba "APRS / paquete
      * AFSK 1200, 70%" sobre tres RTTY de aficionado. La tabla estaba bien;
      * lo que fallaba era de donde salian sus numeros. El detector cogia la
@@ -195,7 +190,6 @@ typedef struct {
 
     /* --- la velocidad de simbolo de lo que no son dos tonos, 05/10/2026 --- */
     /*
-     * Pedido por el usuario.
      *
      * baudios_x10, el de arriba, solo arranca cuando se han visto DOS
      * tonos: cuenta rachas del discriminador y con veintiun tonos no hay
@@ -224,8 +218,6 @@ typedef struct {
 
     /*
      * --- LA RELACION CONSTANTE DE 7 BITS - 08/10/2026 ---
-     *
-     * Pedido por el usuario.
      *
      * Era una FSK de 50,00 baudios y 201 Hz de salto, y la fila que le
      * corresponde -"FSK 50 Bd / 200 Hz (cifrada)", ver ident.c- YA ESTABA
@@ -318,8 +310,6 @@ uint8_t stanag_det_paso(stanag_det_t *out);
 
 /*
  * POR DONDE VA LA CADENA, PARA PODER MIRARLA DESDE LA RADIO - 02/10/2026.
- *
- * Pedido por el usuario.
  *
  * Esa frase sale mientras no ha habido NINGUNA medida, y eso puede ser por
  * tres motivos muy distintos: que no entre audio, que entre y el anillo no

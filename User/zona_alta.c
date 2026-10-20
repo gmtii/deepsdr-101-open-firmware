@@ -10,7 +10,7 @@ uint32_t za_tope(void) { return spi_flash_capacidad(); }
 
 uint32_t za_base(void)
 {
-    return spi_flash_capacidad() - ZA_BYTES_REGION + ZA_HUECO;
+    return za_disco_de(spi_flash_capacidad()) + ZA_HUECO;
 }
 
 /*

@@ -42,8 +42,6 @@ static char     s_chapa[16];
 /*
  * LOS HUECOS SE MIDEN EN FILAS, NO EN LA HORA A LA QUE ME ENTERO.
  *
- * Pedido por el usuario.
- *
  * LA VERSION ANTERIOR MEDIA EL TIEMPO MAL. Pegaba o cortaba segun los
  * milisegundos entre un atomo y el siguiente, pero ese instante no es
  * cuando llego la trama: es cuando el bucle principal se entero. Y
@@ -186,8 +184,6 @@ static void apunta(const char *txt, int16_t hz, uint8_t q, uint8_t entero)
 
     /*
      * Y LA COLUMNA DEL PAIS, del prefijo del indicativo.
-     *
-     * Pedido por el usuario.
      *
      * El indicativo sale de jtty_msg_indicativo(), que coge el ULTIMO del
      * mensaje -quien transmite- reconociendolo por su forma, porque aqui

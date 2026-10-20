@@ -1,8 +1,6 @@
 /*
  * EL MAPA DEL MUNDO, PARA MIRARLO ANTES DE GASTARLE UN FLASHEO.
  *
- * Pedido por el usuario.
- *
  * Un mapa no se comprueba compilando. Esto lo pinta en un fichero que se
  * puede abrir, con estaciones de verdad repartidas por el mundo, y ademas
  * mide lo que mirando NO se ve:
@@ -31,10 +29,14 @@ static void exige(int cond, const char *que)
     if (!cond) { fallos++; }
 }
 
-#define MAPA_X 0
-#define MAPA_Y 0
-#define MAPA_W 800
-#define MAPA_H 318
+/* OJO: la constante de altura NO se puede llamar MAPA_H. User/mapa.h usa ese
+ * mismo nombre como guarda de inclusion, asi que definirlo aqui funciona solo
+ * mientras mapa.h se incluya ANTES; el dia que alguien reordene los #include,
+ * mapa.h se salta entera y en silencio. Por eso lleva prefijo. */
+#define MAPA_X   0
+#define MAPA_Y   0
+#define MAPA_W   800
+#define PANT_H   318
 
 /*
  * La caja, puesta con mapa_pon() y no escrita a mano: desde el 28/09/2026
@@ -108,7 +110,7 @@ static void pinta(gfx2_surf_t *s, void *ctx)
 
 int main(void)
 {
-    mapa_pon(&k_caja, MAPA_X, MAPA_Y, MAPA_W, MAPA_H);
+    mapa_pon(&k_caja, MAPA_X, MAPA_Y, MAPA_W, PANT_H);
 
     printf("\n  EL MAPA DEL MUNDO\n");
 
@@ -147,7 +149,7 @@ int main(void)
             if (lat >  tope) { lat =  tope; }
             if (lat < -tope) { lat = -tope; }
             ex = (int16_t)(MAPA_X + (k[i].lon + 180.0) * MAPA_W / 360.0);
-            ey = (int16_t)(MAPA_Y + (tope - lat) * MAPA_H / (2.0 * tope));
+            ey = (int16_t)(MAPA_Y + (tope - lat) * PANT_H / (2.0 * tope));
             ok = mapa_loc_a_px(&k_caja, k[i].loc, &px, &py);
             printf("    %-42s (%3d,%3d) esperado (%3d,%3d)\n",
                    k[i].q, px, py, ex, ey);
@@ -187,7 +189,7 @@ int main(void)
                                        * MAPA_W / 360.0);
                 double tope = k_mapa_lat_tope_c / 100.0;
                 int16_t ey = (int16_t)(MAPA_Y + (tope - k[i].lat / 10000.0)
-                                       * MAPA_H / (2.0 * tope));
+                                       * PANT_H / (2.0 * tope));
 
                 exige(hay && px >= ex - 1 && px <= ex + 1
                           && py >= ey - 1 && py <= ey + 1, k[i].q);
@@ -307,13 +309,10 @@ int main(void)
      * ------------------------------------------------------------------
      * ZOOM Y ARRASTRE - 28/09/2026
      *
-     * Pedido por el usuario.
      * ------------------------------------------------------------------
      */
     /*
      * EL LOCALIZADOR DE JTTY: EN CUALQUIER PALABRA DEL MENSAJE.
-     *
-     * Pedido por el usuario.
      *
      * En FT8 el localizador es siempre la ultima palabra y por eso
      * mapa_loc_de_linea() mira solo esa. En JTTY un mensaje son varios
@@ -363,8 +362,6 @@ int main(void)
 
     /*
      * EL LOCALIZADOR DE WSPR: EN SU PROPIA COLUMNA.
-     *
-     * Pedido por el usuario.
      *
      * Aqui es el caso facil de los tres y conviene que se vea por que: las
      * columnas de WSPR son Hora, Indicativo, Loc., dBm, Desvio y Cal., o
@@ -427,7 +424,7 @@ int main(void)
     printf("\n  el hueco de la radio: 800 x 288\n");
     {
         mapa_caja_t c;
-        int16_t px, py, px2, py2;
+        int16_t px, py;
 
         mapa_pon(&c, 0, RADIO_Y, 800, RADIO_H);
         printf("      el mundo mide %ld x %ld y se ven %d x %d\n",
@@ -487,8 +484,6 @@ int main(void)
          * Y EL ZOOM A PASOS, QUE ES EL QUE USAN EL MANDO Y LOS BOTONES
          * ==============================================================
          *
-         * Pedido por el usuario, 11/10/2026.
-         *
          * mapa_zoom_paso() existe para que el mando y los botones de la
          * esquina NO tengan cada uno su copia de "multiplica por dos y
          * topa". Lo que se mide aqui es justo eso: que la misma cantidad
@@ -503,12 +498,12 @@ int main(void)
         {
             mapa_caja_t p;
 
-            mapa_pon(&p, MAPA_X, MAPA_Y, MAPA_W, MAPA_H);
+            mapa_pon(&p, MAPA_X, MAPA_Y, MAPA_W, PANT_H);
             exige(mapa_zoom_paso(&p, 1, ax, ay) == 2U, "un paso: x1 -> x2");
             exige(mapa_zoom_paso(&p, 1, ax, ay) == 4U, "otro:    x2 -> x4");
             exige(mapa_zoom_paso(&p, -1, ax, ay) == 2U, "y atras: x4 -> x2");
 
-            mapa_pon(&p, MAPA_X, MAPA_Y, MAPA_W, MAPA_H);
+            mapa_pon(&p, MAPA_X, MAPA_Y, MAPA_W, PANT_H);
             exige(mapa_zoom_paso(&p, 3, ax, ay) == 8U, "tres de golpe: x1 -> x8");
             exige(mapa_zoom_paso(&p, 9, ax, ay) == (uint8_t)MAPA_ESC_MAX,
                   "y nueve mas no pasan del tope");
@@ -517,7 +512,7 @@ int main(void)
             exige(mapa_zoom_paso(&p, -1, ax, ay) == 4U,
                   "y un paso atras desde el tope baja de verdad");
 
-            mapa_pon(&p, MAPA_X, MAPA_Y, MAPA_W, MAPA_H);
+            mapa_pon(&p, MAPA_X, MAPA_Y, MAPA_W, PANT_H);
             exige(mapa_zoom_paso(&p, -9, ax, ay) == 1U, "por abajo topa en x1");
             exige(mapa_zoom_paso(&p, 1, ax, ay) == 2U,
                   "y un paso adelante desde el tope sube de verdad");
@@ -529,8 +524,8 @@ int main(void)
                 mapa_caja_t a, b;
                 int k;
 
-                mapa_pon(&a, MAPA_X, MAPA_Y, MAPA_W, MAPA_H);
-                mapa_pon(&b, MAPA_X, MAPA_Y, MAPA_W, MAPA_H);
+                mapa_pon(&a, MAPA_X, MAPA_Y, MAPA_W, PANT_H);
+                mapa_pon(&b, MAPA_X, MAPA_Y, MAPA_W, PANT_H);
                 for (k = 0; k < 4; k++) { (void)mapa_zoom_paso(&a, 1, ax, ay); }
                 (void)mapa_zoom_paso(&b, 4, ax, ay);
                 exige(a.esc == b.esc, "cuatro de uno en uno == cuatro de golpe");
@@ -637,7 +632,7 @@ int main(void)
     }
 
     lcd_sim_reset(0x0000);
-    gfx2_render(MAPA_X, MAPA_Y, MAPA_W, MAPA_H, pinta, 0);
+    gfx2_render(MAPA_X, MAPA_Y, MAPA_W, PANT_H, pinta, 0);
     lcd_sim_write_ppm("out/mapa_mundo.ppm");
     printf("\n  pintado en out/mapa_mundo.ppm\n");
 
@@ -655,7 +650,7 @@ int main(void)
         uint16_t costa = gfx2_to565(0x3E, 0x7F, 0xA8);
         int y, x, peor = 0;
 
-        for (y = MAPA_Y; y < MAPA_Y + MAPA_H; y++) {
+        for (y = MAPA_Y; y < MAPA_Y + PANT_H; y++) {
             int racha = 0;
 
             for (x = MAPA_X; x < MAPA_X + MAPA_W; x++) {
@@ -674,8 +669,6 @@ int main(void)
     /*
      * LO QUE CUESTA UN SOLO FOTOGRAMA DE ARRASTRE - 11/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Cada movimiento del dedo repinta el mapa ENTERO, y ese repintado es
      * lo que marca cada cuanto se vuelve a leer el tactil: el bucle
      * principal lee el dedo UNA vez por vuelta. O sea que este numero no
@@ -690,7 +683,7 @@ int main(void)
 
         lcd_sim_reset(0x0000);
         lcd_sim_cost_reset();
-        gfx2_render(MAPA_X, MAPA_Y, MAPA_W, MAPA_H, pinta, 0);
+        gfx2_render(MAPA_X, MAPA_Y, MAPA_W, PANT_H, pinta, 0);
         c = lcd_sim_cost();
 
         printf("      %llu accesos al bus, %llu pixeles, %llu ventanas\n",

@@ -12,7 +12,7 @@
  * lo que queda es el camino por el que el fichero LLEGA al disco: la clase
  * MSC del cargador, o sea disco_escribe_n().
  *
- * Y ahi esta la diferencia que el issue describe sin saberlo: el mapa son
+ * Y ahi esta la diferencia que el sintoma describe sin saberlo: el mapa son
  * 8 kB -16 sectores, dos bloques de borrado enteros y alineados- y BD.BIN
  * son medio mega: 1.016 sectores en tiradas de longitud y alineacion
  * cualesquiera. Un fallo en el camino lento, o en la frontera entre el

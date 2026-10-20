@@ -1,8 +1,6 @@
 /*
  * QUE EL CARTEL DE LA CAPTURA QUEPA ENTERO.
  *
- * Pedido por el usuario.
- *
  * El cartel dice por que no se ha podido guardar una captura, y la mitad
  * del texto no lo escribe main.c: lo escribe spi_flash_anade_porque_txt().
  * Pegados detras de "NO CABE: " y del tamano que hace falta, salen frases

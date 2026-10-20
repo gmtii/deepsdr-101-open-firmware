@@ -1,8 +1,6 @@
 /*
  * EL AIRE DE VERDAD, POR EL FIRMWARE DE VERDAD - 14/10/2026
  *
- * Pedido por el usuario.
- *
  * Este es el banco que faltaba desde el principio. Los otros veintitantos
  * de HFDL prueban piezas, y hfdl_extremo.c monta una rafaga sintetica y la
  * mete entera; pero una rafaga sintetica la hace el mismo que escribio el

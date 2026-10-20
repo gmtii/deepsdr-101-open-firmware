@@ -1,8 +1,6 @@
 /*
  * EL 4285 DE VERDAD, ROTO A PROPOSITO CON MULTITRAYECTO.
  *
- * Pedido por el usuario.
- *
  * Antes de escribir una linea del 4539 o del 4415 hay que saber UNA cosa:
  * donde se rompe hoy el demodulador que ya tenemos, y cuanto de eso es culpa
  * del eco. Porque lo que le falta a los dos STANAG nuevos -un ecualizador- no

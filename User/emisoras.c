@@ -526,8 +526,6 @@ uint8_t emisoras_dia_semana(uint16_t anno, uint8_t mes, uint8_t dia)
 /*
  * ------------------------------------------------- SALTAR A LA SIGUIENTE
  *
- * Pedido por el usuario.
- *
  * La tabla de frecuencias YA esta ordenada por hz, asi que esto es la
  * misma busqueda binaria de frec_cerca() y despues andar una casilla a la
  * vez hasta dar con una que este EN ANTENA. Lo caro no es encontrar la

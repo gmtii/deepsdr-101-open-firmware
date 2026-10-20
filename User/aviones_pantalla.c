@@ -8,8 +8,6 @@
 /*
  * LA PANTALLA DE COPIAR LA BASE DE AVIONES.
  *
- * Pedido por el usuario.
- *
  * Era cierto las dos veces, y la segunda explica la primera. El primer
  * intento pintaba la radio entera y le plantaba encima una caja negra con
  * borde de un pixel y la fuente de mapa de bits a doble tamano. O sea: la
@@ -62,8 +60,6 @@ typedef struct {
  * Un entero con puntos de millar, que es como se leen 515.720.
  *
  * LOS GRUPOS SE CUENTAN DESDE LA DERECHA - 28/09/2026.
- *
- * Pedido por el usuario.
  *
  * Esto ponia el punto cada tres cifras contando desde la IZQUIERDA
  * -`k % 3`-, que da lo mismo cuando el numero tiene 3, 6 o 9 cifras y

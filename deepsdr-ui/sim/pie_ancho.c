@@ -1,8 +1,6 @@
 /*
  * QUE EL PIE DE LA CELDA QUEPA EN LA CELDA - 06/10/2026.
  *
- * Pedido por el usuario.
- *
  * La primera era un desbordamiento del buffer y se arreglo contando mal: se
  * amplio el hueco a 40 bytes y se acorto el texto, y el segundo recorte
  * seguia ahi. Porque el limite que manda NO es el buffer: es el ANCHO DE LA

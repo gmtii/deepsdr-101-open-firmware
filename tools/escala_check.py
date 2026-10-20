@@ -2,8 +2,6 @@
 """
 QUIEN PUEDE TOCAR TU ESCALA DEL ESPECTRO.
 
-Pedido por el usuario, 10/10/2026.
-
 Eso funciona porque por debajo de s_db_min la cascada pinta el indice 0 del
 mapa de color, que es el color del panel. Y funcionaba mal porque
 s_db_min/s_db_max tenian DOS dueños: la escala que pone el usuario -que se

@@ -6,11 +6,6 @@
 /*
  * ACARS DENTRO DE HFDL - 14/10/2026.
  *
- * *** Un probador: "it has been receiving for quite a while on a frequency
- * with extremely high traffic activity, yet hasn't decoded a single set of
- * coordinates... With other firmware, on the other hand, logs coordinates
- * for practically every transmission". ***
- *
  * Y la respuesta estaba en los bytes, no en el razonamiento. El volcado en
  * crudo de la pantalla -ver hfdl_modo_linea_bytes()- enseño esto en una
  * trama de verdad, en 17.967 kHz:

@@ -2,8 +2,6 @@
  * LA FASE, DESDE I/Q Y CON RUIDO: EL BANCO QUE FALTABA.
  * ====================================================
  *
- * Pedido por el usuario, 10/10/2026.
- *
  * POR QUE EXISTE. sim/als_real.c mide el decodificador contra la fase YA
  * EXTRAIDA de una grabacion. Y esa fase la extrajo tools/als_fase.py, que
  * hace esto:

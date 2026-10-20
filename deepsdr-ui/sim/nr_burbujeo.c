@@ -6,7 +6,6 @@
  * reductor de ruido. Con señales fuertes -las de 40 metros, transmitiendo
  * con mucha potencia- no se oye nada de eso y las voces graves suenan
  * limpias. ***
- * Pedido por el usuario.
  *
  * ESO ULTIMO MANDA. Si el usuario no lo oye y el banco no lo mide, arreglarlo
  * seria cambiar codigo a ciegas para que suene distinto a alguien que no
@@ -236,8 +235,6 @@ static res_t mide(uint16_t v, double amp_voz, double amp_ruido)
     r.nivel_db = 10.0 * log10((e_on + 1e-12) / (e_off + 1e-12));
     /*
      * LA MITAD QUE ESTABA ANUNCIADA Y NO SE CALCULABA - 11/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Aqui habia `r.voz_db = 0.0; (void)amp_voz;`. O sea: el campo existia,
      * la cabecera de este fichero lo prometia con todas las letras

@@ -133,8 +133,6 @@ typedef struct {
     /*
      * CUANTO FALTA PARA EL PRIMER CARACTER, Y POR QUE HAY QUE ENSEÑARLO.
      *
-     * Pedido por el usuario, 02/10/2026.
-     *
      * Y era verdad que no salia: con entrelazado largo hacen falta
      * j*31 grupos solo para llenarlo, mas 20*repeticiones para juntar
      * la primera ventana del Viterbi. A 600 bps son 392 grupos = 98
@@ -160,8 +158,6 @@ typedef struct {
     /*
      * LO MEJOR QUE HA ENCONTRADO EL BARRIDO, AUNQUE NO LE VALGA.
      *
-     * Pedido por el usuario, 02/10/2026.
-     *
      * Pues entonces el instrumento tiene que estar en la pantalla de la
      * radio. Estos dos numeros dicen de un vistazo en cual de los tres
      * sitios esta el problema:
@@ -181,8 +177,6 @@ typedef struct {
     uint8_t  umbral;         /* el umbral de enganche, para no escribirlo a mano */
     /*
      * LA TRAMA, MEDIDA SIN CAMBIAR DE MODO.
-     *
-     * Pedido por el usuario, 02/10/2026.
      *
      * Y lo que mas falta hacia era esto: saber si en esa frecuencia hay
      * o no hay trama de 106,67 ms SIN tener que irse al identificador,
@@ -204,8 +198,6 @@ typedef struct {
     uint16_t tramas_bien;    /* tramas con los sondeos por encima del minimo */
     /*
      * LA BUSQUEDA AUTOMATICA DE VELOCIDAD Y ENTRELAZADO.
-     *
-     * Pedido por el usuario, 07/10/2026.
      *
      * Ni la velocidad ni el entrelazado van en la señal, y son once
      * combinaciones. Esto las recorre solo. Ver stanag_rx.c.

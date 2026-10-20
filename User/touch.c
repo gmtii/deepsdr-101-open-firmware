@@ -365,8 +365,6 @@ static uint16_t clamp_u16(int32_t v, uint16_t max_exclusive)
 /*
  * EL SALTO MAXIMO ES UNA VELOCIDAD, NO UNA DISTANCIA - 11/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y lo que iba regular no era el mapa: era ESTO.
  *
  * El parrafo de arriba se escribio para un filtro que solo tenia que

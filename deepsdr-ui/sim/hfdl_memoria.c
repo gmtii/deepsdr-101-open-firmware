@@ -3,8 +3,6 @@
  * LA MEMORIA PRESTADA DE HFDL, CONTRA LOS OCHO GIROS
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * HFDL tiene ocho combinaciones de velocidad y ranura -los "giros", el
  * indice M1 del preambulo- y cada una pide un trozo de memoria distinto
  * para desentrelazar y para el Viterbi. El decodificador no tiene memoria
@@ -125,8 +123,6 @@ int main(void)
 
     /*
      * Y AQUI SE EXIGE, QUE HASTA HOY SOLO SE CONTABA - 11/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * La X de esa chapa decia que las veinte rafagas tiradas eran del giro
      * 6, y el 11/10 se pagaron los 5.872 bytes que le faltaban: la union

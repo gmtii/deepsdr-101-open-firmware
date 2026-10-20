@@ -112,6 +112,90 @@ int main(void)
      * holgura de arriba no es que el tope haya desaparecido. */
     caso(k_chapas_estado[0], "No guardar", 1);
 
+    /*
+     * ======================================================================
+     * Y EL TERCER BOTON: QUE SE DIBUJE DE VERDAD
+     * ======================================================================
+     *
+     * Y no estaba. El centrado del fax lo puse en btn3 y lo di por hecho:
+     * el boton existia, respondia al dedo y NO SE DIBUJABA.
+     *
+     * Porque btn3_w() de ui_digi.c no es un numero, es una resta: lo que
+     * queda entre donde acaba la ZONA DE LA BARRA y donde empieza la
+     * chapa. Sin barra esa zona vale sus 300 px enteros, el hueco sale
+     * negativo, la funcion devuelve 0 y no se pinta nada. Hay que
+     * acortarla con barra_w para hacerle sitio.
+     *
+     * Nada lo comprobaba, asi que se entrego. Esto lo comprueba: monta la
+     * cabecera del fax con los MISMOS campos que fax_hdr_draw() y exige
+     * que el boton tenga ancho, que su rotulo mas largo quepa, y que no
+     * pise ni al de guardar ni a la chapa.
+     * ====================================================================== */
+    printf("\n  el tercer boton del fax (el centrado)\n");
+    {
+        /* Los mismos campos que pone fax_hdr_draw(). Si alli cambia el
+         * ancho reservado, aqui hay que cambiarlo tambien - y entonces
+         * este banco dira si el nuevo numero sirve. */
+        /* El peor caso del rotulo con el recorrido de linea entera:
+         * +-378 lleva tres cifras y el signo. Si manana el paso cambia y
+         * el recorrido tambien, esto tiene que seguir cuadrando. */
+        static const char *k_rotulos[] = { "Centro", "Centre",
+                                           "+357 px", "-378 px" };
+        ui_digi_state_t st;
+        int16_t x3, w3, xc;
+        size_t k;
+
+        memset(&st, 0, sizeof st);
+        st.y = HDR_Y;
+        st.h = HDR_H;
+        st.chip = "Recibiendo - 120 lpm - WFAX003 176";
+        st.btn  = "Sincroniza";
+        st.btn2 = "Guardando 003";
+        st.barra_w = 160;              /* <- lo que le hace sitio */
+        st.btn3 = k_rotulos[0];
+
+        w3 = ui_digi_btn3_w_dbg(&st);
+        x3 = ui_digi_btn3_x_dbg(&st);
+        xc = ui_digi_chip_x_dbg(&st);
+        printf("    boton3 en x=%d, %d px de ancho; la chapa empieza en %d\n",
+               x3, w3, xc);
+
+        if (w3 <= 0) {
+            printf("    *** no se dibuja: btn3_w() devuelve %d. Hay que acortar"
+                   " la zona de la barra con barra_w ***\n", w3);
+            fallos++;
+        }
+        if (x3 < UDG_BTN2_X + UDG_BTN2_W) {
+            printf("    *** pisa al boton de guardar ***\n");
+            fallos++;
+        }
+        if (w3 > 0 && x3 + w3 > xc) {
+            printf("    *** pisa la chapa ***\n");
+            fallos++;
+        }
+        for (k = 0; k < sizeof k_rotulos / sizeof k_rotulos[0]; k++) {
+            int ancho = gfx2_text_w(k_rotulos[k], &font_ui_14b);
+            /* Cuatro pixeles de aire a cada lado, que es lo que deja
+             * pinta_uno() antes de que el texto toque el borde. */
+            if (ancho + 8 > w3) {
+                printf("    *** \"%s\" no cabe: %d px en %d ***\n",
+                       k_rotulos[k], ancho, w3);
+                fallos++;
+            } else {
+                printf("    \"%s\" cabe: %d px en %d\n", k_rotulos[k], ancho, w3);
+            }
+        }
+
+        /* Y que sin barra_w NO se dibujara, o sea que esta prueba prueba
+         * algo: un banco que pasa con y sin el arreglo no es un banco. */
+        st.barra_w = 0;
+        if (ui_digi_btn3_w_dbg(&st) > 0) {
+            printf("    *** sin acortar la barra tambien sale: esta prueba no"
+                   " esta midiendo lo que dice ***\n");
+            fallos++;
+        }
+    }
+
     if (fallos) {
         printf("\n  *** %d ***\n", fallos);
         return 1;

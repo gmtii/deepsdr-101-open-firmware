@@ -71,8 +71,6 @@ static uint32_t a_crudo(double grados)
 /*
  * EL MISMO MENSAJE, PERO CON BASURA DELANTE - 10/10/2026 (la tarde).
  *
- * Pedido por el usuario.
- *
  * La cabecera de hfdl_hfnpdu.h dice, de la unica trama real verificada
  * nunca, que el par 0xFF 0xD1 estaba en los BYTES 10-11 de los datos del
  * LPDU. Si eso es cierto, el tipo NO empieza en el byte 0, y exigirlo ahi

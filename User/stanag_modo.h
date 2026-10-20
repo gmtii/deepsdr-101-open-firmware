@@ -6,8 +6,6 @@
 /*
  * EL MODO: APUNTAR A UNA SEÑAL Y QUE DIGA QUE ES - 02/10/2026.
  *
- * Pedido por el usuario.
- *
  * Pues resulta que son la misma cosa, y esta es. stanag_det.c mide cada
  * cuanto se repite la estructura de lo que haya en el filtro; esto le pone
  * NOMBRE a ese numero y lo enseña.

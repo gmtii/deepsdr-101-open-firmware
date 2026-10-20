@@ -184,8 +184,6 @@ void hfdl_payload_decode_get_crc_status(uint8_t *last_ok_out, uint8_t *last_vali
  * BITS POR SIMBOLO DEL ULTIMO SEGMENTO: 1 = BPSK, 2 = 4-PSK, 3 = 8-PSK.
  * 14/10/2026.
  *
- * Pedido por el usuario.
- *
  * Setenta y una tramas sincronizadas y quince buenas. Para saber DONDE se
  * pierden las otras hay que separarlas por velocidad, y la sospecha tiene
  * nombre: durante los datos, la correccion de fase que corre en cada

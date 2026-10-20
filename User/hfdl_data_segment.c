@@ -20,8 +20,6 @@ void hfdl_data_segment_init(hfdl_data_segment_t *ds, uint32_t mod_arity, int32_t
 /*
  * LA MISMA APERTURA, DESCONTANDO EL RETRASO DEL ENGANCHE - 14/10/2026.
  *
- * Pedido por el usuario.
- *
  * hfdl_preamble_sync.c cierra el enganche de M1 unos simbolos DESPUES de
  * su pico de correlacion, a proposito: enganchar con el primer cruce en
  * vez de con el maximo era lo que dejaba la ventana corrida (ver

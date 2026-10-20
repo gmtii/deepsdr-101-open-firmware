@@ -1,8 +1,6 @@
 /*
  * JTTY: LA CORRECCION DE ERRORES, CONTRA EL FORTRAN DE VERDAD.
  *
- * Pedido por el usuario.
- *
  * ESTE BANCO NO COMPRUEBA NUESTRO CODIGO CONTRA NUESTRO CODIGO, y esa es
  * toda la razon de que exista asi. Los vectores de abajo los ha sacado
  * `tbcc.f90` DE WSJT-X v3.2.0-rc1, compilado con gfortran y llamado con

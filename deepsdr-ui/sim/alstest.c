@@ -310,10 +310,6 @@ int main(void)
      * 5. LA SUPOSICION QUE ESTE BANCO ENCARNABA, PUESTA A LA VISTA
      * ==================================================================
      *
-     * *** Contexto, 10/10/2026. En un video, un usuario ruso saca DCF77 y
-     * RBU en antena, las dos en "Time received and confirmed". Nadie ha
-     * sacado nunca ALS162. ***
-     *
      * Y eso NO se reparte como uno esperaria, porque las cinco emisoras no
      * comparten las mismas dos piezas:
      *

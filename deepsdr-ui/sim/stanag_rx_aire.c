@@ -141,8 +141,6 @@ int main(int argc, char **argv)
     /*
      * EL BOTON BORRAR.
      *
-     * Pedido por el usuario, 02/10/2026.
-     *
      * Borraba los renglones del identificador, que es lo que el panel
      * pinta cuando NO demodula. Demodulando pinta los de stanag_rx y
      * esos no los tocaba nadie. Aqui se comprueba lo que tiene que
@@ -163,8 +161,6 @@ int main(int argc, char **argv)
 
     /*
      * CON RUIDO NO PUEDE SALIR NI UNA LETRA.
-     *
-     * Pedido por el usuario, 02/10/2026.
      *
      * Es el peor fallo posible en un decodificador y el mas facil de no
      * ver: que dos señales distintas den la misma salida quiere decir
@@ -335,8 +331,6 @@ int main(int argc, char **argv)
     /*
      * EL MISMO AUDIO A TRES ESCALAS, Y LAS TRES TIENEN QUE DAR EL TEXTO.
      *
-     * Pedido por el usuario, 02/10/2026.
-     *
      * Era que el audio de banda lateral de la radio no viene normalizado
      * a la unidad y yo lo metia en un anillo de enteros con escala fija:
      * saturaba. Este banco pasaba en verde porque el WAV se lee dividido
@@ -399,8 +393,6 @@ int main(int argc, char **argv)
     }
     /*
      * EL REPARTO DE MEMORIA, EN LAS DOCE COMBINACIONES.
-     *
-     * Pedido por el usuario, 02/10/2026.
      *
      * Era que s_salida mide 41 bytes y dejaba las metricas y las
      * decisiones del Viterbi a un byte de su sitio. En el PC eso

@@ -2,8 +2,6 @@
  * EL FICHERO .map: QUE EL LECTOR DE LA RADIO Y EL EMPAQUETADOR DEL PC
  * ENTIENDAN LO MISMO.
  *
- * Pedido por el usuario, 12/10/2026.
- *
  * Este banco mira DOS cosas distintas y las dos hacen falta:
  *
  *  1. QUE EL LECTOR AGUANTE. Se fabrica aqui mismo un .map con trazos

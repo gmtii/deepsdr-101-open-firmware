@@ -7,7 +7,7 @@ QUE NADIE SE QUEDE CON EL MANDO ANTES QUE EL VOLUMEN.
 
 POR QUE EXISTE - 05/10/2026.
 
-De un issue abierto en el repositorio: el mando no cambiaba el volumen
+El mando no cambiaba el volumen
 mientras el menu de ajustes estaba abierto. El cuadro del volumen salia,
 pero girar el mando movia las opciones del menu en vez del volumen.
 

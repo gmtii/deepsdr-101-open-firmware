@@ -15,8 +15,6 @@
  * vale: sam_bloque() y sam_step() tienen que dar EXACTAMENTE lo mismo,
  * muestra a muestra y bit a bit.
  *
- * Pedido por el usuario, 04/10/2026.
- *
  * Y era verdad: sam_step() llamaba a sinf(), cosf() y atan2f() de la
  * biblioteca UNA VEZ POR MUESTRA, dentro de la interrupcion de audio y a
  * 96 kHz. En un Cortex-M4 esas tres son rutinas de software de un par de
@@ -294,8 +292,6 @@ int main(void)
     /*
      * 5. QUE LA LECTURA PROMEDIE DE VERDAD.
      *
-     * Pedido por el usuario.
-     *
      * No era el cristal: el "suavizado" de 0,08/0,92 por muestra se olvida
      * de lo anterior en medio milisegundo. Esto comprueba que la constante
      * de tiempo es la que dice ser, midiendola: tras SAM_TAU_S segundos de
@@ -325,8 +321,6 @@ int main(void)
 
     /*
      * 6. EL ENGANCHE DISTINGUE UNA PORTADORA DE NO TENERLA.
-     *
-     * Pedido por el usuario.
      *
      * 269 PPM a 7 MHz son dos kilohercios: no es un cristal desviado, es un
      * lazo suelto. La pantalla lo enseñaba igual, con su decima. Para poder

@@ -89,7 +89,7 @@ typedef struct {
     uint32_t crit;
 
     /*
-     * EL MAPA SIGUE AL TEMA - 05/10/2026, de un issue.
+     * EL MAPA SIGUE AL TEMA - 05/10/2026.
      *
      * mapa.c nacio con NUEVE colores escritos a pelo y cero referencias a
      * esta paleta: mar, rejilla, ecuador, costa, los dos botones de zoom y
@@ -110,7 +110,7 @@ typedef struct {
     uint8_t mapa_sigue;
 
     /*
-     * EL ESPECTRO SIGUE AL TEMA - 17/10/2026, de un issue: se pedia que
+     * EL ESPECTRO SIGUE AL TEMA - 17/10/2026: se pedia que
      * el fondo del espectro fuera claro con los temas claros.
      *
      * Y era el MISMO caso que el mapa, palabra por palabra. spectrum.c
@@ -311,8 +311,7 @@ static const palette_t k_pal_fosforo = {
 
 /*
  * ===========================================================================
- * CHEMISTRY - 05/10/2026, de un issue, y la paleta la escribio el que
- * abrio el issue.
+ * CHEMISTRY - 05/10/2026, y la paleta viene de fuera.
  * ===========================================================================
  * "my LCD must be far less capable of displaying low intensity colours than
  * yours. This means that pretty much all of the palette options are
@@ -370,7 +369,7 @@ static const palette_t k_pal_fosforo = {
  * El crit que el eligio, #FF0029, ya cumplia las dos (3,97:1 y 0xFF) y se
  * queda como esta.
  *
- * EL MAPA. Es la otra mitad del issue: el mapa del mundo tenia paleta
+ * EL MAPA. Es la otra mitad del caso: el mapa del mundo tenia paleta
  * propia y los contornos de los continentes apenas se le veian. Cierto,
  * mapa.c llevaba nueve colores a pelo. Este fue el PRIMER tema con
  * mapa_sigue = 1 -desde el 17/10 tambien lo llevan los diez claros-, asi
@@ -403,7 +402,7 @@ static const palette_t k_pal_chemistry = {
  * LOS DIEZ CLAROS - 17/10/2026
  * ======================================================================
  *
- * De un issue que pedia fondo claro para el espectro con los temas
+ * Se pedia fondo claro para el espectro con los temas
  * claros. Hacian falta las dos cosas: que spectrum.c mirase la paleta
  * -ver espectro_claro arriba- y temas claros donde mirarla, porque los
  * tres que habia (Oliva, Naranja, Chemistry) son casos particulares:

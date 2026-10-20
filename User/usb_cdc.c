@@ -422,8 +422,6 @@ static void audio_manda(usb_dev *udev)
     /*
      * EL PRIMER ENVIO NO ES UN HUECO - 09/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Uno. Y era este: cdc_set_intf() vacia el anillo y llama aqui
      * inmediatamente, asi que la primera trama sale vacia POR
      * CONSTRUCCION. Hay que mandarla -en isocrono el flujo tiene que
@@ -493,8 +491,6 @@ static usb_class_core k_cdc_class = {
 
 /*
  * APAGARLO Y VOLVERLO A ENCENDER, QUE ES LO QUE PIDE QUIEN LO USA.
- *
- * Pedido por el usuario, 09/10/2026.
  *
  * La primera version no se apagaba, y lo que escribi para justificarlo
  * -"el nucleo del fabricante no tiene un camino de vuelta probado"- era
@@ -614,8 +610,6 @@ uint8_t usb_cdc_conectado(void)
 
 /*
  * METER UN TROZO ENTERO, O NO METER NADA.
- *
- * Pedido por el usuario, 09/10/2026.
  *
  * Las dos cosas eran el mismo fallo. anillo_mete() mete LO QUE QUEPA y
  * devuelve cuanto metio, que para el puerto serie es lo correcto -una orden

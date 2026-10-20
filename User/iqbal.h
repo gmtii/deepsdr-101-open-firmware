@@ -1,8 +1,6 @@
 /*
  * EL ESPEJO: CORRECTOR DE DESEQUILIBRIO I/Q - 07/10/2026
  *
- * Pedido por el usuario.
- *
  * Esa señal no existe. Es el ESPEJO de otra, y la prueba es justo la que el
  * manda: en el eje de la pantalla, una señal de verdad se queda donde esta y
  * parece moverse hacia la derecha cuando bajas el dial. Un espejo vive en
@@ -97,8 +95,6 @@ void  iqbal_bloque(int16_t *crudo, uint32_t n);
 /*
  * LA OTRA MEDIDA: EL ESPEJO LEIDO DEL PROPIO ESPECTRO - 07/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y era de esperar, porque la fila marcaba 51 dB y 0,1 grados: con eso
  * medido, el corrector aplica practicamente la identidad y encenderlo o
  * apagarlo no puede cambiar nada. No son dos datos, es el mismo dos veces.
@@ -166,8 +162,6 @@ int16_t iqbal_espejo_bin(void);  /* a cuantos bins del centro estaba el pico */
  *
  * EL PLAZO DE SEGURIDAD, Y POR QUE EXISTE.
  *
- * Pedido por el usuario.
- *
  * iqbal_ab_paso() cuenta cuadros de pantalla, y en la primera version se
  * llamaba desde dentro de un bloque que se salta entero mientras hay un menu
  * abierto. La fila esta en la pagina de Informacion, o sea que la prueba se
@@ -210,9 +204,6 @@ uint32_t iqbal_bloques(void);   /* bloques medidos desde el arranque */
  * ===========================================================================
  * EL ESPEJO QUE DEPENDE DE LA FRECUENCIA, Y POR QUE UN COEFICIENTE NO PUEDE
  * ===========================================================================
- *
- * *** De un probador, 19/10/2026: "The mirror channel is suppressed by about
- * 24 dB. If we could add another 10 dB to that, it would be just right." ***
  *
  * Y el numero es exactamente el que sale del banco. Medido en el simulador,
  * con el corrector de arriba -un solo coeficiente complejo-:

@@ -15,8 +15,6 @@
 /*
  * LA COMPROBACION ES UNA FASE, NO UN HUECO - 28/09/2026.
  *
- * Pedido por el usuario.
- *
  * No estaba colgada. Despues de copiar se comprueban las sumas de las
  * secciones -medio megabyte por un bus lento, 8,5 segundos medidos-, y
  * durante ese rato la pantalla se quedaba en el 100 % de COPIANDO con el
@@ -37,8 +35,6 @@ typedef enum {
 
 /*
  * EL ROTULO SE PASA, NO SE DA POR SUPUESTO - 28/09/2026.
- *
- * Pedido por el usuario.
  *
  * Esta pantalla la escribio la carga de aviones y por eso llevaba su
  * titulo escrito dentro. Cuando llego la segunda base se reutilizo tal

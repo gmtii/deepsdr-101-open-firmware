@@ -3,8 +3,6 @@
 """
 Comprueba que EN EL CODIGO SOLO HAY UN LOCALIZADOR: el de arranque en frio.
 
-Pedido por el usuario, 30/09/2026.
-
 Las dos cosas a la vez, separando "de donde sale el valor que usa la radio"
 de "con que arranca una radio virgen": el valor sale SIEMPRE de la clave
 "grid" de CONFIG.CSV, y el por defecto existe solo para el arranque en frio,

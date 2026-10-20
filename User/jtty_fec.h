@@ -6,8 +6,6 @@
 /*
  * JTTY: LA CAPA DE CORRECCION DE ERRORES - 28/09/2026.
  *
- * Pedido por el usuario.
- *
  * QUE ES JTTY. Un modo nuevo del equipo de WSJT-X, estrenado en la
  * version 3.2.0-rc1 de SEPTIEMBRE DE 2026. Es 4-GFSK a 31,25 baudios en
  * 127 Hz, pensado para concursos: unos 60 palabras por minuto. Y tiene

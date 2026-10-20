@@ -115,10 +115,6 @@ typedef struct {
     /*
      * EL SI/NO, CON HISTERESIS - 19/10/2026.
      *
-     * *** Pedido por el usuario con un video de la radio delante: en SAM-U,
-     * con una emisora de onda corta normal y corriente, la lectura ponia
-     * "buscando" a ratos y el numero de PPM a ratos. ***
-     *
      * El si/no salia de comparar sam_enganche() con UN umbral, y ahi esta
      * el fallo: una portadora de onda corta se mueve -desvanecimiento,
      * Doppler, el propio error de sintonia- y el enganche la sigue, asi que
@@ -156,8 +152,6 @@ typedef struct {
     float32_t carrier_hz_raw;    /* omega2 pasado a Hz, al instante */
     /*
      * LA LECTURA PROMEDIADA DE VERDAD - 05/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Y no era el cristal: era que esto NO PROMEDIABA. Ponia
      * 0,08*nuevo + 0,92*viejo POR MUESTRA, y 0,92 elevado a las 256 muestras
@@ -200,12 +194,6 @@ void sam_reset(sam_t *s);
  * ===========================================================================
  * EL MARGEN DE ENGANCHE, Y POR QUE ES UN AJUSTE Y NO UN NUMERO FIJO
  * ===========================================================================
- *
- * *** De un probador, 12/10/2026: "It works fine with a strong signal, but
- * if there is strong interference nearby and the received station is weak,
- * the synchronous detector seems to lock onto the interference. Most likely,
- * the capture range is too wide; for proper operation, it should be limited
- * to a hundred hertz on either side of the carrier." ***
  *
  * Era cierto, y el banco lo mide (sim/sam_captura.c). Con los 4.000 Hz que
  * traia el original -el filtro de canal mide lo mismo, asi que el lazo podia
@@ -251,8 +239,6 @@ float32_t sam_step(sam_t *s, float32_t i_in, float32_t q_in, float32_t sample_ra
 
 /*
  * EL BLOQUE ENTERO DE UNA VEZ, que es como lo llama la radio - 05/10/2026.
- *
- * Pedido por el usuario.
  *
  * No es azucar: es la mitad del arreglo. Llamando a sam_step() 256 veces, el
  * compilador tiene que suponer que el puntero `s` puede haber cambiado entre

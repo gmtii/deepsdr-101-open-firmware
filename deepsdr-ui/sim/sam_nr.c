@@ -3,9 +3,6 @@
  * LA REDUCCION DE RUIDO EN SAM - 11/10/2026
  * ======================================================================
  *
- * *** De un issue: la reduccion de ruido no funcionaba en SAM y se
- * pedia que lo hiciera. ***
- *
  * Y era peor que "no funciona": el boton de Ruido no esta limitado por
  * modo, asi que en SAM se encendia, se quedaba encendido, ponia "activo"
  * en la barra... y demod_am.c no entraba en el bloque. Un control que dice
@@ -153,7 +150,7 @@ int main(void)
     uno("SAM", DEMOD_MODE_SAM);
 
     printf("\n  AM es el testigo: ya funcionaba antes del 11/10/2026.\n");
-    printf("  SAM es lo que pedia el issue, y hasta ese dia el boton\n");
+    printf("  SAM es lo que hacia falta, y hasta ese dia el boton\n");
     printf("  decia \"activo\" sin tocar el audio.\n");
 
     printf("\n%s (%d fallos)\n\n", fallos ? "HAY FALLOS" : "TODO CORRECTO", fallos);

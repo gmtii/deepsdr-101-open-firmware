@@ -164,4 +164,13 @@ uint16_t rm68120_bus_dato_arranque(void);
 uint16_t rm68120_bus_ns(void);
 void     rm68120_bus_dato_pon(uint16_t dato);
 
+/* La pendiente de los dieciseis pines de datos y sus tres de control, en
+ * los niveles del fabricante: 0 = 2 MHz, 1 = 25, 2 = 50 (el de arranque),
+ * 3 = el maximo. Ver el comentario gordo en el .c: con la radio sin antena,
+ * pintar el espectro le mete catorce decibelios de ruido a su propio
+ * receptor, y la pendiente es lo unico de este bus que cambia la energia de
+ * cada flanco. No se guarda. */
+uint8_t  rm68120_bus_pendiente(void);
+void     rm68120_bus_pendiente_pon(uint8_t nivel);
+
 #endif /* RM68120_EXMC_H */

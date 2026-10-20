@@ -1,8 +1,6 @@
 /*
  * ECUALIZADOR ADAPTATIVO COMPLEJO - 07/10/2026
  *
- * Pedido por el usuario.
- *
  * LO QUE FALTA PARA LAS DOS STANAG. La radio DETECTA el 4539 y el 4415 desde
  * hace semanas -el modo IDENT los saca por la trama- y no demodula ninguno de
  * los dos. El motivo no es el FEC ni el entrelazado: es que los dos son

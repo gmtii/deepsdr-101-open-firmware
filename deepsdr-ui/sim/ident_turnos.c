@@ -1,8 +1,6 @@
 /*
  * DOS SEÑALES TURNANDOSE EN LA MISMA FRECUENCIA.
  *
- * Pedido por el usuario.
- *
  * En 5339 hay dos cosas: un STANAG 4481 FSK que esta casi todo el rato y
  * una red ALE que solo emite cuando alguien llama -sondeos de dos o tres
  * segundos separados por minutos-. La pantalla enseñaba una sola, y hasta

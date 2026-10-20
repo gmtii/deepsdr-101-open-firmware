@@ -1,8 +1,6 @@
 /*
  * EL RTTY DE VERDAD, CONTRA UNA GRABACION.
  *
- * Pedido por el usuario, 06/10/2026.
- *
  * Las dos son la misma emision -el boletin maritimo del DWD- y las dos
  * estan bien sintonizadas: medidas sobre sus fotos, las rayas del
  * oscilador caen encima de los tonos en las dos.

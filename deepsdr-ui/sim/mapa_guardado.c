@@ -1,8 +1,6 @@
 /*
  * EL MAPA GRABADO EN LA FLASH (User/mapa_flash.c).
  *
- * Pedido por el usuario, 12/10/2026.
- *
  * LO QUE AQUI SE MIDE, y por que cada cosa:
  *
  *  1. Que el ritual entero funciona: fichero en el disco -> grabado ->

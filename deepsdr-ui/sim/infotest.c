@@ -77,6 +77,18 @@ static const struct { const char *nombre; const char *peor; } k_peor[] = {
     { "RTC",            "en hora hace 59 m"     },
     { "RTC",            "en hora hace 999 d"    },
     { "Flash externa",  "16,0 MB ! dice 0,0 MB" },
+    /* LAS DOS FILAS DEL BUS DE LA PANTALLA - 20/10/2026.
+     *
+     * No estaban declaradas aqui, y una de ellas acaba de cambiar de
+     * texto: "Bus pantalla" ya no enseña solo un numero, enseña "auto" o
+     * el valor a mano seguido de los nanosegundos. El peor caso que puede
+     * armar el automatico son doce ciclos (60 ns) y el de a mano son los
+     * 15 de la tabla; se declara 1000 ns, que no se alcanza con ningun
+     * ASET razonable, para que esto siga valiendo si manana el gestor de
+     * arranque deja otro. Ver INFO_XBUS en main.c. */
+    { "Bus pantalla",   "auto \u2192 60 ns"      },
+    { "Bus pantalla",   "15 \u2192 1000 ns"      },
+    { "Pendiente del bus", "2, 50 MHz"          },
     /* Los dos textos de la fila del numero de serie: el identificador
      * entero -16 cifras, que es lo mas largo que puede salir- y lo que se
      * dice cuando el chip no conoce el comando 0x4B. */
@@ -127,7 +139,7 @@ static const struct { const char *nombre; const char *peor; } k_peor[] = {
     { "I/Q quadrature", "phase register"        },
     { "I/Q quadrature", "GD32, PA6/PA7"         },
     /*
-     * MULT. ZONA 7 - 09/10/2026, fila nueva, por el issue #35. Los textos
+     * MULT. ZONA 7 - 09/10/2026, fila nueva. Los textos
      * que puede poner: el multiplicador con su fVCO cuando el dial esta en
      * la zona 7 -el peor caso es 189, fVCO de 907 MHz-, y el multiplicador
      * solo cuando no lo esta. Y el pie, que lleva el rango.

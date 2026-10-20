@@ -10,8 +10,6 @@
  * LOS INDICATIVOS EN EL MAPA, EL RAYO DESDE TU QTH Y LA FICHA DE ABAJO
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * El mapa ya ponia el PUNTO de cada estacion desde el 28/09. Lo que
  * faltaba es lo que convierte un punto en una estacion: COMO SE LLAMA, POR
  * DONDE VA EL SALTO, y -al tocarla- los cuatro numeros con los que se
@@ -104,8 +102,6 @@ typedef struct {
 
     /*
      * Y LA POSICION A PELO, PARA QUIEN NO TIENE LOCALIZADOR - 13/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Los aficionados mandan localizador Maidenhead; un avion manda
      * latitud y longitud. Hasta hoy esto solo sabia de localizadores, asi

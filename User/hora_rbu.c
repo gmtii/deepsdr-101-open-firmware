@@ -203,7 +203,7 @@ static uint8_t decodifica(void)
     /* Los del bit de datos 1 que valen siempre cero. */
     static const uint8_t k_cero1[8] = { 1U, 2U, 8U, 9U, 10U, 16U, 17U, 24U };
 
-    uint8_t m, h, d, mes, anno, ds, k, verano;
+    uint8_t m, h, d, mes, anno, ds, k;
     uint8_t dut, dut_neg;
     int8_t  desp;
 
@@ -288,7 +288,6 @@ static uint8_t decodifica(void)
     }
     s_m = m;
     s_ver = 0U;
-    (void)verano;
     return 1U;
 }
 

@@ -100,8 +100,6 @@ static void emite_reinicia(void) { g_j = 0; }
 /*
  * EL AUDIO QUE NO LLEGA - 13/10/2026.
  *
- * Pedido por el usuario.
- *
  * En la radio eso pasa de verdad y tiene nombre: si la interrupcion del
  * audio llega tarde -mas de media vuelta del DMA- las dos banderas estan
  * puestas a la vez, la mitad vieja ya la esta pisando el DMA y SE PIERDE.

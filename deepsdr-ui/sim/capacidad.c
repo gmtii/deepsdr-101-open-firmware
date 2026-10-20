@@ -1,8 +1,6 @@
 /*
  * LA RADIO SE ADAPTA AL CHIP QUE TENGA SOLDADO.
  *
- * Pedido por el usuario.
- *
  * Esto corre el User/spi_flash.c, el User/disco.c y el User/zona_alta.c de
  * verdad contra el W25Q simulado, cambiandole el tamaño.
  *
@@ -63,7 +61,21 @@ static void chip_con_datos(uint32_t cap)
 
     w25q_reset();
     w25q_tam(cap);
-    for (i = 0U; i < 64U; i++) { g_chip[i] = (uint8_t)(i * 7U + 1U); }
+    /*
+     * LOS PRIMEROS 64 kB CON ALGO DENTRO, QUE ES LO QUE HAY DE VERDAD.
+     *
+     * Un volumen FAT recien formateado tiene ahi el sector de arranque, las
+     * dos copias de la tabla de asignacion y el directorio raiz. De ahi
+     * para arriba, hasta que se copian ficheros, es todo 0xFF.
+     *
+     * Antes aqui se escribian solo los primeros 64 bytes, y eso hacia que
+     * el banco midiera un chip que no se parece a ninguno: con una sola
+     * ventana buena. La medida por alias necesita datos en las tres, y
+     * poner solo 64 bytes escondia justo el caso que importaba.
+     */
+    for (i = 0U; i < 64U * 1024U; i++) {
+        g_chip[i] = (uint8_t)((i * 7U + 1U) ^ (i >> 8));
+    }
     spi_flash_olvida_capacidad();
 }
 
@@ -114,6 +126,29 @@ int main(void)
      * mismo aunque el chip tenga 8, asi que el alias no distingue nada y
      * hay que creerle al JEDEC.
      */
+    /*
+     * EL FALSO ALIAS - 20/10/2026, preguntado por el usuario: "¿puede ser
+     * que un chip de 2 MB lo estemos viendo como de 1?".
+     *
+     * Con una sola ventana de 64 bytes, si: basta que en 0x100000 haya por
+     * casualidad lo mismo que en 0 -una copia del sector de arranque, por
+     * ejemplo- para declarar un alias que no existe y anunciar la mitad
+     * del chip. Aqui se monta ese chip a mala idea: 2 MB de verdad, con
+     * los 64 bytes del principio copiados en el megabyte de arriba.
+     *
+     * Tiene que seguir midiendo 2 MB, porque las otras dos ventanas -un
+     * cuarto y la mitad- no casan.
+     */
+    printf("\n  un chip de 2 MB con una copia del principio en 0x100000\n");
+    chip_con_datos(MB(2));
+    memcpy(&g_chip[MB(1)], &g_chip[0], 64U);
+    spi_flash_olvida_capacidad();
+    cap = spi_flash_capacidad();
+    snprintf(t, sizeof t, "%u", (unsigned)cap);
+    di("no se traga el falso alias: sigue midiendo 2 MB", cap == MB(2), t);
+    di("y el disco sigue siendo de 1 MB",
+       disco_bloques() * DISCO_BLOQUE == MB(1), 0);
+
     printf("\n  un W25Q64 recien borrado, todo a 0xFF\n");
     w25q_reset();
     w25q_tam(MB(8));
@@ -178,7 +213,7 @@ int main(void)
     di("nunca contesta de mas", cap <= w25q_tam_actual(), 0);
 
     /*
-     * Y UN CHIP MAS PEQUEÑO QUE EL SUELO - 18/10/2026, de un issue.
+     * Y UN CHIP MAS PEQUEÑO QUE EL SUELO - 18/10/2026.
      *
      * Este caso faltaba, y era el que importaba. El suelo de 2 MB se
      * aplicaba a TODA respuesta, no solo a la que no habia podido medirse,
@@ -198,6 +233,34 @@ int main(void)
     di("nunca contesta de mas", cap <= w25q_tam_actual(), 0);
     snprintf(t, sizeof t, "0x%06X", (unsigned)za_base());
     di("y za_base() no se sale del chip", za_base() < cap, t);
+
+    /*
+     * UN CHIP DE 2 MB QUE DICE SER DE 1 - 20/10/2026.
+     *
+     * El chip es un W25Q16JVSIQ, 2 MB. Y contesta EF 40 14,
+     * que como codigo de capacidad son 1 MB. La etiqueta de fabrica y el
+     * identificador no coinciden.
+     *
+     * La medida por alias NO puede equivocarse en este sentido: en un chip
+     * de 1 MB la direccion 1 MB + k es fisicamente la direccion k, asi que
+     * encontrar una diferencia ahi demuestra que hay mas de 1 MB. Por eso
+     * cuando la medida dice mas que el codigo, gana la medida.
+     */
+    printf("\n  un chip de 2 MB cuyo codigo JEDEC dice 1 MB\n");
+    chip_con_datos(MB(2));
+    /* Y solo con datos al principio, que es como esta un chip recien
+     * formateado: de ahi para arriba, todo 0xFF. Es el caso que antes
+     * dejaba sin medir y hacia mandar al codigo. */
+    w25q_jedec_capacidad(0x14U);          /* miente: dice 1 MB */
+    spi_flash_olvida_capacidad();
+    cap = spi_flash_capacidad();
+    snprintf(t, sizeof t, "%u", (unsigned)cap);
+    di("se queda con los 2 MB medidos, no con el MB del codigo",
+       cap == MB(2), t);
+    di("y no se pasa del chip de verdad", cap <= w25q_tam_actual(), 0);
+    snprintf(t, sizeof t, "0x%06X", (unsigned)za_base());
+    di("la zona alta cae dentro del chip", za_base() < cap, t);
+    w25q_jedec_capacidad(0U);             /* que vuelva a decir la verdad */
 
     printf("\n%s (%d fallos)\n\n", fallos ? "HAY FALLOS" : "TODO CORRECTO", fallos);
     return fallos ? 1 : 0;

@@ -42,8 +42,6 @@ static volatile uint8_t  s_abierto;  /* hay un tramo cargado */
 /*
  * LA COLA SE VACIA AQUI, NO EN LA INTERRUPCION - 05/10/2026.
  *
- * Pedido por el usuario.
- *
  * La cola la vaciaba bip_mete(), desde la interrupcion, cuando se encontraba
  * sin tramos DENTRO del bucle de muestras. Pero si el ultimo tramo acababa
  * justo con la ultima muestra del bloque, el bucle terminaba antes de llegar

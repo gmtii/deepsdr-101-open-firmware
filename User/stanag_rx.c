@@ -23,8 +23,6 @@
 /*
  * LA COLA DE AUDIO: 2816 MUESTRAS, 235 ms, Y EN int16.
  *
- * Pedido por el usuario, 02/10/2026.
- *
  * Con 1024 muestras en float la cola aguantaba 85 ms, y resulta que lo
  * que la desbordaba era ESTE MISMO MODULO: el barrido de portadora
  * bloquea el bucle principal mas de eso, asi que se comia su propia
@@ -253,8 +251,6 @@ static uint8_t s_largo = 1U;
 
 /*
  * LA BUSQUEDA AUTOMATICA DE VELOCIDAD Y ENTRELAZADO - 08/10/2026.
- *
- * Pedido por el usuario, 07/10/2026.
  *
  * La corazonada era correcta y la causa no era el demodulador. La
  * velocidad y el entrelazado NO VAN EN LA SEÑAL: el preambulo de 80
@@ -572,8 +568,6 @@ uint8_t stanag_rx_init(float *trabajo, uint32_t n_floats)
     /*
      * CADA TROZO ALINEADO A CUATRO, Y NO ES MANIA.
      *
-     * Pedido por el usuario, 02/10/2026.
-     *
      * Era esto. s_salida mide VIT_VENT/8+1 = 41 bytes, que no es
      * multiplo de cuatro, asi que las metricas y las decisiones del
      * Viterbi -que son arrays de uint32_t- caian a un byte de su sitio.
@@ -788,8 +782,6 @@ static void muele(void)
         /*
          * LA GANANCIA, QUE ES LO QUE ME FALTABA.
          *
-         * Pedido por el usuario, 02/10/2026.
-         *
          * Y era esto. El detector no mira la amplitud: normaliza su
          * autocorrelacion por la energia (ver a0 en stanag_det.c), asi
          * que le da igual a que escala venga el audio. Yo guardaba en un
@@ -856,8 +848,6 @@ static void anillo_lee(uint32_t idx, float *re, float *im)
 /*
  * LA CORRELACION DEL PREAMBULO, CON LA PORTADORA COMO PARAMETRO.
  *
- * Pedido por el usuario, 02/10/2026.
- *
  * Y la culpa era de dar por supuesto el 1800. En su grabacion de 4390 la
  * portadora esta en 1850: barriendo de 1400 a 2300 la correlacion del
  * preambulo da 0,312 en 1800 y 0,570 en 1850. Con el umbral en 0,45, a
@@ -913,8 +903,6 @@ static float correla(uint32_t ini, float dw)
 
 /*
  * EL UMBRAL BAJA A 0,30, Y LA RED SE PONE DONDE DEBE ESTAR.
- *
- * Pedido por el usuario, 02/10/2026.
  *
  * O sea: hay preambulo ahi, pero flojo. Con el umbral en 0,45 -que salio
  * de una grabacion limpia- una señal real de S8 con interferencia al
@@ -1070,8 +1058,6 @@ static uint8_t busca_rapida(uint32_t desde, uint32_t cuantos,
 /*
  * EL BARRIDO VA A TROZOS, Y ESTO NO ES UNA OPTIMIZACION: ES LO QUE
  * IMPIDE QUE SE COMA SU PROPIO AUDIO.
- *
- * Pedido por el usuario, 02/10/2026.
  *
  * O sea: engancha, pero pierde audio, y sin diez segundos seguidos no
  * hay forma de llenar el entrelazado largo. Lo que se los comia era el
@@ -1492,8 +1478,6 @@ static void mete_blandos(const int8_t *g)
  * POR QUE HACE FALTA ESTO, Y POR QUE ES EL FALLO MAS GORDO QUE HA TENIDO
  * ESTE MODULO - 08/10/2026.
  *
- * Pedido por el usuario, 07/10/2026.
- *
  * El Viterbi suelta BITS, uno detras de otro, sin principio. Partirlos
  * en bytes de ocho empezando por donde toco es acertar una de ocho. Y
  * hasta hoy eso es exactamente lo que se hacia: el acumulador contaba de
@@ -1828,8 +1812,6 @@ static uint8_t decodifica(void)
     /*
      * NI UN CARACTER HASTA QUE EL ENTRELAZADOR ESTE LLENO DE VERDAD.
      *
-     * Pedido por el usuario, 02/10/2026.
-     *
      * Y tenia toda la razon, y es el peor de los fallos: que dos
      * frecuencias distintas saquen lo mismo quiere decir que eso NO
      * viene de la señal.
@@ -2142,8 +2124,6 @@ uint8_t stanag_rx_paso(void)
             }
             /*
              * UNA BUSQUEDA POR SEGUNDO, NO UNA POR TRAMA.
-             *
-             * Pedido por el usuario, 02/10/2026.
              *
              * Y era esto. Barrer 11 portadoras por 256 posiciones por 80
              * simbolos son millones de cuentas, y se hacia NUEVE VECES

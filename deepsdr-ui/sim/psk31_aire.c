@@ -1,8 +1,6 @@
 /*
  * PSK31 DE PUNTA A PUNTA: DE LA PORTADORA AL TEXTO.
  *
- * Pedido por el usuario.
- *
  * Aqui se fabrica una emision de PSK31 como la que saldria del altavoz
  * -portadora de audio, vueltas de fase con su envolvente de coseno, su
  * error de sintonia y su ruido- y se le da al receptor de verdad, el mismo
@@ -279,8 +277,6 @@ static int prueba(const char *txt, double df, double amp, unsigned semilla,
  * ===================================================================
  *  MODO MEDIDA: ¿QUE FILTRO ADAPTADO ES MEJOR?  (30/09/2026)
  * ===================================================================
- *
- * Pedido por el usuario.
  *
  * Se uso para comparar tres formas de filtro adaptado -el rectangulo de un
  * simbolo que psk31.c lleva, una ventana de coseno de un simbolo y la de dos

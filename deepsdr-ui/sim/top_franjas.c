@@ -193,7 +193,6 @@ int main(void)
      * Y EL REPINTADO DEL S-METRO, que es el otro parcial de esta franja
      * desde el 30/09/2026.
      *
-     * Pedido por el usuario.
      * Con señal la barra de S no para quieta, y repintar los 800 px de la
      * franja entera en cada fotograma costaba 32.051 accesos al bus. Ahora
      * se repinta solo la parte que se mueve. Lo que hay que comprobar es lo
@@ -227,8 +226,6 @@ int main(void)
 
     /*
      * EL PPM DEL SAM, QUE ES EL TERCER PARCIAL - 04/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Mismo cuento que el S-metro, un mes despues y en la otra franja: el
      * error del PLL son DECIMAS y cambian casi en cada fotograma, y por cada
@@ -301,8 +298,6 @@ int main(void)
      * ===================================================================
      * QUE EL PPM Y LA MARQUESINA NO COMPARTAN NI UN PIXEL - 05/10/2026.
      * ===================================================================
-     *
-     * Pedido por el usuario.
      *
      * Y la foto era cierto: "+23,7 PPM" escrito encima de "HOL - NL -
      * 00:00-24:00". Lo que este banco NO comprobaba es justo eso. Vigilaba

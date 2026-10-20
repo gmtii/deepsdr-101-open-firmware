@@ -51,8 +51,6 @@ volatile uint32_t g_msc_lee, g_msc_escribe, g_msc_bloque, g_msc_fallo;
 /*
  * OJO: LO QUE LLEGA AQUI ES UNA DIRECCION EN BYTES, NO UN BLOQUE.
  *
- * Pedido por el usuario.
- *
  * Ese 4096 lo dijo todo. El disco tiene 2048 bloques, asi que el 4096 no
  * existe; y 4096 son exactamente 8 x 512. La librería de GigaDevice, en
  * usbd_msc_scsi.c linea 509, hace esto justo antes de llamarnos:

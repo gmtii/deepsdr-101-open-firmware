@@ -1,8 +1,6 @@
 /*
  * "DIRECTORIO LLENO" CON UN FICHERO DENTRO.
  *
- * Pedido por el usuario.
- *
  * Y era mentira. Todos los recorridos del directorio raiz de spi_flash.c
  * leian UN sector -dieciseis entradas- y daban por hecho que ahi se acababa
  * la raiz. Pero el sector de arranque dice cuantas entradas tiene, y lo que

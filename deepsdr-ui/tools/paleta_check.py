@@ -57,7 +57,7 @@ CAMPOS = ['surf_0', 'surf_1', 'surf_2', 'surf_3', 'line', 'grid', 'hdr_top',
 PANEL_MIN = 4          # el panel resuelve pasos de 4 unidades RGB
 TINTA_MIN = {'ink': 4.5, 'ink_dim': 3.0, 'ink_mute': 3.0}
 
-# EL PANEL QUE APLASTA LAS SOMBRAS - 05/10/2026, de un issue.
+# EL PANEL QUE APLASTA LAS SOMBRAS - 05/10/2026.
 #
 # "my LCD must be far less capable of displaying low intensity colours than
 # yours ... anywhere where you have decided on any colour with a main

@@ -2,8 +2,6 @@
 """
 El sello del cargador de arranque: version + CRC del contenido.
 
-Pedido por el usuario, 02/10/2026.
-
 Esto es para customboot.bin lo que avisa_version() de tools/cabecera.py es
 para update.bin, y existe porque aquel arreglo se hizo solo para el
 firmware: el cargador siguio con su "v2.0" fijo mientras salian dos

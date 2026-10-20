@@ -248,8 +248,6 @@ const float *rtty_scope_get_frame(void)
 /*
  * MIRAR EL CUADRO SIN QUITARSELO A NADIE - 06/10/2026.
  *
- * Pedido por el usuario.
- *
  * rtty_scope_get_frame() CONSUME: baja la bandera de "hay cuadro nuevo".
  * Eso esta bien cuando el que mira es uno solo -el dibujo del
  * osciloscopio- y mal en cuanto hay dos. Y hay dos desde que el ajuste

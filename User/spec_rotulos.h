@@ -38,8 +38,6 @@
 /*
  * CUANTOS CABEN, Y EL NUMERO SALE DE LOS DOS LIMITES A LA VEZ.
  *
- * Pedido por el usuario.
- *
  * POR PANTALLA. Con font_ui_11 (12 px de cuerpo, 15 de linea) tres filas
  * miden 45 px y entran encima de la primera raya de la rejilla, que esta
  * en la 48. Un nombre de catorce letras ronda los 75 px, asi que en cada
@@ -109,8 +107,6 @@
 
 /*
  * DE QUE COLOR VAN LOS CARTELES, EN ESTE TEMA.
- *
- * Pedido por el usuario.
  *
  * `fondo` es el fondo del PANEL DE LA TRAZA, no el del cromo: ahi es donde
  * se pintan. Devuelve el color del texto y el de la rayita. El porque
@@ -182,8 +178,6 @@ void spec_rotulos_pon(spec_rotulos_t *rr, uint8_t i, uint32_t hz,
  * LA ELECCION, QUE ES DONDE ESTABA EL FALLO - 15/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * Lo que se veia en el video: en 7,260 MHz con 96 kHz de ventana se
  * pintaban CUATRO carteles, tres de ellos con el mismo nombre
  * ("SunDance Radio" en 7.215, 7.220 y 7.225) y todos en el tercio
@@ -214,8 +208,6 @@ void spec_rotulos_pon(spec_rotulos_t *rr, uint8_t i, uint32_t hz,
  */
 /*
  * `tune_hz` VUELVE A USARSE, Y LA DIFERENCIA ES UN NUMERO - 15/10/2026.
- *
- * Pedido por el usuario.
  *
  * No salia porque 5.544.000 es multiplo exacto de 8.000, o sea el paso
  * de la rejilla, o sea que cae JUSTO EN EL BORDE de su casilla: el peor

@@ -116,8 +116,6 @@ bool hfdl_hfnpdu_parse_performance_data(const uint8_t *buf, uint32_t len, hfdl_h
      * SE BUSCA EL TIPO, NO SE EXIGE EN UN SITIO - 10/10/2026 (la tarde)
      * ======================================================================
      *
-     * Pedido por el usuario.
-     *
      * Por la manana se habia aceptado el tipo en dos sitios -con sobre y
      * sin el- y seguia sin salir nada. Con tres USER DATA y cero
      * posiciones, "no ha llegado ninguna" deja de ser la explicacion comoda

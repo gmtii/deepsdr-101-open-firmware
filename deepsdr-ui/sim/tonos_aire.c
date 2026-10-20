@@ -1,8 +1,6 @@
 /*
  * EL DETECTOR DE DOS TONOS, CONTRA GRABACIONES DE VERDAD - 06/10/2026.
  *
- * Pedido por el usuario.
- *
  * LO QUE PASABA. La señal de 5339 es un STANAG 4481 FSK: dos tonos a 1348
  * y 510 Hz, separados 838, a 75 baudios. La radio la estaba DECODIFICANDO
  * en RTTY-U con 850 Hz y 75 Bd puestos a mano y sacaba Baudot correcto. Y

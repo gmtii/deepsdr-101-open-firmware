@@ -1,8 +1,6 @@
 /*
  * JTTY: JUNTAR ATOMOS EN MENSAJES, CON EL MODO DE VERDAD - 28/09/2026.
  *
- * Pedido por el usuario.
- *
  * POR QUE ESTE BANCO NO EXISTIA Y TENIA QUE EXISTIR
  * -------------------------------------------------
  * sim/jtty_aire.c manda UNA trama y mira si sale el atomo. jtty_modo.c
@@ -409,7 +407,6 @@ int main(void)
 
     /* ---- 4b. TRES tramas perdidas seguidas ---- */
     /*
-     * Pedido por el usuario.
      *
      * El alcance estaba en dos saltos porque me parecio bastante. Medido
      * con desvanecimiento a -11 dB, el 10% de los enlaces necesita tres o
@@ -548,11 +545,6 @@ int main(void)
 
     /* ---- 7. EL ORDEN DE LOS RENGLONES ---- */
     /*
-     * *** Esto no lo pidio nadie: salio el 28/09 por la tarde al poner el
-     * mapa de WSPR. El mapa de JTTY, puesto esa misma mañana, rellenaba los
-     * tres puntos MAS VIEJOS en vez de los tres mas nuevos, porque copie el
-     * bucle de FT8 y en FT8 `linea(0)` es la mas NUEVA mientras que en JTTY
-     * es la mas VIEJA. ***
      *
      * El fallo no se ve como un fallo -salen puntos y estan bien puestos-,
      * solo que el resalte no significa nada. Y no habia nada que dijera

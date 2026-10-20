@@ -1,8 +1,6 @@
 /*
  * QUIEN SALE EN EL ESPECTRO, CON LA BASE DE VERDAD - 15/10/2026
  *
- * Pedido por el usuario.
- *
  * ESTE BANCO EXISTE PORQUE NO EXISTIA. sim/rotulos.c comprueba el
  * DIBUJO, con listas escritas a mano, y estaba verde mientras la radio
  * enseñaba cuatro carteles amontonados a la izquierda. No mentia: es que
@@ -406,7 +404,6 @@ int main(int argc, char **argv)
 
     printf("\n  3b. LAS DOS FOTOS DE UN KILOHERCIO - 15/10/2026\n");
     /*
-     * Pedido por el usuario.
      *
      * Y era cierto., y el banco de arriba no lo veia: mide cada ventana
      * POR SEPARADO y las dos estaban bien cada una por su cuenta. Lo que
@@ -454,8 +451,6 @@ int main(int argc, char **argv)
                     if (g_txt[i][0] == '\0') { continue; }
                     /*
                      * LA FILA DIBUJADA ES LA DE LA REGLA, SIEMPRE.
-                     *
-                     * Pedido por el usuario.
                      *
                      * Parece una perogrullada contra el codigo de hoy, y
                      * por eso esta: hoy he escrito CUATRO veces una
@@ -581,7 +576,6 @@ int main(int argc, char **argv)
 
     printf("\n  3c. LA QUE SUENA, EN 5.544 - 15/10/2026\n");
     /*
-     * Pedido por el usuario.
      *
      * 5.544.000 es multiplo exacto de 8.000 -el paso de la rejilla- asi
      * que cae en el BORDE de su casilla: descentre 4.000, el peor
@@ -631,7 +625,6 @@ int main(int argc, char **argv)
 
     printf("\n  3d. LOS OCHO TEMAS - 15/10/2026\n");
     /*
-     * Pedido por el usuario.
      *
      * Los carteles se pintan DENTRO del panel de la traza, que es casi
      * negro en los ocho temas, y el color salia de PAL_INK, que es la

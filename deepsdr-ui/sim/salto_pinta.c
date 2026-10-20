@@ -3,8 +3,6 @@
  * LO QUE CUESTA PINTAR UN SALTO - 15/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * Asi que el coste tiene que estar en otro sitio, y la sospecha es el
  * REPINTADO. spectrum_draw() se salta las bandas de 16 filas cuya traza no
  * ha cambiado (s_parcial_hay / s_saltadas). Con un paso de sintonia de

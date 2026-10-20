@@ -1,8 +1,6 @@
 /*
  * WSPR: LA CAPA DE MENSAJE, DE PUNTA A PUNTA.
  *
- * Pedido por el usuario.
- *
  * Esto prueba lo unico que se puede probar sin antena y sin radio, que
  * resulta ser casi todo: se coge un mensaje, se empaqueta en sus 50 bits,
  * se codifica en 162 simbolos y se deshace el camino entero. Si algo del

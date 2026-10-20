@@ -2,8 +2,6 @@
 """
 LAS CADENAS DE INTERFAZ QUE SE QUEDAN EN CASTELLANO.
 
-Pedido por el usuario, 06/10/2026.
-
 Llevaba razon dos veces. El modo Ident era 44 cadenas sin traducir, y
 cuando fui a mirar si habia mas resulto que si: el veredicto del cargador
 -once frases, justo las que lee alguien cuando algo le ha fallado-, las
@@ -145,8 +143,20 @@ def quien_lo_llama(src, a):
         if c == ')':  prof += 1; k -= 1; continue
         if c == '(':
             if prof == 0:
-                m = re.search(r"(\w+)\s*$", src[:k])
-                return m.group(1) if m else ''
+                # Se retrocede A MANO en vez de con re.search sobre src[:k].
+                # Esa rebanada copiaba el prefijo entero del fichero -para
+                # main.c, un megabyte- y el ancla $ obligaba al motor a
+                # recorrerlo hasta el final para leer una palabra que esta
+                # justo antes de k. Diez mil llamadas por tanda: 13,3 de los
+                # 15 s que tardaba este guion. Medido: 14,93 -> 0,99 s, con
+                # la misma salida byte a byte.
+                j = k - 1
+                while j >= 0 and src[j] in ' \t\n':
+                    j -= 1
+                fin = j + 1
+                while j >= 0 and (src[j].isalnum() or src[j] == '_'):
+                    j -= 1
+                return src[j + 1:fin] if fin > j + 1 else ''
             prof -= 1; k -= 1; continue
         if c == ',':  k -= 1; continue
         if c == '"':

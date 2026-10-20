@@ -30,7 +30,6 @@
  *
  * IDA Y VUELTA - 25/09/2026 y 28/09/2026
  * --------------------------------------
- * Pedido por el usuario.
  *
  * Se quito porque HFDL necesitaba flash, no porque estuviera mal. Volvio
  * cuando desensamblar el gestor de arranque abrio 64 kB mas arriba. Lo que NO

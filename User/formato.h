@@ -6,14 +6,12 @@
 /*
  * FORMATEAR EL DISCO DESDE LA PROPIA RADIO - 06/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y es la respuesta correcta al issue. El driver de spi_flash.c no admite
  * cualquier FAT: pide sectores de 512 bytes, cluster potencia de dos que
  * divida a 4 kB -el borrado de la flash-, DOS tablas, y que la zona de
  * datos empiece alineada a 4 kB. Windows no tiene por que elegir nada de
  * eso, y segun el tamaño del chip y la version de Windows elige otra cosa.
- * De ahi que formatear desde el PC no arregle el issue: deja un volumen
+ * De ahi que formatear desde el PC no arregle el fallo: deja un volumen
  * perfectamente valido para Windows y que este driver no puede escribir.
  *
  * Pedirle al usuario que acierte con las opciones de formateo de Windows
@@ -46,10 +44,8 @@ formato_r_t formato_haz(void);
 /*
  * SE COMPRUEBA SOLO, Y NO SE FIA DE HABERLO ESCRITO - 06/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y tiene razon, porque "hecho" a secas no dice nada: lo unico que
- * garantiza es que las escrituras no devolvieron error, y el issue que
+ * garantiza es que las escrituras no devolvieron error, y el caso que
  * trajo todo esto iba precisamente de un volumen escrito sin errores que
  * el driver no podia usar.
  *

@@ -3,8 +3,6 @@
  * EL DEDO QUE ARRASTRA, CONTRA EL TACTIL DE VERDAD - 11/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * Asi que el arrastre no esta muerto: esta ENTRECORTADO. Y eso no se
  * mide mirando el mapa, se mide mirando lo unico que hay entre el dedo y
  * el mapa: touch_read().

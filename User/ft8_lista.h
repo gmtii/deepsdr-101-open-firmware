@@ -8,8 +8,6 @@
  * QUE RENGLONES DE FT8 SE ENSEÑAN: TODOS O SOLO LAS CQ - 13/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * Esto son veinte lineas que podrian estar en main.c, y estaban. Viven
  * aqui por lo que paso ayer con el toque del mapa: el fallo no fue
  * escribir dos lineas mal, fue escribirlas donde ningun banco llegaba.

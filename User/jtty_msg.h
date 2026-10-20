@@ -75,8 +75,6 @@ void jtty_msg_pega(char *dst, uint32_t max, const jtty_atomo_t *a, uint8_t ant5)
 /*
  * EL INDICATIVO DE UN MENSAJE YA MONTADO - 28/09/2026.
  *
- * Pedido por el usuario.
- *
  * En FT8 esto no hace falta: el decodificador sabe que campo es un
  * indicativo porque el protocolo se lo dice, y de ahi sale la columna de
  * pais que ya tiene. En JTTY no hay tal cosa - un mensaje es texto libre

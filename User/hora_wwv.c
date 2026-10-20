@@ -392,7 +392,7 @@ static uint8_t estructura_ok(const uint8_t *ceros)
  */
 static void publica_utc(uint8_t m, uint8_t h, uint8_t dia, uint8_t mes, uint8_t anno)
 {
-    uint8_t hh = h, dd = dia, mm = mes, aa = anno, dsx = 0U, verano;
+    uint8_t hh = h, dd = dia, mm = mes, aa = anno, dsx = 0U;
 
     if (m >= 59U) {
         m = 0U;
@@ -426,7 +426,6 @@ static void publica_utc(uint8_t m, uint8_t h, uint8_t dia, uint8_t mes, uint8_t 
     s_h = hh; s_d = dd; s_mes = mm; s_a = aa; s_ds = dsx;
     s_m = m;
     s_ver = 0U;
-    (void)verano;
 }
 
 static uint8_t decodifica_wwv(void)

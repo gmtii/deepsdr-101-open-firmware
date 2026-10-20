@@ -1,8 +1,6 @@
 /*
  * 4-PSK: LA BLANDA TIENE QUE DECIDIR LO MISMO QUE LA DURA - 14/10/2026
  *
- * Pedido por el usuario.
- *
  * hfdl_soft_demod_psk4() pasa de devolver 0/255 a devolver verosimilitud
  * de verdad. Eso le da al Viterbi los ~2 dB que la decision dura tiraba, y
  * las tramas de 1200 bps -las largas, las de los partes de posicion- son

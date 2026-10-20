@@ -28,8 +28,6 @@ static uint8_t  s_hay_hora;
 /*
  * CUADRE MANUAL DE LA RANURA - 25/09/2026.
  *
- * Pedido por el usuario.
- *
  * Las ranuras de FT8 empiezan en los segundos 0, 15, 30 y 45 de cada minuto
  * UTC, y hasta aqui la radio daba eso por supuesto: s_seg = segundo del RTC
  * modulo 15, y a correr. Eso vale si el RTC esta en hora de verdad. Si esta
@@ -48,8 +46,6 @@ static uint8_t  s_desfase;   /* 0..FT8_RANURA_S-1, segundos enteros */
 
 /*
  * Y LA PARTE DE DEBAJO DEL SEGUNDO - 25/09/2026.
- *
- * Pedido por el usuario.
  *
  * El RTC solo da segundos enteros, asi que el desfase de arriba no puede
  * afinar mas. Pero el sesgo que se veia en antena era de 0,8 s, o sea
@@ -483,7 +479,6 @@ void ft8_modo_tick(void)
         /*
          * VARIOS CANDIDATOS POR VUELTA, CON RELOJ. 27/09/2026.
          *
-         * Pedido por el usuario.
          * Y pintaba cada dos, o cada tres.
          *
          * Aqui se hacia UN candidato por vuelta del bucle principal. El

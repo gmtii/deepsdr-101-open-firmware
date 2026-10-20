@@ -31,8 +31,6 @@
 /*
  * UNA FILA POR AVION, NO UNA POR MENSAJE. 25/09/2026.
  *
- * Pedido por el usuario.
- *
  * Y es MUCHO mejor que una lista de mensajes. Un avion no se presenta una
  * vez: hace logon -y ahi da su direccion OACI-, manda partes de posicion
  * -y ahi da distintivo y coordenadas-, y entre medias manda datos sueltos
@@ -61,9 +59,6 @@ static char     s_lineas[HFDL_MODO_LINEAS][HFDL_MODO_LARGO];
 /*
  * EL ANILLO DE CARGAS EN CRUDO - 14/10/2026.
  *
- * *** Un probador, en una frecuencia con trafico de sobra: "hasn't decoded
- * a single set of coordinates". Y en su pantalla, U10/0. ***
- *
  * Diez LPDU de datos de usuario, todos de BAJADA -o sea del avion- y cero
  * posiciones. El decodificador busca el tipo 0xD1 y lo exige en el byte 0
  * o detras de un 0xFF, y eso sale de UNA sola trama real mirada a mano
@@ -74,7 +69,7 @@ static char     s_lineas[HFDL_MODO_LINEAS][HFDL_MODO_LARGO];
  * por cada uno de los veinte aviones son 480, y al enlazar salio
  * "region `RAM' overflowed by 40 bytes". O sea que no cabia por 40, y
  * medirlo costo un enlace. Un anillo de ocho cuesta 224 y da de sobra:
- * lo que se quiere ver son las ultimas, y en la pantalla del probador
+ * lo que se quiere ver son las ultimas, y en la pantalla estrecha
  * habia CINCO aviones mandando datos.
  *
  * Veinte bytes porque en aquella trama el tipo estaba en el 10: deja el
@@ -258,10 +253,6 @@ typedef struct {
     /*
      * LA PARTE EN CUADRATURA DE ESA MISMA CORRELACION - 14/10/2026.
      *
-     * *** Medido en la radio: "4PSK 0/5  8PSK 0/2", y sumando las dos
-     * versiones del dia, CERO de trece. Ni una trama que no sea BPSK ha
-     * pasado el CRC nunca. ***
-     *
      * La correlacion contra la secuencia de entrenamiento usaba SOLO la I
      * y se quedaba con el signo. Eso resuelve la ambiguedad de +-180 y
      * para BPSK es TODA la ambiguedad que hay, por eso funciona. Pero en
@@ -333,8 +324,6 @@ static volatile uint32_t s_simbolos_datos;
  * haya ahora mismo a mitad de nada. */
 /*
  * EL EMBUDO DEL SINCRONISMO. 25/09/2026.
- *
- * Pedido por el usuario.
  *
  * Es lo mas util de toda su pantalla y no ocupa una columna. Cuenta cuantas
  * veces se pasa cada escalon del preambulo, y la FORMA del embudo dice donde
@@ -411,8 +400,6 @@ static const char *estacion_nombre(uint8_t id)
 static volatile uint32_t s_no_cupo;
 /*
  * ...Y DE ESAS, CUANTAS ERAN DEL GIRO 7. 10/10/2026.
- *
- * Pedido por el usuario.
  *
  * Hay DOS motivos distintos detras de ese numero y se arreglan de formas
  * opuestas (ver hfdl_ram.h con las cuentas de los ocho giros):
@@ -500,8 +487,6 @@ static volatile uint32_t s_pisada;    /* rafagas descartadas por eso */
 /*
  * CUANTOS USER DATA Y CUANTAS POSICIONES - 10/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y no habia forma de contestarle. La radio contaba tramas buenas y totales
  * -"19/117"- y nada mas, asi que no salir coordenadas no se podia distinguir
  * de no haber llegado ninguna. Son dos averias distintas con dos
@@ -523,8 +508,6 @@ static volatile uint32_t s_pos;
 /*
  * BUENAS Y TOTALES POR VELOCIDAD DE MODULACION - 14/10/2026.
  *
- * Pedido por el usuario.
- *
  * Setenta y una sincronizadas y quince buenas: se pierde el 79 % en el
  * CRC. Para saber DONDE hay que separarlas, y la sospecha tiene nombre y
  * esta escrita en hfdl_costas.c: durante los datos la correccion de fase
@@ -537,8 +520,6 @@ static volatile uint32_t s_pos;
  */
 /*
  * LA ESPIA DE SIMBOLOS - 14/10/2026.
- *
- * Pedido por el usuario.
  *
  * El banco de audio -sim/hfdl_extremo.c- mete una rafaga por la cadena
  * entera y el CRC falla con canal perfecto, pero llegan los 2160 simbolos
@@ -582,8 +563,6 @@ static volatile uint8_t s_gs_ultima = 0xFFU;
 /*
  * EL PORTERO: NO BUSCAR PREAMBULO CUANDO NO HAY NADA QUE BUSCAR.
  * 25/09/2026.
- *
- * Pedido por el usuario.
  *
  * POR QUE NO SE PORTA EL SUYO. El suyo hace una FFT de 256 puntos sobre la
  * senal, con su ventana, sus tablas de giro y su historial: unos 7.168 bytes
@@ -803,8 +782,6 @@ static volatile uint32_t s_pos_sin_crc;
 /*
  * CUANTOS PARTES DE POSICION HAN LLEGADO DE VERDAD - 14/10/2026.
  *
- * Pedido por el usuario.
- *
  * "U7/1" dice siete cargas de usuario y una posicion sacada, pero no
  * distingue las dos averias posibles, que son muy distintas:
  *
@@ -829,8 +806,6 @@ static volatile uint32_t s_pos_huerfanas;
 /*
  * TRAMAS BUENAS QUE NO PINTAN RENGLON - 14/10/2026.
  *
- * Pedido por el usuario.
- *
  * Contando su ultima pantalla: BPSK 19/31 y los contadores de los
  * renglones suman once. Ocho tramas BUENAS no pintan nada, y hasta ahora
  * no habia forma de verlo desde fuera: la chapa cuenta tramas y la lista
@@ -840,8 +815,6 @@ static volatile uint32_t s_sin_renglon;
 #if HFDL_DIAG
 /*
  * DE QUE ES CADA "/n" - 15/10/2026.
- *
- * Pedido por el usuario.
  *
  * `s_sin_renglon` cuenta tramas que PASARON EL CRC y aun asi no pintaron
  * fila en la tabla de aviones, y ese numero sale en la chapa como "/n".
@@ -1120,8 +1093,6 @@ static void mide_polaridad_q(hfdl_estado_t *e, float q_sym)
 /*
  * EL UMBRAL, Y POR QUE ESTA TAN BAJO - 14/10/2026, por la noche.
  *
- * Pedido por el usuario.
- *
  * Empezo en 0,30 y ESO FUE UN ERROR MIO que le costo renglones. El
  * numero salio del banco sintetico, donde una ráfaga de verdad da de
  * 0,84 a 0,89, asi que 0,30 parecia holgadisimo. En su antena no lo era:
@@ -1305,8 +1276,6 @@ static void simbolo_de_segmento(hfdl_estado_t *e, float ih, float qh,
      * EL PORTERO: ¿ESTO ES UNA RAFAGA O ES RUIDO? - 14/10/2026
      * ======================================================================
      *
-     * Pedido por el usuario.
-     *
      * LO QUE SE MIDIO, en deepsdr-ui/sim/hfdl_m1.c, el 14/10/2026:
      *
      *  a) Cuando el enganche cae en el simbolo que le toca, la rotacion M1
@@ -1350,8 +1319,6 @@ static void simbolo_de_segmento(hfdl_estado_t *e, float ih, float qh,
      */
     /*
      * EL PORTERO MIDE PERO YA NO TIRA - 14/10/2026, de madrugada.
-     *
-     * Pedido por el usuario.
      *
      * Y su embudo lo decia con numeros: 49>22>18 enganches y 9 tramas.
      * NUEVE DE DIECIOCHO se las comia esto.
@@ -1577,8 +1544,6 @@ static uint8_t hex24(char *d, uint32_t v)
 /*
  * DE BYTES CRUDOS A UNA LINEA QUE SE LEE. 25/09/2026.
  *
- * Pedido por el usuario.
- *
  * Lo que sale del Viterbi es un MPDU: una cabecera con quien habla con quien,
  * y dentro uno o varios LPDU con el asunto. Volcar esos bytes tal cual
  * -que es lo que hacia antes- deja el distintivo del vuelo escondido entre
@@ -1605,8 +1570,6 @@ static uint8_t hex24(char *d, uint32_t v)
  * ======================================================================
  * UNA POSICION SIN CRC, PERO NO SIN PRUEBAS - 14/10/2026
  * ======================================================================
- *
- * Pedido por el usuario.
  *
  * LO QUE SE MIDIO. Se cogio una trama real de las que no daban
  * coordenadas y se siguio byte a byte (sim/hfdl_aire.c saca ahora los
@@ -1681,8 +1644,6 @@ static void apunta_trama(const uint8_t *datos, uint32_t largo)
 
     /*
      * EL SQUITTER VA A SU PROPIO RENGLON - 14/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Y es que lo mas frecuente que hay en la frecuencia -la ranura 0 de
      * cada trama de 32 segundos- no llegaba hasta aqui: se tiraba antes,
@@ -1817,10 +1778,6 @@ static void apunta_trama(const uint8_t *datos, uint32_t largo)
             /*
              * LOS BYTES CRUDOS, ANTES DE INTENTAR ENTENDERLOS. 14/10/2026.
              *
-             * *** Un probador: "there is definitely something wrong with
-             * the HFDL decoder... hasn't decoded a single set of
-             * coordinates". ***
-             *
              * Se guardan SIEMPRE, salga posicion o no, que es justo el
              * caso que hay que mirar: lo que interesa son las tramas que
              * el decodificador NO entiende. Ver ud[] en hfdl_aircraft.h.
@@ -1858,10 +1815,6 @@ static void apunta_trama(const uint8_t *datos, uint32_t largo)
                 /*
                  * Y SI NO ES DATOS DE RENDIMIENTO, PUEDE SER ACARS.
                  * 14/10/2026.
-                 *
-                 * *** Un probador: "hasn't decoded a single set of
-                 * coordinates... with other firmware, logs coordinates for
-                 * practically every transmission". ***
                  *
                  * El volcado en crudo de la pantalla lo contesto: las
                  * tramas que no daban posicion empiezan por FF FF, o sea
@@ -1903,8 +1856,6 @@ static void apunta_trama(const uint8_t *datos, uint32_t largo)
              * EL CRC DEL LPDU HA FALLADO, PERO EL DE LA CABECERA NO.
              * 14/10/2026.
              *
-             * Pedido por el usuario.
-             *
              * Hasta ahora esto caia en el `default` y no hacia nada: la
              * trama entera se perdia sin dejar renglon. Y eso NO esta
              * justificado, porque las dos cosas no tienen la misma
@@ -1944,8 +1895,6 @@ static void apunta_trama(const uint8_t *datos, uint32_t largo)
     /*
      * LAS TRAMAS ANONIMAS NO ENTRAN EN LA TABLA. 25/09/2026.
      *
-     * Pedido por el usuario.
-     *
      * 255 no es un avion: es HFDL_AC_ID_NONE, o sea "no se sabe". Pasa con
      * las tramas de subida que la estacion manda sin destinatario
      * (aircraft_cnt == 0) y sin ningun LPDU que traiga una direccion OACI.
@@ -1975,8 +1924,6 @@ static void apunta_trama(const uint8_t *datos, uint32_t largo)
 #endif
         /*
          * Y ESTO NO SUBE EL "/n" - 15/10/2026.
-         *
-         * Pedido por el usuario.
          *
          * Hasta hoy esta rama sumaba al mismo contador que las dos de
          * arriba, y por eso "/n" no se podia leer: juntaba una AVERIA
@@ -2055,8 +2002,6 @@ static const char *fila_avion(uint32_t i)
      */
     /*
      * --- EL MODELO, EN SU PROPIA COLUMNA ENTRE OACI Y VUELO ---
-     *
-     * Pedido por el usuario.
      *
      * Antes iba pegado detras del distintivo -"DLH494 A320"- y recortado
      * a cinco letras, que es el codigo de tipo y no el modelo. Ahora la
@@ -2178,8 +2123,6 @@ void hfdl_modo_poll(void)
     /*
      * SOLO SE APUNTAN LAS QUE PASAN EL CRC. 25/09/2026.
      *
-     * Pedido por el usuario.
-     *
      * Una trama con el CRC malo no dice NADA: sus bytes son lo que el
      * Viterbi creyo ver, y ya se sabe que se equivoco. Ponerla en la lista no
      * es informacion, es tapar la que si vale.
@@ -2238,9 +2181,6 @@ const char *hfdl_modo_linea(uint32_t i) { return fila_avion(i); }
 /*
  * EL VOLCADO EN CRUDO DEL ULTIMO LPDU DE DATOS DE ESE AVION. 14/10/2026.
  *
- * *** Un probador, en una frecuencia con trafico de sobra: "hasn't decoded
- * a single set of coordinates". Y en pantalla, U10/0. ***
- *
  * Diez LPDU de datos, todos de bajada, cero posiciones. El decodificador
  * busca el tipo 0xD1 y lo exige en el byte 0 o detras de un 0xFF, y eso
  * sale de UNA trama real mirada a mano hace un mes. Mientras no se vean
@@ -2268,8 +2208,6 @@ const char *hfdl_modo_linea_crc(void)
 
     /*
      * EL NUMERO QUE FALTABA: CUANTAS RAFAGAS HAY DE VERDAD - 14/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Y hasta ahora NO HABIA FORMA DE SABER QUIEN ERA CIERTO. El embudo
      * cuenta enganches, y un enganche puede ser ruido; la chapa cuenta
@@ -2384,8 +2322,6 @@ uint8_t hfdl_modo_pos(uint32_t i, int32_t *lat_e4, int32_t *lon_e4)
 
 /*
  * COMO SE LLAMA EL AVION `i`, PARA LA ETIQUETA DEL MAPA - 13/10/2026.
- *
- * Pedido por el usuario.
  *
  * Y lo que un avion tiene de "indicativo" son dos cosas distintas:
  *
@@ -2570,8 +2506,6 @@ void hfdl_modo_mete(const float *i_in, const float *q_in, uint32_t n)
  * EL PRE-KEY: 249 ms DE TONO PURO DELANTE DE CADA RAFAGA - 14/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * Y era cierto. en lo que importa: si se oyen bien, no es señal debil, y
  * entonces el cuello de botella esta en DETECTARLAS. Su embudo lo dice:
  * 49>22>18. Dieciocho enganches donde una frecuencia con trece ranuras
@@ -2682,8 +2616,6 @@ static void prekey_simbolo(float zi, float zq)
  * LA PUERTA DEL PRE-KEY - 14/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * Lleva razon, y el numero que lo explica es otro: ciento once enganches
  * para SETENTA Y OCHO ráfagas reales. Treinta y tres de cada ciento once
  * son ruido, y cada uno abre un segmento de entre 1,2 y 2,8 segundos
@@ -2721,8 +2653,6 @@ static void prekey_envejece(void)
 
 /*
  * PROBADO Y RETIRADO EN EL ACTO - 14/10/2026.
- *
- * Pedido por el usuario.
  *
  * La idea era usar la distancia que fija la norma -A1 acaba 575 simbolos
  * despues de que empiece el tono- para BAJAR el umbral de A1 dentro de
@@ -2999,8 +2929,6 @@ void hfdl_modo_simbolo(float ih, float qh, float i_sym, float q_sym)
          * LOS DOS PORTEROS SE RETIRAN - 14/10/2026, por la tarde
          * ======================================================================
          *
-         * Pedido por el usuario.
-         *
          * Esa frase describe un sintoma muy concreto: algo que al
          * arrancar esta abierto y luego se cierra. Y lo era, literalmente:
          *
@@ -3046,8 +2974,6 @@ void hfdl_modo_simbolo(float ih, float qh, float i_sym, float q_sym)
         if (st == HFDL_PREAMBLE_LOCKED) {
             /*
              * UN PRE-KEY, UN ENGANCHE - 14/10/2026.
-             *
-             * Pedido por el usuario.
              *
              * Setenta y tres enganches para cincuenta y dos ráfagas
              * reales: veintiuno se colaban. El motivo es que la ventana

@@ -4,12 +4,6 @@
 /*
  * EL SNR DE FT8, EN LA REFERENCIA DE 2500 Hz - 13/10/2026.
  *
- * *** De un issue: el SNR que daba el decodificador propio salia desviado
- * frente al de WSJT-X. Casi nunca bajaba de +5 dB, con una media cerca de
- * +11, cuando una señal de FT8 normal da valores NEGATIVOS -del orden de
- * -8 dB- porque el SNR de FT8 se refiere a un ancho de banda de 2.500 Hz.
- * ***
- *
  * ERA CIERTO, Y EL NUMERO DE ANTES NO ERA UN SNR. ft8_decoder.c ponia
  *
  *     snr_i = (int)(cand->score * 0.5f);
@@ -19,7 +13,7 @@
  * señal ahi, no cuanta señal hay frente al ruido. Es positiva por
  * construccion -una correlacion negativa no seria un candidato- y no tiene
  * ancho de banda de referencia, asi que ni el signo ni la escala significan
- * nada. De ahi el "+11 de media" que describe el issue.
+ * nada. De ahi el "+11 de media" que se venia observando.
  *
  * El propio comentario de ft8_decoder.c lo decia desde el primer dia: es la
  * formula de relleno del demo de ft8_lib, marcada ALLI como un TODO de

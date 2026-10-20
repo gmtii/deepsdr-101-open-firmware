@@ -175,7 +175,6 @@ def comprueba_entry_active(src):
 
     POR QUE SE AÑADE ESTO (02/10/2026)
     ----------------------------------
-    Pedido por el usuario.
 
     Las tres frases juntas son el sintoma exacto de este fallo, y es el
     MISMO que esta funcion ya vigilaba un piso mas arriba, pero en otra

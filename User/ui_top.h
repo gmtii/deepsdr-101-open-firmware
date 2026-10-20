@@ -152,8 +152,6 @@ typedef struct {
     /*
      * Y SU PROPIO DESPLAZAMIENTO - 28/09/2026.
      *
-     * Pedido por el usuario.
-     *
      * Grande no se puede: el hueco es lo que queda entre la pastilla de
      * banda y el reloj, y los dos tienen que estar. Asi que marquesina -
      * pero solo cuando hace falta-.
@@ -171,8 +169,6 @@ typedef struct {
 
     /*
      * ATENUADOR DE ENTRADA, EN EL SITIO QUE OCUPABA EL CHIP NR - 19/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * El NR tiene su propia casilla en la barra de abajo ("Ruido") y su
      * celda en Ajustes; el atenuador solo estaba en Ajustes, y es el mando
@@ -196,9 +192,18 @@ typedef struct {
      * al sintonizar, y eso hay que poder saberlo sin abrir los ajustes. */
     uint8_t     nco_on;
     /*
-     * SALTO DE EMISORA PUESTO - 15/10/2026.
+     * La distancia a la que ha quedado la sintonia del oscilador, ya
+     * formateada ("+12k", "-40k"), o 0 para no enseñar nada.
      *
-     * Pedido por el usuario.
+     * Va PEGADA AL CHIP DEL NCO y no en la pagina de Informacion -donde
+     * estuvo primero- porque el numero solo sirve mirandolo A LA VEZ que
+     * la cascada: la pregunta que contesta es "cuando el panorama se queda
+     * sordo, ¿pasa a una frecuencia fija o a una distancia fija?", y en
+     * Informacion no se ve la cascada. Ver el hueco de 78-100 kHz.
+     */
+    const char *nco_off;
+    /*
+     * SALTO DE EMISORA PUESTO - 15/10/2026.
      *
      * Va justo al lado del NCO porque ahi lo pidio, y es de la misma
      * familia que el y que NR: un modo que se enciende y se apaga y que
@@ -227,8 +232,6 @@ typedef struct {
 
 /*
  * EL HUECO DE LA LECTURA DE PPM DE SAM - 05/10/2026.
- *
- * Pedido por el usuario.
  *
  * Estaba en (470, 40): dentro de la franja de la marquesina, encima del
  * renglon de abajo -el del horario de la emisora-. Los dos se pintaban y
@@ -260,6 +263,44 @@ typedef struct {
 #define UI_TOP_SAM_RY  6
 #define UI_TOP_SAM_RW  94
 #define UI_TOP_SAM_RH  24
+
+/*
+ * LA ESQUINA DEL RELOJ Y LA BATERIA - 20/10/2026.
+ *
+ * Medido en la radio: el reloj se llevaba 109 ms de una vuelta de 168, una
+ * vez por minuto, porque time_display_draw() llamaba a ui_top_draw() - la
+ * cabecera ENTERA mas la marquesina mas la franja de estado, 91.003 accesos
+ * al bus medidos en el simulador.
+ *
+ * Es la cuarta de la misma familia y se arregla igual que las tres
+ * anteriores -el S-metro el 30/09, el PPM del SAM el 04/10 y la frecuencia
+ * el 05/10-: el MISMO dibujo con la ventana recortada a donde vive lo que
+ * ha cambiado. Aqui son dos cosas pegadas en la esquina de arriba a la
+ * derecha, el reloj y la pastilla de la bateria, asi que la ventana las
+ * coge a las dos de una vez.
+ *
+ * DONDE EMPIEZA, QUE ES LO UNICO DELICADO. En 716, y los tres numeros que
+ * lo deciden estan medidos, no supuestos:
+ *
+ *   - el PPM del SAM ocupa de 620 a 714 (UI_TOP_SAM_RX + UI_TOP_SAM_RW),
+ *     asi que 716 lo deja fuera y esta ventana no lo repinta;
+ *   - el reloj va alineado a la DERECHA en una caja que acaba en 790, y
+ *     "13:40" mide 65 px en font_num_20 -medido en el simulador-, o sea
+ *     que empieza en 725;
+ *   - la pastilla de la bateria va de 740 a 791.
+ *
+ * Nueve pixeles de margen por la izquierda sobre lo mas ancho que puede
+ * salir. Lo vigila sim/hora_esquina.c, que pinta la cabecera entera y la
+ * esquina sola y compara los 384.000 pixeles: si algun dia el reloj crece
+ * o se mueve, la comparacion salta.
+ */
+#define UI_TOP_HORA_RX 716
+#define UI_TOP_HORA_RY 0
+#define UI_TOP_HORA_RW (800 - UI_TOP_HORA_RX)
+#define UI_TOP_HORA_RH UI_TOP_H
+
+/* Solo la esquina del reloj y la bateria. Ver UI_TOP_HORA_RX. */
+void ui_top_draw_hora(const ui_top_state_t *st);
 
 /* Solo la marquesina. Se llama muchas veces por segundo, asi que tiene su
  * propia franja: repintar la cabecera entera treinta veces por segundo para
@@ -311,6 +352,7 @@ int16_t ui_top_read_x_dbg(void);
 /* Donde empieza la pastilla del mando con y sin lectura en dBm: son dos
  * sitios fijos, no uno. Lo usa sim/toptest.c. */
 int16_t ui_top_knob_x_dbg(uint8_t con_dbm);
+int16_t ui_top_knob_w_dbg(void);
 
 /*
  * --- toques en la barra de estado ---------------------------------------

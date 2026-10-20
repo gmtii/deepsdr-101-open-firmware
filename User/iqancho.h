@@ -1,8 +1,6 @@
 /*
  * EL ESPEJO QUE DEPENDE DE LA FRECUENCIA - 07/10/2026
  *
- * Pedido por el usuario.
- *
  * Un decibelio. El corrector plano de iqbal.c no toca lo que se ve en la
  * pantalla, y eso ya no es una sospecha: es una medida que ha hecho la propia
  * radio apagando y encendiendo el corrector sobre la misma señal.

@@ -163,8 +163,6 @@ static uint8_t pon_ms(char *b, uint8_t i, uint16_t decenas_us)
 /*
  * LO QUE TARDA LA VUELTA DEL BUCLE, DENTRO DEL PROPIO MODO - 08/10/2026.
  *
- * Pedido por el usuario.
- *
  * La V3.92 bajo los repintados de 14,7 a 4,0 por segundo y no bastó. Asi que
  * o el problema no era CUANTOS repintados sino CUANTO cuesta cada uno, o es
  * otra cosa. Adivinarlo otra vez seria la cuarta: lo que hace falta es el
@@ -360,8 +358,6 @@ void stanag_modo_poll(void)
         /*
          * SOLO SE CUENTA UNA MEDIDA CUANDO HAY NOTICIA, Y ESTO IMPORTA.
          *
-         * Pedido por el usuario, 02/10/2026.
-         *
          * stanag_modo_latido() suma esta cuenta y main.c repinta el panel
          * entero cada vez que cambia. Subiendola en CADA pasada, el panel
          * se repintaba en cada vuelta del bucle principal; el bucle se
@@ -451,8 +447,6 @@ void stanag_modo_forma_pon(uint8_t f)
  */
 /*
  * Y UNA POSICION MAS EN EL BOTON DE VELOCIDAD: AUTO.
- *
- * Pedido por el usuario, 07/10/2026.
  *
  * Ni la velocidad ni el entrelazado van en la señal: son once
  * combinaciones y hasta hoy habia que acertarlas con dos botones. En
@@ -592,8 +586,6 @@ void stanag_modo_borra(void)
  */
 /*
  * EL BLOQUE DE DIAGNOSTICO, EN LA ZONA NEGRA DEL PANEL.
- *
- * Pedido por el usuario, 02/10/2026.
  *
  * Pues eso. Mientras no hay texto que enseñar, esas filas valen mas
  * contando lo que pasa que estando vacias. Cuatro renglones que separan
@@ -752,8 +744,6 @@ static void avisos_haz(void)
 /*
  * ARRIBA EL TEXTO, ABAJO EL DIAGNOSTICO. SIEMPRE LOS DOS.
  *
- * Pedido por el usuario, 02/10/2026.
- *
  * Asi que el panel enseña las dos cosas a la vez y el diagnostico no
  * desaparece en cuanto sale una letra - que es justo cuando mas falta
  * hace saber si esa letra es de verdad.
@@ -828,7 +818,6 @@ static void avisos4415_haz(void)
 }
 
 /*
- * Pedido por el usuario, 08/10/2026.
  *
  * Y tenia toda la razon en no encontrarlo: lo meti como UN renglon de texto
  * suelto dentro de una tabla de TRES COLUMNAS, y la primera columna mide 112
@@ -899,8 +888,6 @@ const char *stanag_modo_linea(uint8_t i)
     /*
      * EL RENGLON DEL BUCLE VA PRIMERO - 08/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Estaba el ultimo, en la primera columna de 112 pixeles, y con un texto
      * de 140. O sea cortado y abajo. Ahora va ARRIBA y partido en las tres
      * columnas de la tabla. Un instrumento que no se encuentra no es un
@@ -916,8 +903,6 @@ const char *stanag_modo_linea(uint8_t i)
 
 /*
  * LA CHAPA SON TRECE CARACTERES, NI UNO MAS.
- *
- * Pedido por el usuario, 02/10/2026.
  *
  * ui_digi reserva 140 px a la derecha y ahora los hace cumplir
  * recortando, asi que una frase larga ya no rompe nada. Pero recortada
@@ -1059,7 +1044,6 @@ uint32_t stanag_modo_medidas(void) { return s_medidas; }
 /* Ver el comentario de la cabecera. g_msticks lo lleva main.c. */
 extern volatile uint32_t g_msticks;
 /*
- * Pedido por el usuario, 07/10/2026.
  *
  * NO ESTABA COLGADA: EL BUCLE PRINCIPAL IBA TAN LENTO QUE SE PERDIA LAS
  * PULSACIONES. Y la causa estaba AQUI, sumando s_medidas a este latido.
@@ -1103,8 +1087,6 @@ extern volatile uint32_t g_msticks;
  */
 /*
  * Y AUN ASI NO BASTO - 08/10/2026.
- *
- * Pedido por el usuario.
  *
  * Bajar de 14,7 a 4,0 repintados por segundo no arreglo el problema. O sea
  * que no era solo CUANTOS: tambien CUANTO cuesta cada uno. Y cuatro

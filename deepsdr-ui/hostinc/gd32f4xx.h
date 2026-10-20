@@ -146,9 +146,28 @@ void gpio_af_set(uint32_t port, uint32_t af, uint32_t pin);
  * Asi que el banco lo pone a mano antes de cada bloque y comprueba la
  * resta. Lo que se mide es la CUENTA, no el tiempo.
  */
-typedef struct { uint32_t CYCCNT; } dwt_falso_t;
+typedef struct { uint32_t CYCCNT; uint32_t CTRL; uint32_t LAR; } dwt_falso_t;
 extern dwt_falso_t dwt_falso;
 #define DWT (&dwt_falso)
+
+/*
+ * CTRL y LAR se añaden el 19/10/2026 para poder compilar aqui el
+ * User/ms5351.c de verdad: su espera de la maniobra de los 90 grados
+ * enciende el contador antes de usarlo. CYCCNT sigue siendo lo que era y
+ * los bancos que lo mueven a mano no se enteran de esto.
+ *
+ * OJO con la espera: aqui CYCCNT no avanza solo, asi que un banco que
+ * llame a algo que la use tiene que dejar SystemCoreClock a cero. Con cero
+ * la cuenta de ciclos sale cero y la espera termina en la primera vuelta,
+ * que es lo que hace falta en un banco que mide REGISTROS: la espera no
+ * escribe ninguno, solo deja pasar tiempo de verdad en la radio.
+ */
+#define CoreDebug_DEMCR_TRCENA_Msk   (1UL << 24)
+#define DWT_CTRL_CYCCNTENA_Msk       (1UL << 0)
+typedef struct { uint32_t DEMCR; } coredebug_falso_t;
+extern coredebug_falso_t coredebug_falso;
+#define CoreDebug (&coredebug_falso)
+extern uint32_t SystemCoreClock;
 
 /*
  * Anadido 11/10/2026 para poder compilar aqui el User/touch.c de verdad.

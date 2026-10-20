@@ -1,8 +1,6 @@
 /*
  * EL AVISADOR DE ARMONICOS, CONTRA EL CASO QUE LO TRAJO.
  *
- * Pedido por el usuario.
- *
  * La prueba principal de este banco es EXACTAMENTE ese caso, con los numeros
  * de verdad: dial 3.411 kHz, LO 3.387, y el FT8 de 30 metros en 10.136
  * entrando por el tercer armonico. Si algun dia esto deja de decirlo, el

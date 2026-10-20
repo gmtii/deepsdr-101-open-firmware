@@ -2,8 +2,6 @@
  * UN TRANSMISOR DE STANAG 4285, PARA PODER PROBAR LAS ONCE
  * COMBINACIONES Y NO SOLO LA QUE HAY GRABADA.
  *
- * Pedido por el usuario, 07/10/2026.
- *
  * La unica grabacion de 4285 que hay es 300 bps con entrelazado largo.
  * Con ella se puede comprobar que la busqueda automatica encuentra ESA,
  * y nada mas. Las otras diez combinaciones -que son las que el usuario se
@@ -49,7 +47,13 @@
 #define STX_SPAN     4
 #define STX_TAPS     (2 * STX_SPAN * STX_SPS + 1)
 #define STX_FILAS    32
-#define STX_RETMAX   (24 * 31)    /* el mayor j de la lista por 31 */
+/*
+ * El mayor j de la lista por 31. Y el mayor j es 48, el de 2400 bps con
+ * entrelazado largo (ver stx_init): aqui ponia 24, que es el de 1200, y
+ * cada fila se salia 744 bytes por encima pisando flen[] y fpos[]. O sea
+ * que lo que este banco decia de 2400/largo no significaba nada.
+ */
+#define STX_RETMAX   (48 * 31)
 
 typedef struct {
     /* las dos secuencias de la norma, generadas igual que en tablas() */

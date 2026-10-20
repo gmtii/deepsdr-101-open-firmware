@@ -34,8 +34,6 @@ static struct {
     /*
      * LOS CANDIDATOS QUE EL BUCLE PRINCIPAL TIENE QUE RESOLVER - UNA COLA.
      *
-     * Pedido por el usuario, 28/09/2026.
-     *
      * Aqui habia UN candidato, y mientras estuviera pendiente la busqueda
      * de sincronismo NO SE HACIA - habia un `continue` antes de ella-. Con
      * una estacion en la banda no se nota; con nueve, que es lo que hay en
@@ -311,8 +309,6 @@ static float sync_mide(uint16_t atras_ini, uint8_t base)
 
 /*
  * EL UMBRAL. 0,45, Y DE DONDE SALE - 28/09/2026.
- *
- * Pedido por el usuario.
  *
  * Estaba en 0,55 "porque con ruido puro no se pasa nunca", que es verdad y
  * es la pregunta equivocada: lo que hay que maximizar no es el silencio

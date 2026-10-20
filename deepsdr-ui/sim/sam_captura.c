@@ -3,13 +3,6 @@
  * EL MARGEN DE ENGANCHE DEL SAM - 12/10/2026
  * ======================================================================
  *
- * *** De un probador: "I tested the updated firmware today. (...) there are
- * issues with the synchronous mode. It works fine with a strong signal, but
- * if there is strong interference nearby and the received station is weak,
- * the synchronous detector seems to lock onto the interference. Most likely,
- * the capture range is too wide; for proper operation, it should be limited
- * to a hundred hertz on either side of the carrier." ***
- *
  * Era cierto, y esto lo mide. El lazo venia con los 4.000 Hz del original
  * -que es justo lo que mide el filtro de canal, asi que el lazo podia irse
  * a CUALQUIER sitio que pasara el filtro-.
@@ -17,7 +10,7 @@
  * COMO SE MIDE, y esto es lo unico que hace que el banco valga algo: NO se
  * pone la intrusa y ya. Se SINTONIZA bien, se deja que el lazo se enganche
  * a la portadora buena, y despues la buena se DESVANECE unos segundos
- * mientras la intrusa sigue. Eso es lo que describe el probador -"the
+ * mientras la intrusa sigue. Eso es lo que se describia -"the
  * received station is weak"- y es lo que de verdad rompe un PLL: con las
  * dos presentes a la vez el batido va mas deprisa que el lazo y el lazo lo
  * promedia; es cuando se queda solo con la intrusa cuando se la lleva. Y lo
@@ -126,7 +119,7 @@ static void corre(double seg, double f_w, double a_w, double f_i, double a_i)
 }
 
 /*
- * La secuencia del probador: enganchado a la buena, la buena se desvanece
+ * La secuencia observada: enganchado a la buena, la buena se desvanece
  * dos segundos con la intrusa delante, y la buena vuelve DEBIL (20 dB por
  * debajo de la intrusa). Devuelve donde se ha quedado el lazo y si dice
  * estar enganchado.
@@ -174,7 +167,7 @@ int main(void)
     }
     printf("\n");
     /*
-     * Esto es lo que contaba el probador: el lazo no solo se va a la
+     * Esto es lo que se contaba: el lazo no solo se va a la
      * intrusa, sino que ademas dice que esta enganchado. O sea que la
      * pantalla ensena PPM de una portadora que no es la tuya, y "Calibrar
      * PPM" se dejaria calibrar contra ella.
@@ -191,7 +184,7 @@ int main(void)
      * buscando un fallo que esta en otro sitio: a 10 kHz el filtro ya la ha
      * tumbado lo bastante, el lazo se queda en la portadora buena y
      * engancha. La que se lleva el lazo es la de CERCA -hasta ~1 kHz-, que
-     * es exactamente lo que describe el probador con "nearby".
+     * es exactamente lo descrito con "nearby".
      */
     printf("\n  1b) UNA EMISORA FUERTE PERO LEJOS: ESA NO ES\n\n");
     {
@@ -433,9 +426,6 @@ int main(void)
     /* ------------------------------------------------------------------ */
     /*
      * 8) UNA PORTADORA QUE SE MUEVE, que es como son las de verdad
-     *
-     * *** El usuario, con un video de su radio en SAM-U sobre China Radio en
-     * 15.560 kHz: la lectura se iba a "buscando" cada pocos segundos. ***
      *
      * El margen se eligio el 12/10 mirando SOLO el lado de la intrusa. Este
      * es el otro lado: en la cascada de ese video la traza de la portadora

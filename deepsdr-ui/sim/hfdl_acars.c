@@ -1,10 +1,6 @@
 /*
  * ACARS DENTRO DE HFDL - 14/10/2026.
  *
- * *** Un probador: "hasn't decoded a single set of coordinates... with
- * other firmware, logs coordinates for practically every transmission".
- * ***
- *
  * LA DIFERENCIA CON TODO LO ANTERIOR ES QUE AQUI HAY BYTES DE VERDAD. El
  * decodificador de posicion que habia se verifico una vez, a mano, contra
  * una trama que nadie guardo, y de aquel recuerdo salio un comentario que

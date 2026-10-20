@@ -164,8 +164,6 @@ int main(void)
      *
      * EL UMBRAL ERA `d > 0` Y NO SERVIA - 11/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * `d > 0` quiere decir "que pase AL MENOS UNO". Medido hoy, d = 4: o
      * sea que un cambio que se cargara el 75 % del paso de senal seguia
      * saliendo en verde. Y el contraste cantaba, porque la comprobacion de

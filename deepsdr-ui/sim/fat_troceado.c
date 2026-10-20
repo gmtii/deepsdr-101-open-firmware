@@ -5,7 +5,6 @@
  *
  * DE DONDE SALE ESTO
  * ------------------
- * Pedido por el usuario, 28/09/2026.
  *
  * Y estaba. El cargador EXIGIA que los clusters del fichero fueran
  * seguidos, y el motivo de que no lo fueran era mio: al juntar las dos
@@ -451,8 +450,6 @@ int main(int argc, char **argv)
 
     /*
      * LO QUE CUESTA COMPROBAR LAS SUMAS, MEDIDO.
-     *
-     * Pedido por el usuario.
      *
      * No estaba colgada: estaba sumando medio megabyte por este bus. El
      * comentario de zona_alta.h decia "del orden de dos segundos" y era

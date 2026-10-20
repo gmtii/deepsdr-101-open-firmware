@@ -1,8 +1,6 @@
 /*
  * COMO QUEDA EL PANEL DE JTTY - 28/09/2026.
  *
- * Pedido por el usuario.
- *
  * sim/jtty_cols.c comprueba que los anchos cuadran, que es una pregunta
  * distinta de si SE LEE. Esto pinta el panel con renglones de verdad -de
  * las fotos de 14.090- y saca un PPM para mirarlo, que es lo unico que

@@ -3,14 +3,17 @@
  * copiados dentro de demod_am.c, y para la aritmetica del inverso.
  */
 #include "agc.h"
+#include "sat16.h"
 
+/* El recorte va por sat16(): en el Cortex-M4 es una instruccion en vez de
+ * dos comparaciones con sus dos saltos, y el valor que sale es el mismo.
+ * Aqui pasan las 256 muestras de cada bloque, 96.000 por segundo.
+ *
+ * El paso por int32 es seguro: lo que entra viene de multiplicar muestras de
+ * 16 bits por la ganancia del AGC, que esta acotada por agc_t. */
 static int16_t recorta(float y)
 {
-    int32_t out = (int32_t)y;
-
-    if (out > 32767)  { out = 32767; }
-    if (out < -32768) { out = -32768; }
-    return (int16_t)out;
+    return sat16((int32_t)y);
 }
 
 void agc_manual(const float *entra, int16_t *sale, uint32_t n, float ganancia)

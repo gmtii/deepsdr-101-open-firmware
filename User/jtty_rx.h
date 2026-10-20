@@ -8,8 +8,6 @@
 /*
  * JTTY: DEL AUDIO A LOS ATOMOS - 28/09/2026.
  *
- * Pedido por el usuario.
- *
  * jtty_fec.c sabe pasar de 46 tonos a 34 bits y jtty_msg.c de 34 bits a
  * texto. Los dos estaban comprobados contra el Fortran de WSJT-X y contra
  * los vectores normativos desde el 28 por la mañana, y los dos estaban
@@ -73,8 +71,6 @@
 /*
  * LA VENTANA DE BUSQUEDA: 64 medios bines de 15,625 Hz = 1.000 Hz, o sea
  * de 1.000 a 2.000 Hz de audio.
- *
- * Pedido por el usuario.
  *
  * La razon de fondo es que en JTTY, como en FT8, el que transmite ELIGE su
  * desvio de audio dentro del filtro. No hay un sitio donde esten todos, y
@@ -140,8 +136,6 @@ typedef struct {
     uint8_t      calidad; /* 0..100, de la correlacion de sincronismo */
     /*
      * EN QUE FILA ACABO LA TRAMA, contada desde que arranco el modo.
-     *
-     * Pedido por el usuario, 28/09/2026.
      *
      * Esto es lo que permite separarlas, y no es una heuristica: las
      * tramas de UN mensaje van pegadas, o sea que la siguiente acaba

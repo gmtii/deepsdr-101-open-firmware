@@ -3,7 +3,7 @@
  *
  * DE DONDE SALE ESTO - 18/10/2026
  * -------------------------------
- * De un issue con cuatro palabras de informacion: el mapa se graba bien,
+ * Con cuatro palabras de informacion: el mapa se graba bien,
  * BD.BIN da un error al grabarse y despues el disco queda corrupto. Sin el
  * mensaje de error exacto y sin saber que chip lleva esa radio.
  *
@@ -46,7 +46,7 @@
  * LO QUE ENCONTRO, que no estaba en el guion. El borrado de la cadena
  * esta bien: en las tres distribuciones, con 920 eslabones barajados y
  * vecinos intercalados, no toca un solo byte que no sea suyo. O sea que el
- * disco corrupto del issue NO sale de ahi, y eso tambien es un resultado.
+ * disco corrupto NO sale de ahi, y eso tambien es un resultado.
  *
  * Pero fsck.fat, al juzgar el volumen de despues, dijo esto:
  *

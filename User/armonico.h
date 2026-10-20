@@ -1,8 +1,6 @@
 /*
  * EL AVISADOR DE ARMONICOS - 07/10/2026
  *
- * Pedido por el usuario.
- *
  * No lo hay. Lo que hay es el FT8 de 30 metros, en 10.136 kHz, entrando por
  * el TERCER ARMONICO del oscilador local: con el dial en 3.411 el LO esta en
  * 3.387, y 3 x 3.387 = 10.161, a 25 kHz de 10.136. Dentro del tramo.

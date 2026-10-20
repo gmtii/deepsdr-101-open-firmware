@@ -3,7 +3,7 @@
  *
  * DE DONDE SALE ESTO - 18/10/2026
  * -------------------------------
- * De un issue con tres sintomas y ninguna otra informacion: el mapa se
+ * Con tres sintomas y ninguna otra informacion: el mapa se
  * graba bien, BD.BIN da un error al grabarse, y despues el disco queda
  * corrupto. Los tres salen de la misma linea.
  *
@@ -53,6 +53,7 @@
 #include "spi_flash.h"
 #include "disco.h"
 #include "zona_alta.h"
+#include "formato.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -93,8 +94,17 @@ static void fat_pon(uint32_t c, uint16_t v)
  * tocaba. */
 static uint32_t pon_bd(uint32_t tam)
 {
-    uint32_t n = (tam + bps() - 1U) / bps(), i, k;
+    /* EL CLUSTER NO ES UN SECTOR. Esto daba por hecho que si, porque las
+     * dos primeras escenas cargan una imagen con un sector por cluster. El
+     * formateador de la radio pone OCHO -4 kB, un borrado- y con esta
+     * cuenta la cadena y el tamaño no cuadraban, asi que el fichero no se
+     * encontraba y la escena nueva fallaba por culpa del banco. */
+    uint32_t cl = (uint32_t)g_chip[13] * bps();
+    uint32_t n, i, k;
     uint8_t *e = &g_chip[raiz() + 32U];
+
+    if (cl == 0U) { cl = bps(); }
+    n = (tam + cl - 1U) / cl;
 
     memcpy(e, "BD      BIN", 11);
     e[11] = 0x20U;
@@ -102,8 +112,8 @@ static uint32_t pon_bd(uint32_t tam)
     e[28] = (uint8_t)(tam & 0xFFU); e[29] = (uint8_t)((tam >> 8) & 0xFFU);
     e[30] = (uint8_t)((tam >> 16) & 0xFFU); e[31] = 0U;
     for (i = 0U; i < n; i++) {
-        uint32_t ini = datos() + i * bps();
-        for (k = 0U; k < bps(); k++) { g_chip[ini + k] = (uint8_t)(i * 31U + k); }
+        uint32_t ini = datos() + i * cl;
+        for (k = 0U; k < cl; k++) { g_chip[ini + k] = (uint8_t)(i * 31U + k); }
         fat_pon(2U + i, (i + 1U < n) ? (uint16_t)(3U + i) : (uint16_t)0x0FFFU);
     }
     return n;
@@ -225,6 +235,83 @@ static void escena_inflado(const char *plantilla)
        a.fs_bytes > disco_b);
 }
 
+/*
+ * LA TERCERA ESCENA: EL CHIP DE 1 MB, DESPUES DE FORMATEAR - 20/10/2026.
+ *
+ * Las dos de arriba comprueban que no se rompe nada. Esta comprueba que la
+ * radio SIRVE PARA ALGO, que es lo que faltaba.
+ *
+ * Con la region de la zona alta fija en un mega, un chip de 1 MB se
+ * quedaba sin disco -cero bloques-, y de ahi salia todo lo que conto el
+ * issue: BD.BIN no se puede copiar porque no hay donde dejarlo, el sitio
+ * para fotos no se puede leer, el volumen de fabrica dice medir mas que el
+ * disco y la pantalla manda formatear... y el formateador contestaba "no
+ * se ve la flash" porque disco_bloques() valia cero. Un callejon.
+ *
+ * Con la region a la mitad del chip, el camino existe y es el normal:
+ * formatear deja un volumen de 512 kB, BD.BIN cabe en el disco, y la copia
+ * a la zona alta arranca y termina sin tocar un byte del volumen. Eso es
+ * lo que se mide aqui, de punta a punta.
+ */
+static void escena_formatea_chico(void)
+{
+    spi_flash_alta_t a;
+    const uint32_t tam = 200U * 1024U;
+    uint32_t disco_b, bloques, cambiados = 0U, i;
+    int8_t r;
+    uint8_t abrio;
+    formato_r_t fr;
+
+    printf("\n  un chip de 1 MB, formateado por la propia radio\n");
+    w25q_reset();
+    w25q_tam(MB(1));
+    memset(g_chip, 0xFF, MB(1));
+    spi_flash_olvida_capacidad();
+    spi_flash_geo_olvida();
+    spi_flash_init();
+
+    disco_b = disco_bloques() * DISCO_BLOQUE;
+    printf("    disco %u bytes   za_base 0x%06X   techo de datos 0x%06X\n",
+           (unsigned)disco_b, (unsigned)ZA_BASE, (unsigned)ZA_TOPE_DATOS);
+    di("el disco ya no es de cero bloques", disco_bloques() != 0U);
+
+    fr = formato_haz();
+    printf("    formatear dice: %s\n", formato_porque_txt(fr));
+    di("formatear funciona (y no 'no se ve la flash')", fr == FORMATO_OK);
+
+    spi_flash_geo_olvida();
+    spi_flash_mira_alta(&a);
+    printf("    el volumen nuevo mide %u y el disco %u\n",
+           (unsigned)a.fs_bytes, (unsigned)disco_b);
+    di("el volumen cabe en el disco", a.fs_bytes <= disco_b && a.fs_bytes != 0U);
+    di("y la zona alta queda por encima del volumen", ZA_BASE >= a.fs_bytes);
+
+    (void)pon_bd(tam);
+    memcpy(antes, g_chip, disco_b);
+
+    bloques = (tam + 4095UL) & ~4095UL;
+    abrio = spi_flash_restaura_abre("BD      ", "BIN", ZA_BASE, bloques,
+                                    a.fs_bytes, ZA_TOPE_DATOS);
+    if (abrio) {
+        do { r = spi_flash_volcado_paso(); } while (r > 0);
+    }
+    di("un BD.BIN de 200 kB se copia a la zona alta", abrio == 1U);
+
+    for (i = 0U; i < disco_b; i++) {
+        if (g_chip[i] != antes[i]) { cambiados++; }
+    }
+    di("y el disco no ha cambiado ni un byte", cambiados == 0U);
+
+    /* Y lo que NO tiene que caber: el hueco del mapa es intocable. */
+    abrio = spi_flash_restaura_abre("BD      ", "BIN", ZA_BASE,
+                                    ZA_TOPE_DATOS - ZA_BASE + 4096UL,
+                                    a.fs_bytes, ZA_TOPE_DATOS);
+    di("uno que pasara del techo de datos se niega", abrio == 0U);
+    printf("    y el aviso dice: %s\n", spi_flash_volcado_porque_txt());
+    di("el aviso dice cuanto cabe, no 'destino no permitido'",
+       spi_flash_volcado_porque() == SPI_VOL_NO_CABE);
+}
+
 int main(int argc, char **argv)
 {
     const char *plantilla = (argc > 1) ? argv[1] : "out/fat12_vacio.img";
@@ -239,6 +326,7 @@ int main(int argc, char **argv)
     (void)una_talla(plantilla, MB(1), "un chip de 1 MB, por debajo del suelo", 0);
 
     escena_inflado(inflado);
+    escena_formatea_chico();
 
     printf("\n  %s\n", fallos ? "" : "TODO CORRECTO");
     if (fallos) { printf("  *** %d ***\n", fallos); }

@@ -152,6 +152,7 @@ int main(int argc, char **argv)
     top.bw = "4,0 k";
     top.att = "-06";
     top.nco_on = 1;
+    top.nco_off = "+40k";
     top.ovr = 0;
     top.spk_muted = 0;
     ui_top_draw(&top);

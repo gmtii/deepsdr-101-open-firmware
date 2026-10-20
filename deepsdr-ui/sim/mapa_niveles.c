@@ -1,8 +1,6 @@
 /*
  * LOS TRES NIVELES Y LA VENTANA (User/mapa_bin.c).
  *
- * Pedido por el usuario.
- *
  * LO QUE SE MIDE, y por que cada cosa:
  *
  *  1. Que el x1 se carga entero al abrir el fichero, sin tocar la flash.

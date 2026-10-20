@@ -3,8 +3,6 @@
  * LOS INDICATIVOS DEL MAPA, EL RAYO Y LA FICHA - 12/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * LO QUE AQUI SE MIDE, Y POR QUE CADA COSA:
  *
  *   1) DE DONDE SALE EL INDICATIVO. "CQ DX JA5AFW PM64" tiene que dar
@@ -404,8 +402,6 @@ int main(void)
         /*
          * EL BLANCO DEL DEDO - 13/10/2026.
          *
-         * Pedido por el usuario.
-         *
          * Era 24 x 24 alrededor del punto. Este proyecto se exige 47 px
          * para un blanco de dedo en los ajustes -lo mide sim/config.c- y
          * aqui se conformaba con la mitad.
@@ -466,8 +462,6 @@ int main(void)
     /* ---------------------------------------------------------------- */
     /*
      * 7b) EL GESTO: ARRASTRAR O TOCAR.
-     *
-     * Pedido por el usuario.
      *
      * Y no pasaba, por dos cosas que vivian sueltas en main.c donde
      * ningun banco llegaba:
@@ -635,8 +629,6 @@ int main(void)
      * DOS ESTACIONES EN EL MISMO CUADRADO - 13/10/2026
      * ==================================================================
      *
-     * Pedido por el usuario.
-     *
      * En la lista estaban M7BSI (IO92), EA4AXM (IN80) y G8KHF (IO92). Dos
      * de los tres comparten LOCALIZADOR, o sea el mismo pixel: la chapa
      * del segundo caia justo encima de la del primero, chocaba, y el que
@@ -701,8 +693,6 @@ int main(void)
      * ==================================================================
      * LOS AVIONES DE HFDL - 13/10/2026
      * ==================================================================
-     *
-     * Pedido por el usuario.
      *
      * Un avion no tiene localizador Maidenhead: manda latitud y longitud.
      * Asi que mapa_eti_dx_t aprendio a aceptar la posicion a pelo.
@@ -862,8 +852,6 @@ int main(void)
      * ==================================================================
      * EL PAIS EN LA FICHA, Y QUE SIGA CABIENDO - 13/10/2026
      * ==================================================================
-     *
-     * Pedido por el usuario.
      *
      * Dos cosas, y la segunda es la que tiene miga:
      *

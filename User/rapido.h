@@ -5,8 +5,6 @@
  * CUENTAS RAPIDAS: lo que la biblioteca hace bien pero demasiado caro.
  * 04/10/2026.
  *
- * Pedido por el usuario.
- *
  * En este Cortex-M4 el coprocesador hace sumas, multiplicaciones, divisiones
  * y raices cuadradas en hardware. Lo demas -senos, cosenos, arcotangentes,
  * exponenciales- son RUTINAS DE SOFTWARE de newlib, de un par de cientos de

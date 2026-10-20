@@ -433,8 +433,6 @@ static uint8_t   s_r36_hay;
 /*
  * Y SE MUDA A LA RAM PRESTADA EL 07/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y la respuesta honrada a eso es que lo que NO SE USA ya lo quita el
  * enlazador solo: eso es lo que hace --gc-sections, y por eso sacar
  * gd32f4xx_enet.c del build no cambio ni un byte. No quedan "enets".
@@ -613,7 +611,6 @@ static void modo_aplica(uint8_t i)
     }
     s_info.modo = k_modos[i].nombre;
     /*
-     * Pedido por el usuario, 24/09/2026.
      *
      * A CERO, no al VIS del modo. s_info.vis significa UNA cosa: "llego un
      * VIS valido de un modo que no sabemos hacer" (ver donde se pone, al
@@ -1192,8 +1189,6 @@ void sstv_vis_dbg(uint8_t *est, uint32_t *lider, uint32_t *c1200, float *hz)
 /*
  * EL DESVIO DE SINTONIA, MEDIDO SOBRE EL PROPIO LIDER - 06/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y no era de la emisora. Midiendo su grabacion, los pulsos de sincronismo
  * -que por norma estan en 1200 Hz- le llegaban a 1011: unos 190 Hz BAJOS, que
  * sobre 14,23 MHz son 13 ppm, el error tipico de un cristal sin calibrar.
@@ -1705,8 +1700,6 @@ void sstv_process(const float *audio, uint32_t n)
                 /*
                  * Y EL ORIGEN SE MUEVE UNA LINEA, NO HASTA "AHORA".
                  * 13/10/2026.
-                 *
-                 * Pedido por el usuario.
                  *
                  * Aqui ponia `s_t0 = s_muestra`, o sea AHORA, que es 1,2
                  * lineas despues del origen viejo. Eso deja la rejilla

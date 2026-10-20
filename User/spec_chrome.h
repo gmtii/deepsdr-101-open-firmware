@@ -84,8 +84,6 @@ typedef struct {
     /*
      * DENTRO DE UNA BANDA, O FUERA. 10/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * No se puede sacar del rotulo de la cabecera: ese NUNCA viene vacio
      * -main.c le mete "Bandas" cuando no hay banda, para que el boton siga
      * estando- asi que "hay banda" hay que decirlo aparte.
@@ -94,8 +92,6 @@ typedef struct {
 
     /*
      * ...Y DE QUE CLASE ES ESA BANDA - 11/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Y es verdad: 7.190 son los 40 m de aficionados y 7.210 son los 41 m de
      * radiodifusion. Dos bandas distintas, dos servicios distintos, y la raya

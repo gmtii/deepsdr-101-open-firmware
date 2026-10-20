@@ -2,8 +2,6 @@
  * ALS162 DE VERDAD, POR LA MISMA PUERTA QUE EL AUDIO DE LA RADIO.
  * =============================================================
  *
- * Pedido por el usuario, 10/10/2026.
- *
  * sim/alstest.c mide feed_fase() contra una señal que fabrica EL PROPIO
  * BANCO. Esto la mide contra la de verdad, y ademas contra una VERDAD
  * CONOCIDA: el fichero del WebSDR se llama

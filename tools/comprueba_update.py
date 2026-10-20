@@ -5,7 +5,6 @@ comprueba_update.py - mira un update.bin como lo mira el cargador.
 
 POR QUE EXISTE
 --------------
-Pedido por el usuario.
 
 Lo que paso, sin adornos: habia que entregar un binario, hice `make` y
 copie build/firmware.bin encima de update.bin a mano. firmware.bin es la

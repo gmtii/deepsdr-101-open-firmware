@@ -1,8 +1,6 @@
 /*
  * EL 4415, CONTRA UN AUDIO DE VERDAD, Y PARA UNA PREGUNTA CONCRETA.
  *
- * Pedido por el usuario.
- *
  * s4415.c lleva escrito desde que se escribio que el orden de los dos bits
  * dentro del dibit es UNA SUPOSICION (ver BIT_ALTO_PRIMERO): la tabla XI del
  * estandar dice que a 75 bps se sacan dos bits del entrelazador por simbolo y

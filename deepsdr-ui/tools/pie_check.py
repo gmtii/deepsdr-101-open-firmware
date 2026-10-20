@@ -7,8 +7,6 @@ QUE EL PIE DE LA REJILLA NO SE SALGA DE SU HUECO.
 
 POR QUE EXISTE - 06/10/2026.
 
-Pedido por el usuario.
-
 El pie de cada celda se arma byte a byte con aj_u2s() y punteros, sin
 snprintf ni nada que recorte. Asi que el tamaño no lo comprueba el
 compilador: lo tiene que contar el que añade un numero. Y hay que contarlo
@@ -92,8 +90,16 @@ def main():
         print("  nadie usa las funciones que recortan   MAL")
         return 1
 
-    for ln, txt in malos:
-        print("    linea %-6d %-50s *** ESCRIBE EN EL PIE A MANO Pedido por el usuario. %d escrituras al pie sin recortar ***" % len(malos))
+    if malos:
+        # LA QUEJA SE ROMPIA AL QUEJARSE - 20/10/2026. El formato pedia dos
+        # huecos y le llegaba un solo numero, asi que en vez de decir que
+        # linea era, reventaba con un TypeError. Un guardian que se cae
+        # cuando por fin encuentra algo no esta guardando nada: el que lo
+        # provoco ve una traza de Python y no su fallo.
+        for ln, txt in malos:
+            print("    linea %-6d %-50s *** ESCRIBE EN EL PIE A MANO ***"
+                  % (ln, txt))
+        print("  %d escritura(s) al pie sin recortar" % len(malos))
         print("  Usa pie_txt()/pie_num(): respetan INFO_PIE_MAX y lo de mas")
         print("  sale cortado en vez de pisar la celda siguiente.")
         print("  Ver la cabecera de este guion.")

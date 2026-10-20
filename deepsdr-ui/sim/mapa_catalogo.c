@@ -1,8 +1,6 @@
 /*
  * EL CATALOGO DE LOS CIEN MAPAS, PINTADO POR LA RADIO - 14/10/2026.
  *
- * Pedido por el usuario.
- *
  * El catalogo que habia -DeepSDR_mapas_100.pdf- se hizo con unos mockups
  * que ya no estan en el repositorio, y ademas quedo mintiendo en cuanto la
  * radio aprendio a rellenar: sus miniaturas llevan impreso "En gris, el

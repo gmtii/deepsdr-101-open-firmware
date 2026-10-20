@@ -3,8 +3,6 @@
 """
 QUE LOS ANILLOS DE TIERRA DE UN .map SEAN TIERRA. 14/10/2026.
 
-Pedido por el usuario.
-
 Para rellenar hace falta saber que lado es tierra, y eso lo decide
 mapa_pack.py marcando los trazos cerrados con ANILLO_BIT. Esto lo lee del
 fichero YA ESCRITO -no de las estructuras de Python que lo generaron, que es

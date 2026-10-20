@@ -211,6 +211,23 @@ uint8_t lo_gen_gd32_set_freq(uint32_t freq_hz);
  * generador parado.
  */
 uint32_t lo_gen_gd32_real_hz(void);
+
+/*
+ * EL SENTIDO DE LA CUADRATURA, A MANO.
+ *
+ * Ver el comentario gordo del .c: el arranque de la cuadratura ya no es
+ * aleatorio, pero DETERMINISTA NO QUIERE DECIR CORRECTO - desde el
+ * firmware se puede quitar el azar y no se puede medir en que sentido
+ * queda sin un generador delante. Esto lo invierte: cambia cual de los dos
+ * canales lleva el comparador en cero, o sea I/Q por Q/I.
+ *
+ * Si por debajo de 300 kHz la radio recibe en la imagen -se oye lo que hay
+ * a dos veces el desplazamiento por debajo de donde dice el dial- se toca
+ * esto una vez y se queda. SE GUARDA en los ajustes, porque es una
+ * propiedad de la placa y no una prueba.
+ */
+uint8_t lo_gen_gd32_invertido(void);
+void    lo_gen_gd32_invierte(uint8_t si);
 uint32_t lo_gen_gd32_pedido_hz(void);
 
 void lo_gen_gd32_stop(void);

@@ -69,8 +69,6 @@ def mira_el_manual(firmware, manual_md):
 # Y AHORA TODO LO DEMAS QUE DICE UNA VERSION - 11/10/2026
 # ---------------------------------------------------------------------
 #
-# Pedido por el usuario.
-#
 # Y la respuesta honrada era "a medias", porque al ir a mirarlo aparecieron
 # DOS ficheros que declaraban una version y que nadie comprobaba:
 #

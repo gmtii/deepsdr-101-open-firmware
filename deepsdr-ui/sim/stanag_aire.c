@@ -1,8 +1,6 @@
 /*
  * EL DETECTOR CONTRA UNA GRABACION DE VERDAD.
  *
- * Pedido por el usuario.
- *
  * Y es lo que faltaba desde el principio. Todo lo que habia hasta ahora
  * probaba el detector contra señales que me habia fabricado YO: eso
  * demuestra que se leer lo que yo mismo escribo, y poco mas. Si mi
@@ -136,8 +134,6 @@ static const espera_t k_espera[] = {
 
     /*
      * EL 4481 TIENE DOS CARAS, Y ESTO NO LO SABIA HASTA HOY.
-     *
-     * Pedido por el usuario.
      *
      * El 4481 no es una forma de onda: es el sistema de radiodifusion
      * naval, y admite dos modems. El de FSK es la teleimpresora de

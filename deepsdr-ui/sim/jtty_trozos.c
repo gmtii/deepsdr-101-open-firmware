@@ -1,8 +1,6 @@
 /*
  * CUANTOS RENGLONES SALE UN MENSAJE - 28/09/2026.
  *
- * Pedido por el usuario.
- *
  * Esto mide LO QUE EL VE: se manda un mensaje de diez tramas -de los que
  * de verdad se mandan en la banda- por un canal con desvanecimiento
  * Rayleigh, y se cuenta en cuantos renglones sale. Uno es bien; tres es lo

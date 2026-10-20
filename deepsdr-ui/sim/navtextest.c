@@ -372,8 +372,6 @@ int main(int argc, char **argv)
     /*
      * 7. UNA GRABACION DE VERDAD.
      *
-     * Pedido por el usuario, 02/10/2026.
-     *
      * Todo lo de arriba fabrica la señal con navtex_car_a_cod(), o sea con la
      * misma tabla con la que luego la lee. Eso comprueba que el decodificador
      * es coherente CONSIGO MISMO, que no es poco, pero no comprueba que lo
@@ -389,8 +387,6 @@ int main(int argc, char **argv)
     /* ------------------------------------------------------------------ */
     /*
      * 6b. UN CAMBIO A LETRAS PERDIDO NO PUEDE COSTAR EL MENSAJE ENTERO.
-     *
-     * Pedido por el usuario, 03/10/2026.
      *
      * No era ruido: eran las MISMAS letras impresas por la columna de las
      * cifras. Se habia perdido un cambio a letras y emite() no tenia forma

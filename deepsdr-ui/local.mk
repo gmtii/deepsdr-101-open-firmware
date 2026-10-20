@@ -273,6 +273,19 @@ logen: out/logen ; ./out/logen
 
 comprueba: logen
 
+# El oscilador de toda la radio, de 300 kHz a 180 MHz. Ver sim/lo5351.c:
+# hace pasar al ms5351.c de verdad por un I2C de mentira y deshace la cuenta
+# de los registros. Es el hermano de logen, que mira el tramo de por debajo
+# de 300 kHz.
+out/lo5351: sim/lo5351.c $(FIRMWARE)/User/ms5351.c $(FIRMWARE)/User/ms5351.h
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ sim/lo5351.c $(FIRMWARE)/User/ms5351.c $(LDLIBS)
+
+.PHONY: lo5351
+lo5351: out/lo5351 ; ./out/lo5351
+
+comprueba: lo5351
+
 # ---------------------------------------------------------------------
 # BASURA POR LA PUERTA DEL AIRE. Ver la cabecera de sim/aire_basura.c.
 #
@@ -909,6 +922,67 @@ out/capacidad: sim/capacidad.c sim/w25q_sim.c sim/gd32_pines.c \
 capacidad: out/capacidad ; ./out/capacidad
 comprueba: capacidad
 
+# ---------------------------------------------------------------------
+# GUARDAR LAS CARTAS DE FAX: EL BOTON MANDA. 20/10/2026.
+#
+# *** Esta regla se perdio al quitar el banco del ruido del bus: el corte se
+# llevo por delante la linea de compilar, y durante unas horas "comprueba"
+# ejecuto un BINARIO VIEJO que ya nadie reconstruia. Un banco que no se
+# recompila es un banco que miente. ***
+#
+# Ver la cabecera de sim/fax_guarda.c.
+sim/wfx_tabla.h: $(FIRMWARE)/User/main.c tools/gen_wfx.py
+	python3 tools/gen_wfx.py $(FIRMWARE)/User/main.c $@
+
+#
+# QUE NADIE CIERRE EL FICHERO DE OTRO. Ver tools/gsv_dueno_check.py: es el
+# guardian del fallo de los ficheros de 8 kB, que estuvo semanas sin que
+# nada lo mirara. Probado a mano contra el fuente roto -los tres cierres de
+# sstv_poll() y el nombre viejo- antes de darlo por bueno.
+#
+.PHONY: gsvdueno
+gsvdueno: ; python3 tools/gsv_dueno_check.py $(FIRMWARE)/User/main.c
+comprueba: gsvdueno
+
+#
+# QUE NO SE PUBLIQUEN CONVERSACIONES. tools/citas_check.py existe desde el
+# 18/10/2026 y NO ESTABA COLGADO DE AQUI: nadie lo ejecutaba. Un guardian
+# que no corre no es una red, es un fichero - que es justo lo que dice su
+# propia cabecera sobre otro agujero.
+#
+# Mira la carpeta del firmware y las dos hermanas, porque docs/ y manual/
+# tambien se escriben y una de ellas ya acumulo 94 citas sin que nada lo
+# viera.
+#
+.PHONY: citas
+citas: ; python3 $(FIRMWARE)/tools/citas_check.py $(FIRMWARE)
+comprueba: citas
+
+out/fax_guarda: sim/fax_guarda.c sim/wfx_tabla.h $(FIRMWARE)/User/wfx_guarda.h
+	@mkdir -p out
+	$(CC) -O2 -Wall -I hostinc -I sim -I $(FIRMWARE)/User -o $@ sim/fax_guarda.c
+
+.PHONY: fax_guarda
+fax_guarda: out/fax_guarda ; ./out/fax_guarda
+comprueba: fax_guarda
+
+# ---------------------------------------------------------------------
+# EL DIAL POR DEBAJO DE 300 kHz. 20/10/2026.
+#
+# No habia recepcion entre 78 kHz y 100 kHz. Recorre el dial con
+# la logica de verdad -nco_lo_aparcado() y la aritmetica del temporizador-
+# y mira si hay alguna frecuencia en la que la emisora se salga de la
+# ventana del IQ. Ver la cabecera de sim/lf_hueco.c.
+out/lf_hueco: sim/lf_hueco.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c \
+              $(FIRMWARE)/User/lo_gen_gd32.h $(FIRMWARE)/User/nco.h
+	@mkdir -p out
+	$(CC) -O2 -Wall -I hostinc -I sim -I $(FIRMWARE)/User -o $@ \
+	      sim/lf_hueco.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c $(LDLIBS)
+
+.PHONY: lf_hueco
+lf_hueco: out/lf_hueco ; ./out/lf_hueco
+comprueba: lf_hueco
+
 #
 # Y SE SALTA SI NO HAY FIRMWARE COMPILADO - 16/10/2026.
 #
@@ -1021,6 +1095,24 @@ out/toptest: sim/toptest.c sim/lcd_sim.c gfx2/gfx2.c gfx2/ui_top.c \
 top: out/toptest ; ./out/toptest
 
 comprueba: top
+
+# ---------------------------------------------------------------------
+# EL RELOJ SOLO EN SU ESQUINA (20/10/2026).
+#
+# De una medida en antena: time_display_draw() repintaba la cabecera entera
+# una vez por minuto -91.003 accesos al bus para cambiar cinco caracteres- y
+# se llevaba 109 ms de una vuelta de 168. Esto comprueba que pintar solo la
+# esquina deja los 384.000 pixeles del marco EXACTAMENTE igual, y que sigue
+# costando menos de 12.000 accesos. Ver la cabecera del .c.
+out/horaesquina: sim/hora_esquina.c sim/lcd_sim.c gfx2/gfx2.c gfx2/ui_top.c \
+                 gfx2/fonts_data.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) $(GFX2) -o $@ $^ $(LDLIBS)
+
+.PHONY: horaesquina
+horaesquina: out/horaesquina ; ./out/horaesquina
+
+comprueba: horaesquina
 
 # ---------------------------------------------------------------------
 # Que nadie baje una bandera de repintado sin mirar si se ha pintado. La
@@ -1304,7 +1396,7 @@ out/fat12_16m.img:
 	dd if=/dev/zero of=$@ bs=512 count=30720 status=none
 	mkfs.fat -F 12 -R 6 -f 2 -r 512 -s 8 -S 512 -n DEEPSDR16 $@ >/dev/null
 
-out/fatanade: sim/fatanade.c sim/w25q_sim.c sim/gd32_pines.c $(FIRMWARE)/User/spi_flash.c $(FIRMWARE)/User/bmp.c
+out/fatanade: sim/fatanade.c sim/wfx_tabla.h sim/w25q_sim.c sim/gd32_pines.c $(FIRMWARE)/User/spi_flash.c $(FIRMWARE)/User/bmp.c
 	@mkdir -p out
 	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -Ihostinc -Isim -o $@ \
 	      sim/fatanade.c sim/w25q_sim.c sim/gd32_pines.c \
@@ -1403,12 +1495,12 @@ comprueba: bdborra
 # y cuenta los bytes del disco que cambian: tienen que ser cero.
 out/chipchico: sim/chip_chico.c sim/w25q_sim.c sim/gd32_pines.c \
                $(FIRMWARE)/User/spi_flash.c $(FIRMWARE)/User/disco.c \
-               $(FIRMWARE)/User/zona_alta.c
+               $(FIRMWARE)/User/zona_alta.c $(FIRMWARE)/User/formato.c
 	@mkdir -p out
 	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -Ihostinc -Isim -o $@ \
 	      sim/chip_chico.c sim/w25q_sim.c sim/gd32_pines.c \
 	      $(FIRMWARE)/User/spi_flash.c $(FIRMWARE)/User/disco.c \
-	      $(FIRMWARE)/User/zona_alta.c $(LDLIBS)
+	      $(FIRMWARE)/User/zona_alta.c $(FIRMWARE)/User/formato.c $(LDLIBS)
 
 .PHONY: chipchico
 chipchico: out/fat12_vacio.img out/fat12_inflado.img
@@ -1578,6 +1670,52 @@ espectrooro: out/espectrooro ; ./out/espectrooro && ./out/espectrooro --sinparci
 ifneq ($(wildcard vendor/gfx.c),)
 comprueba: espectrooro
 endif
+
+# ---------------------------------------------------------------------
+# DONDE SE VAN LOS MILISEGUNDOS DE LA TRAZA (20/10/2026).
+#
+# No es una comprobacion, es una MEDIDA, y por eso no cuelga de
+# `comprueba`: lo que saca depende del reloj del PC. Lo que no depende es
+# el REPARTO -cuanto del cuadro va por pixel y cuanto por columna-, que es
+# el mismo codigo aqui y en la radio. Ver la cabecera del .c.
+out/espectrocoste: sim/espectro_coste.c sim/lcd_sim.c vendor/gfx.c $(FIRMWARE)/User/spectrum.c gfx2/gfx2.c gfx2/fonts_data.c
+	@mkdir -p out
+	$(CC) -O2 -Wall -I hostinc -I sim -I gfx2 -I $(FIRMWARE)/User -I vendor -o $@ $^ $(LDLIBS)
+
+.PHONY: espectrocoste
+espectrocoste: out/espectrocoste ; ./out/espectrocoste
+
+# ---------------------------------------------------------------------
+# CUANTO SE QUEDA PARADO EL BUCLE ESPERANDO AL CHIP (20/10/2026).
+#
+# En la radio salio un pico de 237 ms en el segundo bloque de poll, que es
+# donde viven la captura de pantalla y el volcado de ficheros. Esto pone en
+# el chip simulado los tiempos del fabricante y mide lo que el firmware se
+# queda esperando de verdad en cada paso. Ver la cabecera del .c.
+out/flashbloqueo: sim/flash_bloqueo.c sim/w25q_sim.c sim/gd32_pines.c \
+                  $(FIRMWARE)/User/spi_flash.c
+	@mkdir -p out
+	$(CC) -O2 -Wall -I hostinc -I sim -I $(FIRMWARE)/User -o $@ $^ $(LDLIBS)
+
+.PHONY: flashbloqueo
+flashbloqueo: out/flashbloqueo ; ./out/flashbloqueo
+comprueba: flashbloqueo
+
+# ---------------------------------------------------------------------
+# "EL WEFAX SE QUEDA FRITO EN CUANTO PONE GUARDANDO". 20/10/2026.
+#
+# Mide, contra el chip simulado con los tiempos del fabricante, cuanto se
+# queda parado el bucle escribiendo una carta de las dos maneras: bloque a
+# bloque sobre flash sin borrar (como estaba) y borrando por delante (como
+# esta). Ver la cabecera de sim/fax_bloqueo.c.
+out/faxbloqueo: sim/fax_bloqueo.c sim/w25q_sim.c sim/gd32_pines.c \
+                $(FIRMWARE)/User/spi_flash.c
+	@mkdir -p out
+	$(CC) -O2 -Wall -I hostinc -I sim -I $(FIRMWARE)/User -o $@ $^ $(LDLIBS)
+
+.PHONY: faxbloqueo
+faxbloqueo: out/faxbloqueo ; ./out/faxbloqueo
+comprueba: faxbloqueo
 
 # ---------------------------------------------------------------------
 # El camino de guardar los AJUSTES (25/09/2026). Ver la cabecera de
@@ -3626,7 +3764,8 @@ comprueba: armonico
 # por donde pasan TODAS las muestras de TODOS los modos. Tarde tres entregas
 # y tres hipotesis falladas en encontrarlo, porque NO HABIA NINGUNA MEDIDA de
 # lo que cuesta ese sitio. Ahora la hay, con tope.
-out/iqcoste: sim/iq_coste.c $(FIRMWARE)/User/iqbal.c $(FIRMWARE)/User/iqancho.c
+out/iqcoste: sim/iq_coste.c $(FIRMWARE)/User/iqbal.c $(FIRMWARE)/User/iqancho.c \
+              $(FIRMWARE)/User/fft.c
 	@mkdir -p out
 	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -Ihostinc -Isim -o $@ $(filter %.c,$^) $(LDLIBS)
 
@@ -4287,6 +4426,24 @@ out/emisrango: sim/emisoras_rango.c $(FIRMWARE)/User/emisoras.c \
 emisrango: out/emisrango ; ./out/emisrango datos/EMISORAS.BIN
 
 comprueba: emisrango
+
+# ---------------------------------------------------------------------
+# LO QUE CUESTA EL CARTEL DE LA CABECERA (20/10/2026).
+#
+# De un pico de 167 ms medido en antena: el tramo culpable era el de antes
+# del dibujo, y dentro de el la sospecha era la base de emisoras, que son
+# 206 kB al otro lado de un bus de patadas. Esto lo mide -104..420 bytes
+# por cartel, tres decimas de milisegundo- y de paso se queda de guardian:
+# si alguien vuelve a recorrer la tabla entera por ahi, se pone rojo.
+out/emiscartel: sim/emis_cartel.c $(FIRMWARE)/User/emisoras.c \
+                $(FIRMWARE)/User/hora_comun.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ $(filter %.c,$^) $(LDLIBS)
+
+.PHONY: emiscartel
+emiscartel: out/emiscartel ; ./out/emiscartel datos/EMISORAS.BIN
+
+comprueba: emiscartel
 
 out/rotulos: sim/rotulos.c sim/lcd_sim.c gfx2/gfx2.c gfx2/fonts_data.c \
              $(FIRMWARE)/User/spec_rotulos.c $(FIRMWARE)/User/spec_rotulos.h

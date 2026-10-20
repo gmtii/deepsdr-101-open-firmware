@@ -1,8 +1,6 @@
 /*
  * CUANTAS VECES POR SEGUNDO SE REPINTA EL PANEL DE STANAG.
  *
- * Pedido por el usuario, 07/10/2026.
- *
  * NO ESTABA COLGADA. El bucle principal iba tan lento que se perdia las
  * pulsaciones del boton. Y la causa era que stanag_modo_latido() sumaba
  * s_medidas, que sube ONCE VECES POR SEGUNDO -medido sobre el stanag_det.c

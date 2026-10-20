@@ -175,8 +175,6 @@ static void draw_val(gfx2_surf_t *s, void *ctx)
 /*
  * LA MISMA CAPA, EN UNA BANDA QUE LE DAN - 05/10/2026.
  *
- * Pedido por el usuario.
- *
  * Es la MISMA funcion de dibujo que pinta en la pantalla, no una copia: lo
  * unico que cambia es de donde sale la banda. En la pantalla la pide
  * gfx2_render(); aqui la trae la captura, que va montando la pantalla

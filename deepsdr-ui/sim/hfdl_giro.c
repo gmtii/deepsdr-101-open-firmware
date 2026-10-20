@@ -1,8 +1,6 @@
 /*
  * CUANTO GIRO AGUANTA EL DECODIFICADOR - 14/10/2026.
  *
- * Pedido por el usuario.
- *
  * La autoprueba que ya existia demuestra que el decodificador va bien a
  * las CUATRO velocidades -M1 0, 1, 2 y 3, o sea BPSK, 4-PSK y 8-PSK- con
  * simbolos limpios. Asi que el fallo esta ANTES, en lo que le llega.

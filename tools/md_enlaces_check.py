@@ -6,8 +6,6 @@ QUE NINGUN ENLACE NI NINGUNA IMAGEN DE LOS .MD APUNTE A DONDE NO HAY NADA.
 
 POR QUE EXISTE - 13/10/2026.
 
-Pedido por el usuario.
-
 Preparando esa publicacion aparecio esto en la PRIMERA linea de HARDWARE.md:
 
     ![Texto alternativo](deepsdr_1.jpg)
@@ -47,8 +45,6 @@ from urllib.parse import unquote
 
 
 # Los UNICOS .md que se quedan en la raiz. El resto van en docs/.
-#
-# Pedido por el usuario, 13/10/2026.
 #
 # README.md es la portada, NOVEDADES.md lo que lee el que acaba de
 # actualizar, y PROCEDENCIA.md el que dice de donde sale lo que no es
@@ -155,8 +151,6 @@ def main():
                 usadas.add(os.path.relpath(ruta, raiz).replace(os.sep, '/'))
 
     # EN LA RAIZ, SOLO README.md - 13/10/2026.
-    #
-    # Pedido por el usuario.
     #
     # Lo escribo aqui y no en un comentario porque un orden que no comprueba
     # nadie dura hasta el siguiente fichero que a alguien le venga bien

@@ -149,8 +149,6 @@ static uint8_t  s_figs_shift;   /* 0=letters, 1=figures - current Baudot shift s
 /*
  * LA INVERSION, SOLA - 06/10/2026.
  *
- * Pedido por el usuario.
- *
  * Puede, y sale casi gratis: los dos Goertzels YA estan calculados y la
  * polaridad contraria es el mismo bit con el signo cambiado. O sea que no
  * hay que medir nada nuevo - solo hay que mirar que pasaria.
@@ -549,8 +547,6 @@ void rtty_process(const float *audio, uint32_t n)
 
     /*
      * CADA TONO CONTRA SI MISMO, NO CONTRA EL OTRO - 06/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Las dos estaban bien sintonizadas. Medido sobre sus dos fotos, las
      * rayas del oscilador caen ENCIMA de los tonos en las dos:

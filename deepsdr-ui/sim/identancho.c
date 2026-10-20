@@ -3,7 +3,6 @@
  *
  * POR QUE EXISTE
  * --------------
- * Pedido por el usuario, 06/10/2026.
  *
  * Cortada a mitad de palabra, y justo antes de los dos ajustes que son el
  * motivo de que esa nota exista. La escribe escribe() con snprintf() sobre

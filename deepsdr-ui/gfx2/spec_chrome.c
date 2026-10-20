@@ -404,17 +404,55 @@ int spec_chrome_divisiones(void)
     return (int)SPC_GRID_ROWS;
 }
 
+/*
+ * SE COMPARA LO QUE SE DIBUJA, NO LOS HERCIOS - 19/10/2026.
+ *
+ * Esto comparaba center_hz EN HERCIOS y la regla imprime kHz. Con el span de
+ * serie un pixel son 127 Hz, asi que cualquier clic de 1, 10 o 100 Hz decia
+ * "ha cambiado" y repintaba 20.834 accesos al bus -0,94 ms con la CPU
+ * parada, porque la regla va por gfx2_render, que no usa DMA- para dejar la
+ * pantalla EXACTAMENTE igual. Medido pintando la regla de verdad y
+ * comparando los pixeles: con pasos de 1, 10 y 100 Hz cambiaban CERO.
+ *
+ * Es el mismo fallo que spec_chrome_axis_changed() -treinta lineas mas
+ * abajo- tiene arreglado desde el 05/10/2026, y que a la regla no llego.
+ *
+ * Lo que la regla dibuja son cinco etiquetas y una raya de color. Las marcas
+ * caen siempre en multiplos de SPC_TRACE_W/4, o sea que su posicion no
+ * depende de nada; lo que cambia es el TEXTO. Asi que se compara el texto,
+ * que es lo que se ve. Sigue siendo exacto en los dos sentidos: si cambia
+ * algo de lo que se ve, esto lo dice; si no, no se repinta.
+ *
+ * en_banda y fam_banda entran aunque hoy el centro cambie en el mismo clic
+ * en que se cruza un borde, porque depender de eso es depender de un efecto
+ * de lado: el dia que algo mueva la banda sin mover el centro, la raya se
+ * quedaria del color de antes.
+ */
 uint8_t spec_chrome_ruler_changed(const spec_chrome_t *a, const spec_chrome_t *b)
 {
-    /* en_banda entra aqui aunque hoy no haga falta -center_hz cambia en el
-     * mismo clic en que se cruza un borde-, porque depender de eso es
-     * depender de un efecto de lado: el dia que algo mueva la banda sin
-     * mover el centro, la raya se quedaria del color de antes. */
-    return (uint8_t)(a->center_hz != b->center_hz ||
-                     a->span_hz   != b->span_hz   ||
-                     a->demod_px  != b->demod_px  ||
-                     a->en_banda  != b->en_banda ||
-                     a->fam_banda != b->fam_banda);
+    char   ta[20], tb[20];
+    int8_t k;
+    uint8_t c;
+
+    if (a->demod_px  != b->demod_px)  { return 1U; }
+    if (a->en_banda  != b->en_banda)  { return 1U; }
+    if (a->fam_banda != b->fam_banda) { return 1U; }
+    if (a->eje_en_hz != b->eje_en_hz) { return 1U; }
+
+    for (k = -2; k <= 2; k++) {
+        int64_t fa = (int64_t)a->center_hz + (int64_t)k * (int64_t)(a->span_hz / 4U);
+        int64_t fb = (int64_t)b->center_hz + (int64_t)k * (int64_t)(b->span_hz / 4U);
+
+        if (fa < 0) { fa = 0; }
+        if (fb < 0) { fb = 0; }
+        fmt_eje(ta, (uint32_t)fa, a->eje_en_hz);
+        fmt_eje(tb, (uint32_t)fb, b->eje_en_hz);
+        for (c = 0U; c < (uint8_t)sizeof ta; c++) {
+            if (ta[c] != tb[c]) { return 1U; }
+            if (ta[c] == '\0') { break; }
+        }
+    }
+    return 0U;
 }
 
 /*

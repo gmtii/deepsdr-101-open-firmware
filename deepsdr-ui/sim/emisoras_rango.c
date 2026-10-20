@@ -1,8 +1,6 @@
 /*
  * LOS NOMBRES QUE ENTRAN EN EL ESPECTRO - 15/10/2026
  *
- * Pedido por el usuario.
- *
  * Ver User/emisoras.h. Este banco mide y comprueba emisoras_rango() sobre
  * el EMISORAS.BIN DE VERDAD -206 kB, 1.898 frecuencias-, no sobre uno
  * inventado: un fichero de juguete no tiene las ventanas apretadas de los

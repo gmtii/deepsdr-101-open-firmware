@@ -1,8 +1,6 @@
 /*
  * COMO QUEDA LA PANTALLA DE FT8 - 25/09/2026.
  *
- * Pedido por el usuario.
- *
  * Lo de "bonito" no se comprueba con un banco. Lo que SI se comprueba, y es
  * lo que se colaba antes, son los numeros que hay debajo:
  *

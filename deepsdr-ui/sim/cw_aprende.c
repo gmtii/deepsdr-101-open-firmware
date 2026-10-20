@@ -1,8 +1,6 @@
 /*
  * EL BOTON DE APRENDIZAJE DEL CW, Y LO QUE CUESTA CADA LECTURA.
  *
- * Pedido por el usuario, 08/10/2026.
- *
  * No hay una buena y una mala: hay dos suposiciones sobre quien teclea.
  *
  *   APAGADO: la raya dura TRES puntos. Es la norma y es lo que manda

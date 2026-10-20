@@ -18,6 +18,1459 @@ ordered by date, does not spare the detail, and is not published.
 
 ---
 
+## V5.47 · 2026-10-20
+
+### Qué cambia
+
+- **La distancia al oscilador se ve en la pantalla principal**, pegada al
+  chip «NCO» de la barra de estado («NCO +12k»). Estaba en Información, y ahí
+  no sirve: la pregunta que contesta —si el panorama se queda sordo a una
+  frecuencia fija o a una distancia fija— hay que mirarla **en la cascada**, y
+  no se pueden ver las dos pantallas a la vez.
+- **La cabecera del BMP declara los renglones que hay escritos, no los que
+  entraron.** Si la grabación se corta —disco lleno, o un bloque que no se
+  pudo escribir— el contador incluía renglones que no llegaron al fichero: el
+  BMP prometía más imagen de la que tiene dentro, que es justo como un visor
+  dice que el fichero está dañado.
+
+### What's new
+
+- **The offset from the local oscillator is now on the main screen**, next to
+  the «NCO» chip in the status bar («NCO +12k»). It used to be in the
+  Information page, which is no use: the question it answers — whether the
+  band goes deaf at a fixed frequency or at a fixed offset — has to be watched
+  **on the waterfall**, and you cannot see both screens at once.
+- **The BMP header now declares the rows actually written, not the rows that
+  came in.** If recording is cut short — disk full, or a block that could not
+  be written — the counter included rows that never reached the file, so the
+  BMP promised more image than it holds. That is exactly how a viewer decides
+  a file is damaged.
+
+---
+
+## V5.46 · 2026-10-20
+
+### Qué cambia
+
+- **La fila «Cuadratura I/Q» de Información dice ahora a qué distancia ha
+  quedado la emisora del oscilador.** Es el número que faltaba para atacar el
+  hueco de 78–100 kHz: con el NCO puesto el oscilador se queda quieto y es la
+  sintonía la que se pasea entre 6 y 40 kHz de él. Si una zona del dial se
+  queda sorda **siempre a la misma frecuencia**, el problema está delante del
+  convertidor; si se queda sorda **siempre que ese número es grande**, el
+  problema es dónde se aparca el oscilador. Son dos averías con el mismo
+  aspecto y hasta ahora no había forma de distinguirlas desde la radio.
+
+### What's new
+
+- **The «I/Q quadrature» row in Information now shows how far the signal has
+  ended up from the local oscillator.** It is the number that was missing to
+  attack the 78–100 kHz gap: with the NCO on, the oscillator stays put and
+  the tuning walks between 6 and 40 kHz from it. If a stretch of the dial
+  goes deaf **always at the same frequency**, the problem is ahead of the
+  converter; if it goes deaf **whenever that number is large**, the problem
+  is where the oscillator parks. Two faults that look alike, with no way to
+  tell them apart from the radio until now.
+
+---
+
+## V5.45 · 2026-10-20
+
+### Qué cambia
+
+- **Una carta de fax cabe entera, de verdad.** El límite estaba en 1280
+  renglones (10 min 40 s) y la carta que recibiste hoy medía **1352** — se
+  habría partido igual, por 72 renglones. Ahora son **1536 (12 min 48 s)**,
+  que es un 14 % por encima de la carta más larga medida. Es el tercer número
+  de hoy y el primero que sale de un dato en vez de una impresión.
+- En una flash de 8 MB caben seis cartas enteras en vez de ocho.
+
+### What's new
+
+- **A fax chart really does fit in one file now.** The limit was 1280 rows
+  (10 min 40 s) and the chart received today was **1352** — it would still
+  have split, by 72 rows. It is now **1536 (12 min 48 s)**, 14 % above the
+  longest chart actually measured. It is today's third value for this number
+  and the first taken from data rather than an impression.
+- An 8 MB drive holds six full charts instead of eight.
+
+---
+
+## V5.44 · 2026-10-20
+
+### Qué cambia
+
+- **El centrado da la vuelta entera a la línea.** Salió con ±49 puntos porque
+  la primera carta estaba corrida 21; la segunda estaba corrida **269**, así
+  que el desfase no es de la emisora, depende de dónde se enganche. Ahora el
+  paso es de 21 puntos, el recorrido es la línea completa (36 posiciones) y
+  **la mitad izquierda del botón corre hacia la izquierda y la derecha hacia
+  la derecha**: 18 toques en el peor caso, dos o tres en el normal.
+- **El botón de centrado del fax ahora se ve.** En V5.43 existía y respondía
+  al dedo, pero no se dibujaba: en esa cabecera el tercer botón no tiene un
+  ancho fijo, es lo que queda entre la zona de la barra y la chapa, y sin
+  acortar esa zona el hueco salía negativo. Ya está, 130 px al lado de
+  «Guardando».
+
+### What's new
+
+- **Centring now wraps the whole line.** It shipped with ±49 points because
+  the first chart was 21 points out; the second was **269**, so the offset is
+  not a property of the station — it depends on where the decoder latched. The
+  step is now 21 points, the range is the full line (36 positions), and **the
+  left half of the button goes left, the right half goes right**: 18 taps
+  worst case, two or three normally.
+- **The fax centring button is now visible.** In V5.43 it existed and
+  responded to touch, but was never drawn: in that header the third button
+  has no fixed width — it is whatever is left between the bar area and the
+  badge — and without shortening that area the gap came out negative. Fixed,
+  130 px next to the save button.
+
+---
+
+## V5.43 · 2026-10-20
+
+### Qué cambia
+
+- **Centrado del fax, a mano.** En el panel del fax, al lado de «Sincroniza» y del botón de guardar. Si la
+  carta sale con un trozo del margen pegado al borde derecho, es que el pulso
+  de sincronismo de esa emisora no cae donde el decodificador supone. Se corre
+  la imagen de 7 en 7 puntos (±49, o sea ±6,5 % de la línea) hasta que el
+  margen vuelve a su sitio. **No se pierde nada**: lo que sale por un lado
+  entra por el otro. Se guarda en CONFIG.CSV, así que se ajusta una vez.
+- Se aplica al renglón **ya terminado**, justo antes de entregarlo: no toca el
+  enganche, ni el ritmo, ni el pulso de fase.
+
+### What's new
+
+- **Manual fax centring**, on the fax panel, next to «Sync» and the save button. If a
+  chart comes out with a strip of the margin stuck to the right edge, that
+  station's sync pulse does not fall where the decoder assumes. Shift the
+  image 7 points at a time (±49, i.e. ±6.5 % of a line) until the margin is
+  back in place. **Nothing is lost**: what leaves one side comes in the other.
+  Saved in CONFIG.CSV, so it is set once.
+- It is applied to the **finished** row, just before handing it over: it does
+  not touch the sync lock, the line rate or the phasing pulse.
+
+---
+
+## V5.42 · 2026-10-20
+
+### Qué cambia
+
+- **Una carta de diez minutos cabe entera en un fichero.** El troceo por
+  altura estaba en 1024 renglones, que a 120 lpm son **8 min 32 s** — menos
+  que una carta del DWD, así que iba a partir en dos justo lo que tiene que
+  salir de una pieza. Ahora son **1280 renglones (10 min 40 s, 949 kB)**. En
+  una flash de 8 MB caben ocho cartas enteras en vez de diez: barato al lado
+  de partir una carta buena por la mitad.
+
+### What's new
+
+- **A ten-minute chart now fits in a single file.** The height split was set
+  at 1024 rows, which at 120 lpm is **8 min 32 s** — shorter than a DWD
+  chart, so it would have cut in two exactly what is meant to come out whole.
+  It is now **1280 rows (10 min 40 s, 949 kB)**. An 8 MB drive holds eight
+  full charts instead of ten: cheap next to splitting a good chart in half.
+
+---
+
+## V5.41 · 2026-10-20
+
+Lo que hacía falta para poder prometer que la riada de ficheros no vuelve.
+
+### Qué cambia
+
+- **El cerrojo lo arma el cierre, no el que cierra.** Para que no se abra un
+  fichero detrás de otro hay un cerrojo de un minuto, y lo armaba *quien
+  cerraba*. Bastaba un cerrador que no se acordara —y lo hubo— para que no se
+  armara nunca. Ahora lo arma el propio cierre: aunque mañana aparezca otro
+  cerrador que no he visto, lo peor posible es **un fichero por minuto**, no
+  veinte.
+- **Si el disco se llena a mitad de carta, el fichero se cierra en
+  condiciones.** Antes se abandonaba: quedaba con la cabecera prometiendo
+  1024 renglones —el visor pinta basura hasta abajo— y con el tramo entero
+  reservado, hasta 64 kB desperdiciados justo cuando menos sobra. Ahora se
+  rehace la cabecera con la altura real y se devuelve lo que no se usó.
+- **Y se deja de reintentar lo que acaba de fallar.** Volcar la cola del
+  buffer tras un fallo de escritura eran otros 300 ms de radio parada sin
+  añadir un renglón.
+
+### What's new
+
+- **The lock is armed by the close, not by the closer.** To stop one file
+  opening right after another there is a one-minute lock, and it used to be
+  armed by *whoever closed*. One closer that forgot — and there was one — and
+  it never armed. The close now arms it itself: even if another closer I have
+  not found turns up, the worst possible case is **one file per minute**, not
+  twenty.
+- **If the drive fills mid-chart, the file is closed properly.** It used to be
+  abandoned, leaving the BMP header promising 1024 rows — viewers paint
+  garbage to the bottom — and the whole extent still reserved, up to 64 kB
+  wasted exactly when there is none to spare. The header is now rewritten
+  with the real height and the unused part returned.
+- **And what just failed is not retried.** Flushing the buffer tail after a
+  write failure was another 300 ms of stalled radio for no extra row.
+
+---
+
+## V5.40 · 2026-10-20
+
+El fallo de los ficheros sueltos. No estaba donde lo busqué todo el día.
+
+### Qué cambia
+
+- **Se acabaron los ficheros de 8 kB.** `gsv_*` —el que escribe en el
+  pendrive— es **uno solo**, compartido por SSTV, WEFAX y la captura de
+  pantalla. Y el bucle principal llama a `fax_poll()` y a `sstv_poll()` en la
+  **misma vuelta y siempre**, esté activo el modo que esté. `sstv_poll()`
+  empezaba con «si el SSTV no está activo, cierra lo que haya»: en WEFAX, el
+  fax abría la carta y escribía la cabecera, y **la línea siguiente del bucle
+  la cerraba**. Como el cerrojo de un minuto sólo se arma cuando cierra el
+  propio `fax_poll()`, no se armaba nunca y a la vuelta siguiente se abría
+  otro fichero. 8 kB = la cabecera más el primer bloque de renglones.
+- **Ahora el fichero tiene dueño.** El prefijo con el que se abrió —«WFAX»,
+  «SSTV», «PANT»— ya estaba guardado; quien cierra tiene que decir de quién
+  es lo que viene a cerrar, y si no coincide no toca nada.
+- **Y la carta de fax ya no se cierra por silencio.** Ese cierre a los diez
+  segundos es del SSTV. El fax se cierra con el botón, que es lo pedido.
+
+### What's new
+
+- **No more 8 kB files.** `gsv_*` — the thing that writes to the drive — is a
+  **single** machine shared by SSTV, WEFAX and the screen capture. The main
+  loop calls `fax_poll()` and `sstv_poll()` in the **same pass, always**,
+  whichever mode is active. `sstv_poll()` opened with "if SSTV is not active,
+  close whatever is open": in WEFAX the fax opened the chart and wrote the
+  header, and **the very next line of the loop closed it**. Since the
+  one-minute lock only arms when `fax_poll()` itself closes, it never armed,
+  and the next pass opened another file. 8 kB = the header plus the first
+  block of rows.
+- **The file now has an owner.** The prefix it was opened with — "WFAX",
+  "SSTV", "PANT" — was already stored; whoever closes must say whose file
+  they came to close, and leaves it alone if it does not match.
+- **And the fax chart no longer closes on silence.** That ten-second close
+  belongs to SSTV. The fax closes with the button, as asked.
+
+---
+
+## V5.39 · 2026-10-20
+
+Dos fallos de la versión de ayer, que el usuario encontró al primer intento.
+
+### Qué cambia
+
+- **Los botones vuelven a responder mientras graba.** La carta crecía
+  llamando a `spi_flash_anade_trozo()` una vez por bloque de 4 kB, y eso
+  cuesta **303 ms medidos** de chip parado: cada dos segundos y medio la
+  radio dejaba de mirar la pantalla táctil. Ahora el fichero se alarga a
+  **tramos de 64 kB** y dentro escribe a direcciones ya conocidas: **51 ms
+  por bloque**, y la parada larga pasa de cada 2,5 s a cada 40 s.
+- **Una carta es UN fichero.** Con el camino de antes, el primer fallo
+  cerraba el fichero y el siguiente intento abría otro: lo que quedaba en el
+  pendrive era `WFAX001..WFAX020` con 4 kB cada uno, la cabecera y nada más.
+  Ahora el fichero se crea una vez y todas las demás escrituras lo alargan.
+- **Y se devuelve lo que sobra.** Al cerrar, los bloques no usados del último
+  tramo —hasta 60 kB— vuelven al pendrive, siguiendo la cadena del fichero.
+- **Si el disco está repartido, sigue grabando.** Hacen falta 64 kB seguidos,
+  no 774; y si tampoco los hay, se piden la mitad, y la mitad de la mitad,
+  hasta un solo bloque.
+- **Entrar en WEFAX ya no empieza a grabar solo.** El botón se guardaba en
+  los ajustes, así que al entrar en el modo la radio abría fichero sin que
+  nadie tocara nada. Ahora arranca siempre en «No guardar».
+
+### What's new
+
+- **Buttons respond again while recording.** The chart file grew by calling
+  `spi_flash_anade_trozo()` once per 4 kB block, and that costs a **measured
+  303 ms** with the chip busy: every 2.5 seconds the radio stopped looking at
+  the touch panel. The file now grows in **64 kB extents** and writes to
+  already-known addresses inside them: **51 ms per block**, and the long
+  stall drops from every 2.5 s to every 40 s.
+- **One chart is ONE file.** Previously the first failure closed the file and
+  the next attempt opened another one, leaving `WFAX001..WFAX020` of 4 kB
+  each on the drive — the header and nothing else. The file is now created
+  once and every later write extends it.
+- **And the leftovers come back.** On close, the unused blocks of the last
+  extent — up to 60 kB — are returned to the drive, following the file's
+  cluster chain.
+- **A fragmented drive still records.** It needs 64 kB contiguous, not 774;
+  and if even that is missing it asks for half, and half of that, down to a
+  single block.
+- **Entering WEFAX no longer starts recording by itself.** The save button
+  was stored in the settings, so entering the mode opened a file with nobody
+  touching anything. It now always starts at "Do not save".
+
+---
+
+## V5.38 · 2026-10-20
+
+Revisión a fondo del WEFAX entero, pasada tras pasada hasta que dos
+seguidas no encontraran nada. Esto es lo que salió.
+
+### Qué cambia
+
+- **La carta ya no se reserva de una pieza: el fichero crece.** Se monta con
+  `spi_flash_anade_trozo()`, de 4 kB en 4 kB y cada trozo donde quepa, así
+  que **no hace falta ni un byte de espacio seguido**. Una carta entera, un
+  fichero — se acabó trocearla para que entrara. Y se acabó el «no cabe» con
+  el disco medio vacío.
+- **GRAVE, y llevaba ahí desde siempre: el decodificador sólo tenía DOS
+  buffers de línea.** El bucle recibía el puntero a la línea cerrada y se
+  iba a escribirla en la flash —decenas de milisegundos—, y dos líneas
+  después la interrupción volvía a ese mismo buffer y escribía encima de lo
+  que el bucle aún estaba leyendo. Eso son renglones partidos por la mitad.
+  Y con una sola bandera, si se cerraban dos líneas antes de que el bucle
+  pasara, la primera desaparecía. Ahora hay un anillo de ocho, que es lo que
+  ya se hizo en SSTV por este mismo motivo.
+- **GRAVE: el escritor de bloques borraba lo que no era suyo.**
+  `spi_flash_write_block_4k()` redondeaba la dirección **hacia abajo** y
+  borraba y reescribía ese sector entero — con una dirección no alineada se
+  llevaba hasta 4 kB del vecino y además dejaba los datos corridos. Es el
+  mismo fallo que borró un `CONFIG.CSV` esta tarde, y estaba también en el
+  escritor principal. No saltaba porque las direcciones de fichero están
+  alineadas **sólo si Windows formateó el volumen así**.
+- **El aviso dice el motivo de verdad.** Antes decía siempre «pide n kB
+  seguidos» —que desde hoy ni siquiera es cierto— y sólo salía al abrir. Si
+  el disco se llenaba a mitad de carta, la grabación se paraba en silencio.
+  Ahora el motivo lo da quien lo sabe y sale en los dos sitios.
+- **Y el cartel ya no se recortaba:** cabían 39 caracteres y el motivo se
+  cortaba sin decirlo.
+
+### What's new
+
+- **A chart is no longer reserved in one piece: the file grows.** It is
+  built with `spi_flash_anade_trozo()`, 4 kB at a time, each chunk wherever
+  it fits — so **not one byte of contiguous space is needed**. One chart,
+  one file. No more splitting it up to make it fit, and no more «no room»
+  with a half-empty disk.
+- **SERIOUS, and it had always been there: the decoder had only TWO line
+  buffers.** The loop took the pointer to the closed line and went off to
+  write it to flash — tens of milliseconds — and two lines later the
+  interrupt came back to that same buffer and wrote over what the loop was
+  still reading. That is torn rows. And with a single flag, if two lines
+  closed before the loop came round, the first vanished. There is now a ring
+  of eight, which is what SSTV already got for the same reason.
+- **SERIOUS: the block writer erased what was not its own.**
+  `spi_flash_write_block_4k()` rounded the address **down** and erased and
+  rewrote that whole sector — with an unaligned address it took up to 4 kB
+  of the neighbour and wrote the data at the wrong offset. Same fault that
+  erased a `CONFIG.CSV` this afternoon, and it was in the main writer too.
+- **The notice states the real reason**, and appears mid-chart too, not just
+  when opening.
+- **And it no longer truncated:** 39 characters fit, and the reason was cut
+  off without saying so.
+
+## V5.37 · 2026-10-20
+
+### Qué cambia
+
+- **Encontrado lo que llenaba el disco: los ficheros vacíos se quedaban con
+  su reserva entera.** Una carta se reserva de una pieza —448 kB— y la
+  entrada de directorio se escribe ya con el tamaño final. Al cerrar, un
+  fichero con cero renglones **se salía sin recortar**, así que esos 448 kB
+  seguían marcados como suyos en la tabla de asignación. Catorce de esos son
+  seis megas y medio. Y desde fuera no se ve: Windows enseña el tamaño de la
+  entrada de directorio mientras la tabla dice otra cosa — de ahí «tengo
+  espacio de sobra» con un disco que no admite una carta más. Ahora se
+  recorta a un bloque.
+- **Y una carta pide 100 kB seguidos, no 448.** De 600 renglones a 128. Lo
+  que manda para poder abrir un fichero no es el hueco libre sino **el hueco
+  seguido más grande**, y ese se parte en cuanto hay unos cuantos ficheros
+  repartidos. 100 kB entran casi en cualquier sitio. El precio son más
+  ficheros —a 120 lpm, 64 segundos cada uno— y no hay hueco entre ellos:
+  cuando uno se llena, el siguiente se abre en la misma vuelta.
+- **Y el cartel dice el número de verdad**, calculado y no escrito a mano:
+  si cambia el tamaño del fichero, cambia el cartel.
+
+### What's new
+
+- **Found what was filling the disk: empty files kept their whole
+  reservation.** A chart is reserved in one piece — 448 kB — and the
+  directory entry is written with the final size up front. On close, a file
+  with zero lines **returned without trimming**, so those 448 kB stayed
+  marked as its own in the allocation table. Fourteen of those is six and a
+  half megabytes. And it is invisible from outside: Windows shows the
+  directory entry's size while the table says otherwise — hence «I have
+  plenty of space» with a disk that will not take one more chart. It is now
+  trimmed to one block.
+- **And a chart asks for 100 kB in a row, not 448.** From 600 lines to 128.
+  What decides whether a file can be opened is not free space but **the
+  largest contiguous hole**, and that breaks up as soon as a few files are
+  scattered about. 100 kB fits almost anywhere. The price is more files — at
+  120 lpm, 64 seconds each — with no gap between them.
+- **And the notice states the real number**, computed rather than written by
+  hand.
+
+## V5.36 · 2026-10-20
+
+### Qué cambia
+
+- **El botón de guardar del WEFAX es ahora un interruptor, y nada más.** Lo
+  pones y abre un fichero; todo lo que decodifica se escribe ahí; lo quitas
+  —o te sales del modo— y lo cierra. Punto.
+- **Por qué hacía falta.** Hasta ahora el fichero se abría y se cerraba
+  siguiendo al **decodificador**: al entrar en imagen y al salir. Y el
+  decodificador entra y sale constantemente con señal justa. De ahí salieron
+  en un mismo día, por tres causas distintas, veintisiete ficheros de una
+  sesión, luego diez minutos de carta sin grabar nada, y luego veintiséis
+  ficheros de 8 kB. Eran tres intentos de hacer bien una máquina de estados
+  **que no tenía que existir**.
+- **Y si no hay sitio, sale un cartel grande encima del espectro**, no un
+  rótulo en otra pantalla: «NO CABE: PIDE 448 kB SEGUIDOS, HAY nnn kB». Con
+  el número, porque «no cabe» con medio disco libre no se entiende hasta que
+  ves que lo que falta es sitio **seguido**.
+- **Un cerrojo de un minuto entre fichero y fichero.** No protege de nada
+  conocido; está porque el mismo síntoma volvió tres veces por tres causas
+  distintas, y un tope que no depende de haber entendido la causa es lo
+  único que cubre la cuarta. Un fichero que se llena —600 renglones, cinco
+  minutos— continúa en el siguiente sin esperar.
+- **Arreglado: una regla del comprobador se había perdido.** Al quitar un
+  banco, el corte se llevó por delante la línea que compila el del WEFAX, y
+  durante unas horas `make comprueba` ejecutó un **binario viejo** que ya
+  nadie reconstruía. Un banco que no se recompila es un banco que miente.
+
+### What's new
+
+- **The WEFAX save button is now a switch, and nothing else.** Turn it on
+  and it opens a file; everything decoded goes in there; turn it off — or
+  leave the mode — and it closes. Full stop.
+- **Why it was needed.** Until now the file opened and closed following the
+  **decoder**: on entering image and on leaving it. And the decoder enters
+  and leaves constantly on a marginal signal. That produced, in one day and
+  from three different causes, twenty-seven files in one session, then ten
+  minutes of chart with nothing saved, then twenty-six 8 kB files. Three
+  attempts at getting right a state machine **that should not have existed**.
+- **And if there is no room, a large notice appears over the spectrum**, not
+  a label on another screen: «NO ROOM: NEEDS 448 kB IN A ROW, THERE IS nnn
+  kB». With the number, because «no room» with half the disk free makes no
+  sense until you see that what is missing is room **in a row**.
+- **A one-minute lock between files.** It guards against nothing known; it
+  is there because the same symptom came back three times from three
+  different causes, and a cap that does not depend on having understood the
+  cause is the only thing that covers the fourth. A file that fills — 600
+  lines, five minutes — continues into the next without waiting.
+- **Fixed: a rule in the checker had been lost.** When a bench was removed,
+  the cut took the WEFAX bench's compile line with it, and for a few hours
+  `make comprueba` ran an **old binary** that nobody rebuilt. A bench that
+  is not recompiled is a bench that lies.
+
+## V5.35 · 2026-10-20
+
+### Qué cambia
+
+- **GRAVE, y era mío: el firmware podía borrar ficheros ajenos del disco.**
+  Un usuario mandó su `CONFIG.CSV`: **1.536 bytes a 0xFF con la entrada de
+  directorio intacta**, que es la firma de un borrado de sector por
+  dirección de chip. La causa: `spi_flash_borrado_paso()` redondeaba el
+  cursor **hacia abajo** al límite de sector, o sea podía empezar a borrar
+  **por debajo** de donde le decían. No saltaba a la vista porque todo lo
+  que lo llamaba hasta la V5.33 trabajaba sobre zonas alineadas a 4 kB —
+  pero una reserva de fichero empieza donde empiece su *cluster*, y la zona
+  de datos de un volumen formateado por Windows no tiene por qué caer en un
+  límite de 4 kB. Con la reserva desalineada se salía por el principio, y si
+  ese límite caía en un múltiplo de 64 kB se llevaba **64 kB del vecino de
+  un golpe**. Ahora redondea hacia arriba, que no puede salirse.
+- **Y el «borrado por delante» de la V5.33 se retira entero.** Era quien
+  llamaba a eso con una zona desalineada. Ganaba 45 ms por bloque, uno cada
+  dos minutos, y se jugaba los ficheros del usuario — y encima, medido
+  después, **no era la causa del atasco** que iba a arreglar: 51 ms de cada
+  2.700 son el 2% del tiempo, no un tercio.
+- **Quitado también lo de borrar las cartas cortas**, que metí en la V5.34.
+  Era lo único de todo ese camino que *destruye* algo que ya existía. Un
+  fichero feo molesta; tirar una carta de diez minutos no se arregla.
+- **Una carta ya no pide 448 kB seguidos, sino 193.** Baja de 600 a 256
+  renglones por fichero, y **cuando uno se llena se abre el siguiente
+  enseguida**, así que una carta larga sigue grabándose en WFAX002,
+  WFAX003… Antes se grababan los primeros cinco minutos y el resto se perdía
+  en silencio.
+- **Y la cabecera del fax dice lo que está haciendo el guardado**, mientras
+  recibes y sin ir a otra pantalla: «no guarda», «listo», «WFAX003 128» o
+  «sin sitio». Cuatro palabras que separan «no estaba puesto» de «está
+  roto».
+
+### What's new
+
+- **SERIOUS, and it was mine: the firmware could erase other files off the
+  disk.** A user sent his `CONFIG.CSV`: **1,536 bytes of 0xFF with the
+  directory entry intact**, which is the signature of a sector erase by chip
+  address. The cause: `spi_flash_borrado_paso()` rounded the cursor **down**
+  to the sector boundary, so it could start erasing **below** where it was
+  told to. It did not show because everything that called it before V5.33
+  worked on 4 kB-aligned areas — but a file reservation starts wherever its
+  cluster starts, and the data area of a Windows-formatted volume need not
+  land on a 4 kB boundary. Misaligned, it ran off the front, and if that
+  boundary fell on a 64 kB multiple it took **64 kB of the neighbour at
+  once**. It now rounds up, which cannot run off.
+- **And V5.33's «erase ahead» is withdrawn entirely.** It was what called
+  that with a misaligned area. It gained 45 ms per block, one every two
+  minutes, and gambled the user's files — and, measured afterwards, **it was
+  not the cause of the stall** it was meant to fix: 51 ms out of every 2,700
+  is 2% of the time, not a third.
+- **Also removed: deleting short charts**, added in V5.34. It was the only
+  thing in that whole path that *destroys* something already there.
+- **A chart no longer needs 448 kB in a row, but 193.** Down from 600 to 256
+  lines per file, and **when one fills the next opens straight away**, so a
+  long chart keeps recording into WFAX002, WFAX003… Before, the first five
+  minutes were saved and the rest was lost in silence.
+- **And the fax header states what saving is doing**, while you receive and
+  without going to another screen: «not saving», «ready», «WFAX003 128» or
+  «no room».
+
+## V5.34 · 2026-10-20
+
+### Qué cambia
+
+- **Arreglado: una carta de fax dejaba veintisiete ficheros en el disco.** El
+  fichero se cerraba en cuanto el decodificador se salía de imagen **un
+  instante**, y con señal justa el enganche se pierde medio segundo y vuelve
+  cada poco. Cada parpadeo cerraba la carta y abría otra — y cada apertura
+  reserva 448 kB y recorre la tabla de asignación entera. Ahora el estado
+  tiene que llevar **cinco segundos** fuera de imagen para dar la carta por
+  acabada. El tono de parada de verdad la cierra igual, cinco segundos más
+  tarde, sin perder un renglón.
+- **Y lo que no llega a dieciséis renglones se borra al cerrar.** Antes, una
+  carta de cero renglones se dejaba en el directorio con sus 448 kB
+  reservados y su cabecera dentro. Dieciséis renglones a 120 lpm son ocho
+  segundos: por debajo de eso no hay nada que mirar.
+
+### What's new
+
+- **Fixed: one fax chart left twenty-seven files on the disk.** The file was
+  closed the moment the decoder dropped out of image **for an instant**, and
+  with a marginal signal the lock drops for half a second every so often.
+  Every flicker closed the chart and opened another — and every open reserves
+  448 kB and walks the whole allocation table. The state must now be out of
+  image for **five seconds** before the chart is called finished. The real
+  stop tone still closes it, five seconds later, without losing a line.
+- **And anything under sixteen lines is deleted on close.** A zero-line chart
+  used to stay in the directory with its 448 kB reserved and its header
+  inside. Sixteen lines at 120 lpm is eight seconds: below that there is
+  nothing to look at.
+
+## V5.33 · 2026-10-20
+
+### Qué cambia
+
+- **Fuera el bus automático de la V5.31. Era mío y era malo.** Lo monté sobre
+  una suposición —que ASET valía 3— y la radio dice que vale 2: con el valor
+  de verdad, la cuenta predice lo contrario de lo que se midió. Y de paso
+  movía el bus de los 45 ns del cargador a 50. **Los 45 ns de serie ya
+  estaban en la zona silenciosa**, así que lo único que hacía el automático
+  era meter ruido. La fila «Bus pantalla» vuelve a ser la de la V5.30.
+- **Guardar una carta de fax ya no para el bucle cada dos segundos.** Escribir
+  4 kB sobre flash con datos viejos obliga a borrar el sector y reprogramar:
+  **51 ms** medidos contra el chip simulado con los tiempos del fabricante, y
+  eso cada 2,7 segundos durante los diez minutos que dura una carta. Ahora la
+  zona se borra **por delante**, un borrado por vuelta del bucle, y cada
+  bloque se programa sobre flash limpia: **6 ms**. Preparar cuesta 1,5 s una
+  sola vez, repartidos en 21 vueltas de 45 a 150 ms.
+- **Y una carta abre un fichero, no diez.** Desde que el fichero se abre sin
+  esperar al renglón cero, un parpadeo del enganche lo cerraba y lo volvía a
+  abrir — y cada apertura reserva 448 kB. Ahora se abre una vez por carta.
+
+- **Y un chip de 2 MB que dice ser de 1 ya no pierde la mitad.** Un usuario
+  del repositorio mandó la foto de su flash: pone **W25Q16JVSIQ**, que son
+  2 MB. Y el identificador que contesta es **EF 40 14**, que como código de
+  capacidad significa 1 MB. La etiqueta de fábrica y lo que el chip dice de
+  sí mismo no coinciden, y nosotros creíamos al código. Ahora **manda la
+  medida**: leer en 1 MB y que salga algo distinto de lo que hay en 0 sólo
+  es posible si hay más chip —en uno de 1 MB esa dirección ES físicamente la
+  0— así que eso no es una estimación, es una demostración. Se le cree al
+  chip, no a su etiqueta.
+- **Y la medida ya funciona con el chip casi vacío.** Miraba tres ventanas
+  repartidas por el chip (en 0, a un cuarto y a la mitad), y en un disco
+  recién formateado dos de las tres están en blanco: sin datos no se
+  distingue nada, así que no medía y mandaba el código. Ahora las tres van
+  pegadas al principio, donde cualquier volumen FAT tiene el sector de
+  arranque, la tabla de asignación y el directorio raíz.
+
+### What's new
+
+- **The V5.31 automatic bus is gone. It was mine and it was bad.** I built it
+  on an assumption — that ASET was 3 — and the radio says it is 2: with the
+  real value the arithmetic predicts the opposite of what was measured. And
+  it moved the bus from the bootloader's 45 ns to 50. **The stock 45 ns was
+  already in the quiet zone**, so all the automatic did was add noise. The
+  «Display bus» row goes back to what it was in V5.30.
+- **Saving a fax chart no longer stalls the loop every two seconds.** Writing
+  4 kB over flash that holds old data forces a sector erase and a
+  reprogram: **51 ms** measured against the simulated chip with the
+  manufacturer's timings, and that every 2.7 seconds for the ten minutes a
+  chart lasts. The area is now erased **ahead**, one erase per loop pass, and
+  each block is programmed onto clean flash: **6 ms**. Preparing costs 1.5 s
+  once, spread over 21 passes of 45 to 150 ms.
+- **And one chart opens one file, not ten.** Since the file opens without
+  waiting for line zero, a flicker of the lock closed it and reopened it —
+  and every open reserves 448 kB. Now it opens once per chart.
+- **And a 2 MB chip that claims to be 1 MB no longer loses half of itself.**
+  A user of the repository sent a photo of his flash: it reads
+  **W25Q16JVSIQ**, which is 2 MB. And the id it answers is **EF 40 14**,
+  which as a capacity code means 1 MB. The factory marking and what the chip
+  says about itself disagree, and we believed the code. Now **the
+  measurement wins**: reading at 1 MB and getting something different from
+  what is at 0 is only possible if there is more chip — on a 1 MB part that
+  address IS physically 0 — so that is not an estimate, it is a proof.
+- **And the measurement now works on a nearly empty chip.** It looked at
+  three windows spread across the chip (at 0, a quarter in and half way in),
+  and on a freshly formatted disk two of the three are blank: with no data
+  nothing can be told apart, so it did not measure and the code took over.
+  The three windows now sit near the start, where any FAT volume keeps its
+  boot sector, allocation table and root directory.
+
+## V5.32 · 2026-10-20
+
+### Qué cambia
+
+- **Arreglado: el WEFAX podía estar recibiendo con «BMP gris» puesto y no
+  guardar nada.** El fichero sólo se abría si el contador de renglones valía
+  cero, y eso únicamente es cierto en el instante en que el decodificador
+  entra en imagen. Si encendías el botón con la carta ya empezada —que es lo
+  normal, porque la radio arranca en «No guardar»— esa condición no se volvía
+  a cumplir hasta la carta siguiente. **Y no avisaba**: el botón seguía
+  diciendo «BMP gris» como si todo fuera bien.
+- **Ahora se abre en cuanto hay imagen y el botón lo pide.** Si te enganchas
+  a mitad de carta, el fichero empieza ahí. Media carta guardada es
+  infinitamente más que ninguna, y lo que ya pasó no se puede recuperar.
+- **Y si no hay sitio, se intenta una vez y no más.** Reservar son 448 kB
+  seguidos y un barrido de la FAT entera; sin freno, a 120 lpm serían dos
+  barridos por segundo durante toda la carta. Tocar el botón vuelve a darle
+  una oportunidad, que es lo que ese botón ya hacía.
+
+### What's new
+
+- **Fixed: WEFAX could be receiving with «Grey BMP» set and save nothing.**
+  The file was only opened if the line counter was zero, and that is only
+  true at the instant the decoder enters image. If you turned the button on
+  with the chart already running — which is the normal case, since the radio
+  starts at «Do not save» — that condition did not come true again until the
+  next chart. **And it said nothing**: the button went on reading «Grey BMP»
+  as if all were well.
+- **It now opens as soon as there is an image and the button asks for it.**
+  If you join mid-chart, the file starts there. Half a chart saved is
+  infinitely more than none, and what already went by cannot be recovered.
+- **And if there is no room, it tries once and no more.** Reserving means
+  448 kB in a row and a full sweep of the FAT; with no brake, at 120 lpm that
+  would be two sweeps a second for the whole chart. Tapping the button gives
+  it another go, which is what that button already did.
+
+## V5.31 · 2026-10-20
+
+### Qué cambia
+
+- **El bus de la pantalla se elige solo, según dónde estés escuchando.** Lo
+  que radia ese bus no son armónicos sueltos: son los dieciséis hilos de
+  datos cambiando en cada escritura, o sea ruido de banda ancha con una
+  envolvente que vale **cero en los múltiplos de 1/T**, siendo T el ciclo de
+  una escritura. Y T lo pone el firmware, así que se puede poner un cero
+  justo encima de la emisora. Ahora se calcula en cada clic del mando.
+- **La cuenta coincide con lo que marcó el S-metro.** Con el bus de esta
+  radio, en 97,8 MHz elige 50 ns — que es exactamente el ajuste que se había
+  medido a mano como el más silencioso, sin que nadie se lo dijera. En toda
+  la banda de FM baja la envolvente **7,2 dB de media** y en ninguna emisora
+  la sube. El precio es un bus **un 11% más lento de media**, nunca más de un
+  tercio.
+- **Nunca acelera y nunca se pasa.** El suelo es el ciclo que dejó el gestor
+  de arranque — el único que sabemos que esta pantalla aguanta — y el techo
+  son doce ciclos. Lo peor que puede hacer es pintar algo más despacio. En
+  onda corta no hay ningún cero al alcance, así que ahí no toca nada.
+- **«Bus pantalla» empieza ahora en «auto».** Un toque lo apaga y recorre la
+  tabla a mano como antes; al acabarla vuelve a automático. No es fila nueva
+  porque la página de Pantalla ya está llena, y porque automático y manual
+  son el mismo ajuste.
+- **Arreglado: «Pendiente del bus» no enseñaba su valor.** La fila se añadió
+  en V5.30 con etiqueta y sin número, así que tocarla cambiaba algo que no se
+  veía. Ahora dice el nivel y los MHz.
+
+### What's new
+
+- **The display bus picks itself, based on where you are listening.** What
+  that bus radiates is not a few harmonics: it is sixteen data lines changing
+  on every write, that is, wideband noise with an envelope that is **zero at
+  multiples of 1/T**, T being one write cycle. And T is set by the firmware,
+  so a zero can be placed right on top of the station. It is now computed on
+  every click of the knob.
+- **The arithmetic agrees with what the S-meter read.** With this radio's
+  bus, at 97.8 MHz it picks 50 ns — exactly the setting that had been
+  measured by hand as the quietest, without being told. Across the FM band it
+  lowers the envelope by **7.2 dB on average** and raises it at no station.
+  The price is a bus **11% slower on average**, never more than a third.
+- **It never speeds up and never overshoots.** The floor is the cycle the
+  bootloader left — the only one we know this panel tolerates — and the
+  ceiling is twelve cycles. The worst it can do is paint a little slower. On
+  shortwave there is no zero within reach, so there it changes nothing.
+- **«Display bus» now starts at «auto».** One tap turns it off and walks the
+  manual table as before; at the end of the table it returns to auto. It is
+  not a new row because the Display page is already full, and because auto
+  and manual are the same setting.
+- **Fixed: «Bus slew rate» did not show its value.** The row shipped in V5.30
+  with a label and no number, so tapping it changed something you could not
+  see. It now states the level and the MHz.
+
+## V5.30 · 2026-10-20
+
+### Qué cambia
+
+- **La radio se mete ruido a sí misma al pintar el espectro.** Medido sin
+  antena en 97,8 MHz: el S-metro marca **S9+21** con la pantalla de radio
+  dibujando y **S9+7** con el menú abierto, que es la misma radio sin
+  dibujar. Catorce decibelios que no vienen de fuera: los hacen los 211.000
+  píxeles por segundo que salen por las dieciséis líneas del bus de la
+  pantalla.
+- **«Bus pantalla» ya puede ir también a más lento.** Sólo sabía bajar
+  ciclos —o sea ir más rápido—, porque se puso para ganar milisegundos.
+  Ahora recorre 4, 5, 6, 8, 10, 12 y 15 y vuelve a empezar. Hace falta
+  porque lo que ese ajuste mueve es un **peine de armónicos**: con 5 ciclos
+  sale S9+7, con 4 sale +14, con 3 parpadea entre los dos y con 2 vuelve a
+  +14. No sube y baja poco a poco — cae dentro de la emisora o cae fuera, y
+  para sacarlo hay que poder moverlo en las dos direcciones.
+- **Fila nueva: «Pendiente del bus».** 50 MHz al arrancar, y cada toque baja
+  a 25 y a 2. Es lo único de este bus que cambia la **energía** de cada
+  flanco en vez de moverla de sitio, así que es lo que puede bajar el ruido
+  entero en lugar de cambiarlo de frecuencia. Tampoco se guarda: si un nivel
+  deja la pantalla con basura, apagar y encender lo deshace.
+- **Y la medida del tamaño del chip ya no se decide con 64 bytes.** Declaraba
+  el alias —y por tanto el tamaño— comparando UNA ventana de 64 bytes, así
+  que una copia casual del principio del chip un megabyte más arriba lo
+  habría hecho anunciar la mitad. Ahora compara tres ventanas repartidas y
+  tienen que coincidir las tres; una ventana toda igual no cuenta, porque en
+  una zona borrada todo coincide con todo.
+
+### What's new
+
+- **The radio feeds noise to itself when it paints the spectrum.** Measured
+  with no antenna at 97.8 MHz: the S-meter reads **S9+21** with the radio
+  screen drawing and **S9+7** with the menu open, which is the same radio not
+  drawing. Fourteen decibels that do not come from outside: they come from
+  the 211,000 pixels a second going out over the display bus's sixteen
+  lines.
+- **«Display bus» can now also go slower.** It only knew how to drop cycles
+  — that is, go faster — because it was added to gain milliseconds. It now
+  walks 4, 5, 6, 8, 10, 12, 15 and starts over. That matters because what
+  the setting moves is a **comb of harmonics**: at 5 cycles it reads S9+7, at
+  4 it reads +14, at 3 it flickers between the two and at 2 it is back to
+  +14. It does not rise and fall gradually — it lands on the station or it
+  does not, and to get it off you need to move it both ways.
+- **New row: «Bus slew rate».** 50 MHz at startup, and each tap drops to 25
+  and to 2. It is the only thing about this bus that changes the **energy**
+  of each edge instead of moving it around, so it is what can lower the noise
+  altogether rather than shift its frequency. Not saved either: if a level
+  leaves the screen full of garbage, a power cycle undoes it.
+- **And the chip-size measurement is no longer decided by 64 bytes.** It
+  declared the alias — and therefore the size — by comparing ONE 64-byte
+  window, so a chance copy of the chip's start one megabyte higher up would
+  have made it announce half the chip. It now compares three spread-out
+  windows and all three must match; a window that is all one value does not
+  count, because in an erased area everything matches everything.
+
+---
+
+## V5.29 · 2026-10-20
+
+### Qué cambia
+
+- **El S-metro pasa de 31 ms a 3.** Era lo que quedaba después del reloj, y
+  es peor que el reloj porque no corre una vez por minuto: corre **cada vez
+  que la barra cambia de segmento**, o sea constantemente mientras entra
+  señal.
+- Dos cosas a la vez. Su ventana llegaba hasta la pastilla del mando
+  («Sintonía 1 kHz»), que **no se mueve con la señal**: ahora acaba justo
+  donde esa pastilla empieza, y de alto pinta las 26 filas donde vive la
+  barra en vez de las 40 de la franja. De 16.805 accesos al bus a 5.476.
+- Y lo gordo: **lo que no entra en la ventana ya no se calcula**. El
+  recorte vivía dentro de cada primitiva, así que la pastilla y los cinco
+  chips de la derecha se medían enteros —el texto de cada uno, su ancho, el
+  sitio que queda— aunque la ventana acabara mucho antes de llegar a ellos.
+  No se pintaban, pero se calculaban. Y una vez por banda.
+- **Comprobado pixel a pixel** en cinco escenas más: la barra bajando, S9
+  justo donde cambia de color, por encima de S9 con el +21, de S9+60 a cero
+  —el que más borra— y con el mando en volumen, que mueve la pastilla y por
+  tanto el borde de la ventana. Ni un píxel distinto en los 384.000 del
+  marco.
+
+### What's new
+
+- **The S-meter goes from 31 ms to 3.** It was what remained after the
+  clock, and it is worse than the clock because it does not run once a
+  minute: it runs **every time the bar changes segment**, which is
+  constantly while a signal is coming in.
+- Two things at once. Its window reached as far as the knob pill («Tuning
+  1 kHz»), which **does not move with the signal**: it now stops right where
+  that pill begins, and vertically it paints the 26 rows where the bar lives
+  instead of the strip's 40. From 16,805 bus accesses down to 5,476.
+- And the big one: **what falls outside the window is no longer computed**.
+  The clipping lived inside each primitive, so the pill and the five chips
+  on the right were measured in full — each one's text, its width, the room
+  left — even when the window ended long before reaching them. They were not
+  painted, but they were computed. Once per band.
+- **Checked pixel by pixel** in five more scenes: the bar dropping, S9 right
+  where it changes colour, above S9 with the +21, from S9+60 to zero — the
+  one that erases most — and with the knob on volume, which moves the pill
+  and therefore the window's edge. Not one pixel differs out of the frame's
+  384,000.
+
+---
+
+## V5.28 · 2026-10-20
+
+### Qué cambia
+
+- **ARREGLADO: el reloj repintaba la cabecera entera.** La radio lo dijo con
+  todas las letras —«max 164 **cab** 99»—: componer la cabecera, no
+  empujarla al bus. `time_display_draw()` llamaba a `ui_top_draw()`, que es
+  la cabecera (800×64) más la marquesina más la franja de estado (800×40):
+  **91.003 accesos al bus para cambiar cinco caracteres**, una vez por
+  minuto.
+- Ahora repinta **sólo su esquina**, con el mismo dibujo de siempre y la
+  ventana recortada: **5.512 accesos**, dieciséis veces menos. La pastilla
+  de la batería vive en esa misma esquina y va en la misma ventana.
+- Es la cuarta vez que aparece este mismo fallo —el S-metro el 30/09, el PPM
+  del SAM el 04/10 y la frecuencia el 05/10— y se arregla igual, sin una
+  segunda función de dibujo que mantener al día.
+- **Comprobado pixel a pixel**: el banco nuevo pinta la cabecera entera y la
+  esquina sola y compara los 384.000 píxeles del marco en seis escenas —el
+  minuto, medianoche, el reloj más ancho, la batería, las dos a la vez y con
+  el PPM del SAM pegado al lado—. Ni uno distinto.
+
+### What's new
+
+- **FIXED: the clock was repainting the whole header.** The radio said it in
+  plain terms — «max 164 **cab** 99»: composing the header, not pushing it to
+  the bus. `time_display_draw()` called `ui_top_draw()`, which is the header
+  (800×64) plus the marquee plus the status strip (800×40): **91,003 bus
+  accesses to change five characters**, once a minute.
+- It now repaints **only its corner**, with the same drawing code and a
+  clipped window: **5,512 accesses**, sixteen times less. The battery pill
+  lives in that same corner and rides along in the same window.
+- This is the fourth time this same bug has shown up — the S-meter on 30/09,
+  the SAM PPM on 04/10 and the frequency on 05/10 — and it is fixed the same
+  way, with no second drawing function to keep in sync.
+- **Checked pixel by pixel**: the new bench draws the whole header and the
+  corner alone and compares all 384,000 pixels across six scenes — the
+  minute, midnight, the widest clock, the battery, both at once, and with the
+  SAM PPM right next to it. Not one differs.
+
+---
+
+## V5.27 · 2026-10-20
+
+### Qué cambia
+
+- **El reloj se lleva 109 ms de una vuelta de 168.** Con la resta ya
+  arreglada y los tramos sumando la vuelta entera, la radio señaló
+  `time_display_draw()`: el repintado de la cabecera que se hace una vez
+  por minuto. Esta versión lo parte en las tres cosas que hace, que se
+  arreglan de maneras completamente distintas: `syn` rellenar la ficha de
+  la cabecera, `cab` componer sus 91.003 píxeles, y `bus` empujarlos al
+  panel —este último sale del mismo contador que la fila «Fotograma» usa
+  para separar las dos mitades del espectro—.
+- Medido en el simulador contra ese mismo `ui_top.c`: 91.003 accesos al
+  bus, que a los 45 ns que dice la propia radio son **4,1 ms**. Así que
+  `bus` tiene que salir pequeño; si sale grande, lo que miente es el número
+  de nanosegundos, y entonces lo que hay que hacer es pasar la cabecera al
+  DMA que el espectro ya usa.
+
+### What's new
+
+- **The clock takes 109 ms out of a 168 ms pass.** With the subtraction
+  fixed and the stretches adding up to the whole pass, the radio pointed at
+  `time_display_draw()`: the header repaint done once a minute. This release
+  splits it into the three things it does, which are fixed in completely
+  different ways: `syn` filling in the header's data, `cab` composing its
+  91,003 pixels, and `bus` pushing them to the panel — that last one comes
+  from the same counter the «Frame» row uses to separate the spectrum's two
+  halves.
+- Measured in the simulator against that same `ui_top.c`: 91,003 bus
+  accesses, which at the 45 ns the radio itself reports are **4.1 ms**. So
+  `bus` has to come out small; if it comes out large, what is lying is the
+  nanosecond figure, and then the fix is to move the header onto the DMA the
+  spectrum already uses.
+
+---
+
+## V5.26 · 2026-10-20
+
+### Qué cambia
+
+- **La resta del tramo `mod` se dejaba media franja de arriba.** Al partir
+  la franja en `smt`, `hra` y `emi`, el tramo `fra` pasó a ser sólo lo que
+  sobra de ella — pero la resta que calcula `mod` seguía descontando
+  únicamente `fra`, así que `mod` se quedaba con los otros tres. Un tramo
+  que contiene a otros gana el reparto siempre, diga lo que diga la
+  realidad: en antena salió «max 170 mod 141» con la radio en LSB, donde lo
+  que `mod` mide de verdad no hace nada.
+- **Y ahora los tramos suman la vuelta entera.** Entre tramo y tramo
+  quedaban huecos que no contaba nadie; el tramo nuevo `res` es la resta —
+  la vuelta menos la suma de los doce—, así que si el tiempo se va por uno
+  de esos huecos la fila lo dice en vez de culpar al mayor de los pequeños.
+- **Y la media de la vuelta, que llevaba días diciendo cero.** Marcaba la
+  pasada como «ha dibujado» sólo en los modos digitales, así que escuchando
+  en LSB no se marcaba nunca y el contador se quedaba a cero con la radio
+  pintando cuarenta y cinco veces por segundo. Ahora se marca por lo que de
+  verdad significa: que el tramo del dibujo haya costado un milisegundo o
+  más.
+- **Medido de paso, y descartado:** la cabecera entera (`ui_top_draw()`,
+  que es lo que repinta el reloj una vez por minuto) son **91.003 accesos
+  al bus, 4,1 ms**; la franja del nombre, 0,34; la del medidor de S, 0,76.
+  Ninguna de las tres explica 141 ms.
+
+### What's new
+
+- **The `mod` stretch's subtraction was missing half the top strip.** When
+  the strip was split into `smt`, `hra` and `emi`, `fra` became just what is
+  left over from it — but the subtraction that computes `mod` still
+  discounted `fra` alone, so `mod` kept the other three. A stretch that
+  contains others always wins the share-out, whatever the truth: on air it
+  read «max 170 mod 141» with the radio in LSB, where what `mod` actually
+  measures does nothing.
+- **And the stretches now add up to the whole pass.** There were gaps
+  between them that nobody counted; the new `res` stretch is the
+  subtraction — the pass minus the sum of the twelve — so if the time goes
+  into one of those gaps the row says so instead of blaming the largest of
+  the small ones.
+- **And the pass average, which had been reading zero for days.** It
+  flagged a pass as «drew» only in the digital modes, so while listening in
+  LSB it never did and the counter stayed at zero with the radio painting
+  forty-five times a second. It is now flagged by what it actually means:
+  that the drawing stretch cost a millisecond or more.
+- **Measured along the way, and ruled out:** the whole header
+  (`ui_top_draw()`, which is what the clock repaints once a minute) is
+  **91,003 bus accesses, 4.1 ms**; the name strip, 0.34; the S-meter strip,
+  0.76. None of the three explains 141 ms.
+
+---
+
+## V5.25 · 2026-10-20
+
+### Qué cambia
+
+- **El nombre del tramo sin su número señalaba al inocente.** La fila decía
+  «max 167 fra», pero el ganador es el tramo **más grande** de esa vuelta,
+  no el que explica el pico: uno de cuatro milisegundos gana igual si los
+  demás son de uno. Ahora sale el número al lado — «max 167 fra 160» dice
+  que fra es el culpable; «max 167 fra 4» dice que el tiempo se fue por un
+  sitio que no mide nadie, que es un diagnóstico distinto y igual de útil.
+- **Y la franja de arriba se parte en tres**, que es donde apuntaba la
+  última lectura: `smt` el medidor de S y el dBm, `hra` el reloj —que
+  repinta la cabecera entera una vez por minuto— y `emi` el cartel de quién
+  emite.
+- **El peor dibujo se va de esa fila.** Medido en el simulador con la fuente
+  de verdad: con el nombre y el número la fila ocupaba 188 px de los 192 del
+  hueco, y a la primera cifra de más se recorta sin avisar. Quitándolo
+  quedan 165 y aguanta cuatro cifras en cada número. No se pierde nada: si
+  el dibujo es quien hace el pico, el tramo se llama `dib`.
+
+### What's new
+
+- **The stretch's name without its number was blaming the innocent.** The
+  row read «max 167 fra», but the winner is the **largest** stretch of that
+  pass, not the one that explains the peak: a four-millisecond one wins just
+  the same if the others are one millisecond each. The number now sits next
+  to it — «max 167 fra 160» says fra is the culprit; «max 167 fra 4» says
+  the time went somewhere nobody measures, which is a different diagnosis
+  and just as useful.
+- **And the top strip is split in three**, which is where the last reading
+  pointed: `smt` the S-meter and dBm readout, `hra` the clock —which
+  repaints the whole header once a minute— and `emi` the station label.
+- **The worst drawing leaves that row.** Measured in the simulator with the
+  real font: with the name and the number the row took 188 px of the 192
+  available, and one more digit would clip silently. Without it the row is
+  165 px and survives four digits in each number. Nothing is lost: if the
+  drawing is what made the peak, the stretch is called `dib`.
+
+---
+
+## V5.24 · 2026-10-20
+
+### Qué cambia
+
+- **El tramo «pre» era demasiado gordo.** La V5.22 puso nombre al pico de
+  la vuelta y en antena contestó `pre` —todo lo de antes del dibujo— con
+  167 ms. Tres sospechosos y ninguna forma de elegir, así que ahora son
+  tres tramos: `fra` la franja de arriba, `mod` la traza y los repintados
+  de cambio de modo, y `tc3` la tercera mirada al táctil, que estaba ahí
+  dentro sin que el nombre lo dijera y es la única de las tres que despacha
+  toques, o sea que puede hacer cualquier cosa.
+- **Dos sospechosos descartados antes de tocar nada.** La base de emisoras
+  no es: el banco nuevo la mide en **104–420 bytes** por cartel, tres
+  décimas de milisegundo. Y pintar tampoco: la pantalla entera son 384.000
+  accesos a 45 ns, **17 ms**.
+- **Y queda de guardián**: si algún día el cartel de la cabecera vuelve a
+  recorrer la tabla entera de emisoras —206 kB por ese bus son 170 ms—, la
+  compilación se para.
+
+### What's new
+
+- **The «pre» stretch was too coarse.** V5.22 put a name on the loop peak
+  and on air it answered `pre` — everything before the drawing — at 167 ms.
+  Three suspects and no way to choose between them, so it is now three:
+  `fra` the top strip, `mod` the trace and the mode-change repaints, and
+  `tc3` the third look at the touchscreen, which was in there without the
+  name saying so and is the only one of the three that dispatches touches,
+  so it can do anything.
+- **Two suspects ruled out before touching anything.** The station database
+  is not it: the new bench measures **104–420 bytes** per header label,
+  three tenths of a millisecond. And neither is painting: the whole screen
+  is 384,000 bus accesses at 45 ns, **17 ms**.
+- **And it stays as a guard**: if the header label ever walks the whole
+  station table again — 206 kB over that bus is 170 ms — the build stops.
+
+---
+
+## V5.23 · 2026-10-20
+
+### Qué cambia
+
+- **Una radio con un chip de flash de 1 MB se quedaba sin disco.** El
+  firmware reserva el último megabyte para las bases de datos, y en un chip
+  de 1 MB eso es el chip entero: el disco USB salía de **cero bloques**. De
+  ahí, en cadena: BD.BIN no se podía copiar porque no había dónde dejarlo,
+  el sitio para fotos no se podía leer, el volumen de fábrica decía medir
+  más que el disco y la pantalla mandaba formatear… y formatear contestaba
+  **«no se ve la flash»** con el chip delante y su número de serie en
+  pantalla. Un callejón sin salida.
+- **La regla nueva es de una línea:** la zona alta se queda con el último
+  mega **o con la mitad del chip, lo que sea menos**. Con 2 MB o más no se
+  mueve ni un byte —la mitad de 2 MB es justo un mega—, así que ninguna
+  radio de las que funcionan hoy se entera. Con 1 MB salen 512 kB de disco
+  y 512 kB de zona alta, que es sitio para el mapa y para la lista de
+  emisoras.
+- **El techo de BD.BIN miraba el final del chip** en vez del hueco del
+  mapa. Un .BIN de entre 847.872 y 1.044.480 bytes se habría escrito encima
+  del mapa; no ha pasado porque el empaquetador del PC ya usa el número
+  bueno, pero la red estaba mal puesta.
+- **«No cabe» ya no sale como «destino no permitido»**, que mandaba a mirar
+  el disco. Ahora dice **«no cabe, hay sitio para N kB»**.
+
+### What's new
+
+- **A radio with a 1 MB flash chip ended up with no disk at all.** The
+  firmware reserves the last megabyte for the databases, and on a 1 MB chip
+  that is the whole chip: the USB disk came out at **zero blocks**. Then, in
+  a chain: BD.BIN could not be copied because there was nowhere to put it,
+  the photo area could not be read, the factory volume claimed to be larger
+  than the disk and the screen said to format it… and formatting answered
+  **«no flash found»** with the chip right there and its serial number on
+  screen. A dead end.
+- **The new rule is one line:** the upper area takes the last megabyte **or
+  half the chip, whichever is smaller**. At 2 MB and above not one byte
+  moves — half of 2 MB is exactly one megabyte — so no radio in use today
+  notices. At 1 MB it comes out as 512 kB of disk and 512 kB of upper area,
+  which is room for the map and the station list.
+- **BD.BIN's ceiling looked at the end of the chip** instead of the map
+  hole. A .BIN between 847,872 and 1,044,480 bytes would have been written
+  over the map; it never happened because the PC packer already uses the
+  right number, but the safety net was in the wrong place.
+- **«Does not fit» no longer comes out as «target not allowed»**, which sent
+  you to look at the disk. It now says **«does not fit, room for N kB»**.
+
+---
+
+## V5.22 · 2026-10-20
+
+### Qué cambia
+
+- **Cinco instrucciones por píxel de espectro, en vez de siete.** El bucle
+  que rellena la barra y pinta la traza es el más repetido de toda la radio
+  —hasta 157.248 vueltas por fotograma—, y llevaba un índice de 16 bits:
+  eso obliga al compilador a recortar a 16 bits en cada vuelta y a comparar
+  contra el final. Contando hacia atrás las dos instrucciones sobran.
+  Comprobado pixel a pixel contra la imagen patrón: no cambia ni uno.
+- **La fila «Vuelta del bucle» ya dice de quién es el pico.** Decía un
+  número sin dueño: en antena salieron 343 ms con el dibujo en 55 y los dos
+  poll en 1 y 0, o sea 290 ms de nadie. La vuelta está partida en siete
+  tramos con nombre y, junto al máximo, salen tres letras diciendo cuál lo
+  hizo: `cat`, `pre`, `dib`, `tac`, `man`, `dec` o `pol`.
+- **Y el pico ya no se lo lleva salir del menú.** La vuelta que cierra el
+  menú repinta la pantalla entera y se contaba como si fuera una vuelta
+  normal. Ahora sólo cuentan las que empiezan y acaban en la radio.
+- **El máximo del segundo bloque de poll se borra con los demás.** Se
+  añadió con su máximo y nadie lo metió en el botón de poner a cero, así que
+  un pico de hacía media hora salía al lado de tres números recién puestos a
+  cero.
+
+### What's new
+
+- **Five instructions per spectrum pixel instead of seven.** The loop that
+  fills the bar and draws the trace is the most repeated one in the whole
+  radio — up to 157,248 iterations per frame — and it used a 16-bit index,
+  which forces the compiler to truncate to 16 bits every time round and to
+  compare against the end. Counting down makes both instructions unnecessary.
+  Checked pixel by pixel against the reference image: not one changes.
+- **The «Loop pass» row now says whose the peak was.** It used to give an
+  ownerless number: on air it read 343 ms with drawing at 55 and both poll
+  blocks at 1 and 0 — 290 ms belonging to nobody. The pass is now split into
+  seven named stretches and, next to the maximum, three letters say which one
+  did it: `cat`, `pre`, `dib`, `tac`, `man`, `dec` or `pol`.
+- **And leaving the menu no longer owns the peak.** The pass that closes the
+  menu repaints the whole screen and was counted as an ordinary pass. Only
+  passes that begin and end on the radio screen count now.
+- **The second poll block's maximum is cleared with the rest.** It was added
+  with its own maximum and nobody put it in the reset button, so a peak from
+  half an hour earlier sat next to three freshly zeroed numbers.
+
+---
+
+## V5.21 · 2026-10-20
+
+### Qué cambia
+
+- **La franja de los carteles de emisora ya no es intocable.** El espectro la
+  trataba como una zona que no se salta nunca y que se monta de ancho
+  completo en cada fotograma —el 16 % del dibujo, según su propio
+  comentario—. Medido en antena, en onda larga con la lista llena: **nueve
+  milisegundos de los 38 que tardaba la traza**.
+- Ya no hace falta, porque quien pone los carteles invalida el cuadro entero
+  cada vez que la lista o la posición cambian, que es lo único que puede
+  moverlos. Si no ha cambiado nada, esas bandas se saltan como las demás.
+  Además cubre un caso que al forzado le faltaba: la lista igual con las
+  posiciones movidas, que es lo que pasa girando el dial.
+- **Y la media de «Vuelta del bucle» por fin sale.** Marcaba la pasada como
+  «ha dibujado» en un sitio por el que se pasa siempre, dibuje o no, así que
+  seguía promediando todas y seguía saliendo cero.
+
+### What's new
+
+- **The station-label strip is no longer untouchable.** The spectrum treated
+  it as a zone that is never skipped and is composed full width on every
+  frame — 16 % of the drawing, by its own comment. Measured on air, on
+  longwave with a full list: **nine milliseconds of the 38 the trace was
+  taking**.
+- It is no longer needed, because whatever places the labels invalidates the
+  whole frame whenever the list or the positions change, which is the only
+  thing that can move them. If nothing changed, those bands are skipped like
+  any other. It also covers a case the forcing missed: same list, moved
+  positions, which is what happens while turning the dial.
+- **And the «Loop pass» average finally shows up.** It flagged a pass as
+  «drew» at a point the code goes through every time, drawing or not, so it
+  was still averaging all of them and still reading zero.
+
+---
+
+## V5.20 · 2026-10-20
+
+### Qué cambia
+
+- **Los nombres de emisora del espectro se leían de la flash en CADA
+  fotograma.** Hasta trece carteles, dos lecturas de la flash SPI cada uno,
+  cuarenta y dos veces por segundo, dentro del camino de dibujo. Ahora se
+  leen una sola vez, cuando la lista cambia —al cambiar de minuto o de
+  frecuencia—, que es cuando pueden cambiar.
+- Lo que lo destapó: midiendo en onda larga de noche, con la lista de
+  emisoras llena, la traza tardaba **41 ms de un tope de 22** y el bus de la
+  pantalla marcaba **cero**. O sea que lo caro no era pintar: era ir a buscar
+  los nombres.
+
+### What's new
+
+- **The spectrum's station labels were read from flash on EVERY frame.** Up
+  to thirteen labels, two SPI flash reads each, forty-two times a second,
+  inside the drawing path. They are now read once, when the list changes —
+  on a minute or frequency change — which is when they can change.
+- What exposed it: measured on longwave at night with a full station list,
+  the trace was taking **41 ms against a 22 ms budget** while the display bus
+  read **zero**. So the expensive part was not painting: it was fetching the
+  names.
+
+---
+
+## V5.19 · 2026-10-19
+
+### Qué cambia
+
+- **La media de «Vuelta del bucle» salía 0 y ahora sale el número de
+  verdad.** Promediaba TODAS las pasadas del bucle, y la mayoría no dibuja
+  —el limitador de fotograma las devuelve enseguida—, así que la media caía
+  por debajo del milisegundo mientras las que sí dibujan tardaban 24 ms.
+  Ahora sólo entran en la media las pasadas que han dibujado, que son las
+  que importan.
+
+### What's new
+
+- **The «Loop pass» average read 0 and now reads the real number.** It
+  averaged EVERY pass of the loop, and most passes do not draw — the frame
+  limiter returns from them right away — so the average fell below a
+  millisecond while the passes that do draw were taking 24 ms. Only passes
+  that drew now count towards the average, which are the ones that matter.
+
+---
+
+## V5.18 · 2026-10-19
+
+### Qué cambia
+
+- **«Vuelta del bucle» enseñaba la última pasada, que es una lotería.** El
+  valor se congela al abrir el menú, así que es la pasada que pille: del
+  mismo sitio salieron 53, 47 y 16 ms, y las dos primeras mandaron a buscar
+  un problema de 37 ms que no existe. Ahora enseña la **media de las últimas
+  64** y, entre paréntesis, la última suelta.
+- **Y el peor caso se puede poner a cero tocando la celda.** La función para
+  hacerlo existía desde hace tiempo y **no la llamaba nadie**, así que el
+  máximo venía acumulando desde el arranque e incluía la carga de mapas y
+  listas desde la flash: 173 ms de pico con una vuelta típica de 16. Un pico
+  que no se puede borrar no dice si acaba de pasar o si fue al encender.
+- También vuelve el peor caso del dibujo al lado del de la vuelta, que es lo
+  que parte en dos el caso «la vuelta es grande y los poll no».
+
+### What's new
+
+- **«Loop pass» showed the last pass, which is a lottery.** The value freezes
+  when the menu opens, so it is whichever pass it happens to catch: the same
+  spot gave 53, 47 and 16 ms, and the first two sent us chasing a 37 ms
+  problem that does not exist. It now shows the **average of the last 64**
+  with the latest one in brackets.
+- **And the peak can be zeroed by tapping the cell.** The function to do that
+  had existed for a while and **nobody called it**, so the peak accumulated
+  from boot and included loading maps and lists from flash: a 173 ms spike
+  against a typical pass of 16. A peak you cannot clear does not tell you
+  whether it just happened or happened at power-on.
+- The drawing peak is back alongside the loop one, which is what splits the
+  «the loop is big and the polls are not» case in two.
+
+---
+
+## V5.17 · 2026-10-19
+
+### Qué cambia
+
+- **Dos celdas nuevas en Información, que había media página vacía.**
+  «Vuelta del bucle» y «Poll de pantalla». La fila «Fotograma» se queda sólo
+  con el reparto del dibujo, que es lo que cabe en ella.
+- **Y lo importante: había un bloque entero del bucle que no medía nadie.**
+  El cronómetro de los `poll` se cerraba justo después de los
+  decodificadores, y todo lo que viene detrás —la captura, el volcado de
+  4 kB por vuelta, el fax, el SSTV, el Hell, el RDS, la marquesina y el
+  autoguardado— quedaba fuera de todos los relojes. Escuchando en 80 m la
+  vuelta tardaba 47 ms con 9 de dibujo, 1 de táctil y 0 de `poll`: **37 ms
+  sin dueño**, y la fila que debía señalarlos miraba el bloque equivocado.
+  Ahora se miden los dos bloques por separado.
+
+### What's new
+
+- **Two new cells on the Information page, which had half a page spare.**
+  «Loop pass» and «Screen polls». The «Frame» row keeps only the drawing
+  breakdown, which is what fits in it.
+- **And the point: a whole block of the loop was measured by nobody.** The
+  poll timer closed right after the decoders, and everything after it — the
+  screen capture, the 4 kB-per-pass dump, fax, SSTV, Hell, RDS, the marquee
+  and the settings autosave — fell outside every clock. Listening on 80 m
+  the loop took 47 ms with 9 of drawing, 1 of touch and 0 of polls: **37 ms
+  with no owner**, and the row meant to point at them was watching the wrong
+  block. Both blocks are now timed separately.
+
+---
+
+## V5.16 · 2026-10-19
+
+### Qué cambia
+
+- **La fila «Fotograma» de Información enseñaba menos de lo que medía.**
+  Escribía ocho números en un renglón que sólo da para cinco, y la celda los
+  recortaba **sin avisar**: lo que se perdía era justo la parte que dice
+  dónde se van los milisegundos cuando la vuelta del bucle tarda más que el
+  dibujo. Ahora el reparto del dibujo va en un renglón y la vuelta entera
+  —con el táctil, los decodificadores y los máximos— en el de debajo.
+- **Y se cuenta lo que no cabe.** Que un texto no quepa en una celda no daba
+  error en ninguna parte: se dibujaba lo que entraba y el resto desaparecía.
+  Desde hoy hay un contador, al lado de «Choques», que **tiene que ser
+  cero**: si alguna celda de cualquier pantalla pierde un dato, se ve.
+
+### What's new
+
+- **The Information page's «Frame» row showed less than it measured.** It
+  wrote eight numbers into a line that fits five, and the cell clipped them
+  **with no warning** — and what got lost was exactly the part that says
+  where the milliseconds go when the loop takes longer than the drawing. The
+  drawing breakdown now has its own line and the whole loop — touch,
+  decoders and peaks — goes on the one below.
+- **And what does not fit is now counted.** Text overflowing a cell raised no
+  error anywhere: whatever fitted was drawn and the rest vanished. There is
+  now a counter next to «Collisions» that **must stay zero**: if any cell on
+  any screen loses a value, it shows.
+
+---
+
+## V5.15 · 2026-10-19
+
+### Qué cambia
+
+- **La tira con la que se compone la pantalla pasa de 16 filas a 8**, y con
+  eso la radio recupera **13.704 bytes de memoria**. La SRAM libre pasa de
+  1.436 bytes a 15.140: de un 0,7 % a un 7,7 %.
+- **Esto ya se probó el 25/09 y se deshizo** porque el par de milisegundos
+  de más se notaba en la pantalla. Vuelve porque el motivo es otro: entonces
+  era para que cupiera FT8, ahora es que con 1.436 bytes libres no cabe
+  ninguna de las mejoras que quedan pendientes. Y porque el fotograma de hoy
+  no es el de entonces: por el camino se han quitado la regla repintándose
+  sin motivo, la cabecera pintada dos veces y el color del degradado
+  calculado por píxel.
+- Medido: el coste en accesos al panel es **+0,17 %**, bastante menos que el
+  +0,3 % que se midió la vez anterior. Lo que no se puede medir sin la radio
+  es si el doble de tiras se ve al repintar. **Si se ve, se deshace en una
+  línea y no hay que devolver nada a cambio.**
+
+### What's new
+
+- **The strip the screen is composed in goes from 16 rows to 8**, handing
+  back **13,704 bytes of memory**. Free SRAM goes from 1,436 bytes to
+  15,140: from 0.7 % to 7.7 %.
+- **This was tried on 25/09 and reverted** because the extra couple of
+  milliseconds showed on screen. It is back for a different reason: then it
+  was to make FT8 fit, now it is that 1,436 free bytes are not enough for any
+  of the remaining improvements. And today's frame is not that frame: since
+  then the ruler repainting for nothing, the header painted twice and the
+  gradient colour computed per pixel have all gone.
+- Measured: the cost in panel accesses is **+0.17 %**, well under the +0.3 %
+  measured last time. What cannot be measured without the radio is whether
+  twice as many strips shows up when repainting. **If it does, this reverts
+  in one line and nothing has to be given back.**
+
+---
+
+## V5.14 · 2026-10-19
+
+### Qué cambia
+
+Revisión a fondo de todo el proyecto buscando cosas hechas de forma más cara
+de lo necesario. Nada de esto cambia lo que la radio hace: cambia lo que le
+cuesta hacerlo.
+
+- **FT8 deja de gastar más en mover memoria que en filtrar.** El decimador
+  corría 119 números de sitio por **cada muestra** que entraba, 12.000 veces
+  por segundo. Eso costaba dos veces y media más que el filtro al que
+  alimentaba. Ahora es un anillo: la muestra nueva se escribe y lo que gira
+  es el índice. **Un 2,9 % de la CPU devuelto** mientras FT8 está activo, sin
+  gastar ni un byte más de memoria.
+- **La reducción de ruido y el panadaptador, más baratos.** Las dos
+  transformadas tenían cada una un defecto que la otra no: una leía la tabla
+  de giros una vez por mariposa en vez de una por columna, y la otra releía
+  de memoria valores que ya tenía. Corregido en las dos. El resultado es
+  **idéntico bit a bit**.
+- **El recorte de audio a 16 bits se hace con la instrucción del núcleo**, no
+  con dos comparaciones y dos saltos. Son 96.000 muestras por segundo.
+- **La regla de frecuencia deja de repintarse sin motivo.** Comparaba
+  hercios y la regla imprime kilohercios: cualquier clic de 1, 10 o 100 Hz
+  repintaba 20.834 píxeles para dejar la pantalla exactamente igual, con la
+  CPU parada esperando al bus. Ahora compara el texto que se lee.
+- **La cabecera deja de pintarse dos veces** al cambiar de banda o al cruzar
+  los 9.999 kHz, y el degradado calcula su color una vez por fila en vez de
+  una por píxel.
+- **1.600 bytes de pila devueltos**: los ajustes reservaban dos copias de un
+  buffer de 1.600 bytes en la pila teniendo ya uno estático al lado.
+- **La tanda de comprobaciones tarda 14 segundos menos** por una sola línea
+  de uno de los guiones, y dos bancos que no podían ponerse rojos ahora sí
+  pueden.
+
+### What's new
+
+A deep review of the whole project looking for work done more expensively
+than it needs to be. None of this changes what the radio does; it changes
+what it costs.
+
+- **FT8 no longer spends more on moving memory than on filtering.** The
+  decimator shifted 119 numbers along for **every** incoming sample, 12,000
+  times a second — two and a half times the cost of the filter it fed. It is
+  now a ring buffer. **2.9 % of the CPU handed back** while FT8 is running,
+  at no extra memory cost.
+- **Noise reduction and the panadapter got cheaper.** Each of the two
+  transforms had a flaw the other didn't: one read the twiddle table once per
+  butterfly instead of once per column, the other re-read values from memory
+  it already held. Both fixed. The result is **bit-for-bit identical**.
+- **16-bit audio clipping now uses the core's own instruction** instead of
+  two compares and two branches. That is 96,000 samples a second.
+- **The frequency ruler stops repainting for nothing.** It compared hertz
+  while the ruler prints kilohertz: any 1, 10 or 100 Hz click repainted
+  20,834 pixels to leave the screen exactly as it was, with the CPU stalled
+  on the bus. It now compares the text you read.
+- **The header stops being painted twice** when the band changes or the
+  reading crosses 9,999 kHz, and the gradient computes its colour once per
+  row instead of once per pixel.
+- **1,600 bytes of stack handed back**: the settings code reserved two
+  1,600-byte stack copies while a static one sat right beside it.
+- **The check suite runs 14 seconds faster** thanks to one line in one of the
+  scripts, and two benches that could never go red now can.
+
+---
+
+## V5.13 · 2026-10-19
+
+### Qué cambia
+
+- **Mejor recepción entre 3,6 y 4,8 MHz.** El oscilador local reparte esa
+  banda en zonas, y cada zona lleva un multiplicador que decide dónde
+  trabaja el VCO del sintetizador. La zona de 3,6 a 4,8 MHz era **la única
+  de las siete que no llegaba al techo del VCO**: vivía pegada al suelo,
+  con 2,9 MHz de margen, mientras las otras seis barren el rango entero. El
+  número se había elegido por ser el mínimo que cabía, y la sensibilidad
+  nunca fue un criterio al elegirlo.
+- Ahora el multiplicador se ha medido en vez de suponerse: de los 22
+  valores posibles se toma el que deja el VCO a más de 20 MHz de sus dos
+  topes y, entre ésos, el de mejor ángulo de cuadratura. El margen pasa de
+  2,9 MHz a 38,8 por abajo y 53,6 por arriba.
+- **El oscilador tiene banco por primera vez.** Genera la señal de toda la
+  radio, de 300 kHz a 180 MHz, y no lo tenía: ahora se comprueba la
+  frecuencia sintetizada en toda la banda, que el VCO no se salga, que los
+  dos canales lleven el mismo divisor y el ángulo de los 90 grados.
+
+### What's new
+
+- **Better reception between 3.6 and 4.8 MHz.** The local oscillator splits
+  that band into zones, and each zone carries a multiplier that decides
+  where the synthesiser's VCO runs. The 3.6-to-4.8 MHz zone was **the only
+  one of the seven that never reached the top of the VCO**: it sat against
+  the floor with 2.9 MHz of headroom while the other six sweep the whole
+  range. That number had been picked as the smallest that fit, and
+  sensitivity was never a criterion when it was chosen.
+- The multiplier is now measured rather than assumed: of the 22 possible
+  values, the one that keeps the VCO more than 20 MHz away from both of its
+  limits and, among those, has the best quadrature angle. Headroom goes
+  from 2.9 MHz to 38.8 below and 53.6 above.
+- **The oscillator has a bench for the first time.** It generates the
+  signal for the whole radio, 300 kHz to 180 MHz, and had none: the
+  synthesised frequency across the band, the VCO staying in range, both
+  channels carrying the same divider and the 90-degree angle are all
+  checked now.
+
+---
+
+## V5.12 · 2026-10-19
+
+### Qué cambia
+
+- **El corrector de I/Q cuesta tres veces y media menos dentro de la
+  interrupción del ADC.** El filtro que entró en V5.11 hacía dos pasadas
+  sobre cada bloque —una el corrector plano y otra el filtro— y además movía
+  su historial en memoria para cada muestra. Ahora es **una sola pasada**,
+  con el historial en registros y el recorte a 16 bits hecho con la
+  instrucción del núcleo: de unas 145 instrucciones por muestra a **43**. El
+  rechazo de imagen no cambia: los mismos 38,3 dB.
+- **Por qué importa:** por esa interrupción pasan todas las muestras de
+  todos los modos, 96.000 parejas por segundo. Ya hubo una vez en que meter
+  trabajo ahí hizo que la radio empezara a perder pulsaciones de botón.
+- **Dos sitios donde se leía fuera de su sitio.** La respuesta de "¿llega el
+  conector grande a las patillas de USB?" copiaba hasta 30 caracteres de un
+  texto de 24, y la comprobación del tope iba después de leer. Y dos relojes
+  —el ruso y el americano— arrastraban una variable muerta.
+
+### What's new
+
+- **The I/Q corrector is 3.4x cheaper inside the ADC interrupt.** The filter
+  added in V5.11 made two passes over every block —one for the flat
+  corrector, one for the filter— and shuffled its history through memory for
+  every sample. It is now a **single pass**, with the history in registers
+  and the 16-bit clamp done by the core's own instruction: from about 145
+  instructions per sample down to **43**. Image rejection is unchanged: the
+  same 38.3 dB.
+- **Why it matters:** every sample of every mode goes through that
+  interrupt, 96,000 pairs per second. Putting work there once already made
+  the radio start dropping button presses.
+- **Two out-of-bounds reads.** The "does the big connector reach the USB
+  pins?" answer copied up to 30 characters out of a 24-character string, with
+  the bounds check placed after the read. And two of the time-signal decoders
+  carried a dead variable.
+
+---
+
 ## V5.11 · 2026-10-19
 
 ### Qué cambia

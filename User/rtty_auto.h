@@ -6,8 +6,6 @@
 /*
  * EL RTTY SE AJUSTA SOLO: TONOS, DESPLAZAMIENTO Y VELOCIDAD - 06/10/2026.
  *
- * Pedido por el usuario.
- *
  * Se puede, y las dos piezas ya estaban en la radio. Esto solo las
  * conecta.
  *

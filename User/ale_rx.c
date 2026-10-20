@@ -422,8 +422,6 @@ static void mide(void)
     /*
      * EN DOS TRAMOS SEGUIDOS, SIN MODULO - 05/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Esto recorria la ventana con `(s_hi + k) % ALE_SPS`, y ALE_SPS son 96:
      * no es potencia de dos, asi que cada uno de esos modulos es una
      * division entera de verdad. Ocho tonos por noventa y seis muestras son

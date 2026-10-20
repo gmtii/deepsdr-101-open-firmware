@@ -72,8 +72,6 @@ typedef struct {
 	/*
 	 * EL PICO DE A1, NO SU PRIMER CRUCE - 14/10/2026.
 	 *
-	 * Pedido por el usuario.
-	 *
 	 * De noventa y ocho enganches de A1 solo cuarenta y tres confirman
 	 * con A2. Parte de esos noventa y ocho son ruido, pero parte son
 	 * preambulos DE VERDAD enganchados un par de simbolos antes de
@@ -151,8 +149,6 @@ void hfdl_preamble_sync_reset(hfdl_preamble_sync_t *p);
  * demod_am.c's probe for hfdl_scope_burst_active()). */
 /*
  * LA PUERTA DE A1 - 14/10/2026.
- *
- * Pedido por el usuario.
  *
  * Doscientos cincuenta y seis enganches de A1 para CINCUENTA Y DOS
  * ráfagas reales. Los doscientos sobrantes no son gratis: cada uno manda

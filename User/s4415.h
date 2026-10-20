@@ -1,8 +1,6 @@
 /*
  * STANAG 4415 / MIL-STD-188-110A A 75 bps — ENGANCHE Y DESENSANCHADO
  *
- * Pedido por el usuario.
- *
  * Lo que hace este fichero esta MEDIDO contra la grabacion de referencia, no
  * supuesto. El camino entero esta en docs/STANAG_4415_MEDIDO.md; aqui va el
  * resumen de lo que importa para leer el codigo.

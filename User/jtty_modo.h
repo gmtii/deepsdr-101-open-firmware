@@ -6,8 +6,6 @@
 /*
  * JTTY como modo de la radio. 28/09/2026.
  *
- * Pedido por el usuario.
- *
  * jtty_rx.c saca ATOMOS del audio; esto los junta en MENSAJES y los
  * engancha a la pantalla y al boton de frecuencia.
  *
@@ -36,8 +34,6 @@
  * EL RENGLON YA MONTADO. Sube de 96 a 128 el 28/09 por la tarde, cuando
  * entro la columna del pais: los 32 de mas son para ella y para el
  * tabulador que la separa, no para el mensaje.
- *
- * Pedido por el usuario.
  *
  * JTTY_MODO_PAIS es lo que se le reserva. Cuando se escribio esto el nombre
  * mas largo de dxcc.c eran trece letras ("Nueva Zelanda") y con dieciseis
@@ -94,8 +90,6 @@
  */
 /*
  * LOS DOS NUMEROS, Y LOS DOS MEDIDOS - 28/09/2026 por la tarde.
- *
- * Pedido por el usuario.
  *
  * EL MARGEN: la primera vez lo puse en dos filas RAZONANDO -"el
  * sincronismo se prueba cada media fila y puede clavarse en la que toca o

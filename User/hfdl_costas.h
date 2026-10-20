@@ -83,8 +83,6 @@ void hfdl_costas_reset(hfdl_costas_t *c);
 /*
  * LE DICE AL LAZO DONDE ESTA LA PORTADORA - 14/10/2026.
  *
- * Pedido por el usuario.
- *
  * `w` es el avance de fase por simbolo, en radianes, que el lazo debe dar
  * por bueno de salida en vez de empezar en cero. Se SUMA al estado del
  * integrador, no lo pisa, para que si ya habia convergido algo no se

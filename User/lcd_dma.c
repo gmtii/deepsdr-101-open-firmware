@@ -84,8 +84,6 @@ static void arranca(uint32_t origen, uint32_t destino, uint32_t n)
 /*
  * LA ESPERA TAMBIEN CUENTA COMO TIEMPO DE BUS - 05/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y la primera razon por la que no se encontraban era que el instrumento
  * mentia. g_lcd_ciclos -la fila "empuje" de la ventana de Fotograma- solo
  * se sumaba dentro de gfx_blit(), o sea por el camino SIN DMA. Con el DMA

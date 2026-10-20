@@ -94,10 +94,6 @@ int main(void)
         /*
          * LA PASTILLA: ANCHO FIJO, Y METIDA EN EL HUECO - 19/10/2026.
          *
-         * *** El usuario, con una foto y una raya roja sobre el hueco:
-         * "vuelve a poner el s-meter a su tamaño", "hazle un ancho fijo a
-         * la chapa de sintonia", "usa el hueco de la raya roja". ***
-         *
          * Dos cosas que comprobar, y las dos se ven en la pantalla:
          *   - que la pastilla se mete de verdad en el hueco que dejo "AGC
          *     activo" (si no, el agujero de la foto sigue ahi);
@@ -151,8 +147,6 @@ int main(void)
     /* ================================================================
      * EL TANTO POR CIENTO DENTRO DE LA BATERIA - 13/10/2026
      * ================================================================
-     *
-     * Pedido por el usuario.
      *
      * Dos cosas, y las dos leyendo PIXELES del lienzo, no repitiendo las
      * restas de ui_top.c:

@@ -152,8 +152,6 @@ int main(void)
     /*
      * CONTADOR PROPIO, NO EL GLOBAL - 11/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Aqui se sumaba a `fallos` -el contador global, el que mueve
      * comprueba()- y luego se preguntaba `fallos == 0`. O sea que un fallo
      * del apartado 1 se volvia a contar aqui y se reportaba con el texto

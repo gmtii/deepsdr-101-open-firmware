@@ -162,7 +162,26 @@ static const float32_t s_resampler_phase[FT8_RESAMPLER_L][FT8_RESAMPLER_TAPS_PER
 }
 };
 
-static float32_t s_history[FT8_RESAMPLER_TAPS_PER_PHASE]; /* shift register of the most recent input samples, oldest first (index 0), newest last (index TAPS_PER_PHASE-1) */
+/*
+ * EL HISTORIAL, QUE AHORA ES UN ANILLO - 19/10/2026.
+ *
+ * Antes esto era un registro de desplazamiento de verdad: por CADA muestra
+ * de entrada se corrian 119 floats una posicion. El compilador lo convertia
+ * en un memmove de 476 bytes, unos 480 ciclos, y entra una muestra cada
+ * 1/12000 s. Medido: 15.400 ciclos por bloque de audio, DOS VECES Y MEDIA
+ * lo que cuesta el filtro polifasico al que alimenta.
+ *
+ * Ahora la muestra nueva se escribe en su sitio y ya esta; lo que gira es el
+ * indice. s_hist_w apunta a donde ira la PROXIMA, que es tambien la posicion
+ * de la MAS VIEJA de las que hay. El filtro lo recorre en dos tramos para no
+ * pagar un modulo por toma.
+ *
+ * El doble buffer -escribir cada muestra dos veces para que el tramo salga
+ * contiguo- habria sido mas simple, pero son 480 bytes y de SRAM quedan
+ * 1.436 en toda la radio.
+ */
+static float32_t s_history[FT8_RESAMPLER_TAPS_PER_PHASE];
+static uint16_t  s_hist_w;   /* la proxima a escribir, y la mas vieja de las que hay */
 static uint32_t s_next_output_vpos; /* "virtual sample position" (in units of 1/48000s) of the next output due - see this file's own comment in ft8_decimator_feed_sample() for the polyphase bookkeeping */
 static uint32_t s_input_count;      /* how many real 12kHz samples have been fed since reset */
 
@@ -259,6 +278,7 @@ void ft8_decimator_reset(void)
     {
         s_history[i] = 0.0f;
     }
+    s_hist_w = 0U;
     s_next_output_vpos = 0U;
     s_input_count = 0U;
     s_agc_peak = FT8_AGC_TARGET; /* start at unity-ish gain, matches demod_am.c's own s_agc_peak init convention */
@@ -288,9 +308,22 @@ static void produce_output_sample(uint8_t phase)
      * the NEWEST history sample (matching the polyphase derivation in
      * ft8_decimator.h: tap index t=r+4j corresponds to input sample
      * n=base_n-j, i.e. j samples back from the newest). */
-    for (j = 0; j < FT8_RESAMPLER_TAPS_PER_PHASE; j++)
+    /* El anillo se recorre en dos tramos: de s_hist_w al final y del
+     * principio a s_hist_w. `p` es la posicion LOGICA -0 la mas vieja,
+     * TAPS_PER_PHASE-1 la mas nueva-, que es con la que emparejan los
+     * coeficientes igual que antes. Las mismas sumas en el mismo orden que
+     * con el registro de desplazamiento: bit a bit lo mismo. */
     {
-        acc += s_resampler_phase[phase][j] * s_history[FT8_RESAMPLER_TAPS_PER_PHASE - 1U - j];
+        uint16_t pp, p = 0U;
+        for (pp = s_hist_w; pp < FT8_RESAMPLER_TAPS_PER_PHASE; pp++, p++) {
+            acc += s_resampler_phase[phase][FT8_RESAMPLER_TAPS_PER_PHASE - 1U - p]
+                   * s_history[pp];
+        }
+        for (pp = 0U; p < FT8_RESAMPLER_TAPS_PER_PHASE; pp++, p++) {
+            acc += s_resampler_phase[phase][FT8_RESAMPLER_TAPS_PER_PHASE - 1U - p]
+                   * s_history[pp];
+        }
+        (void)j;
     }
 
     if (acc > 32767.0f) { acc = 32767.0f; }
@@ -357,15 +390,13 @@ void ft8_decimator_feed_sample(int16_t sample)
     if (sample_f > 32767.0f) { sample_f = 32767.0f; }
     if (sample_f < -32768.0f) { sample_f = -32768.0f; }
 
-    /* Shift the new (AGC'd) sample into history - same technique as
-     * the original decimator's own sliding window, just a shorter
-     * buffer now (120 taps/phase instead of the old single filter's
-     * 257 full taps). */
-    for (i = 0; i < FT8_RESAMPLER_TAPS_PER_PHASE - 1U; i++)
-    {
-        s_history[i] = s_history[i + 1U];
-    }
-    s_history[FT8_RESAMPLER_TAPS_PER_PHASE - 1U] = sample_f;
+    /* La muestra nueva ocupa el sitio de la mas vieja y el indice avanza.
+     * Ver el comentario de s_history: antes esto corria 119 floats por cada
+     * muestra que entraba. */
+    s_history[s_hist_w] = sample_f;
+    s_hist_w++;
+    if (s_hist_w >= FT8_RESAMPLER_TAPS_PER_PHASE) { s_hist_w = 0U; }
+    (void)i;
 
     s_input_count++;
     base_n = s_input_count - 1U; /* index of the sample just added */

@@ -99,8 +99,6 @@ static void hfdl_soft_demod_psk4(float32_t i_in, float32_t q_in, uint8_t *out)
     /*
      * BLANDA, NO DURA - 14/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Aqui se devolvian 0 o 255 y nada en medio, copiando a liquid-dsp,
      * que para M=2 no construye tabla blanda. Correcto como copia, caro
      * como receptor: el Viterbi con decision dura pierde del orden de 2 dB

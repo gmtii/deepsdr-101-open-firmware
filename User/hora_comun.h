@@ -51,8 +51,6 @@ uint8_t hora_dia_del_anno_a_fecha(uint16_t doy, uint8_t anno2,
  * EL HUSO HORARIO, QUE HASTA HOY ERA "ESPAÑA" ESCRITO EN TRES SITIOS
  * ======================================================================
  *
- * Pedido por el usuario, 10/10/2026.
- *
  * Lo que habia: hora_wwv.c y hora_rbu.c llamaban a hora_verano_espanna()
  * y sumaban una hora o dos. O sea que las emisoras que dan UTC daban hora
  * ESPAÑOLA, con la regla EUROPEA del horario de verano, estuviera la radio

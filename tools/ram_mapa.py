@@ -2,8 +2,6 @@
 """
 EL REPARTO DE LA RAM, LEIDO DEL MAPA Y NO DEL CODIGO FUENTE.
 
-Pedido por el usuario.
-
 Y la respuesta es que no podia salir. Un repaso del codigo fuente mira
 ficheros .c; la RAM no se decide en un .c, se decide en el ENLAZADO. El mapa
 es el unico sitio del proyecto donde pone que acaba de verdad en los 192 kB, y

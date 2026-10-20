@@ -232,14 +232,10 @@ void     ms5351_lowband_reengancha(void);
 /*
  * EL MULTIPLICADOR DE LA ZONA 7 (3,589..4,8 MHz), EN CALIENTE.
  *
- * *** Issue #35, 09/10/2026: "la recepcion entre 3,6 y 4,8 MHz es mas floja
- * de lo esperado; con 189 en vez de 168 vuelve, pero sube la respuesta al
- * tercer armonico". ***
- *
  * La tabla de zonas de ms5351.c se derivo con un unico criterio -que el
  * fVCO quepa en [600, 908] MHz y el divisor en el multisynth-, y la
  * sensibilidad NO fue uno de ellos. 168 es el minimo que cabe; 189 es el
- * maximo. Los dos numeros del issue son los dos extremos del mismo rango.
+ * maximo. Los dos numeros observados son los dos extremos del mismo rango.
  *
  * Las cuentas dicen que el firmware hace exactamente lo mismo con los dos
  * (ver el comentario largo junto a LOWF_ZONE_07_MULT para el detalle con

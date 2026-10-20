@@ -3,8 +3,6 @@
  * LA COMPONENTE DE CONTINUA ENCIMA DE LA PORTADORA, EN WFM - 11/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * Eso no es una opinion, es una prediccion: dice que el estropicio depende
  * de la RELACION entre la portadora y el offset, no del offset a secas. Y
  * una prediccion asi se mide.

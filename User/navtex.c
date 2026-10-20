@@ -91,8 +91,6 @@ uint8_t navtex_car_a_cod(char c, uint8_t figuras)
 /*
  * LOS 42 BITS QUE HACEN FALTA PARA VER UNA PAREJA - 02/10/2026.
  *
- * Pedido por el usuario.
- *
  * Era cierto, y el fallo estaba en como se elegia el desplazamiento.
  * Contar codigos validos es un criterio ROMO: el desplazamiento bueno saca
  * el 100%, pero el de al lado saca el 70-75% el solo. Al correr un bit, un
@@ -493,8 +491,6 @@ static void mira_cabecera(char c)
 /*
  * VOLVER A LETRAS AL SALTAR DE RENGLON - 03/10/2026.
  *
- * Pedido por el usuario.
- *
  * Aquello no era ruido: eran las mismas letras impresas por la columna de
  * las cifras. Se habia perdido un cambio a letras -los dos ejemplares, el
  * suyo y su copia- y de ahi no se salia: emite() solo volvia a letras si
@@ -625,8 +621,6 @@ static void caracter_nuevo(uint8_t cod)
  */
 /*
  * EL ORDEN DE LOS BITS DENTRO DEL CARACTER - 02/10/2026.
- *
- * Pedido por el usuario.
  *
  * Una vez arreglado el enganche, el decodificador cogia la señal y sacaba
  * codigos TODOS validos -calidad 0,99, cero malos- y aun asi el texto no se

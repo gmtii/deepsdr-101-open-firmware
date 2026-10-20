@@ -13,10 +13,10 @@ repositorio se tomó midiendo y no a ojo.
 > grabar este firmware y volver al firmware original en cualquier momento.
 > No secuestramos ni bloqueamos ningún dispositivo.**
 
-`V5.11` · cargador `v2.17` · **dos binarios, uno por chip**:
-`update.bin` 471.224 B CRC `08E810A6` (GD32F450VET6, 512 kB) ·
-`update_470.bin` 471.248 B CRC `AE985FC5` (GD32F470VGT6, 1024 kB) ·
-**220 comprobaciones en verde, 0 fallos** (`make comprueba`)
+`V5.47` · cargador `v2.17` · **dos binarios, uno por chip**:
+`update.bin` 476.928 B CRC `E9084F61` (GD32F450VET6, 512 kB) ·
+`update_470.bin` 476.960 B CRC `52BED227` (GD32F470VGT6, 1024 kB) ·
+**229 comprobaciones en verde, 0 fallos** (`make comprueba`)
 
 🇬🇧 [English below](#deepsdr-101--open-firmware) · 📘
 [Manual de uso (PDF, ES + EN)](DeepSDR_Reload_Manual-ES-EN.pdf)
@@ -458,13 +458,13 @@ comprobar.
 ## Estado
 
 ```
-  VERSION V5.11          CARGADOR v2.17
+  VERSION V5.47          CARGADOR v2.17
   update.bin  +  update_470.bin      <- 450VET6 (512 kB)  /  470VGT6 (1024 kB)
   customboot.bin  +  customboot_470.bin                   BD.BIN
   ZONA ALTA  520.192 de  847.872   libre 327.680  (294.909 aviones,
                                      211.387 emisoras, 5.592 la fuente)
-  FLASH   471.092 de 491.520   libre  20.428   <- UNA region, sin desvan
-  FLASH 470  471.116 de 1.015.808 libre 544.692 <- el mismo codigo, otro .ld
+  FLASH   472.832 de 491.520   libre  18.688   <- UNA region, sin desvan
+  FLASH 470  472.856 de 1.015.808 libre 542.952 <- el mismo codigo, otro .ld
   CARGADOR 32.632 de  32.768   libre     136   <- DOS sectores, no tres
   RAM     195.172 de 196.608   libre   1.436   <- .bss + .data + .noinit
   RAM 470    194.876 de 458.752  libre 263.876  <- 448 kB contiguos
@@ -538,10 +538,10 @@ in this repository was made by measuring rather than by eye.
 > It is also entirely reversible: anyone can flash this firmware and go back
 > to the original one at any time. We do not hold or lock any device.**
 
-`V5.11` · bootloader `v2.17` · **two builds, one per chip**:
-`update.bin` 471,224 B CRC `08E810A6` (GD32F450VET6, 512 kB) ·
-`update_470.bin` 471,248 B CRC `AE985FC5` (GD32F470VGT6, 1024 kB) ·
-**220 checks green, 0 failures** (`make comprueba`)
+`V5.47` · bootloader `v2.17` · **two builds, one per chip**:
+`update.bin` 476,928 B CRC `E9084F61` (GD32F450VET6, 512 kB) ·
+`update_470.bin` 476,960 B CRC `52BED227` (GD32F470VGT6, 1024 kB) ·
+**229 checks green, 0 failures** (`make comprueba`)
 
 📘 [User manual (PDF, ES + EN)](DeepSDR_Reload_Manual-ES-EN.pdf)
 

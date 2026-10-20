@@ -1,8 +1,6 @@
 /*
  * Banco de la COLA DE PITIDOS (User/bip.c del firmware, sin cambios).
  *
- * Pedido por el usuario.
- *
  * LO QUE SE MIDE: que la cola se pueda usar MUCHAS veces. El fallo que
  * motiva este banco no era que sonara mal, era que despues de la primera
  * captura la cola se quedaba marcada como llena para siempre y todas las

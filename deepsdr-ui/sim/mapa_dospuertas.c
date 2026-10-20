@@ -1,8 +1,6 @@
 /*
  * EL MISMO MAPA POR LAS DOS PUERTAS - 14/10/2026.
  *
- * Pedido por el usuario.
- *
  * Un mapa se puede cargar de dos maneras y SON DOS FUNCIONES DISTINTAS:
  *
  *   mapa_bin_pon()         el fichero entero en RAM. Es la que usan todos

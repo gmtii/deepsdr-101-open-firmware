@@ -300,8 +300,6 @@ void panel_serie_init(void)
     /*
      * LA RAMA, COMO LA ELIGE EL DE SERIE - 05/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * El de serie lee dos identificadores y reparte en tres ramas. Aqui se
      * hacia lo mismo... y despues se forzaba la B a pelo, porque el 01/10
      * las lecturas parecian basura. Con las tres lecturas puestas ya no lo

@@ -3,8 +3,6 @@
  * EL FILTRO DE CQ DE LA LISTA DE FT8 - 13/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * Son veinte lineas, y por eso mismo hay banco: las veinte lineas del
  * toque del mapa de ayer tambien eran veinte, estaban en main.c -que el
  * simulador no compila- y la radio se quedo sin responder al toque. Lo

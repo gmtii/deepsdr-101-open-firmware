@@ -33,8 +33,6 @@
 /*
  * EL VOLTAJE DE REFERENCIA YA NO SE SUPONE: SE MIDE - 12/10/2026.
  *
- * Pedido por el usuario.
- *
  * Tiene razon, y el comentario que habia justo encima de la cuenta ya lo
  * admitia: "NOT VREFINT-calibrated, so this inherits whatever tolerance
  * that rail has". Lo que no decia -y es lo gordo- es que la constante era

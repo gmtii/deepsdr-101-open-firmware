@@ -1,8 +1,6 @@
 /*
  * EL BANCO DEL 4415 / 110A A 75 bps.
  *
- * Pedido por el usuario.
- *
  * QUE TIENE QUE DEMOSTRAR ESTE BANCO, y en este orden:
  *
  *   1. Que sobre una señal GENERADA AQUI, con la que se sabe la verdad
@@ -513,8 +511,6 @@ static void sintetica(const char *nombre, double tau, double df, double snr,
 /*
  * ===================================================================
  * CUANTO CUESTA. No si acierta: CUANTO CUESTA.
- *
- * Pedido por el usuario, 07/10/2026.
  *
  * La primera version de este banco comprobaba que el modulo ACIERTA, y
  * acertaba. Lo que no comprobaba es que la radio pueda con el, y la radio no

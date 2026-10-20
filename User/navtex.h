@@ -64,8 +64,6 @@
  * PERO AQUI NO ES UN CONTRATO, Y LA LINEA QUE DECIA QUE SI SE HA QUITADO -
  * 11/10/2026.
  *
- * Pedido por el usuario.
- *
  * Decia "se comprueba con _Static_assert en navtex.c", y en navtex.c no
  * hay ningun _Static_assert. Pero lo importante es lo otro: navtex_process()
  * ACEPTA CUALQUIER LONGITUD a proposito -es de muestra a muestra, el anillo

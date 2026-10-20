@@ -1,7 +1,7 @@
 /*
  * EL ESPECTRO, TEMA POR TEMA, MEDIDO SOBRE LOS PIXELES - 17/10/2026.
  *
- * De un issue que pedia fondo claro para el espectro con los temas claros.
+ * Se pedia fondo claro para el espectro con los temas claros.
  * El arreglo fue que spectrum.c pasara a leer la paleta (campo
  * espectro_claro de palette.h); esto es lo que comprueba que el arreglo
  * sirve y, sobre todo, QUE NO SE HA LLEVADO POR DELANTE A NADIE.

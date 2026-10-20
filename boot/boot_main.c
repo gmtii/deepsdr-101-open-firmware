@@ -56,7 +56,7 @@ extern usb_core_driver g_usb;   /* en soporte.c, compartido con usb_it.c */
 #define BARRA     0x18C3U   /* la banda del titulo */
 #define ACENTO    0x3D7FU   /* azul claro, para el titulo */
 /*
- * LA ETIQUETA SUBE DE 0x6D A 0xA6 - 05/10/2026, de un issue.
+ * LA ETIQUETA SUBE DE 0x6D A 0xA6 - 05/10/2026.
  *
  * *** El que lo abrio decia que en el cargador nuevo no se leia bien el
  * texto de la columna izquierda, la de la flash. *** La columna de la
@@ -80,7 +80,6 @@ extern usb_core_driver g_usb;   /* en soporte.c, compartido con usb_it.c */
 /* --- texto: la fuente proporcional del firmware --------------------- */
 
 /*
- * Pedido por el usuario.
  *
  * La tenia delante. El firmware lleva seis fuentes proporcionales con
  * antialias a 4 bits (gfx2_font.h), generadas de DejaVu Sans Condensed, y
@@ -249,8 +248,6 @@ static void borra_linea(uint16_t y)
 /*
  * Y CUAL DE LOS DOS, EN LA MISMA LINEA - 16/10/2026.
  *
- * Pedido por el usuario.
- *
  * Desde hoy hay dos cargadores con el mismo numero de version y distinto
  * contenido. Como la version sola ya no identifica el binario, la etiqueta
  * lo dice: "v2.16 470" o "v2.16" a secas. Una palabra en pantalla contra
@@ -375,8 +372,6 @@ static void fmc_lee(uint32_t addr, uint8_t *buf, uint32_t len)
 
 /*
  * HASTA DONDE SE PUEDE BORRAR DE VERDAD - 16/10/2026.
- *
- * Pedido por el usuario.
  *
  * Con dos cargadores en la misma carpeta, arrastrar el que no era es un
  * error de un segundo. Y los dos errores NO cuestan lo mismo:
@@ -528,7 +523,6 @@ static void progreso(uint32_t hechos)
     s_grabar_pct = pct;
 
     /*
-     * Pedido por el usuario.
      *
      * Era el repintado a medias. Yo borraba la barra entera -752 x 28, mas
      * de veinte mil pixeles- y la rellenaba otra vez en cada 1%. Como el
@@ -662,9 +656,6 @@ static uint16_t ficha(void)
     /*
      * Y SI NO SE RECONOCE, POR QUE - 06/10/2026.
      *
-     * *** De un issue: el cargador no veia update.bin en el disco. Y
-     * la foto de su ficha decia "Volumen: no se reconoce". ***
-     *
      * Son el MISMO fallo y no dos: cargador_busca_update() empieza con
      * `if (!geo()) { return 0U; }`, asi que con el volumen rechazado ni
      * siquiera mira el directorio raiz. El fichero esta ahi y nadie lo
@@ -708,8 +699,6 @@ static uint16_t ficha(void)
 
 /*
  * LOS SIETE PINES QUE EL CARGADOR DE SERIE PONE Y NADIE MAS - 01/10/2026.
- *
- * Pedido por el usuario.
  *
  * Habia adivinado dos veces -que era la retroiluminacion de PA3- y las dos
  * le costaron una grabacion. Asi que esto no sale de razonar: sale de

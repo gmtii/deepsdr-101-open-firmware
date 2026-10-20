@@ -2,6 +2,7 @@
 #define SPLASH_H_INCLUDED
 
 #include <stdint.h>
+#include "gfx2_font.h"
 
 /*
  * Pantalla de arranque: lluvia de codigo sobre negro y el titulo
@@ -29,7 +30,6 @@
  *
  * IDA Y VUELTA - 25/09/2026 y 28/09/2026
  * --------------------------------------
- * Pedido por el usuario.
  *
  * Se quito porque HFDL necesitaba flash, no porque estuviera mal. Volvio
  * cuando desensamblar el gestor de arranque abrio 64 kB mas arriba. Lo que NO
@@ -59,14 +59,22 @@ uint32_t splash_ram_bytes(void);
  * esta pensada para llamarse una vez en el arranque, donde no hay nada mas
  * que hacer. `ms` es el reloj de milisegundos del sistema, que se le pasa en
  * vez de leerlo para que el simulador de host pueda compilar este fichero
- * tal cual. `ram`/`bytes`: ver el comentario de arriba; 0 = sin lluvia. */
+ * tal cual. `ram`/`bytes`: ver el comentario de arriba; 0 = sin lluvia.
+ *
+ * `lluvia` es la fuente de los katakana, que desde el 17/10/2026 tampoco
+ * vive aqui: son 5.592 bytes y se fueron a BD.BIN, en la zona alta de la
+ * flash SPI. Se pasa por el mismo motivo que la memoria y el reloj -para
+ * que este fichero no dependa de donde sale- y con la misma red: 0 = sin
+ * lluvia, o sea la pantalla fija. */
 typedef uint32_t (*splash_ms_fn)(void);
 
-void splash_run(splash_ms_fn ms, void *ram, uint32_t bytes);
+void splash_run(splash_ms_fn ms, void *ram, uint32_t bytes,
+                const gfx2_font_t *lluvia);
 
 /* Un solo fotograma de la animacion, para el simulador: t es el tiempo
  * transcurrido en ms. Devuelve 0 cuando la animacion ha terminado. */
 uint8_t splash_paso(uint32_t t);
-void    splash_reinicia(void *ram, uint32_t bytes);
+void    splash_reinicia(void *ram, uint32_t bytes,
+                        const gfx2_font_t *lluvia);
 
 #endif /* SPLASH_H_INCLUDED */

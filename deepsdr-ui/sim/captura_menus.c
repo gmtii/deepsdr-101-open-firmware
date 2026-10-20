@@ -1,8 +1,6 @@
 /*
  * LA CAPTURA TIENE QUE SALIR IGUAL QUE LA PANTALLA, TAMBIEN EN LOS MENUS.
  *
- * Pedido por el usuario.
- *
  * sim/captura.c ya vigila esto para la pantalla de la radio. Este banco es
  * el mismo trato para las SEIS pantallas de menu: ajustes con columna,
  * rejilla paginada, detalle de un ajuste, teclado, sincronizar la hora y

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-EL ORDEN DE ARRANQUE, VIGILADO - 07/10/2026, de un issue.
+EL ORDEN DE ARRANQUE, VIGILADO - 07/10/2026.
 
 QUE SE ROMPIO. settings.c aplicaba `spectrum_palette` DENTRO de la lectura
 del fichero, con este comentario encima:

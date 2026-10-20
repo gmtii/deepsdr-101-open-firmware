@@ -3,8 +3,6 @@
  * LA RAFAGA ENTERA, POR LA CADENA DE VERDAD, HASTA EL CRC
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * ESTE ES EL BANCO QUE FALTABA, Y SU AUSENCIA ES LA CAUSA DE TODO LO DE
  * HOY. El proyecto tiene veintitantos bancos de HFDL y todos prueban
  * PIEZAS: la aritmetica del Viterbi, el permutado del desentrelazador, la
@@ -258,8 +256,6 @@ static void pon(float i_, float q_)
 /*
  * EL CANAL QUE SE MUEVE - 14/10/2026, de madrugada.
  *
- * Pedido por el usuario.
- *
  * Y el banco de aire real le da la razon a medias: de catorce ráfagas que
  * pasan por la antena (las cuenta el detector de pre-key) solo seis
  * decodifican. No es detectar: es demodular.
@@ -484,8 +480,6 @@ int main(void)
 {
     /*
      * LAS OCHO, NO TRES. 14/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Aqui habia tres entradas -giros 1, 2 y 3- y se llamaban "BPSK",
      * "4PSK" y "8PSK" como si eso cubriera el aire. No lo cubre: hay

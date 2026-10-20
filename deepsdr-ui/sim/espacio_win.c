@@ -1,8 +1,6 @@
 /*
  * LO QUE WINDOWS DICE DEL DISCO, Y SI ES VERDAD.
  *
- * Pedido por el usuario, 11/10/2026.
- *
  * "Vacia y medio llena" es un estado concreto del volumen, no una rareza:
  * la FAT tiene clusters marcados como ocupados y el directorio raiz no
  * tiene ninguna entrada que los reclame. Lo primero que hace este banco es
@@ -156,7 +154,7 @@ static void una_talla(uint32_t mb)
     /*
      * Y LAS TRES COSAS QUE SE HACEN CON EL DISCO. Lo que se mira no es que
      * funcionen -eso ya lo miran otros bancos- sino que NO DEJEN SITIO
-     * OCUPADO DETRAS, que es el estado del issue apareciendo solo.
+     * OCUPADO DETRAS, que es ese estado apareciendo solo.
      */
     /*
      * 4.096 bytes y no mas: es el tope de

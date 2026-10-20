@@ -1,8 +1,6 @@
 /*
  * EL DIRECTORIO DE LA ZONA ALTA, CONTRA UN BD.BIN DE VERDAD.
  *
- * Pedido por el usuario.
- *
  * Este banco abre el BD.BIN que sale de tools/datos_pack.py -con las
  * dos bases de verdad dentro- y le pregunta a User/zona_alta.c, el mismo
  * que corre en la radio.

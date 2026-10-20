@@ -1,8 +1,6 @@
 /*
  * BASURA POR LA PUERTA DEL AIRE.
  *
- * Pedido por el usuario.
- *
  * POR QUE ESTO Y NO GREP
  * ----------------------
  * La pregunta "¿hay algun indice calculado con datos del aire que escriba
@@ -259,8 +257,6 @@ static void a_rds(void)    { rds_start(192000.0f); }
  * LOS DOS QUE FALTABAN: HFDL Y FT8 - 10/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * Y son justo los dos mas grandes. HFDL lleva una cadena entera de demodulo
  * -mezclador, filtro adaptado, sincronismo de simbolo, Costas, ecualizador,
  * Viterbi, desentrelazado, CRC- y FT8 arrastra la biblioteca ft8_lib con su
@@ -305,8 +301,6 @@ static void a_ft8(void)
  * ======================================================================
  * LA BASURA QUE NO ENTRABA - 11/10/2026
  * ======================================================================
- *
- * Pedido por el usuario.
  *
  * Y el primero estaba aqui dentro.
  *

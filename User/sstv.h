@@ -135,8 +135,6 @@ void sstv_fuerza(uint8_t indice_modo);
 /*
  * ADIVINAR EL MODO SIN CABECERA, DEL RITMO DE LOS SINCRONISMOS - 11/10/2026.
  *
- * Pedido por el usuario.
- *
  * La cabecera VIS dice el modo, pero solo pasa UNA vez y al principio. Si te
  * enganchas a mitad de imagen -que es lo normal buscando por la banda- ya no
  * vuelve hasta la siguiente foto, y hasta hoy la unica salida era elegir el

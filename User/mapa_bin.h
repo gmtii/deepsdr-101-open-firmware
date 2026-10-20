@@ -6,8 +6,6 @@
 /*
  * EL MAPA QUE TRAE EL DUEÑO EN UN FICHERO - 12/10/2026.
  *
- * Pedido por el usuario.
- *
  * NO ES UNA FOTO, Y ESO NO ES UN RECORTE: ES LO QUE LO HACE POSIBLE. Una
  * foto del mundo a la resolucion de esta pantalla son 460.800 bytes, y
  * leerlos del bus de la flash cuesta 370 ms por repintado -medido: unos
@@ -207,8 +205,6 @@ uint32_t mapa_bin_color(uint8_t cual, uint32_t porsi);
 
 /*
  * LA VENTANA: QUE TROZO DEL MUNDO ESTA CARGADO - 12/10/2026.
- *
- * Pedido por el usuario.
  *
  * Ayudaba. Medido:
  *

@@ -1,8 +1,6 @@
 /*
  * WSPR DE PUNTA A PUNTA: DEL AUDIO AL INDICATIVO.
  *
- * Pedido por el usuario.
- *
  * Aqui se fabrica una emision de WSPR como la que saldria del altavoz
  * -110,6 segundos de audio de banda lateral a 12 kHz, con su desvio de
  * frecuencia, su desvio de reloj y su ruido- y se le da al receptor de

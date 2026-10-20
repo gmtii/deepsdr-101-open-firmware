@@ -1,8 +1,6 @@
 /*
  * EL DISCO QUE VE WINDOWS - 01/10/2026.
  *
- * Pedido por el usuario.
- *
  * La clase MSC de USB pide bloques de 512 bytes por numero (LBA) y punto.
  * Aqui esta esa traduccion, y esta SEPARADA del USB a proposito: el
  * transporte USB no se puede probar sin placa, pero esto si, y es donde
@@ -33,8 +31,6 @@
 /*
  * EL DISCO ES TODO EL CHIP MENOS EL ULTIMO MEGABYTE - 02/10/2026.
  *
- * Pedido por el usuario.
- *
  * Aqui habia un 1 MB fijo, "la mitad de abajo del W25Q16". Ahora sale de
  * spi_flash_capacidad() menos la region de datos, asi que:
  *
@@ -63,7 +59,7 @@
  */
 uint32_t disco_bloques(void)
 {
-    return (spi_flash_capacidad() - ZA_BYTES_REGION) / DISCO_BLOQUE;
+    return za_disco_de(spi_flash_capacidad()) / DISCO_BLOQUE;
 }
 
 uint8_t disco_lee(uint32_t lba, uint8_t *buf)

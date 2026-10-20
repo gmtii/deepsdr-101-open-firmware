@@ -102,8 +102,6 @@ uint8_t *hfdl_scope_get_hfdl_ram(uint32_t *capacity_out);
  * Y EL GIRO 6 SI CABE, PORQUE SE MIDIO - 11/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * Esa X vale mas que toda la tabla de arriba, porque es la medida que
  * faltaba. La chapa pone X o Z segun cual de los dos giros que no caben
  * manda, y esta puesta ahi justo para decidir ESTO:

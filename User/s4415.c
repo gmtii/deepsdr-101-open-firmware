@@ -235,8 +235,6 @@ static const char *const k_bps[8] = {
 /*
  * EL OSCILADOR DE BAJADA, EXACTO Y SIN TRIGONOMETRIA.
  *
- * Pedido por el usuario, 07/10/2026.
- *
  * Y LA CULPA FUE DE NO LEER LO QUE YO MISMO HABIA ESCRITO. stanag_rx.c, el
  * fichero de al lado, lleva este comentario desde hace dias:
  *
@@ -1040,7 +1038,6 @@ static void cierra_pendiente(void)
 }
 
 /*
- * Pedido por el usuario, 07/10/2026.
  *
  * Y LO QUE PASO FUE ESTO, QUE ESTABA AVISADO POR ESCRITO.
  *

@@ -48,8 +48,6 @@ USER = os.path.join(AQUI, '..', 'User')
 
 # Y TAMBIEN SE MIRA boot/, QUE SI NO ESTE BANCO MIENTE - 08/10/2026.
 #
-# Pedido por el usuario.
-#
 # Y lo primero que dijo este banco fue "cargador_arranca: NADIE la llama".
 # La llama boot/boot_main.c linea 1037, que es su unico cliente y siempre
 # lo fue: el cargador vive en el arranque, no en el firmware. Este script

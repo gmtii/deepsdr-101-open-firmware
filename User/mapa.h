@@ -7,8 +7,6 @@
 /*
  * EL MAPA DEL MUNDO, Y DONDE ESTA LO QUE SE HA CAZADO - 28/09/2026.
  *
- * Pedido por el usuario.
- *
  * Una lista de indicativos con su localizador contesta "quien" pero no
  * contesta "por donde se oye hoy", que es la pregunta de verdad cuando
  * uno mira una banda: si lo que entra es Europa, si ha abierto el
@@ -26,8 +24,6 @@
  * la Antartida y el alto Artico, que en HF no tienen a nadie.
  *
  * Y LO QUE SE VE ES MENOS QUE ESO - 28/09/2026.
- *
- * Pedido por el usuario.
  *
  * Las dejaba porque la proporcion manda: 360 grados por 143 son 2,517 a 1,
  * y en el hueco de 800x288 el mapa mas grande que cabe entero mide 724x288
@@ -78,8 +74,6 @@ extern const int16_t  k_mapa_lat_tope_c;
 
 /*
  * EL HUECO, Y QUE TROZO DEL MUNDO SE VE EN EL.
- *
- * Pedido por el usuario.
  *
  * `x,y,w,h` son el hueco en pantalla y no cambian. Lo que cambia es el
  * MUNDO que se mete dentro: a escala `esc` mide `w*esc` de ancho -y el
@@ -199,8 +193,6 @@ uint8_t mapa_zoom(mapa_caja_t *c, uint8_t esc, int16_t ax, int16_t ay);
 /*
  * UN PASO DE ZOOM, EN POTENCIAS DE DOS. 11/10/2026.
  *
- * Pedido por el usuario.
- *
  * Nace de ahi, pero vive AQUI y no en main.c a proposito: con el mando y
  * los botones de la esquina hay ya DOS caminos al mismo zoom, y una cuenta
  * de "multiplica por dos y topa" copiada en los dos es como se consigue que
@@ -229,8 +221,6 @@ void mapa_arrastra(mapa_caja_t *c, int16_t dx, int16_t dy);
  * ======================================================================
  * ARRASTRAR O TOCAR, QUE NO ES LO MISMO - 13/10/2026
  * ======================================================================
- *
- * Pedido por el usuario.
  *
  * Y no pasaba. El reparto del gesto vivia suelto en main.c y tenia DOS
  * fallos que un banco habria cogido en diez segundos, si hubiera habido
@@ -321,8 +311,6 @@ uint8_t mapa_ind_de_linea(const char *linea, char *out);
 /*
  * LO MISMO, PERO BUSCANDO EN TODAS LAS PALABRAS DE UN CAMPO - 28/09/2026.
  *
- * Pedido por el usuario.
- *
  * Y lo tiene, pero no sirve la funcion de arriba. En FT8 el localizador, si
  * lo hay, es SIEMPRE la ultima palabra del mensaje, y por eso aquella mira
  * solo esa. En JTTY un mensaje son varios atomos pegados -"CQ K1ABC CQ
@@ -355,8 +343,6 @@ void mapa_marca(gfx2_surf_t *s, const mapa_caja_t *c,
 
 /*
  * LOS DOS MANDOS DEL ZOOM, abajo a la izquierda y ENCIMA del mapa.
- *
- * Pedido por el usuario.
  *
  * Viven aqui y no en main.c aunque sea main.c quien los pone: main.c no lo
  * puede compilar el simulador, asi que un boton dibujado alli no se puede

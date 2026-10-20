@@ -175,8 +175,6 @@ void spi_flash_write_block_4k(uint32_t block_addr, const uint8_t *data4k);
 /*
  * CUANTO SITIO HAY PARA UNA FOTO - 05/10/2026.
  *
- * Pedido por el usuario.
- *
  * Una foto no cabe por TRES razones distintas y "el disco esta lleno" solo
  * nombra una:
  *
@@ -551,6 +549,13 @@ uint8_t spi_flash_anade_trozo(const char name8[8], const char ext3[3],
 
 const char *spi_flash_anade_porque_txt(spi_anade_r_t r);
 
+/* Reescribe el PRIMER bloque de 4 kB de un fichero que ya existe,
+ * localizandolo por su entrada de directorio. Hace falta para las cartas de
+ * fax, que se montan a trozos y cuya cabecera BMP lleva una altura que no
+ * se sabe hasta el final. Ver su comentario en el .c. */
+uint8_t spi_flash_escribe_cabecera(const char name8[8], const char ext3[3],
+                                   const uint8_t *bloque4k);
+
 /*
  * Si la distribucion del volumen es una que este driver sabe manejar, y si
  * no, cual de las comprobaciones falla. Se lee del sector de arranque en
@@ -588,8 +593,6 @@ uint32_t spi_flash_dir_max_indice(const char pre[4], const char ext3[3]);
 /*
  * EL PRIMER FICHERO DEL RAIZ CON ESTA EXTENSION - 12/10/2026.
  *
- * Pedido por el usuario.
- *
  * O sea que el NOMBRE no se sabe: lo elige el que se descarga el mapa. Lo
  * unico seguro es la extension. Esto recorre el raiz entero y devuelve el
  * nombre de ocho caracteres del primero que la lleve, para no obligar al
@@ -622,6 +625,34 @@ uint8_t spi_flash_reserva(const char name8[8], const char ext3[3],
 /* Recorta un fichero reservado a lo que de verdad se uso, devolviendo los
  * bloques de sobra al volumen. Se redondea hacia arriba a bloque de 4 kB. */
 uint8_t spi_flash_recorta(const char name8[8], const char ext3[3], uint32_t bytes);
+
+/*
+ * --- EL FICHERO QUE CRECE A TRAMOS - 20/10/2026 ----------------------
+ *
+ * Alarga `name8.ext3` con `bloques` de 4 kB SEGUIDOS, creandolo si no
+ * existe. Si no hay tantos seguidos coge el tramo mayor que encuentre,
+ * bajando a la mitad hasta un bloque: un volumen repartido graba mas
+ * despacio, pero graba.
+ *
+ * Es lo que permite grabar una carta de fax, cuya altura no se sabe hasta
+ * el final, EN UN SOLO FICHERO y sin parar el bucle principal: el trabajo
+ * de FAT y directorio se hace una vez por tramo -unos 300 ms- en vez de
+ * una vez por bloque. Ver el comentario gordo en spi_flash.c.
+ *
+ * Devuelve en *addr el primer byte del tramo NUEVO y en *dados cuantos
+ * bloques trae. Dentro del tramo se escribe con spi_flash_write_block_4k()
+ * a direcciones ya conocidas.
+ */
+uint8_t spi_flash_amplia(const char name8[8], const char ext3[3],
+                         uint32_t bloques, uint32_t *addr, uint32_t *dados,
+                         spi_anade_r_t *porque);
+
+/* Como spi_flash_recorta(), pero SIGUIENDO LA CADENA en vez de dar por
+ * hecho que el fichero es seguido. Es la que hay que usar con un fichero
+ * hecho con spi_flash_amplia(): ver su comentario en el .c, porque
+ * recortar uno de esos con la otra libera clusters del vecino. */
+uint8_t spi_flash_recorta_cadena(const char name8[8], const char ext3[3],
+                                 uint32_t bytes);
 
 /* Reescribe los primeros `len` bytes de un fichero (<= 4096). */
 uint8_t spi_flash_fichero_cabecera_pon(const char name8[8], const char ext3[3],
@@ -691,6 +722,17 @@ uint32_t spi_flash_volcado_total(void);    /* 0 = no hay volcado en curso */
  * cuando lo que pasa es que la cadena se acaba antes que el fichero.
  */
 #define SPI_VOL_CORTO     8U   /* la cadena se acaba antes que el tamaño */
+/*
+ * Y "NO CABE" NO ES "DESTINO NO PERMITIDO" - 20/10/2026.
+ *
+ * Los dos salian por SPI_VOL_DESTINO, y no se parecen en nada: uno dice
+ * que se intenta escribir DEBAJO del sistema de ficheros -un fallo
+ * nuestro, o un volumen roto- y el otro que el fichero es mas grande que
+ * la zona que hay encima, que es lo que le pasa a un chip pequeño con un
+ * BD.BIN hecho para uno grande. El primero manda a mirar el disco; el
+ * segundo, a hacer un BD.BIN mas pequeño. El mensaje dice cuanto cabe.
+ */
+#define SPI_VOL_NO_CABE   9U
 
 uint8_t     spi_flash_volcado_porque(void);
 const char *spi_flash_volcado_porque_txt(void);

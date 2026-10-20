@@ -1,8 +1,6 @@
 /*
  * EL IDENT, CONTRA UN AUDIO DE VERDAD.
  *
- * Pedido por el usuario.
- *
  * sim/identtest.c prueba la TABLA con medidas inventadas, que es lo que hay
  * que hacer con una funcion pura. Esto es lo otro: mete una grabacion por
  * la misma puerta que el audio de la radio -ident_modo_mete(), a 12 kHz- y

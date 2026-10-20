@@ -416,68 +416,64 @@ _Static_assert(LOWF_FLOOR_HZ == MS5351_LOWBAND_FLOOR_HZ,
 #define LOWF_ZONE_04_MULT      578UL
 #define LOWF_ZONE_05_MULT      382UL
 #define LOWF_ZONE_06_MULT      253UL
-#define LOWF_ZONE_07_MULT      168UL
+#define LOWF_ZONE_07_MULT      178UL   /* medido, ver el barrido de abajo */
 
 /*
  * Y EL DE LA ZONA 7 SE MUEVE EN CALIENTE. SOLO EL DE LA ZONA 7.
  *
- * *** Issue #35, 09/10/2026: "la recepcion entre 3,6 y 4,8 MHz es mas floja
- * de lo esperado; con 189 en vez de 168 vuelve, pero sube la respuesta al
- * tercer armonico". Y la pregunta, que es la buena: "deberia la zona 7
- * usar 189 en lugar de 168?" ***
- *
- * La respuesta honesta es QUE NO SE SABE, y no se sabe por como se hizo la
- * tabla de arriba: el criterio escrito alli es que el fVCO quepa en
+ * POR QUE HABIA UN 168. Porque era el MINIMO que cabia y se cogio sin mirar
+ * nada mas: el criterio con el que se hizo la tabla es que el fVCO quepa en
  * [600, 908] MHz y que el divisor quepa en el multisynth. LA SENSIBILIDAD
- * NUNCA FUE UN CRITERIO. Por eso hay un 168 y no un 189: 168 es el MINIMO
- * que cabe -el fVCO rozando el suelo por abajo, 602,9 MHz- y se cogio el
- * minimo sin mirar nada mas. Quien abre el issue lo adivina solo, y acierta.
+ * NUNCA FUE UN CRITERIO. Quien se lo encuentra lo adivina solo, y acierta.
  *
- * El rango entero que CABE son 22 valores, 168..189:
+ * LO QUE FALTABA ERA LA MEDIDA, Y EL 19/10/2026 YA ESTA. La hace
+ * deepsdr-ui/sim/lo5351.c, que pasa este fichero por un I2C de mentira y
+ * deshace la cuenta de los registros. Los 22 valores que caben:
  *
- *     168 -> fVCO  602,9 .. 806,4 MHz    (+2,9 MHz de margen por abajo)
- *     189 -> fVCO  678,3 .. 907,2 MHz    (+0,8 MHz de margen por arriba)
+ *     mult   fVCO ini  fVCO fin   marg-   marg+    angulo   espejo
+ *     168      602,9M    806,4M    2,9M  101,6M   89,845   57,4 dB
+ *     172      617,3M    825,6M   17,3M   82,4M   89,994   86,2 dB
+ *     178      638,8M    854,4M   38,8M   53,6M   89,989   80,6 dB
+ *     184      660,4M    883,2M   60,4M   24,8M   89,985   77,5 dB
+ *     189      678,3M    907,2M   78,3M    0,8M   89,641   50,1 dB
  *
- * con 167 el fVCO se sale por abajo (599,4 MHz) y con 190 por arriba
- * (912,0 MHz). O sea que los dos numeros del issue son JUSTO LOS DOS
- * EXTREMOS del rango valido, y los intermedios que propone -180, 184, 186,
- * 188- valen todos.
+ * (la tabla entera la imprime el banco; aqui van los cinco que deciden)
  *
- * Y lo que dicen las cuentas es que el firmware no hace NADA distinto con
- * uno y con otro:
+ * El angulo da vueltas de cuatro en cuatro porque el divisor de la maniobra
+ * es fraccionario y cae mejor o peor en el escalon: no es ruido, sale igual
+ * cada vez.
  *
- *   - el error de la frecuencia sintetizada es <= 0,15 Hz en toda la zona
- *     y practicamente el mismo con los dos -0,148 Hz con 168, 0,131 Hz
- *     con 189- (FRAC_C = 0xFFFFF, xtal 26 MHz);
- *   - el divisor del multisynth es el multiplicador EXACTO -b = 0- en los
- *     dos casos, porque fVCO = freq * mult por construccion;
- *   - CLKCTRL_QUAD_PLLB = 0x2F deja MS_INT a 0 -modo fraccionario- y la
- *     corriente de salida al maximo con los dos;
- *   - la maniobra de los 90 grados no depende del multiplicador: es
- *     LOWF_PHASE_DF_HZ * LOWF_PHASE_SHIFT_US = un cuarto de ciclo, y eso
- *     vale para cualquier mult;
- *   - el ruido de fase del VCO sale dividido por el multiplicador, asi que
- *     189 gana 20*log10(189/168) = 1,0 dB. UN decibelio;
- *   - y el tercer armonico, que es lo que el issue dice que empeora: la
- *     cuadrada que sale es de freq en los dos casos. Con divisor impar el
- *     ciclo de trabajo se desvia medio periodo de VCO -0,55 ns sobre 208 ns
- *     a 4,8 MHz-, y eso mueve el tercer armonico 0,003 dB.
+ * Y LO QUE DICE. La zona 7 era LA UNICA DE LAS SIETE que no llega al techo
+ * del VCO: las otras seis barren los 600-908 MHz enteros y esta se quedaba
+ * cien megahercios por debajo, pegada al suelo. Por eso el aviso tiene
+ * exactamente la forma de una zona.
  *
- * O sea que el compromiso "mas sensibilidad a cambio de mas armonico" que
- * describe el issue NO SALE DE LAS CUENTAS. Lo cual no quiere decir que no
- * lo este viendo: quiere decir que con las cuentas no se decide, y que EL
- * NUMERO TIENE QUE SALIR DE LA RADIO, que es la regla de siempre aqui.
+ * El 189 observado NO es la respuesta: cambia un extremo por el otro -deja
+ * 0,8 MHz hasta el techo- y ademas da el PEOR angulo de la tabla.
  *
- * De ahi esto. El multiplicador de la zona 7 se mueve desde la fila
- * "Mult. zona 7" de Informacion, un toque por valor, 168..189 y vuelta a
- * empezar. Cada toque rehace la maniobra y vuelve a sintonizar SIN MOVER EL
- * DIAL NI UN HERCIO, asi que se barre el rango entero sobre LA MISMA
- * EMISORA en una sesion, leyendo la sensibilidad en el espectro y el
- * rechazo de imagen en la fila "Espejo I/Q", que esta justo al lado.
+ * EL CRITERIO, que esta vez si esta escrito: que el fVCO quede a mas de 20
+ * MHz de LOS DOS topes del VCO -para que la zona no viva pegada a ninguno
+ * de los dos, que es lo que le pasaba- y, entre los que lo cumplen, el de
+ * mejor angulo. Sale el 178, que ademas es el centro geometrico de la zona:
+ * 38,8 MHz de margen por abajo y 53,6 por arriba. El banco comprueba las
+ * dos cosas, asi que cambiar este numero por uno peor se pone rojo.
  *
- * NO SE GUARDA EN AJUSTES, a proposito, y al arrancar vuelve a 168. Esto es
- * una vara de medir, no un ajuste: lo que salga del barrido se escribe
- * arriba en la tabla, con el numero medido detras. Que es lo que le falta.
+ * LO QUE ESTO NO DEMUESTRA, dicho claro. El nivel de salida del VCO, la
+ * corriente que le llega al mezclador y el ruido de fase son del chip y no
+ * del firmware: de eso ni este fichero ni su banco pueden decir nada. Lo
+ * que se ha hecho es quitar la unica anomalia que SI estaba en el firmware
+ * -una zona colocada donde no esta ninguna otra- y elegir dentro de lo que
+ * se puede medir. Si en antena sigue flojo, el siguiente sitio donde mirar
+ * NO es este numero, es el tramo de 4,8 a 7,2 MHz, que arranca igual de
+ * bajo (604,8 MHz) y ahi no hay multiplicador que tocar.
+ *
+ * LA FILA SIGUE. "Mult. zona 7" de Informacion mueve el valor en caliente,
+ * un toque por valor, 168..189 y vuelta a empezar. Cada toque rehace la
+ * maniobra y vuelve a sintonizar SIN MOVER EL DIAL NI UN HERCIO, asi que se
+ * barre el rango entero sobre LA MISMA EMISORA leyendo la sensibilidad en
+ * el espectro y el rechazo de imagen en la fila "Espejo I/Q", que esta
+ * justo al lado. NO SE GUARDA EN AJUSTES y al arrancar vuelve al valor de
+ * la tabla: es una vara de medir, no un ajuste.
  */
 #define LOWF_Z7_MULT_MIN      168UL
 #define LOWF_Z7_MULT_MAX      189UL
@@ -532,8 +528,6 @@ _Static_assert(LOWF_FLOOR_HZ == LOWF_ZONE_01_HZ,
                "el suelo y la primera zona tienen que empezar en el mismo sitio");
 /*
  * DE 4 Hz A 40, Y DE 62,5 ms A 6,25 - 27/09/2026.
- *
- * Pedido por el usuario.
  *
  * La espera no es un retardo de cortesia: es el tiempo EXACTO que tardan
  * los dos relojes en separarse 90 grados, y sale de la propia df:
@@ -685,8 +679,8 @@ static uint8_t s_last_lowf_zone = 0U;
 static uint32_t s_lowf_fvco_khz;
 
 /* El multiplicador de la zona 7, que se puede mover desde Informacion. Ver
- * el comentario largo junto a LOWF_ZONE_07_MULT: es una vara de medir para
- * el issue #35, arranca siempre en el valor de la tabla y no se guarda. */
+ * el comentario largo junto a LOWF_ZONE_07_MULT: es una vara de medir, asi que
+ * arranca siempre en el valor de la tabla y no se guarda. */
 static uint32_t s_lowf_z7_mult = LOWF_ZONE_07_MULT;
 
 /* DWT-cycle-counter busy-wait - genuine hardware-timer precision (this
@@ -894,8 +888,6 @@ uint32_t ms5351_lowband_z7_mult(void)
 }
 
 /*
- * *** EL MARGEN, QUE ES EL NUMERO QUE DECIDE SI UN VALOR SE PUEDE ENTREGAR
- * - 09/10/2026, segunda vuelta del issue #35. ***
  *
  * La fila ensenaba el multiplicador y el fVCO del dial de ese momento. Eso
  * sirve para barrer, pero NO sirve para elegir: lo que decide si un valor
@@ -903,7 +895,7 @@ uint32_t ms5351_lowband_z7_mult(void)
  * donde este, sino LO CERCA QUE PASA DEL BORDE en los dos extremos de la
  * zona entera, que son 3,588932 y 4,8 MHz.
  *
- * Y ahi los dos valores que discute el issue estan los dos al borde:
+ * Y ahi los dos valores en discusion estan los dos al borde:
  *
  *     168 -> 602,9 .. 806,4 MHz   ->  margen  2 MHz (por ABAJO)
  *     180 -> 646,0 .. 864,0 MHz   ->  margen 44 MHz

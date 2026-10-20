@@ -1,8 +1,6 @@
 /*
  * EL ALFABETO DE SIETE BITS, CONTRA SEÑAL SINTETICA.
  *
- * Pedido por el usuario.
- *
  * Era una FSK de 50,00 baudios y 201 Hz de salto cuyo contenido es el
  * alfabeto CCIR 476 -siete bits con cuatro unos- cifrado. La fila del
  * ident ya existia y no cuadraba porque pedia velocidad de SIMBOLO y el

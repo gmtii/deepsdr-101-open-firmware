@@ -1,8 +1,6 @@
 /*
  * EL CARGADOR DE ARRANQUE, PROBADO EN EL PC CON EL FICHERO DE VERDAD.
  *
- * Pedido por el usuario.
- *
  * Esto es eso. Corre el User/cargador.c del firmware -el de verdad, no una
  * copia- contra:
  *

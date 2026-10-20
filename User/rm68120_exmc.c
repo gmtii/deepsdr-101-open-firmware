@@ -51,6 +51,67 @@ void rm68120_exmc_gpio_init(void)
 }
 
 /* ---------------------------------------------------------------------
+ * LA PENDIENTE DE LOS PINES, AJUSTABLE EN MARCHA. 20/10/2026.
+ * ---------------------------------------------------------------------
+ * DE DONDE SALE ESTO. Medido por el usuario, con la radio SIN ANTENA y en
+ * 97,8 MHz: el S-metro marca S9+21 con el espectro pintando y S9+7 con el
+ * menu abierto, que es la misma radio sin dibujar. Catorce decibelios que
+ * no vienen de fuera - los hace la propia radio al empujar 211.000 pixeles
+ * por segundo por estas dieciseis lineas.
+ *
+ * Y el tiempo de dato -la fila "Bus pantalla", que ya existia- NO lo
+ * cambia: se probo y el ruido se queda igual. Tiene sentido, porque ese
+ * ajuste cambia CUANDO se hacen los flancos, no CUANTOS ni como de duros:
+ * los mismos 211.000 pixeles mueven la misma carga, solo que mas deprisa o
+ * mas despacio. Si lo que radia es la energia de cada flanco, ahi no hay
+ * nada que tocar.
+ *
+ * Lo que si cambia la energia de cada flanco es la PENDIENTE. Los pines
+ * arrancan en el nivel 2 (50 MHz) y el bus va a 45 ns, o sea muy por
+ * debajo de lo que ese nivel permite: bajarlos a 1 (25 MHz) o a 0 (2 MHz)
+ * deja la misma senal con los cantos mas redondos, y lo que se recorta son
+ * justo los armonicos de arriba, que son los que caen en la banda de FM.
+ *
+ * NO SE GUARDA, igual que el tiempo de dato: si un nivel deja la pantalla
+ * mal, apagar y encender lo arregla. Y si el nivel 0 fuera demasiado lento
+ * para el tiempo de dato que haya puesto, lo que se ve es basura en la
+ * pantalla - no se rompe nada, y se deshace solo.
+ */
+static uint8_t s_pendiente = 2U;   /* GPIO_OSPEED_50MHZ, el de arranque */
+
+static uint32_t pines_d(void)
+{
+    return GPIO_PIN_0  | GPIO_PIN_1  | GPIO_PIN_4  | GPIO_PIN_5  |
+           GPIO_PIN_7  | GPIO_PIN_8  | GPIO_PIN_9  | GPIO_PIN_10 |
+           GPIO_PIN_11 | GPIO_PIN_14 | GPIO_PIN_15;
+}
+
+static uint32_t pines_e(void)
+{
+    return GPIO_PIN_7  | GPIO_PIN_8  | GPIO_PIN_9  | GPIO_PIN_10 |
+           GPIO_PIN_11 | GPIO_PIN_12 | GPIO_PIN_13 | GPIO_PIN_14 |
+           GPIO_PIN_15;
+}
+
+uint8_t rm68120_bus_pendiente(void) { return s_pendiente; }
+
+void rm68120_bus_pendiente_pon(uint8_t nivel)
+{
+    uint32_t osp;
+
+    if (nivel > 3U) { nivel = 3U; }
+    switch (nivel) {
+    case 0U:  osp = GPIO_OSPEED_2MHZ;  break;
+    case 1U:  osp = GPIO_OSPEED_25MHZ; break;
+    case 3U:  osp = GPIO_OSPEED_MAX;   break;
+    default:  osp = GPIO_OSPEED_50MHZ; break;
+    }
+    gpio_output_options_set(GPIOD, GPIO_OTYPE_PP, osp, pines_d());
+    gpio_output_options_set(GPIOE, GPIO_OTYPE_PP, osp, pines_e());
+    s_pendiente = nivel;
+}
+
+/* ---------------------------------------------------------------------
  * EL TIEMPO DE DATO DEL BUS, AJUSTABLE EN MARCHA. 24/09/2026.
  * ---------------------------------------------------------------------
  * Importa mucho mas de lo que parece: el volcado de la cascada son 54.432
@@ -164,8 +225,6 @@ void rm68120_exmc_bus_init(void)
     /*
      * LA TEMPORIZACION DEL DE SERIE, TAL CUAL - 01/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Y es culpa del cargador, aunque el espectro lo pinte la aplicacion:
      * la aplicacion NO configura este bus, lo HEREDA (main.c linea 912,
      * "the bootloader already brings the panel up correctly - EXMC bus
@@ -237,8 +296,6 @@ void rm68120_exmc_bus_init(void)
 #ifdef CARGADOR_ARRANQUE
     /*
      * NOR, NO SRAM - 01/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Descartada la temporizacion -mismo reloj, mismos ciclos- y
      * comprobado que las tres secuencias del panel estan extraidas fielmente

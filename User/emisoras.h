@@ -6,8 +6,6 @@
 /*
  * QUIEN EMITE EN ESTA FRECUENCIA - 28/09/2026.
  *
- * Pedido por el usuario.
- *
  * Sintonizas 9.420 kHz a las siete de la tarde y la radio dice "Voice of
  * Greece, Grecia, griego". Eso es todo lo que hace este modulo.
  *
@@ -162,8 +160,6 @@ uint8_t emisoras_busca(uint32_t hz, uint32_t tol_hz,
  * LOS NOMBRES SOBRE EL ESPECTRO - 15/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * emisoras_busca() contesta "quien hay EN esta frecuencia". Esto contesta
  * "quien hay ENTRE estas dos", que es otra pregunta y se paga distinto.
  *
@@ -216,8 +212,6 @@ uint8_t emisoras_rango(uint32_t hz0, uint32_t hz1,
 
 /*
  * SALTAR A LA SIGUIENTE EMISORA EN ANTENA - 15/10/2026.
- *
- * Pedido por el usuario.
  *
  * `dir` positivo busca hacia arriba y negativo hacia abajo, siempre
  * ESTRICTAMENTE: estando encima de una emisora, un clic lleva a la

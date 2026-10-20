@@ -148,7 +148,6 @@ static void prueba(uint8_t modo, int lineas, double ppm, double sigma,
         }
         comprueba(err < umbral, "y los colores estan en su sitio");
         /*
-         * Pedido por el usuario, 24/09/2026.
          *
          * sstv_info().vis significa UNA cosa: "llego un VIS valido de un
          * modo que no sabemos hacer". modo_aplica() tambien le metia el VIS
@@ -220,8 +219,6 @@ int main(void)
 
     /*
      * SOLO RUIDO, SIN SEÑAL - 24/09/2026
-     *
-     * Pedido por el usuario.
      *
      * En la radio, con Martin 1 forzado sobre ruido de banda, la cuenta de
      * lineas subia y se pintaba confeti; con Scottie 2 no se movia, y
@@ -308,8 +305,6 @@ int main(void)
 
     /*
      * 5c. CON LA SINTONIA DESVIADA.
-     *
-     * Pedido por el usuario, 06/10/2026.
      *
      * Le llegaba todo 190 Hz bajo -13 ppm de cristal sin calibrar sobre 14,23
      * MHz-. Con las bandas fijas que tenia clasifica(), el bit de arranque de

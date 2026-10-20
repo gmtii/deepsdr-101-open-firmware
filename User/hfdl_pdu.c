@@ -198,8 +198,6 @@ static hfdl_lpdu_result_t lpdu_parse_one(const uint8_t *buf, uint32_t payload_le
 		 * Y DETRAS DE LA DIRECCION OACI VIENE UN HFNPDU - 14/10/2026
 		 * ======================================================================
 		 *
-		 * Pedido por el usuario.
-		 *
 		 * LOGON_REQUEST_LPDU_LEN son 4 -tipo mas tres bytes de direccion- y
 		 * eso es el MINIMO, no el tamaño. Los que llegan de verdad traen
 		 * 55, y los cincuenta y uno de detras no son relleno:

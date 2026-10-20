@@ -6,8 +6,6 @@ QUE EL "QUE HAY DE NUEVO" NO SE QUEDE ATRAS.
 
 POR QUE EXISTE - 05/10/2026.
 
-Pedido por el usuario.
-
 Lo de "que se vaya rellenando" es la parte dificil. CAMBIOS.md son medio
 megabyte y se escribe solo porque mientras arreglas algo lo estas contando;
 un fichero corto y en cristiano NO se escribe solo. Se escribe las dos

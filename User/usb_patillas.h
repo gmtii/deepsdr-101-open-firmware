@@ -7,8 +7,6 @@
  * EN QUE PATILLAS DEL GD32 ESTA EL CONECTOR GRANDE, PREGUNTANDOSELO A LA
  * RADIO EN VEZ DE A UNA FOTO.
  *
- * Pedido por el usuario, 09/10/2026.
- *
  * POR QUE HACE FALTA SABERLO, Y POR QUE NO VALE LA FOTO
  * -----------------------------------------------------
  * Para grabar en un pincho hace falta que el GD32 haga de ANFITRION, y para
@@ -80,8 +78,6 @@ uint8_t usb_pat_lee(void);
 
 /*
  * Y SI NO LLEGA, ¿A DONDE LLEGA? - 09/10/2026.
- *
- * Pedido por el usuario.
  *
  * Tiene razon, y la respuesta estaba en el propio codigo de la radio. Lo
  * que no se puede es mirarlo en una foto de la placa.

@@ -25,8 +25,6 @@ static uint8_t nfilas(const ui_digi_state_t *st)
 /*
  * LA CHAPA Y EL QUINTO BOTON SE PELEABAN POR EL SITIO - 28/09/2026.
  *
- * Pedido por el usuario.
- *
  * Exacto, y medido antes de tocar nada -con ui_digi_btn5_*_dbg()-:
  *
  *     JTTY, la chapa de 1 a 4 cifras   btn5 x617 -> x590   se MUEVE 27 px
@@ -390,8 +388,6 @@ static void pinta_barra(gfx2_surf_t *s, const ui_digi_state_t *st)
         /*
          * Y LO QUE VA PEGADO AL PUNTO, si lo hay - 13/10/2026.
          *
-         * Pedido por el usuario.
-         *
          * Se dibuja PRIMERO para poder descontar su ancho del hueco del
          * otro: así no hay forma de que los dos se pisen por largo que se
          * ponga ninguno. Lo que se le quita al centrado es su ancho más
@@ -418,8 +414,6 @@ static void pinta_barra(gfx2_surf_t *s, const ui_digi_state_t *st)
     /*
      * Y LA LUCECITA, cuando es la barra la que lleva lo que llevaba la
      * chapa - 13/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Las dos cosas se quedan, y las dos estan aqui: el 8/15 lo escribe
      * quien arma el texto -ft8_chapa() en main.c- y el punto lo pinta
@@ -588,8 +582,6 @@ static void pinta_boton3(gfx2_surf_t *s, const ui_digi_state_t *st)
 /*
  * REPINTAR LA BARRA NO PUEDE BORRAR AL VECINO. 25/09/2026.
  *
- * Pedido por el usuario.
- *
  * Y no estaba porque lo borraba esto. Cuando solo cambia la barra se repinta
  * ella sola, y para eso primero se limpia su zona... que estaba escrita como
  * UDG_BAR_W fijo, o sea los 300 de siempre. Con la barra acortada a 170 esos
@@ -633,8 +625,6 @@ static int16_t barra_ventana_w(const ui_digi_state_t *st)
 {
     /*
      * LA VENTANA SOLO SE ESTIRA SI EL TERCER BOTON ESTA A LA DERECHA.
-     *
-     * Pedido por el usuario, 13/10/2026.
      *
      * Y se veia fatal: la barra de FT8 salia como una persiana de rayas
      * naranjas. Esto pedia repintar 336 (barra) + 10 + 104 (tercer boton)
@@ -908,8 +898,6 @@ static void renglon(gfx2_surf_t *s, const ui_digi_state_t *st,
     }
     /*
      * UN RENGLON QUE CRUZA TODAS LAS COLUMNAS - 14/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Una tabla con columnas recorta cada campo a la suya, que es justo lo
      * que hay que hacer con datos de fuera (ver el comentario de abajo).
@@ -1426,8 +1414,6 @@ uint8_t ui_digi_draw_cambios(const ui_digi_state_t *st)
 /*
  * LA FRANJA QUE SE LIMPIA AL REPINTAR LA CHAPA - 24/09/2026
  *
- * Pedido por el usuario.
- *
  * Los botones no, porque viven en la cabecera y la imagen empieza 8 px por
  * debajo. Pero la CHAPA si hacia algo raro, y desde antes de que hubiera
  * dos botones.
@@ -1654,8 +1640,6 @@ uint8_t ui_digi_boton2_hit(const ui_digi_state_t *st, uint16_t x, uint16_t y)
  * Y LA BARRA TAMBIEN SE TOCA, cuando es ella la que lleva lo que llevaba
  * la chapa - 13/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y era cierto. en recordarlo: en FT8 ese toque es el que cuadra la
  * ranura -"el cero de la ranura es AHORA"- y vivia en la chapa porque era
  * la chapa quien decia el segundo. Al meter el segundo dentro de la barra
@@ -1677,8 +1661,6 @@ uint8_t ui_digi_barra_hit(const ui_digi_state_t *st, uint16_t x, uint16_t y)
 
 /*
  * La chapa de estado tambien se toca - 24/09/2026.
- *
- * Pedido por el usuario.
  *
  * La zona NO es el rectangulo de la chapa sino toda la franja desde donde
  * acaba el segundo boton hasta el borde: la chapa encoge y crece con su

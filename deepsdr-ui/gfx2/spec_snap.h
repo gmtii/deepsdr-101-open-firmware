@@ -6,8 +6,6 @@
 /*
  * TOCAR UNA SEÑAL EN EL ESPECTRO Y CAER ENCIMA - etapa 21, 22/09/2026.
  *
- * Pedido por el usuario.
- *
  * Tocar el espectro ya sintonizaba, pero caia donde apuntaba el dedo
  * redondeado al paso de sintonia: con el paso en 1 kHz, hasta 500 Hz de
  * error, mas lo que falle la punteria en un panel resistivo. En AM se nota

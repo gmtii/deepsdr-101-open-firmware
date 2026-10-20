@@ -5,8 +5,6 @@
 /*
  * EL SENO Y EL COSENO SALEN DE LA TABLA, NO DE LA BIBLIOTECA - 05/10/2026.
  *
- * Pedido por el usuario.
- *
  * Este lazo se llama DOS veces por simbolo -la toma de T/2 y la principal-
  * a 1800 baudios, o sea 7.200 llamadas por segundo a cosf() y sinf() de la
  * biblioteca, que en este Cortex-M4 son rutinas de software de un par de
@@ -99,8 +97,6 @@ void hfdl_costas_derotate_only(const hfdl_costas_t *c, float32_t i_in, float32_t
  * ======================================================================
  * EL DETECTOR DE FASE PARA 4-PSK Y 8-PSK - 14/10/2026
  * ======================================================================
- *
- * Pedido por el usuario.
  *
  * Y el motivo estaba escrito aqui al lado desde hace semanas, en el
  * comentario de hfdl_costas_adjust(): la correccion que corre en CADA
@@ -418,9 +414,6 @@ uint8_t hfdl_costas_selftest(void)
  * ======================================================================
  * EL GIRO ABSOLUTO DE LA CONSTELACION - 14/10/2026
  * ======================================================================
- *
- * *** Medido en la radio, con el arreglo del detector de fase ya puesto:
- * "4PSK 0/5  8PSK 0/2". Cero de trece sumando el dia entero. ***
  *
  * El detector de fase mantiene el lazo enganchado a UN punto de la
  * constelacion, pero no dice a CUAL. Hasta hoy eso se resolvia mirando el

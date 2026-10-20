@@ -6,10 +6,6 @@
 /*
  * POR QUE SE REINICIO LA RADIO - 08/10/2026.
  *
- * *** Un usuario, en la V4.01: "de forma random se le reinicia y no vuelve
- * al mismo modo en que estaba ni guarda la config de la pantalla". Y otra
- * vez: "estaba recibiendo FT8 y se le ha reiniciado". ***
- *
  * LO QUE YA SE SABIA ANTES DE ESCRIBIR UNA LINEA, Y QUE ESTRECHA MUCHO LA
  * BUSQUEDA:
  *

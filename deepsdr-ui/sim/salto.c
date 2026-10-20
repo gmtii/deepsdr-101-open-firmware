@@ -3,8 +3,6 @@
  * SALTAR DE EMISORA EN EMISORA - 15/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * Esto mide emisoras_salto() contra el EMISORAS.BIN de verdad, barriendo
  * las 24 horas y toda la HF en los dos sentidos. Lo que exige, y cada cosa
  * caza una averia distinta:
@@ -180,8 +178,6 @@ int main(int argc, char **argv)
 
     /*
      * 6. Y QUE UN GIRO RAPIDO NO CUESTE DIEZ VECES UN GIRO LENTO.
-     *
-     * Pedido por el usuario.
      *
      * El mando entrega los detentes ACUMULADOS, asi que un sondeo puede
      * pedir diez saltos seguidos. Si cada uno gastara su tope entero, el

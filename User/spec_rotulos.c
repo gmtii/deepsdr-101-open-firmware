@@ -156,8 +156,6 @@ void spec_rotulos_limpia(const spec_rotulos_t *rr, spec_rot_txt_t txt,
     /*
      * UNA CASILLA, Y SE QUEDO EN UNA - 15/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Llegue a subir el liston a dos casillas para que las dos de Barrow
      * se fundieran en una. Vuelve a una: si en el dial hay dos señales,
      * la pantalla dice dos. Lo unico que se silencia es el repetido tan
@@ -181,8 +179,6 @@ void spec_rotulos_limpia(const spec_rotulos_t *rr, spec_rot_txt_t txt,
 
 /*
  * LA ELECCION. Ver la cabecera para el por que; aqui va el como.
- *
- * Pedido por el usuario.
  *
  * LO PRIMERO, Y LO QUE ESTABA MAL: LA ELECCION NO PUEDE DEPENDER DE DONDE
  * ESTE LA VENTANA.
@@ -239,8 +235,6 @@ static uint32_t rot_dif(uint32_t a, uint32_t b)
  * elegirian con una medida y se pintarian con otra. */
 /*
  * EL ANCHO DE CASILLA, Y POR QUE ES span/(max-1) Y NO span/max.
- *
- * Pedido por el usuario.
  *
  * Con span/max la ventana mide EXACTAMENTE max casillas, y eso solo pasa
  * si los bordes caen clavados en la rejilla. En cuanto no caen -o sea
@@ -417,8 +411,6 @@ uint8_t spec_rotulos_filtra(spec_rot_cand_t *c, uint8_t n,
         /*
          * 2c. Y LA QUE SUENA MANDA EN SU CASILLA - 15/10/2026.
          *
-         * Pedido por el usuario.
-         *
          * Porque 5.544.000 es multiplo exacto del paso y cae en el borde
          * de su casilla, que es el peor sitio posible. El porque largo
          * -y por que con tolerancia si y sin tolerancia no- esta en
@@ -562,8 +554,6 @@ uint8_t spec_rotulos_draw(gfx2_surf_t *s, const spec_rotulos_t *rr,
     /*
      * LOS RENGLONES SE REPARTEN EL ALTO QUE HAY, no al reves.
      *
-     * Pedido por el usuario.
-     *
      * Antes la altura de renglon era la de la fuente y el que llamaba
      * pedia tres por quince, o sea 46. Pero el sitio que hay no es un
      * numero que se pida: es el que haya hasta la primera raya de la
@@ -624,8 +614,6 @@ uint8_t spec_rotulos_draw(gfx2_surf_t *s, const spec_rotulos_t *rr,
 
         /*
          * LA FILA SALE DE LA FRECUENCIA, Y NO SE MUEVE DE AHI.
-         *
-         * Pedido por el usuario.
          *
          * PRIMER INTENTO: alternar por el INDICE en la lista. Zigzag
          * perfecto en una foto, y saltos en cuanto te mueves: entra un
@@ -696,8 +684,6 @@ uint8_t spec_rotulos_selftest(void)
 }
 
 /* ------------------------------------------- DE QUE COLOR VAN LOS CARTELES
- *
- * Pedido por el usuario.
  *
  * Y es verdad, y la causa es de SITIO. Los carteles se pintan DENTRO del
  * panel de la traza, que es casi negro en los ocho temas

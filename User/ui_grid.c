@@ -82,6 +82,20 @@ int8_t ui_grid_hit(uint16_t x, uint16_t y)
     return UIG_HIT_NONE;
 }
 
+static uint16_t s_recortes;
+
+/* Cuenta una vez por renglon que no cabe. Ver el comentario de arriba. */
+static void mide(gfx2_surf_t *s, const char *t, const gfx2_font_t *f)
+{
+    (void)s;
+    if (t == 0) { return; }
+    if (gfx2_text_w(t, f) > (int16_t)UIG_CELL_W) {
+        if (s_recortes < 0xFFFFU) { s_recortes++; }
+    }
+}
+
+uint16_t ui_grid_recortes(void) { return s_recortes; }
+
 static void celda(gfx2_surf_t *s, const ui_grid_state_t *st, uint8_t i)
 {
     int16_t x = cel_x(i), y = cel_y(i);
@@ -120,6 +134,28 @@ static void celda(gfx2_surf_t *s, const ui_grid_state_t *st, uint8_t i)
         gfx2_rrect_outline(s, x, y, UIG_CELL_W, UIG_CELL_H, 8, 2,
                            gfx2_rgb(PAL_ACCENT));
     }
+
+    /*
+     * QUE NO QUEPA UN TEXTO NO DA ERROR, Y ESO YA HA COSTADO CARO.
+     *
+     * gfx2_text_in() recorta sin quejarse (ver su codigo): la celda enseña
+     * lo que cabe y lo demas desaparece. El 19/10/2026 la fila "Fotograma"
+     * de Informacion escribia mas de lo que cabe y se comia justo el numero
+     * que decia donde se iban los milisegundos; o sea que el instrumento
+     * señalaba al culpable con el dedo fuera de la pantalla, y nadie podia
+     * saberlo mirando la radio.
+     *
+     * Asi que se cuenta. Este numero TIENE que ser cero, igual que
+     * gfx2_banda_choques(): si no lo es, hay una celda cuyo texto se esta
+     * perdiendo. Sale en Informacion, al lado de los choques.
+     *
+     * Se cuenta aqui y no dentro de gfx2_text_in() porque alli el recorte a
+     * veces SE QUIERE -la marquesina de emisoras vive de eso-; en una celda
+     * de la rejilla no se quiere nunca.
+     */
+    mide(s, c->l1, &font_ui_18b);
+    mide(s, c->l2, c->l3 ? &font_ui_14 : &font_ui_14b);
+    mide(s, c->l3, &font_ui_14b);
 
     if (c->l3) {
         /* Tres renglones: titulo, dato y dato secundario. */
@@ -240,8 +276,6 @@ static void draw_uno(gfx2_surf_t *s, void *ctx)
 
 /*
  * LA MISMA CAPA, EN UNA BANDA QUE LE DAN - 05/10/2026.
- *
- * Pedido por el usuario.
  *
  * Es la MISMA funcion de dibujo que pinta en la pantalla, no una copia: lo
  * unico que cambia es de donde sale la banda. En la pantalla la pide

@@ -1,8 +1,6 @@
 /*
  * EL ESPEJO QUE DEPENDE DE LA FRECUENCIA, Y POR QUE UN SOLO NUMERO NO LLEGA.
  *
- * Pedido por el usuario.
- *
  * Un decibelio. El corrector plano de iqbal.c no toca lo que se ve. Este
  * banco reproduce el motivo que se sospechaba y comprueba el arreglo.
  *

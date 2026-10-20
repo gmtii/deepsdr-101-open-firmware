@@ -12,8 +12,6 @@
 /*
  * EL LOCALIZADOR POR DEFECTO, Y LAS DOS REGLAS QUE LO SUJETAN.
  *
- * Pedido por el usuario, 30/09/2026.
- *
  * Las dos cosas a la vez, y no se contradicen si se separan "de donde sale
  * el valor que usa la radio" de "con que arranca una radio virgen":
  *
@@ -25,12 +23,6 @@
  * Y la regla que de verdad importa: SE APLICA UNA SOLA VEZ, en main(), ANTES
  * de settings_load(). Nunca desde ft8_decoder_init(), porque a ese lo llama
  * ft8_modo.c cada vez que se entra en FT8 y se llevaba por delante el QTH
- * del usuario - el aspa saltaba de sitio y las distancias cambiaban, sin
- * aviso, y la unica pista era mirar el mapa-. tools/qth_check.py comprueba
- * que siga siendo asi, y que este sea el unico localizador escrito en todo
- * el codigo.
- *
- * POR QUE MADRID Y NO OTRA COSA, Y LO QUE COSTO. Valio "IL18" -Canarias-
  * durante meses, porque era el EJEMPLO del comentario original ("CHANGE THIS
  * to your own square before flashing") y nadie lo cambio: el aspa salia en
  * Tenerife y las distancias se median desde 1.796 km de donde tocaba, sin un
@@ -96,8 +88,6 @@ static bool grid_to_latlon(const char *grid, int len, float *lat, float *lon)
 
 /*
  * "40.6458, -3.5417". CON PUNTO Y CON SIGNO, no "40,6458 N 3,5417 W".
- *
- * Pedido por el usuario, 30/09/2026.
  *
  * Y era cierto., aunque el numero fuese correcto. Este renglon existe para
  * UNA cosa: comprobar que el localizador que has teclado es el tuyo. Y eso
@@ -535,8 +525,6 @@ void ft8_decoder_slot_empieza(void)
     /*
      * DE UNA SOLA VEZ A UNO POR VUELTA - 25/09/2026.
      *
-     * Pedido por el usuario.
-     *
      * O sea: decodificaba una tanda de cada cuatro. Y la causa es que ESTO
      * bloqueaba el bucle principal.
      *
@@ -683,8 +671,6 @@ uint8_t ft8_decoder_slot_paso(void)
         /*
          * LOS CAMPOS VAN SEPARADOS POR TABULADOR - 25/09/2026.
          *
-         * Pedido por el usuario.
-         *
          * Antes esto salia como una frase: "05:17 0263Hz +12dB ~ CQ ...". Eso
          * ocupa 390 px de los 800 que hay -media pantalla vacia- y encima NO
          * se alinea en columnas: la tipografia es proporcional, y aunque los
@@ -713,8 +699,6 @@ uint8_t ft8_decoder_slot_paso(void)
 
         /*
          * DT: EL DESFASE TEMPORAL DE ESTA SEÑAL, en segundos - 25/09/2026.
-         *
-         * Pedido por el usuario.
          *
          * Y aqui no es adorno ni copiar al vecino: es el UNICO numero que
          * mide si la ranura esta cuadrada. El usuario del proyecto habia
@@ -803,8 +787,6 @@ uint8_t ft8_decoder_slot_paso(void)
 
             /*
              * --- pais, del prefijo del indicativo ---
-             *
-             * Pedido por el usuario.
              *
              * Se coge el ULTIMO indicativo del mensaje, que es el de quien
              * transmite: en "CQ AI0Y EN08" es AI0Y, y en "DL5AN TA3NK KM39"

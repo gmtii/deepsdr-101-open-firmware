@@ -248,7 +248,6 @@ static void prueba_pureza(void)
 
 /* --- 4b. ONDA LARGA: donde el aparcado se sale de la cuenta ------------- */
 /*
- * Pedido por el usuario, 09/10/2026.
  *
  * Esa ultima frase es la que dice donde mirar: irse y volver arregla cosas
  * que dependen de DONDE ESTABA EL OSCILADOR, y lo unico que recuerda donde

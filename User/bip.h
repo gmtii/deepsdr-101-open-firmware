@@ -9,8 +9,6 @@
  * ============================================================================
  * 05/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y hace falta de verdad, no es un adorno: un gesto que hay que MANTENER
  * cuatro segundos necesita decir "ya" en el momento exacto en que ha contado,
  * porque si no, o se suelta antes o se tiene el dedo ahi diez segundos por si

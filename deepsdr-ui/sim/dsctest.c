@@ -55,8 +55,14 @@ static void emite(const uint8_t *m, uint8_t n, int roto)
     for (i = 0U; i < (uint8_t)(n + 3U); i++) {
         if (i < n) { dsc_mete_simbolo(m[i], (uint8_t)(i != (uint8_t)roto), 0U); }
         else       { dsc_mete_simbolo(0U, 0U, 0U); }
-        if (i >= 2U) { dsc_mete_simbolo(m[i - 2U], 1U, 1U); }
-        else         { dsc_mete_simbolo(104U, 1U, 1U); }
+        /* La ranura RX va dos caracteres por detras, asi que en las tres
+         * ultimas vueltas i-2 ya se sale del mensaje: ahi va relleno, como
+         * al principio. Antes solo se miraba i >= 2 y se leia m[n]. */
+        if (i >= 2U && (uint8_t)(i - 2U) < n) {
+            dsc_mete_simbolo(m[i - 2U], 1U, 1U);
+        } else {
+            dsc_mete_simbolo(104U, 1U, 1U);
+        }
     }
 }
 static void arranca(void) { dsc_stop(); dsc_start(12000.0f); }

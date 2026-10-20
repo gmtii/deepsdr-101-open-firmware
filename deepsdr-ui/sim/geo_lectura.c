@@ -3,10 +3,6 @@
  *
  * POR QUE EXISTE.
  *
- * *** De un issue: el cargador no veia update.bin en el disco, con
- * una foto de la ficha que decia "Volumen: no se reconoce" y la radio con
- * el FORMATEO DE FABRICA, sin reformatear en ningun momento. ***
- *
  * Los dos sintomas eran el mismo fallo. cargador_busca_update() empieza
  * con `if (!geo()) { return 0U; }`, asi que un volumen rechazado deja el
  * fichero sin buscar: estaba en el disco y nadie miraba el directorio. Y la

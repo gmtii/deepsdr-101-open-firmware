@@ -110,8 +110,6 @@ static inline void f_cs(uint8_t level)
 /*
  * EN EL CARGADOR, ESTE BUS VA POR HARDWARE - 01/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y la causa es esta funcion. A pelo por las patas son unos 2 us por bit,
  * o sea 16 us por byte: **un sector de 512 bytes tarda 8,2 ms**. La clase
  * de almacenamiento del USB llama a disco_lee() desde la INTERRUPCION del
@@ -177,8 +175,6 @@ static uint8_t spi_xfer_byte(uint8_t out)
  * EL BUS DE LA FLASH IBA A 600 kHz PORQUE EL RETARDO ERA PARA OTRO CHIP
  * ============================================================================
  * 05/10/2026.
- *
- * Pedido por el usuario.
  *
  * Antes de bajar la resolucion conviene mirar por que tarda. Una captura son
  * 768.000 bytes, y a este bus le costaban unos 16 microsegundos por BYTE: la
@@ -514,8 +510,6 @@ static void spi_page_program_send(uint32_t addr, const uint8_t *data)
 /*
  * ¿ESTE BLOQUE YA ESTA BORRADO? - 05/10/2026.
  *
- * Pedido por el usuario.
- *
  * Un borrado de sector son unos 45 ms de los 130 que cuesta escribir un
  * bloque, y una captura de pantalla son 189 bloques: ocho segundos y medio
  * solo borrando. Pero un bloque que ya esta a 0xFF no hace falta borrarlo -
@@ -549,8 +543,6 @@ static uint8_t bloque_ya_borrado(uint32_t addr)
 
 /*
  * BORRAR DE 64 kB EN 64 kB - 05/10/2026.
- *
- * Pedido por el usuario.
  *
  * Los 10 s eran 189 bloques a 53 ms, y 45 de esos 53 son el borrado del
  * sector: OCHO SEGUNDOS Y MEDIO borrando y uno y medio escribiendo. Y no
@@ -621,7 +613,34 @@ uint8_t spi_flash_borrado_paso(uint32_t *cursor, uint32_t fin)
 
     if (cursor == 0 || *cursor >= fin) { return 0U; }
 
-    a = *cursor & ~(uint32_t)(FLASH_SECTOR_SIZE - 1U);
+    /*
+     * HACIA ARRIBA, NUNCA HACIA ABAJO. 20/10/2026.
+     *
+     * *** Aqui ponia `a = *cursor & ~(SECTOR-1)`, o sea REDONDEAR HACIA
+     * ABAJO. Y eso borra POR DEBAJO del cursor: memoria que no es de quien
+     * llama. ***
+     *
+     * Le borro a un usuario el CONFIG.CSV entero -1.536 bytes a 0xFF, con
+     * su entrada de directorio intacta, que es la firma inconfundible de
+     * un borrado de sector por direccion-.
+     *
+     * Por que no saltaba a la vista: todo lo que llamaba a esto hasta hoy
+     * trabajaba sobre zonas alineadas a 4 kB, asi que el redondeo no movia
+     * nada. Pero una reserva de fichero empieza donde empiece su CLUSTER, y
+     * la zona de datos de un volumen formateado por Windows no tiene por
+     * que caer en un limite de 4 kB. Con la reserva desalineada, el
+     * redondeo hacia abajo se sale por el principio - y si ademas ese
+     * limite inferior cae en un multiplo de 64 kB, se lleva SESENTA Y
+     * CUATRO KILOBYTES del vecino de un golpe.
+     *
+     * Redondeando hacia arriba no se puede salir: lo que quede por debajo
+     * del primer limite simplemente no se borra, y quien escriba ahi usara
+     * su camino normal, que lee, borra y reescribe el sector entero sin
+     * tocar lo de al lado.
+     */
+    a = (*cursor + (uint32_t)(FLASH_SECTOR_SIZE - 1U))
+        & ~(uint32_t)(FLASH_SECTOR_SIZE - 1U);
+    if (a >= fin) { *cursor = fin; return 0U; }
     for (k = 0U; k < (uint8_t)(sizeof k_borra / sizeof k_borra[0]); k++) {
         uint32_t tam = k_borra[k].tam;
 
@@ -655,10 +674,45 @@ void spi_flash_write_block_4k_borrado(uint32_t block_addr, const uint8_t *data4k
     }
 }
 
+/*
+ * ESCRIBE 4 kB EN block_addr, ESTE ALINEADO O NO. 20/10/2026.
+ *
+ * *** Aqui ponia `aligned = block_addr & ~(SECTOR-1)` y despues BORRABA Y
+ * ESCRIBIA ese sector. O sea que con una direccion no alineada borraba el
+ * sector de MAS ABAJO -hasta 4 kB del vecino- y ademas dejaba los datos
+ * corridos. ***
+ *
+ * Es el mismo fallo que le borro el CONFIG.CSV a un usuario esta tarde, y
+ * estaba tambien aqui, en el escritor principal. No habia saltado porque
+ * los sitios que lo llaman con una direccion de FICHERO -la cabecera de una
+ * foto de SSTV, la de una captura- estaban alineados por casualidad: lo
+ * estan cuando la zona de datos del volumen empieza en un multiplo de
+ * 4 kB, y eso depende de COMO LO FORMATEARA WINDOWS. En un volumen cuya
+ * zona de datos no cae en ese limite, cada cierre de foto se llevaba por
+ * delante un trozo del vecino.
+ *
+ * Ahora: si viene alineada, el camino de siempre. Si no, se parte en los
+ * DOS sectores que toca y cada uno se arregla leyendo, empalmando en
+ * memoria y reescribiendo, que es lo que ya hacia
+ * spi_flash_block_read_modify_write() y nadie usaba aqui.
+ */
 void spi_flash_write_block_4k(uint32_t block_addr, const uint8_t *data4k)
 {
     uint32_t off;
     uint32_t aligned = block_addr & ~(uint32_t)(FLASH_SECTOR_SIZE - 1U);
+    uint32_t dentro  = block_addr - aligned;
+
+    if (dentro != 0U) {
+        uint32_t primera = FLASH_SECTOR_SIZE - dentro;
+
+        /* Lo que cae en el sector de abajo, empalmado sin tocar el resto. */
+        spi_flash_block_read_modify_write(aligned, dentro, data4k, primera);
+        /* Y lo que sobra, al principio del siguiente. */
+        spi_flash_block_read_modify_write(aligned + FLASH_SECTOR_SIZE, 0U,
+                                          data4k + primera,
+                                          FLASH_SECTOR_SIZE - primera);
+        return;
+    }
 
     if (!bloque_ya_borrado(aligned)) {
         spi_flash_sector_erase_4k(aligned);
@@ -977,8 +1031,6 @@ void spi_flash_probe_dump(void)
  * LA GEOMETRIA DEL VOLUMEN SE LEE, NO SE SUPONE - 24/09/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * Estas cinco cifras estaban escritas a fuego, deducidas del hardware hace
  * meses. Y eran correctas... para el volumen que traia la radio de
  * fabrica. En cuanto alguien formatea el pendrive desde un PC, el sistema
@@ -1167,8 +1219,6 @@ enum {
 
 /*
  * EL DIRECTORIO RAIZ ENTERO, NO SU PRIMER SECTOR - 05/10/2026.
- *
- * Pedido por el usuario.
  *
  * Y era mentira. Todos los recorridos del directorio raiz de este fichero
  * leian UN sector -dieciseis entradas- y daban por hecho que ahi se acababa
@@ -1444,10 +1494,6 @@ static uint8_t geo_lee(void)
      * HASTA AQUI, LO QUE HACE FALTA PARA LEER - 06/10/2026.
      * ===================================================================
      *
-     * *** De un issue: el cargador no veia update.bin en el disco,
-     * con una ficha que decia "Volumen: no se reconoce" y la radio con el
-     * formateo DE FABRICA, sin reformatear nunca. ***
-     *
      * Son el mismo fallo: cargador_busca_update() empieza con
      * `if (!geo()) { return 0U; }`, asi que un volumen rechazado deja el
      * fichero sin buscar. Y lo que estaba mal de fondo es que esta funcion
@@ -1530,7 +1576,7 @@ static uint8_t geo_lee(void)
      * .img de los bancos.
      */
     if (s_geo.sectores >
-        ((spi_flash_capacidad() - ZA_BYTES_REGION) / SECTOR_BYTES)) {
+        (za_disco_de(spi_flash_capacidad()) / SECTOR_BYTES)) {
         s_geo.porque = GEO_MAS_GRANDE;      return 0U;
     }
 
@@ -2898,26 +2944,153 @@ static const uint8_t k_firma_update4[8] = {
  * Devuelve 0 solo cuando el metodo no vale: si el sector 0 fuese uniforme,
  * cualquier direccion "coincidiria" y la medida no significaria nada.
  */
+/* Una ventana de 64 bytes sirve para medir el alias solo si NO es toda
+ * igual: una zona borrada (0xFF) o a ceros coincide con cualquier otra
+ * zona borrada y no demuestra nada. */
+static uint8_t ventana_vale(const uint8_t *v)
+{
+    uint32_t i;
+
+    for (i = 1U; i < 64U; i++) {
+        if (v[i] != v[0]) { return 1U; }
+    }
+    return 0U;
+}
+
+/*
+ * TRES VENTANAS Y NO UNA - 20/10/2026, preguntado por el usuario.
+ *
+ * "¿Puede ser que un chip de 2 MB lo estemos viendo como de 1?"
+ *
+ * Con una sola comparacion de 64 bytes, si: bastaria que en 0x100000
+ * hubiera por casualidad los mismos 64 bytes que en 0 -una copia del
+ * sector de arranque, por ejemplo- para declarar un alias que no existe y
+ * anunciar la mitad del chip. Es improbable, pero "improbable" no es una
+ * razon: es lo que se dice justo antes de que pase.
+ *
+ * Asi que se comparan TRES ventanas repartidas -el principio, un cuarto y
+ * la mitad del tamaño candidato- y tienen que coincidir las tres. Que
+ * casen 64 bytes por casualidad puede pasar; que casen 192 repartidos por
+ * todo el chip, no.
+ *
+ * Y una ventana toda igual NO CUENTA: en una zona borrada cualquier
+ * direccion "coincide" con cualquier otra. Si no quedan al menos dos
+ * ventanas con contenido, este metodo no sabe medir y se dice -se
+ * devuelve 0- en vez de inventarse un tamaño; entonces manda el codigo
+ * JEDEC, que es lo que ya hacia con el chip recien borrado.
+ *
+ * Cuesta cuatro lecturas de 64 bytes mas por tamaño candidato, una vez al
+ * arrancar.
+ */
+/*
+ * CUANTAS VENTANAS SE COMPARAN - 20/10/2026.
+ *
+ * Tres en la aplicacion y UNA en el cargador, y no por gusto: el cargador
+ * son 32 kB justos y ya no cabe nada mas. Lo que se pierde con una sola es
+ * la defensa contra un alias falso, o sea contra una copia casual del
+ * principio del chip mas arriba, y ese error hace contestar DE MENOS: el
+ * cargador anunciaria un disco mas pequeño del que hay, que es molesto y
+ * no rompe nada. Contestar de mas, que es lo unico grave, sigue siendo
+ * imposible por construccion - ver el comentario de la regla asimetrica.
+ *
+ * La aplicacion, que es quien escribe las bases de datos y quien formatea,
+ * se queda con las tres.
+ */
+#ifdef CARGADOR_ARRANQUE
+#define VENTANAS 1U
+#else
+#define VENTANAS 3U
+#endif
+
 static uint32_t alta_mide_tam(void)
 {
-    uint8_t cero[64], otro[64];
+    uint8_t base[VENTANAS][64];
+    uint8_t otro[64];
     uint32_t tam;
-    uint32_t i;
-    uint8_t  uniforme = 1U;
-
-    spi_flash_read(0UL, cero, sizeof cero);
-    for (i = 1U; i < sizeof cero; i++) {
-        if (cero[i] != cero[0]) { uniforme = 0U; break; }
-    }
-    if (uniforme) { return 0UL; }   /* el metodo no vale aqui */
+    uint32_t i, k;
 
     for (tam = 1UL << 17; tam < (1UL << 24); tam <<= 1) {
-        uint8_t igual = 1U;
-        spi_flash_read(tam, otro, sizeof otro);
-        for (i = 0U; i < sizeof cero; i++) {
-            if (otro[i] != cero[i]) { igual = 0U; break; }
+        uint32_t off[VENTANAS];
+        uint8_t  valen = 0U, casan = 0U;
+
+        /*
+         * LAS TRES VENTANAS VAN DONDE SEGURO HAY DATOS - 20/10/2026.
+         *
+         * Antes iban a 0, tam/4 y tam/2, o sea repartidas por el chip. Y
+         * eso suena bien hasta que el chip esta recien formateado: de los
+         * primeros kilobytes para arriba es todo 0xFF, asi que dos de las
+         * tres ventanas no valen y la medida se queda sin hacer. Entonces
+         * manda el codigo JEDEC - y un codigo que miente no tiene arreglo.
+         *
+         * Pegadas al principio hay datos SIEMPRE en cualquier volumen FAT:
+         * el sector de arranque, la tabla de asignacion y el directorio
+         * raiz. Y sirven igual de bien, porque lo que se compara no es "el
+         * chip entero" sino si la direccion tam+off devuelve lo mismo que
+         * off. Da igual donde caiga off con tal de que tenga algo escrito.
+         *
+         * Y ademas es lo que mata el alias falso: una copia suelta del
+         * principio un megabyte mas arriba engaña a la ventana de 0, pero
+         * no a las otras dos.
+         */
+        off[0] = 0UL;
+#if VENTANAS > 1
+        off[1] = 0x1000UL;
+        off[2] = 0x4000UL;
+#endif
+
+        for (k = 0U; k < VENTANAS; k++) {
+            spi_flash_read(off[k], base[k], sizeof base[k]);
+            if (!ventana_vale(base[k])) { continue; }
+            valen++;
+            spi_flash_read(tam + off[k], otro, sizeof otro);
+            for (i = 0U; i < sizeof otro; i++) {
+                if (otro[i] != base[k][i]) { break; }
+            }
+            if (i == sizeof otro) { casan++; }
         }
-        if (igual) { return tam; }
+        /* Sin al menos dos ventanas con contenido no hay con que decidir:
+         * se deja que conteste el codigo JEDEC. */
+        /*
+         * LA REGLA ES ASIMETRICA A PROPOSITO - 20/10/2026.
+         *
+         * Las dos respuestas no cuestan lo mismo si uno se equivoca:
+         *
+         *   decir "aqui da la vuelta" (o sea, el chip es MAS PEQUEÑO)
+         *      se puede equivocar: si los datos de arriba repiten por
+         *      casualidad a los de abajo, parece una vuelta que no existe.
+         *      Por eso hacen falta DOS ventanas buenas que coincidan las
+         *      dos, que es lo que se endurecio el 18/10;
+         *
+         *   decir "aqui no da la vuelta" (o sea, el chip es MAS GRANDE)
+         *      NO se puede equivocar: en un chip de 'tam' bytes la
+         *      direccion tam+k ES FISICAMENTE la direccion k, el chip
+         *      ignora los bits de direccion que le sobran. Si una sola
+         *      ventana buena sale distinta, hay mas chip. Punto.
+         *
+         * Y EL SUELO DE DOS VENTANAS SE QUITA, porque protegia de un error
+         * que no hace daño y tapaba uno que si. Equivocarse con un alias
+         * falso hace contestar de MENOS -se desaprovecha sitio y ya-;
+         * quedarse sin medir hace mandar al codigo JEDEC, y un codigo que
+         * miente contesta de menos tambien, pero ademas SIN POSIBILIDAD DE
+         * CORREGIRLO. Lo que se mantiene de aquel endurecimiento es lo que
+         * de verdad valia: una ventana toda igual no cuenta, y TODAS las
+         * buenas tienen que coincidir.
+         *
+         * El caso que lo pedia: un chip recien formateado solo tiene datos
+         * al principio, asi que solo la ventana de la direccion 0 vale. Con
+         * el suelo de dos, eso era "no se" y mandaba el codigo. Que es lo
+         * que le quito un megabyte a un usuario del repositorio:
+         * W25Q16JVSIQ de 2 MB por la etiqueta de fabrica -lo mando en una
+         * foto- y EF 40 14, o sea 1 MB, por el identificador.
+         *
+         * Y NO PUEDE CONTESTAR DE MAS, que es lo unico grave: para llegar a
+         * un tamaño hay que haber DESCARTADO todos los de abajo, y
+         * descartar es lo que no admite error. Si el alias de arriba fuera
+         * falso, se contesta de menos.
+         */
+        if (valen < 1U) { return 0UL; }      /* ni una ventana con la que mirar */
+        if (casan < valen) { continue; }     /* alguna difiere: hay mas chip */
+        return tam;                          /* todas las buenas coinciden */
     }
     /* No da la vuelta por debajo de 16 MB: tiene 16 MB o mas, y 16 es el
      * tope de lo direccionable con tres bytes. Ver el comentario. */
@@ -2926,8 +3099,6 @@ static uint32_t alta_mide_tam(void)
 
 /*
  * LA CAPACIDAD DEL CHIP, BARATA Y CACHEADA - 02/10/2026.
- *
- * Pedido por el usuario.
  *
  * De esto cuelgan el tamaño del disco USB y donde empieza la zona alta, o
  * sea que se pregunta al arrancar y ANTES de enumerar el USB. Por eso no
@@ -3016,9 +3187,7 @@ uint32_t spi_flash_capacidad(void)
         jedec = 1UL << id.capacity_code;
     }
 
-    if (tam == 0UL)                    { tam = jedec; }
-    else if (jedec != 0UL && jedec < tam) { tam = jedec; }
-
+    if (tam == 0UL) { tam = jedec; }
     /*
      * EL SUELO SOLO VALE CUANDO NO SE HA PODIDO MEDIR NADA - 18/10/2026.
      *
@@ -3190,6 +3359,7 @@ void spi_flash_mira_alta(spi_flash_alta_t *out)
  * dice de que es un "no" cuesta mas caro que el problema que tapa.
  */
 static uint8_t s_vol_porque = SPI_VOL_NADA;
+static uint32_t s_vol_sitio_kb;   /* ver SPI_VOL_NO_CABE en spi_flash.h */
 
 static const uint8_t *s_vol_mem; /* si no es 0, se lee de memoria y no del chip */
 static uint8_t  s_vol_restaura;  /* 1 = del fichero AL chip, en vez de al reves */
@@ -3287,8 +3457,6 @@ static uint8_t fichero_busca(const char name8[8], const char ext3[3],
 
 /*
  * IGUAL, PERO ADMITIENDO QUE EL FICHERO ESTE TROCEADO - 28/09/2026.
- *
- * Pedido por el usuario.
  *
  * Y estaba. Lo que pasaba es que fichero_busca() EXIGE que la cadena de
  * clusters sea seguida, y su comentario explicaba por que:
@@ -3535,8 +3703,14 @@ uint8_t spi_flash_restaura_abre(const char name8[8], const char ext3[3],
         s_vol_porque = SPI_VOL_DESTINO;
         return 0U;
     }
-    if (len == 0U || destino + len > tope || destino + len < destino) {
+    if (len == 0U || destino + len < destino) {
         s_vol_porque = SPI_VOL_DESTINO;
+        return 0U;
+    }
+    if (destino + len > tope) {
+        /* Cabe o no cabe, y cuanto. Ver SPI_VOL_NO_CABE en spi_flash.h. */
+        s_vol_sitio_kb = (tope > destino) ? ((tope - destino) / 1024UL) : 0UL;
+        s_vol_porque = SPI_VOL_NO_CABE;
         return 0U;
     }
 
@@ -3657,6 +3831,21 @@ const char *spi_flash_volcado_porque_txt(void)
     case SPI_VOL_CORTO:     return tr("el .BIN está a medias", "the .BIN is incomplete");
     case SPI_VOL_SOLAPA:    return tr("origen pisa destino", "source overlaps target");
     case SPI_VOL_DESTINO:   return tr("destino no permitido", "target not allowed");
+    case SPI_VOL_NO_CABE: {
+        /* Con el numero: "no cabe, hay sitio para 319 kB". Sin el, el
+         * aviso manda a probar otra vez con el mismo fichero. */
+        static char t[40];
+        const char *a = tr("no cabe, hay sitio para ", "does not fit, room for ");
+        uint32_t v = s_vol_sitio_kb;
+        uint8_t  i = 0U, d[8], n = 0U;
+
+        while (a[i] != '\0' && i < (uint8_t)(sizeof t - 12U)) { t[i] = a[i]; i++; }
+        if (v == 0UL) { d[n++] = '0'; }
+        while (v > 0UL && n < (uint8_t)sizeof d) { d[n++] = (uint8_t)('0' + (v % 10UL)); v /= 10UL; }
+        while (n > 0U) { t[i++] = (char)d[--n]; }
+        t[i++] = ' '; t[i++] = 'k'; t[i++] = 'B'; t[i] = '\0';
+        return t;
+    }
     default:                return tr("tocar", "tap");
     }
 }
@@ -3819,8 +4008,6 @@ uint32_t spi_flash_volcado_total(void)  { return s_vol_total; }
  * ANADIR UN TROZO A UN FICHERO DEL PENDRIVE - 24/09/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * POR QUE ESTO ANTES QUE LA GALERIA
  * ---------------------------------
  * Para guardar imagenes hace falta escribir ficheros grandes en el
@@ -3885,6 +4072,20 @@ uint32_t spi_flash_volcado_total(void)  { return s_vol_total; }
 #define ANADE_TROZO        FLASH_SECTOR_SIZE      /* 4096: un bloque de borrado */
 #define ANADE_CLUSTERS     CLUSTERS_PER_BLOCK     /* los que quepan en el bloque */
 #define ANADE_TOPE_TROZOS  200U                   /* 800 kB, tope de cordura */
+/*
+ * El mismo tope de cordura para el fichero que crece a tramos, en bloques
+ * de 4 kB: 1,25 MB.
+ *
+ * Nacio en 256 -1 MB- cuando una carta de fax eran 190 bloques. Sube a 320
+ * el 20/10/2026 porque la carta mas larga MEDIDA son 1.352 renglones y el
+ * tope de altura subio a 1.536, o sea 285 bloques y 288 contando los
+ * tramos redondeados hacia arriba. Ver WFX_ALTO_MAX en main.c, donde esta
+ * la cuenta y de donde sale el numero.
+ *
+ * No se pone "muy alto por si acaso": esto decide cuanta flash puede
+ * quedarse UN solo fichero, y en un chip de 8 MB son seis cartas.
+ */
+#define AMPLIA_TOPE_BLOQUES  320U
 
 /*
  * Pone UNA entrada de la FAT12, en las dos copias.
@@ -3995,6 +4196,46 @@ uint8_t spi_flash_fichero_tam(const char name8[8], const char ext3[3], uint32_t 
      * "no esta" sobre un fichero que si esta.
      */
     return fichero_busca_cadena(name8, ext3, tam, 0);
+}
+
+/*
+ * REESCRIBE EL PRIMER BLOQUE DE UN FICHERO YA EXISTENTE - 20/10/2026.
+ *
+ * Hace falta para las cartas de fax: el fichero se monta con
+ * spi_flash_anade_trozo(), o sea a trozos de 4 kB repartidos por donde
+ * quepan, y la cabecera BMP dice una altura que no se sabe hasta que la
+ * carta acaba. Al cerrar hay que rehacerla con la de verdad.
+ *
+ * No vale escribir "en el offset 0 del fichero" con los caminos de arriba
+ * porque ninguno hace eso; lo que hay que hacer es localizar el PRIMER
+ * cluster por su entrada de directorio y escribir ahi.
+ *
+ * Solo toca el primer bloque. Si el fichero no existe, o no esta donde dice
+ * su entrada, no hace nada y lo dice.
+ */
+static uint8_t dir_busca_todo(const char name8[8], const char ext3[3],
+                              uint32_t *out_off, uint16_t *out_c0,
+                              uint32_t *out_tam);
+
+uint8_t spi_flash_escribe_cabecera(const char name8[8], const char ext3[3],
+                                   const uint8_t *bloque4k)
+{
+    uint32_t dir_off = 0UL, tam = 0UL;
+    uint16_t c0 = 0U;
+    uint8_t  r = 0U;
+
+    if (bloque4k == 0) { return 0U; }
+    if (!borrador_coge(BORRADOR_FAT)) { return 0U; }
+
+    if (geo_lee() && dir_busca_todo(name8, ext3, &dir_off, &c0, &tam)
+        && c0 >= 2U && c0 < (2U + DATA_CLUSTER_COUNT)) {
+        spi_flash_write_block_4k(SECTOR_DE_CLUSTER(c0)
+                                 * ROOT_DIR_SECTOR_BYTES, bloque4k);
+        r = 1U;
+    }
+
+    borrador_suelta(BORRADOR_FAT);
+    return r;
 }
 
 uint8_t spi_flash_anade_trozo(const char name8[8], const char ext3[3],
@@ -4321,8 +4562,6 @@ uint8_t spi_flash_reserva(const char name8[8], const char ext3[3],
 /*
  * EL ESCANEO DE BLOQUES LIBRES, EN UN SITIO - 05/10/2026.
  *
- * Pedido por el usuario.
- *
  * Pregunta buena, y la radio no sabia contestarla: decia "el disco esta
  * lleno" y punto. Ahora hay una fila en Ajustes -> Informacion que dice
  * cuanto hay libre, cuanto SEGUIDO y cuantos huecos quedan en el
@@ -4542,8 +4781,6 @@ static uint8_t recorta_interno(const char name8[8], const char ext3[3], uint32_t
 
 /*
  * BORRAR UN FICHERO DEL DISCO - 25/09/2026.
- *
- * Pedido por el usuario.
  *
  * Era cierto, y faltaba la pieza: este driver sabia crear, ampliar,
  * recortar y sobrescribir, pero no borrar. ICAO24.BIN son medio mega en un
@@ -4828,3 +5065,261 @@ static uint8_t recorta_interno(const char name8[8], const char ext3[3], uint32_t
     return 1U;
 }
 #undef fat
+
+/* =======================================================================
+ * EL FICHERO QUE CRECE A TRAMOS - 20/10/2026
+ * =======================================================================
+ *
+ * Las dos cosas salen de lo mismo. Una carta de fax no se sabe cuanto
+ * mide hasta que acaba, asi que el fichero tenia que crecer, y crecia
+ * llamando a spi_flash_anade_trozo() UNA VEZ POR BLOQUE DE 4 kB. Eso lo
+ * cambie sin medir lo que costaba, y cuesta esto -medido en
+ * sim/fatanade.c, contra el W25Q simulado con los tiempos del fabricante-:
+ *
+ *     20 trozos: peor 308 ms, media 303 ms
+ *
+ * Trescientos milisegundos CADA DOS SEGUNDOS Y MEDIO. Y no son calculo:
+ * son el chip parado. Durante ese rato el bucle principal no mira el
+ * tactil, y de ahi que los botones dejaran de responder.
+ *
+ * De donde salen: recorrer la FAT entera buscando un hueco, escribir las
+ * DOS copias de la FAT, reescribir la entrada de directorio... todo eso
+ * para colocar 4 kB. El trabajo de administracion es el mismo tanto si se
+ * pide un bloque como si se piden dieciseis.
+ *
+ * ASI QUE SE PIDEN DIECISEIS. Esta funcion reserva un TRAMO seguido -64 kB
+ * por omision- y lo encadena al final del fichero de una vez. Dentro del
+ * tramo, cada bloque es una escritura en una direccion ya conocida:
+ * spi_flash_write_block_4k(), unos 51 ms. O sea:
+ *
+ *     antes   303 ms cada 4 kB
+ *     ahora    51 ms cada 4 kB, mas un tramo cada dieciseis
+ *
+ * A 120 lineas por minuto un bloque son dos segundos y medio y un tramo
+ * son cuarenta segundos. El parpadeo largo pasa de uno cada dos segundos
+ * a uno cada cuarenta.
+ *
+ * Y EL FICHERO ES UNO. Ese era el otro sintoma: con el camino de antes,
+ * en cuanto una llamada fallaba se cerraba el fichero y el siguiente
+ * intento abria otro, y de ahi la lista de WFAX001..WFAX020 de 4 kB -la
+ * cabecera y nada mas-. Aqui el fichero se crea en la primera llamada y
+ * todas las demas lo alargan: el nombre no cambia nunca.
+ *
+ * SI NO HAY UN TRAMO ENTERO SEGUIDO, SE COGE LO QUE HAYA. Se pide lo que
+ * se queria y, si el volumen esta repartido, se va bajando a la mitad
+ * hasta un solo bloque. Un pendrive fragmentado hace la grabacion mas
+ * lenta, pero no la impide: eso es lo que antes salia como "NO CABE: PIDE
+ * 448 kB SEGUIDOS, HAY 216" con sitio de sobra en el disco.
+ *
+ * Devuelve en `addr` el primer byte del tramo NUEVO y en `dados` cuantos
+ * bloques trae. Quien escribe lleva su propia cuenta de por cual va.
+ */
+#define fat s_fat
+static uint8_t amplia_interno(const char name8[8], const char ext3[3],
+                              uint32_t bloques, uint32_t *addr, uint32_t *dados,
+                              spi_anade_r_t *porque)
+{
+    uint32_t dir_off = 0UL, tam = 0UL, ultimo = 0UL, cuantos = 0UL;
+    uint16_t primero = 0U;
+    uint32_t ini = 0UL, i, pide, nuevos;
+    uint8_t  hallado = 0U;
+    uint8_t  tam4[4];
+
+    if (porque) { *porque = SPI_ANADE_OK; }
+    if (!geo_lee()) {
+        if (porque) { *porque = SPI_ANADE_GEOMETRIA; }
+        return 0U;
+    }
+    if (bloques == 0UL) { bloques = 1UL; }
+
+    /*
+     * No existe todavia: nace. reserva_interno() ya sabe buscar el hueco,
+     * encadenar y poner la entrada de directorio, asi que no se repite
+     * aqui - y se le pide directamente a el, no por spi_flash_reserva(),
+     * porque el cerrojo del borrador lo tiene ya cogido quien nos llama.
+     */
+    if (!dir_find_entry(name8, ext3, &dir_off, &primero, &tam)) {
+        for (pide = bloques; ; pide = pide / 2UL) {
+            if (reserva_interno(name8, ext3, pide * FLASH_SECTOR_SIZE,
+                                addr, porque)) {
+                if (dados) { *dados = pide; }
+                return 1U;
+            }
+            /* Si no cabe se prueba con menos; si falla por cualquier otra
+             * cosa -directorio lleno, geometria rara- probar con menos no
+             * va a arreglarlo. */
+            if (porque == 0 || *porque != SPI_ANADE_SIN_SITIO) { return 0U; }
+            if (pide <= 1UL) { return 0U; }
+        }
+    }
+
+    /*
+     * Ya existe: se le pega un tramo detras. El tamano tiene que ser un
+     * numero entero de bloques, que es como lo dejamos siempre nosotros:
+     * si no lo es, lo ha tocado otro y aqui no se adivina.
+     */
+    if (tam == 0UL || (tam % FLASH_SECTOR_SIZE) != 0UL) {
+        if (porque) { *porque = SPI_ANADE_RARO; }
+        return 0U;
+    }
+    if (primero < 2U || primero >= (2U + DATA_CLUSTER_COUNT)) {
+        if (porque) { *porque = SPI_ANADE_CADENA; }
+        return 0U;
+    }
+    if (((tam / FLASH_SECTOR_SIZE) + bloques) > AMPLIA_TOPE_BLOQUES) {
+        if (porque) { *porque = SPI_ANADE_TOPE; }
+        return 0U;
+    }
+    /* La cadena y el tamano tienen que contar lo mismo. Si no, algo se
+     * quedo a medias y alargar encima seria empeorarlo. */
+    if (!cadena_ultimo_interno(primero, &ultimo, &cuantos, 0) ||
+        cuantos != (tam / CLUSTER_BYTES)) {
+        if (porque) { *porque = SPI_ANADE_CADENA; }
+        return 0U;
+    }
+
+    spi_flash_read(FAT1_OFF, fat, FAT_UTIL);
+    for (pide = bloques; ; pide = pide / 2UL) {
+        sitio_mira(fat, pide, 0, 0, &ini, &hallado);
+        if (hallado) { break; }
+        if (pide <= 1UL) {
+            if (porque) { *porque = SPI_ANADE_SIN_SITIO; }
+            return 0U;
+        }
+    }
+
+    /*
+     * Primero la FAT y luego el tamano, NO al reves. Si se va la corriente
+     * en medio, con este orden queda una cola encadenada que la entrada de
+     * directorio no reclama -unos kilobytes que nadie usa hasta que el PC
+     * pase un chkdsk-; al reves quedaria un fichero diciendo que tiene
+     * datos en clusters que la FAT da por libres, y eso si es corrupcion.
+     */
+    nuevos = pide * CLUSTERS_PER_BLOCK;
+    for (i = 0UL; i < nuevos; i++) {
+        uint32_t c = ini + i;
+        uint16_t v = ((i + 1UL) < nuevos) ? (uint16_t)(c + 1UL) : 0x0FFFU;
+        fat12_pack_entry(fat, c + (c / 2U), c, v);
+    }
+    /* y el que era el ultimo deja de decir "fin" */
+    fat12_pack_entry(fat, ultimo + (ultimo / 2U), ultimo, (uint16_t)ini);
+    fat_vuelca(FAT1_OFF, fat);
+    fat_vuelca(FAT2_OFF, fat);
+
+    {
+        uint32_t nuevo = tam + (pide * FLASH_SECTOR_SIZE);
+
+        tam4[0] = (uint8_t)(nuevo & 0xFFU);
+        tam4[1] = (uint8_t)((nuevo >> 8) & 0xFFU);
+        tam4[2] = (uint8_t)((nuevo >> 16) & 0xFFU);
+        tam4[3] = (uint8_t)((nuevo >> 24) & 0xFFU);
+        escribe_datos_fichero(RAIZ_OFF + dir_off + 28U, tam4, 4U);
+    }
+
+    if (addr)  { *addr = SECTOR_DE_CLUSTER(ini) * ROOT_DIR_SECTOR_BYTES; }
+    if (dados) { *dados = pide; }
+    return 1U;
+}
+#undef fat
+
+uint8_t spi_flash_amplia(const char name8[8], const char ext3[3],
+                         uint32_t bloques, uint32_t *addr, uint32_t *dados,
+                         spi_anade_r_t *porque)
+{
+    uint8_t r;
+
+    if (!borrador_coge(BORRADOR_FAT)) {
+        if (porque) { *porque = SPI_ANADE_GEOMETRIA; }
+        return 0U;
+    }
+    r = amplia_interno(name8, ext3, bloques, addr, dados, porque);
+    borrador_suelta(BORRADOR_FAT);
+    return r;
+}
+
+/*
+ * RECORTAR UN FICHERO QUE NO ES SEGUIDO - 20/10/2026
+ *
+ * spi_flash_recorta() libera "del cluster `primero` + n en adelante": da
+ * por hecho que la cadena es CONSECUTIVA, que es lo que vale para la
+ * captura de pantalla -nace de una reserva de una pieza-. Un fichero
+ * hecho a tramos no lo es: el segundo tramo cae donde haya hueco.
+ *
+ * Llamar a aquella con uno de estos liberaria los clusters que van
+ * DETRAS del primer tramo, que son de otro fichero. O sea, el mismo
+ * tipo de fallo que se llevo por delante el CONFIG.CSV del usuario.
+ *
+ * Asi que esta sigue la cadena eslabon a eslabon. Vale para los dos
+ * casos; la de siempre se queda donde esta porque es el camino que ya
+ * esta probado para las capturas y no hay razon para moverlo.
+ */
+#define fat s_fat
+static uint8_t recorta_cadena_interno(const char name8[8], const char ext3[3],
+                                      uint32_t bytes)
+{
+    uint8_t  tam4[4];
+    uint32_t dir_off = 0UL, viejo = 0UL;
+    uint16_t primero = 0U;
+    uint32_t bloques, quedan, i, c, n;
+    uint16_t sig;
+
+    if (!geo_lee()) { return 0U; }
+    if (!dir_find_entry(name8, ext3, &dir_off, &primero, &viejo)) { return 0U; }
+    if (primero < 2U || primero >= (2U + DATA_CLUSTER_COUNT)) { return 0U; }
+
+    bloques = (bytes + FLASH_SECTOR_SIZE - 1UL) / FLASH_SECTOR_SIZE;
+    if (bloques == 0UL) { bloques = 1UL; }
+    quedan = bloques * CLUSTERS_PER_BLOCK;
+    if (quedan >= ((viejo + CLUSTER_BYTES - 1UL) / CLUSTER_BYTES)) {
+        return 1U;    /* no sobra nada */
+    }
+
+    spi_flash_read(FAT1_OFF, fat, FAT_UTIL);
+
+    /* Hasta el ultimo que se queda, siguiendo la cadena. */
+    c = primero;
+    for (i = 1UL; i < quedan; i++) {
+        sig = fat12_entry(fat, c);
+        if (sig < 2U || sig >= (2U + DATA_CLUSTER_COUNT)) {
+            return 0U;   /* la cadena es mas corta de lo que dice la entrada */
+        }
+        c = sig;
+    }
+
+    sig = fat12_entry(fat, c);
+    fat12_pack_entry(fat, c + (c / 2U), c, 0x0FFFU);
+
+    /* Y de ahi al final, libres. El tope de vueltas es el numero de
+     * clusters del volumen: una cadena con un bucle no deja esto girando. */
+    n = 0UL;
+    while (sig >= 2U && sig < (2U + DATA_CLUSTER_COUNT) && n < DATA_CLUSTER_COUNT) {
+        uint16_t prox = fat12_entry(fat, sig);
+        fat12_pack_entry(fat, (uint32_t)sig + ((uint32_t)sig / 2U), sig, 0x000U);
+        sig = prox;
+        n++;
+    }
+    fat_vuelca(FAT1_OFF, fat);
+    fat_vuelca(FAT2_OFF, fat);
+
+    /* El tamano al final, por la misma razon que en amplia_interno(). */
+    bytes = bloques * FLASH_SECTOR_SIZE;
+    tam4[0] = (uint8_t)(bytes & 0xFFU);
+    tam4[1] = (uint8_t)((bytes >> 8) & 0xFFU);
+    tam4[2] = (uint8_t)((bytes >> 16) & 0xFFU);
+    tam4[3] = (uint8_t)((bytes >> 24) & 0xFFU);
+    escribe_datos_fichero(RAIZ_OFF + dir_off + 28U, tam4, 4U);
+    return 1U;
+}
+#undef fat
+
+uint8_t spi_flash_recorta_cadena(const char name8[8], const char ext3[3],
+                                 uint32_t bytes)
+{
+    uint8_t r;
+
+    if (!borrador_coge(BORRADOR_FAT)) { return 0U; }
+    r = recorta_cadena_interno(name8, ext3, bytes);
+    borrador_suelta(BORRADOR_FAT);
+    return r;
+}
+

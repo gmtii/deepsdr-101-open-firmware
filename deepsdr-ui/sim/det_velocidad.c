@@ -1,8 +1,6 @@
 /*
  * LA VELOCIDAD QUE MIDE EL DETECTOR, CONTRA LA QUE ES.
  *
- * Pedido por el usuario, 07/10/2026.
- *
  * Contestando eso salio un fallo que no se buscaba: el medidor de velocidad
  * del identificador se equivoca, y mucho, sobre señales cifradas.
  *
@@ -136,8 +134,6 @@ int main(void)
         if (!x) { printf("  no puedo abrir %s\n", k_casos[c].fich); fallos++; continue; }
         /*
          * LA FRECUENCIA DE MUESTREO SE LEIA Y NO SE MIRABA - 11/10/2026.
-         *
-         * Pedido por el usuario.
          *
          * lee_wav() devuelve la frecuencia por `hz` y aqui no se usaba en
          * ninguna linea mas: el audio se metia crudo por stanag_det_mete(),

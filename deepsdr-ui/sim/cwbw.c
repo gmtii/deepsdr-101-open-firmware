@@ -1,8 +1,6 @@
 /*
  * ANCHO REAL DEL FILTRO DE CW - 22/09/2026
  *
- * Pedido por el usuario.
- *
  * Tiene razon y aqui esta el numero. demod_am_set_cw_filter_hz() monta un
  * paso banda RBJ con Q = 0,9 en DOS etapas iguales. Q = 0,9 a 700 Hz es un
  * ancho de unos 780 Hz por etapa: en CW eso no es un filtro, es media banda

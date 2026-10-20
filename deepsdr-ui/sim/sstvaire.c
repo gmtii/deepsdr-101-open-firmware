@@ -3,8 +3,6 @@
  *
  * POR QUE EXISTE - 06/10/2026.
  *
- * Pedido por el usuario.
- *
  * El banco sintetico (sstvtest.c) FABRICA la señal con el mismo plan con el
  * que el decodificador la lee, asi que comprueba que las dos mitades estan
  * de acuerdo - pero no que ninguna de las dos se parezca a lo que sale de

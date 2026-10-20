@@ -1,8 +1,6 @@
 /*
  * EL DETECTOR DE FASE DE M-PSK - 14/10/2026.
  *
- * Pedido por el usuario.
- *
  * La causa estaba escrita en hfdl_costas.c desde hacia semanas: la
  * correccion que corre en cada simbolo supone BPSK siempre. `sign(I)*Q`
  * mide el error contra una constelacion de DOS puntos; con cuatro u ocho

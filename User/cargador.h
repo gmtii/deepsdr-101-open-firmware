@@ -1,8 +1,6 @@
 /*
  * EL CARGADOR DE ARRANQUE, EN CODIGO NUESTRO - 01/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y con todos quiere decir TODOS, a proposito. Este fichero no arregla
  * nada del gestor actual: no anade CRC, no anade ranuras A/B, no levanta
  * el techo de 0x50000 y no mueve la firma de 0x08060000. Hace exactamente
@@ -62,8 +60,6 @@
 #define CARGA_APP_BASE      0x08008000UL
 /*
  * HASTA DONDE BORRA EL CARGADOR, Y DEPENDE DEL CHIP - 16/10/2026.
- *
- * Pedido por el usuario.
  *
  * 0x08080000 son los 512 kB del GD32F450VET6, el chip con el que nacio
  * esto. El GD32F470VGT6 tiene 1024 y ese tope deja sin usar la mitad.

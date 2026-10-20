@@ -1,8 +1,6 @@
 /*
  * EL ESPEJO: CUANTO LO BAJA EL CORRECTOR.
  *
- * Pedido por el usuario.
- *
  * Esa es la firma de un espejo y de nada mas. Aqui se fabrica uno a
  * proposito -un desequilibrio de fase y de ganancia conocidos-, se mide
  * cuanto espejo sale, se pasa por el corrector y se vuelve a medir.
@@ -427,8 +425,6 @@ int main(void)
     /*
      * EL ESPEJO LEIDO DEL ESPECTRO.
      *
-     * Pedido por el usuario.
-     *
      * El medidor de arriba promedia los 96 kHz enteros y puede salir limpio
      * mientras en la pantalla hay un espejo gordo, si el desequilibrio
      * depende de la frecuencia. iqbal_mira_espectro() mide lo otro: el pico
@@ -597,8 +593,6 @@ int main(void)
         /*
          * EL PLAZO DE SEGURIDAD, QUE ES EL QUE HABRIA PILLADO EL FALLO.
          *
-         * Pedido por el usuario.
-         *
          * iqbal_ab_paso() se llamaba desde dentro de un bloque que se salta
          * entero mientras hay un menu abierto, y la fila desde la que se
          * lanza la prueba ESTA en un menu. La prueba no avanzaba un cuadro y
@@ -628,9 +622,6 @@ int main(void)
     /*
      * EL FIR DEL ESPEJO, CALIBRADO DESDE EL PANADAPTADOR - 19/10/2026.
      *
-     * *** De un probador: "The mirror channel is suppressed by about 24 dB. If we
-     * could add another 10 dB to that, it would be just right." ***
-     *
      * Esto no mide el corrector de un coeficiente -eso lo hacen las secciones
      * de arriba- sino lo que se le ha añadido: un FIR de cuatro tomas sobre
      * el conjugado, calibrado con las portadoras que haya en el panorama.
@@ -643,7 +634,6 @@ int main(void)
      */
     printf("\n  el FIR del espejo, calibrado desde el panadaptador\n");
     {
-        static const double fp[5] = { -31000.0, -17000.0, 5000.0, 19000.0, 33000.0 };
         struct { const char *n; double a, b, c, d; double min_antes, min_despues; } cs[3] = {
             { "plano (un coeficiente ya basta)", 1.0, 0.0,  1.096, 0.0,   60.0, 60.0 },
             { "con pendiente (el del aviso)",    1.0, 0.0,  0.93,  0.115,  0.0, 32.0 },

@@ -3,8 +3,6 @@
  * LA PASTILLA DE BANDA, CUANDO LA ETIQUETA CAMBIA DE ANCHO
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * ui_top_draw_freq() -el repintado barato, el que corre en cada clic del
  * mando- recorta en rds_x1(), y rds_x1() sale de s_band_x2, que es una
  * variable que draw_header() rellena MIENTRAS PINTA. Antes de pintar vale

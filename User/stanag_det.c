@@ -54,8 +54,6 @@
 /*
  * LA SEGUNDA RAYA YA NO SE MIDE CONTRA LA PRIMERA - 06/10/2026.
  *
- * Pedido por el usuario.
- *
  * Los dos criterios que miraban las rayas POR SEPARADO -que la segunda no
  * cayera mas de 10 dB bajo la primera, y que cada una llevara el 12 % de
  * la potencia- daban por hecho que los dos tonos llegan parejos. Y eso es
@@ -143,8 +141,6 @@
  * ==========================================================================
  * LA VELOCIDAD DE SIMBOLO DE LO QUE NO SON DOS TONOS - 05/10/2026
  * ==========================================================================
- *
- * Pedido por el usuario.
  *
  * El medidor de velocidad que ya habia cuenta rachas del discriminador y
  * solo arranca cuando se han visto DOS tonos. Con veintiuno no arranca, y
@@ -805,8 +801,6 @@ static void mide_rachas(void)
      * EL PEINE - 08/10/2026. Y ESTO SUSTITUYE AL "GRUPO MAS BAJO".
      * ==================================================================
      *
-     * Pedido por el usuario.
-     *
      * Lo que habia aqui buscaba EL GRUPO MAS BAJO QUE FUERA UN GRUPO DE
      * VERDAD: la racha mas corta que se repite. Con una alternancia limpia
      * eso ES el simbolo. Con datos cifrados NO, y el banco
@@ -926,8 +920,6 @@ static void mide_rachas(void)
  * ==========================================================================
  * LA REJILLA DE TONOS - 05/10/2026
  * ==========================================================================
- *
- * Pedido por el usuario.
  *
  * Y no podia hacer otra cosa: hasta hoy este fichero solo sabia buscar DOS
  * rayas. Un peine de veintiuna le era invisible, asi que se quedaba con el
@@ -1385,8 +1377,6 @@ static void mide_espectro(void)
      * ======================================================================
      * PRIMERO: CUANTAS SEÑALES HAY. 10/10/2026.
      * ======================================================================
-     *
-     * Pedido por el usuario.
      *
      * Lo que habia debajo cogia la raya mas alta y luego LA MAS ALTA DE TODO
      * lo que estuviera a mas de 120 Hz. Con una señal eso son sus dos tonos.

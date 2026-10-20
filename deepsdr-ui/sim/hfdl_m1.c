@@ -1,8 +1,6 @@
 /*
  * ¿QUE INDICE M1 ELIGE LA RADIO? - 14/10/2026
  *
- * Pedido por el usuario.
- *
  * 157 ráfagas de 178 dicen ser BPSK. Eso no es lo que hay en el aire:
  * es lo que elige el buscador de preámbulo. Y solo 14 de esas 157
  * pasan el CRC.

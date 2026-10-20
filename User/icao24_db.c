@@ -7,8 +7,6 @@
 /*
  * LA BASE VIVE EN LA ZONA ALTA, NO EN EL DISCO USB. 25/09/2026.
  *
- * Pedido por el usuario.
- *
  * El proyecto padre guarda ICAO24.BIN en el volumen FAT y lo lee con un
  * spi_flash_ro.c que recorre la cadena de clusters. Aqui vive en la mitad
  * alta del chip, la que el modo USB no ensena, y se lee con una suma.
@@ -57,8 +55,6 @@
  */
 /*
  * DONDE ESTA LA BASE: LO DICE EL DIRECTORIO, NO ESTE FICHERO - 28/09/2026.
- *
- * Pedido por el usuario.
  *
  * Esta direccion era fija, y ademas el limite de abajo (I24_TOPE) decia
  * que la base podia llegar hasta 0x180000 - o sea, por encima de donde

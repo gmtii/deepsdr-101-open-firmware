@@ -185,7 +185,7 @@ typedef enum {
      */
     SET_X_HUSO,         /* desplazamiento sobre UTC en minutos, -720..+840 */
     /*
-     * EL AJUSTE DEL VOLTIMETRO - 12/10/2026, con el issue del regulador de
+     * EL AJUSTE DEL VOLTIMETRO - 12/10/2026, con el regulador de
      * 3 V. Al final, como las de aqui arriba y por lo mismo: un CONFIG.CSV
      * de una version anterior no la trae, su bit queda a 0 y arranca a
      * cero, que es "sin calibrar" - exactamente lo que es una radio que
@@ -193,7 +193,7 @@ typedef enum {
      */
     SET_X_VCALIB,       /* correccion del voltimetro en mV, -500..+500 */
     /*
-     * EL MARGEN DE ENGANCHE DEL SAM - 12/10/2026, con el aviso del probador
+     * EL MARGEN DE ENGANCHE DEL SAM - 12/10/2026, con el aviso recibido
      * sobre el detector sincrono enganchandose a la interferencia. Al final
      * de la lista, como todas las de aqui arriba y por lo mismo: un
      * CONFIG.CSV de una version anterior no la trae, su bit queda a 0 y
@@ -221,6 +221,25 @@ typedef enum {
      * mando no hace lo que el usuario espera que haga.
      */
     SET_X_JMP,          /* 0 = el mando sintoniza por pasos, 1 = salta de emisora */
+
+    /*
+     * EL SENTIDO DE LA CUADRATURA DE BANDA BAJA - 20/10/2026.
+     *
+     * Por debajo de 300 kHz el par en cuadratura lo hace un temporizador
+     * del GD32. Su arranque ya es determinista (ver lo_gen_gd32.c), pero en
+     * que SENTIDO queda es una propiedad de la placa que no se puede medir
+     * desde el firmware. Por eso se puede invertir a mano, y por eso se
+     * guarda: se prueba una vez y no se vuelve a tocar.
+     *
+     * Al final, como las de arriba: un CONFIG.CSV viejo no lo trae, su bit
+     * queda a 0 y arranca sin invertir, que es como se ha comportado
+     * siempre.
+     */
+    SET_X_IQ_INV,       /* 0 = cuadratura normal, 1 = I/Q invertida */
+    /* Puntos que se corre el renglon de fax al entregarlo, para cuadrar el
+     * margen cuando el pulso de fase de la emisora no cae donde este
+     * decodificador supone. Ver wefax_set_centro(). */
+    SET_X_WFX_CENTRO,
     SET_X_N
 } settings_extra_id_t;
 
@@ -271,17 +290,6 @@ typedef struct {
     uint8_t      tema_idx;            /* indice en k_temas[] de main.c: paleta de la interfaz + paleta del waterfall */
     /*
      * LA PALETA DE LA CASCADA, Y POR QUE YA NO SE APLICA SOLA - 07/10/2026,
-     * de un issue.
-     *
-     * Esto se aplicaba DIRECTAMENTE dentro de settings_load(), con un
-     * comentario que decia que no habia dependencia de orden. Era verdad el
-     * 08/09/2026 y dejo de serlo el 23/09/2026, cuando los temas pasaron a
-     * llevar su propia paleta de cascada: desde ese dia tema_aplicar() llama
-     * a spectrum_set_palette(), y en el arranque corre DESPUES de leer el
-     * fichero. O sea que la paleta guardada se leia bien, se ponia bien, y
-     * acto seguido el tema la pisaba.
-     *
-     * Quien abrio el issue lo vio asi: tema "Oliva" -que propone SMOKE- con
      * la paleta puesta a TURBO, y al reiniciar salia SMOKE "aunque en el
      * fichero pone Turbo". El fichero no se estaba ignorando: se leia y se
      * machacaba.

@@ -3,7 +3,7 @@
 #include "palette.h"
 
 /*
- * EL MAPA SIGUE AL TEMA (SOLO EN UNO) - 05/10/2026, de un issue.
+ * EL MAPA SIGUE AL TEMA (SOLO EN UNO) - 05/10/2026.
  *
  * *El que lo abrio* pedia que el mapa dejara de tener paleta propia y
  * siguiera la del resto de la interfaz, porque con algunos temas los
@@ -621,8 +621,6 @@ uint8_t mapa_loc_de_linea(const char *linea, char *out)
 /*
  * EL INDICATIVO DE QUIEN LLAMA EN UN CQ - 12/10/2026.
  *
- * Pedido por el usuario.
- *
  * En un CQ de FT8 el mensaje es "CQ CALL LOC", a veces con un adorno en
  * medio: "CQ DX CALL LOC", "CQ NA CALL LOC", "CQ POTA CALL LOC". O sea que
  * el indicativo NO esta en un sitio fijo contando desde el principio, pero
@@ -730,8 +728,6 @@ uint8_t mapa_ventana(const mapa_caja_t *c)
  * ======================================================================
  * RELLENAR LA TIERRA - 14/10/2026
  * ======================================================================
- *
- * Pedido por el usuario.
  *
  * MAPA_COL_TIERRA lleva en la paleta de los cien mapas desde el primer dia
  * y no lo leia nadie: esta funcion rellenaba el panel con el color del mar
@@ -887,8 +883,6 @@ static void cruces_arista(int16_t ax, int16_t ay, int16_t bx, int16_t by,
 }
 
 /* ------------------------------------------- RELLENAR AL ACERCARSE
- *
- * Pedido por el usuario.
  *
  * Al zoom 1 el par-impar se arranca solo: toda fila empieza en el borde
  * del mapa, que es mar. Al acercarse no, y una ventana metida en mitad de

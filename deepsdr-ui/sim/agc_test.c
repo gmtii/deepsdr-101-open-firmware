@@ -2,8 +2,6 @@
  * EL AGC, CONTRA UN AGC DE LIBRO. Y ES EL PRIMER BANCO QUE TOCA LA CADENA
  * DE AUDIO.
  *
- * Pedido por el usuario, 08/10/2026.
- *
  * LO QUE SALIO DE ESA REVISION, Y POR QUE HAY QUE MEDIRLO
  * ------------------------------------------------------
  * Habia dos bucles de AGC copiados a mano dentro de demod_am.c -el de

@@ -82,8 +82,6 @@ customboot.bin: customboot.elf
 #
 # EL CARGADOR DEL GD32F470VGT6 - 16/10/2026.
 #
-# Pedido por el usuario.
-#
 # Mismo codigo con CHIP_F470VG puesto. Lo que cambia esta en
 # User/cargador.h (CARGA_BORRA_HASTA: 1024 kB en vez de 512) y en la cadena
 # de sectores de boot_main.c, que con el 470 llega al 11. El linker script

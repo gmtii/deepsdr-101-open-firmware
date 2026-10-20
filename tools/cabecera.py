@@ -107,8 +107,6 @@ def avisa_version(version, crc):
     """
     Avisa si esta version ya salio con OTRO contenido.
 
-    Pedido por el usuario, 02/10/2026.
-
     Y era cierto.: salieron SEIS update.bin distintos llamados todos V3.00.
     Eso es el mismo fallo que llevo a escribir tools/update4_check.py en su
     dia -un fichero con la cara del bueno- pero una capa mas arriba: aqui

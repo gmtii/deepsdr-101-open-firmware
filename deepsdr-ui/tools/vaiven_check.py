@@ -7,8 +7,6 @@ QUE EL DIBUJO NO SE ENGANCHE AL AUDIO.
 
 POR QUE EXISTE - 06/10/2026.
 
-Pedido por el usuario.
-
 EL ENGANCHE. sdr_spectrum_waterfall_tick() vuelve entera si no ha llegado un
 bloque de audio:
 

@@ -913,8 +913,6 @@ static bool hfdl_pd_test_one_combo(uint32_t m1_index)
 /*
  * LOS SIMBOLOS DE UNA RAFAGA DE VERDAD, PARA FUERA - 14/10/2026.
  *
- * Pedido por el usuario.
- *
  * Todo lo que se ha entregado hoy se baso en bancos que prueban PIEZAS.
  * Ninguno mete una rafaga por la cadena y mira si sale el CRC, y por eso
  * se pudieron entregar tres arreglos seguidos sin mover el numero.

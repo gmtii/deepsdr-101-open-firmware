@@ -2,8 +2,6 @@
 """
 EL BANCO DEL TOPE DE BORRADO.
 
-Pedido por el usuario.
-
 Desde hoy hay dos customboot en la misma carpeta y arrastrar el que no era
 es un error de un segundo. El caro es el del 470 en una radio de 512 kB:
 intenta borrar sectores que en ese chip NO EXISTEN, se queda ahi en mitad de

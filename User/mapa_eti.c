@@ -435,8 +435,6 @@ uint8_t mapa_eti_pon(const mapa_eti_dx_t *dx)
     /*
      * SEIS SITIOS ANTES DE RENDIRSE - 13/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * En la lista estaban M7BSI (IO92), EA4AXM (IN80) y G8KHF (IO92). Dos
      * de los tres comparten LOCALIZADOR, o sea el mismo pixel. Aqui se
      * probaba UN sitio -a la derecha del punto, centrado- y, si chocaba,
@@ -649,8 +647,6 @@ uint8_t mapa_eti_texto(char *buf, uint8_t tope, uint16_t ahora)
     /*
      * EL PAIS, ANTES DE LOS KILOMETROS - 13/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * No se guarda: se busca aqui por el indicativo que ya esta en la
      * ficha. dxcc_pais() mira una tabla en flash y devuelve un puntero a
      * flash, asi que guardarlo en la seleccion costaria cuatro bytes de
@@ -832,8 +828,6 @@ void mapa_eti_ficha(gfx2_surf_t *s, uint16_t ahora)
 /* ------------------------------------------------------------------ */
 /*
  * EL BLANCO DEL DEDO, Y POR QUE ES TAN GRANDE - 13/10/2026.
- *
- * Pedido por el usuario.
  *
  * Era un rectangulo de 24 x 24 alrededor del punto mas la caja del texto,
  * y 24 px es menos de la mitad de lo que este proyecto se exige a si mismo

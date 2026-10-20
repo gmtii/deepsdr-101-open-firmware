@@ -90,6 +90,7 @@
 #include "rtc_hw.h"   /* el RTC de hardware - ver reloj_ahora_ms() */
 #include "navtex.h" /* decodificador de NAVTEX (SITOR-B) - ver k_demod_modes[] */
 #include "wefax.h"  /* facsimil meteorologico - ver k_demod_modes[] y fax_panel_*() */
+#include "wfx_guarda.h" /* cuando se abre el fichero de una carta - ver su cabecera */
 #include "sstv.h"   /* fotos por radio - mismo panel que el fax, en color */
 #include "hell.h"   /* telegrafia de imagen de 1929 - ver hell.h */
 #include "bmp.h"    /* y sus cabeceras, para guardarlas en el pendrive */
@@ -124,8 +125,6 @@ static void systick_delay_init(void);
 /*
  * EL BUCLE ENTERO, NO SOLO EL DIBUJO - 01/10/2026.
  *
- * Pedido por el usuario.
- *
  * Comparando los dos cargadores salio esto, y es lo que obliga a medir mas:
  *
  *                  FFT  marco  traza(empuje)  cascada  medido  real   tope
@@ -155,8 +154,6 @@ static volatile uint32_t s_bucle_us;    /* la vuelta entera */
 /*
  * Y LO PEOR QUE SE HA VISTO DESDE EL ARRANQUE - 07/10/2026.
  *
- * Pedido por el usuario.
- *
  * La fila de Informacion ya decia cuanto tarda la vuelta del bucle, pero eso
  * solo sirve si uno esta mirando en el momento malo - y en el momento malo la
  * radio no deja ni llegar a la pantalla. Asi que se guarda el PEOR valor
@@ -178,6 +175,22 @@ static volatile uint32_t s_bucle_us;    /* la vuelta entera */
  * instrumento pegado al tope no distingue un problema de una catastrofe.
  */
 static volatile uint32_t s_bucle_max_us;
+/*
+ * LA MEDIA DE LAS ULTIMAS VUELTAS - 19/10/2026.
+ *
+ * La celda enseñaba la ULTIMA vuelta, y eso es una loteria: el valor que se
+ * queda congelado al abrir el menu es el de la pasada que pillara, no el
+ * tipico. Midiendo en antena salieron 53, 47 y 16 ms del mismo sitio, y los
+ * dos primeros hicieron buscar un problema de 37 ms que no existia.
+ *
+ * Con la media de las ultimas 64 el numero se queda quieto y dice algo. La
+ * ultima se sigue enseñando al lado, porque para ver un pico puntual la
+ * media no vale.
+ */
+#define BUCLE_MEDIA_N  32U
+static volatile uint32_t s_bucle_media_us;
+static uint32_t s_bucle_suma;
+static uint16_t s_bucle_n;
 static volatile uint32_t s_polls_max_us;
 /*
  * Y EL TERCERO: EL DIBUJO - 19/10/2026.
@@ -212,15 +225,123 @@ static volatile uint32_t s_dibujo_max_us;
  * propio panel de STANAG, que es donde esta el problema y donde el usuario no
  * tiene que ir navegando con la radio a medio gas para leerlos.
  */
+static volatile uint16_t s_tactil_us;   /* demo_touch_poll() */
+static volatile uint32_t s_polls_us;    /* los poll de los decodificadores */
+/* El SEGUNDO bloque de poll -captura, volcado, fax, SSTV, Hell, RDS,
+ * marquesina y autoguardado-, que hasta el 19/10/2026 no medía nadie. Ver
+ * el comentario que lo abre en el bucle principal. */
+static volatile uint32_t s_polls2_us;
+static volatile uint32_t s_polls2_max_us;
+
+/*
+ * QUIEN HIZO EL PICO, CON SU NOMBRE - 20/10/2026.
+ *
+ * Los cronometros de arriba cubren el dibujo, el tactil y los dos bloques
+ * de poll, y entre los cuatro NO suman la vuelta. En antena salio una
+ * vuelta de 343 ms con el dibujo en 55 y los dos poll en 1 y 0: o sea que
+ * casi 290 ms se los llevo un tramo que no mide nadie, y la fila que tenia
+ * que senalarlo solo sabia decir "yo no he sido".
+ *
+ * Los tramos sin cronometro eran tres: el CAT con su repintado de
+ * cabecera, todo lo que va ANTES del dibujo -la traza, la franja de
+ * arriba y los repintados de cambio de modo- y el mando. Ahora la vuelta
+ * esta partida en siete, cada tramo lleva su nombre, y cuando una vuelta
+ * bate el record se guarda EL NOMBRE del tramo mas gordo de esa vuelta.
+ * La fila deja de dar un numero huerfano y dice de quien es.
+ *
+ * Cuesta cuatro lecturas mas del contador de ciclos por vuelta, un ciclo
+ * cada una.
+ */
+/*
+ * Y "PRE" ERA DEMASIADO GORDO - 20/10/2026.
+ *
+ * La primera version tenia un solo tramo para todo lo de antes del dibujo,
+ * y en antena gano el pico con 167 ms. Tres sospechosos y ninguna forma de
+ * elegir entre ellos, asi que se parte en los tres:
+ *
+ *   fra  franja_arriba_tick(): el medidor de S, la hora y el cartel de
+ *        quien emite. Se descarto antes de partirlo que fuera la base de
+ *        emisoras -el banco sim/emis_cartel.c la mide en 104..420 bytes de
+ *        bus, o sea tres decimas de milisegundo- y tambien que fuera
+ *        pintar: la pantalla entera son 384.000 accesos a 45 ns, 17 ms.
+ *   mod  lo que queda: rtty_scope_poll() y los repintados de cambio de
+ *        modo. Con la radio en LSB, rtty_scope_poll() se sale en la
+ *        primera linea.
+ *   tc3  la TERCERA mirada al tactil, que estaba metida aqui dentro sin
+ *        que el nombre lo dijera. Y es la unica de las tres que puede
+ *        hacer cualquier cosa: ahi se despacha el toque, o sea que un
+ *        boton de la barra de abajo se cobra en este tramo.
+ */
+enum { TRAMO_CAT = 0,   /* usb_cdc_poll() + cat_pinta_pendiente() */
+       TRAMO_SMT,       /* el medidor de S, el dBm y el PPM del SAM */
+       TRAMO_SYN,       /* top_sync(): rellenar la ficha de la cabecera */
+       TRAMO_CAB,       /* componer la cabecera entera (sin el empuje) */
+       TRAMO_BUS,       /* y empujar esos pixeles al panel */
+       TRAMO_EMI,       /* emisoras_tick(): el cartel de quien emite */
+       TRAMO_FRA,       /* lo que quede de franja_arriba_tick() */
+       TRAMO_MOD,       /* la traza y los repintados de cambio de modo */
+       TRAMO_TC3,       /* la tercera mirada al tactil, que despacha */
+       TRAMO_DIB,       /* el dibujo, el mismo tramo que s_dibujo_max_us */
+       TRAMO_TAC,       /* las otras dos miradas al tactil */
+       TRAMO_MAN,       /* tune_encoder_poll() */
+       TRAMO_DEC,       /* el primer bloque de poll: los decodificadores */
+       TRAMO_POL,       /* el segundo: captura, volcado, fax, SSTV, RDS... */
+       /*
+        * Y EL RESTO DE LA VUELTA, QUE VA EL ULTIMO A PROPOSITO.
+        *
+        * Entre tramo y tramo quedan huecos -el contador de vueltas, lo que
+        * hay entre el dibujo y el tactil, lo de detras del segundo bloque
+        * de poll-, y hasta hoy no los contaba nadie. Si el tiempo se va
+        * por uno de ellos, la fila no puede decir "no se": tiene que
+        * decir `res`, que es "en ninguno de los que miro".
+        *
+        * Sale de restar: la vuelta entera menos la suma de los once de
+        * arriba. Asi no hay forma de que algo se esconda, y el numero del
+        * ganador siempre suma con el pico.
+        */
+       TRAMO_RES,
+       TRAMO_N };
+static const char *const k_tramo_nombre[TRAMO_N] = {
+    "cat", "smt", "syn", "cab", "bus", "emi", "fra", "mod", "tc3",
+    "dib", "tac", "man", "dec", "pol", "res"
+};
+/*
+ * Y LO QUE SE LLEVO EL GANADOR, QUE ES LA MITAD QUE FALTABA - 20/10/2026.
+ *
+ * El nombre solo no basta, y se vio en la primera lectura: la vuelta marco
+ * 167 ms y el ganador fue `fra`... pero el ganador es el tramo MAS GRANDE
+ * de esa vuelta, no el que explica el pico. Un tramo de cuatro
+ * milisegundos gana igual si los otros once son de uno, y entonces la fila
+ * señala al inocente con toda la seguridad del mundo.
+ *
+ * Con el numero al lado no hay forma de confundirse: "max 167/27 fra 160"
+ * dice que fra es el culpable, y "max 167/27 fra 4" dice que el tiempo se
+ * fue por un sitio que no mide nadie, que es un diagnostico distinto y
+ * igual de util.
+ */
+static volatile uint32_t s_peor_tramo_us;
+/* Los tres de dentro de franja_arriba_tick(), que no puede escribir en la
+ * tabla local del bucle. Ver TRAMO_SMT. */
+static volatile uint32_t s_fra_smt, s_fra_syn, s_fra_cab, s_fra_bus, s_fra_emi;
+static volatile uint8_t s_peor_tramo = 0xFFU;   /* 0xFF = aun no hay record */
+
 uint32_t ui_bucle_peor_us(void)  { return s_bucle_max_us; }
 uint32_t ui_polls_peor_us(void)  { return s_polls_max_us; }
 uint32_t ui_dibujo_peor_us(void) { return s_dibujo_max_us; }
 void     ui_peores_cero(void)
 {
     s_bucle_max_us = 0U; s_polls_max_us = 0U; s_dibujo_max_us = 0U;
+    /* Y EL SEGUNDO BLOQUE DE POLL, QUE SE QUEDABA SIN BORRAR. Se
+     * añadio el 19/10/2026 con su maximo y nadie lo metio aqui, asi
+     * que el toque que pone los peores a cero dejaba ese numero
+     * clavado desde el arranque: un pico de hace media hora al lado
+     * de tres numeros recien puestos a cero se lee como si acabara
+     * de pasar. */
+    s_polls2_max_us = 0U;
+    s_peor_tramo = 0xFFU;
+    s_peor_tramo_us = 0U;
 }
-static volatile uint16_t s_tactil_us;   /* demo_touch_poll() */
-static volatile uint32_t s_polls_us;    /* los poll de los decodificadores */
+
 
 static void radio_screen_draw(void);
 static void info_vivo_invalida(void);
@@ -427,8 +548,6 @@ static void menu_detail_value_redraw(void);
 /*
  * DOS ARRAYS Y NO UNO - 30/09/2026.
  *
- * Pedido por el usuario.
- *
  *   s_db_frame   el cuadro CRUDO, promediado dentro del propio cuadro. Es
  *                lo que baja a la CASCADA.
  *   s_db_traza   el mismo, suavizado entre cuadros. Es lo que se DIBUJA
@@ -486,7 +605,15 @@ static char s_time_buf[6] = "--:--";
  * Ancho > "Cambiar a LO" y un toque en "+". O al arrancar, si CONFIG.CSV
  * trae un paquete de filtro con corte bajo.
  */
+/* Definida mucho mas abajo, con el resto de los formateadores del menu.
+ * top_sync() la necesita para el valor del chip del NCO. */
+static void aj_u2s(char *d, uint32_t v);
+
 static char s_top_bw[12];
+
+/* "+40k" y el cero. Ocho por si algun dia el paseo crece. Ver
+ * s_top.nco_off en top_sync(). */
+static char s_top_nco_off[8];
 
 /* Declaradas mas abajo (junto a las etiquetas del menu); top_sync() necesita
  * los Hz aqui arriba y duplicar la tabla seria justo como se consigue que dos
@@ -1090,8 +1217,6 @@ static uint8_t s_hfdl_bytes;
 /*
  * Y LA LISTA DE FT8 ENSEÑA TODO O SOLO LAS CQ - 13/10/2026.
  *
- * Pedido por el usuario.
- *
  * No se guarda en CONFIG.CSV, igual que el mapa de aqui arriba y por lo
  * mismo: es lo que estas mirando AHORA, no como quieres que arranque la
  * radio. Un filtro que sobrevive al apagado esconde mensajes la proxima
@@ -1101,8 +1226,6 @@ static uint8_t s_ft8_solo_cq;
 
 /*
  * EL TROZO DE MUNDO QUE SE ESTA MIRANDO - 28/09/2026.
- *
- * Pedido por el usuario.
  *
  * Vive aqui y no dentro de la funcion que pinta porque el zoom y el sitio
  * tienen que sobrevivir a los repintados: el mapa se repinta entero cada
@@ -1666,7 +1789,7 @@ int main(void)
     }
     /*
      * Y LA PALETA DE LA CASCADA JUSTO DETRAS. ESTAS DOS LINEAS VAN EN ESTE
-     * ORDEN Y NO EN EL OTRO - 07/10/2026, de un issue.
+     * ORDEN Y NO EN EL OTRO - 07/10/2026.
      *
      * tema_aplicar() llama a spectrum_set_palette() con la paleta que PROPONE
      * el tema. Si la paleta guardada se aplicara antes -que es lo que hacia
@@ -1824,6 +1947,29 @@ int main(void)
     while (1) {
         uint32_t t_vuelta0 = DWT->CYCCNT;
         uint32_t t_dibujo0 = t_vuelta0;   /* ver s_dibujo_max_us */
+        uint8_t  hubo_dibujo = 0U;        /* ver BUCLE_MEDIA_N */
+        uint32_t tramo_us[TRAMO_N];       /* ver k_tramo_nombre */
+        uint32_t t_pre0;
+        /*
+         * CON QUE PANTALLA SE ENTRO, y no solo con cual se sale.
+         *
+         * Todas las guardias de abajo miran s_menu_open AL FINAL de la
+         * vuelta. La vuelta que CIERRA el menu entra con el menu puesto y
+         * sale sin el, asi que pasa la guardia - y lo que ha hecho por el
+         * camino es repintar la pantalla de radio entera. Ese repintado no
+         * cae en ningun cronometro de tramo (va dentro del despacho del
+         * toque o del mando) y se cobraba integro en el peor de la vuelta.
+         *
+         * Un pico que solo pasa al salir del menu no es lo que se esta
+         * buscando: lo que interesa es lo que tarda la radio escuchando.
+         * Con esto, la vuelta de la transicion no cuenta para las
+         * estadisticas; los tramos se siguen midiendo igual.
+         */
+        uint8_t  menu_al_entrar = s_menu_open;
+        {
+            uint8_t k;
+            for (k = 0U; k < (uint8_t)TRAMO_N; k++) { tramo_us[k] = 0U; }
+        }
 
         /*
          * El CAT, lo primero de la vuelta y antes del dibujo.
@@ -1838,6 +1984,8 @@ int main(void)
         /* Y se pinta UNA vez lo que haya cambiado por el CAT, no una por
          * orden recibida. Ver s_cat_pide. */
         cat_pinta_pendiente();
+        t_pre0 = DWT->CYCCNT;
+        tramo_us[TRAMO_CAT] = (t_pre0 - t_vuelta0) / (SystemCoreClock / 1000000U);
 #if !CALIB_HEIGHT_TEST
         if (s_screen_asleep) {
             /*
@@ -1910,8 +2058,6 @@ int main(void)
             /*
              * Y UNA TERCERA BANDERA: si lo que habia era una IMAGEN.
              *
-             * Pedido por el usuario.
-             *
              * El SSTV y el fax entran en digi_panel_active() igual que el
              * RTTY -los tres le quitan el sitio al espectro- y por eso
              * caian en la rama de abajo, que llama a
@@ -1941,7 +2087,22 @@ int main(void)
 
             /* La franja de arriba, ANTES de repartir entre espectro y panel
              * digital: es de los dos, no de uno. Ver franja_arriba_tick(). */
-            franja_arriba_tick();
+            {
+                uint32_t t0 = DWT->CYCCNT;
+                uint32_t d, otros;
+
+                s_fra_smt = 0U; s_fra_emi = 0U;
+                s_fra_syn = 0U; s_fra_cab = 0U; s_fra_bus = 0U;
+                franja_arriba_tick();
+                d = (DWT->CYCCNT - t0) / (SystemCoreClock / 1000000U);
+                tramo_us[TRAMO_SMT] = s_fra_smt;
+                tramo_us[TRAMO_SYN] = s_fra_syn;
+                tramo_us[TRAMO_CAB] = s_fra_cab;
+                tramo_us[TRAMO_BUS] = s_fra_bus;
+                tramo_us[TRAMO_EMI] = s_fra_emi;
+                otros = s_fra_smt + s_fra_syn + s_fra_cab + s_fra_bus + s_fra_emi;
+                tramo_us[TRAMO_FRA] = (d > otros) ? (d - otros) : 0U;
+            }
             /* Only actually DRAW the scope when the settings menu
              * isn't covering the panel - added 08/08/2026, per the
              * project owner: the scope never checked s_menu_open at
@@ -2083,9 +2244,50 @@ int main(void)
              * hablar con el chip. Solo hay trafico en el bus mientras hay
              * un dedo puesto, que es justo cuando interesa.
              */
-            demo_touch_poll();
+            {
+                uint32_t t0 = DWT->CYCCNT;
+                demo_touch_poll();
+                tramo_us[TRAMO_TC3] = (DWT->CYCCNT - t0) / (SystemCoreClock / 1000000U);
+            }
 
             t_dibujo0 = DWT->CYCCNT;   /* el tramo de dibujo empieza aqui */
+            /*
+             * Y ahi mismo se cierra lo de antes del dibujo. Lo que ya
+             * tiene cronometro propio -la franja de arriba y la tercera
+             * mirada al tactil- se descuenta, asi que en `mod` queda lo
+             * que no mide nadie mas: rtty_scope_poll() y los repintados
+             * de cambio de modo. Solo se cierra en esta rama porque es la
+             * unica que llega al dibujo - con la pantalla dormida o en
+             * calibracion no hay ni tramo.
+             */
+            {
+                /*
+                 * LA RESTA SE DEJABA LA MITAD DE LA FRANJA - 20/10/2026.
+                 *
+                 * Aqui ponia `otros = FRA + TC3`, y eso era verdad cuando
+                 * FRA era la franja entera. Al partirla en smt/hra/emi,
+                 * FRA paso a ser SOLO lo que sobra de ella, asi que los
+                 * otros tres se los quedaba `mod` - que entonces es un
+                 * superconjunto y gana el reparto siempre, diga lo que
+                 * diga la realidad.
+                 *
+                 * En antena salio exactamente eso: "max 170 mod 141" con
+                 * la radio en LSB, donde lo que `mod` mide de verdad
+                 * -rtty_scope_poll() y los repintados de cambio de modo-
+                 * no hace nada: rtty_scope_poll() se sale en la primera
+                 * linea y el bloque de cambio de modo ni se entra.
+                 *
+                 * Sexta vez que un instrumento de esta vuelta mide una
+                 * cosa y se lee como si midiera otra.
+                 */
+                uint32_t d = (t_dibujo0 - t_pre0) / (SystemCoreClock / 1000000U);
+                uint32_t otros = tramo_us[TRAMO_SMT] + tramo_us[TRAMO_SYN]
+                               + tramo_us[TRAMO_CAB] + tramo_us[TRAMO_BUS]
+                               + tramo_us[TRAMO_EMI] + tramo_us[TRAMO_FRA]
+                               + tramo_us[TRAMO_TC3];
+
+                tramo_us[TRAMO_MOD] = (d > otros) ? (d - otros) : 0U;
+            }
 
             if (capt_tapando()) {
                 /*
@@ -2118,6 +2320,34 @@ int main(void)
                              / (SystemCoreClock / 1000000U);
                 if (d > 999999UL) { d = 999999UL; }
                 if (d > s_dibujo_max_us) { s_dibujo_max_us = d; }
+                tramo_us[TRAMO_DIB] = d;
+                /* `drawing_now` y no "hemos llegado aqui": este bloque corre
+                 * en TODAS las vueltas, dibujen o no, asi que marcarlo aqui
+                 * sin mas dejaba la media como estaba -sobre todas- y seguia
+                 * saliendo cero. */
+                /*
+                 * Y "HA DIBUJADO" NO ES "ESTA EL OSCILOSCOPIO" - 20/10/2026.
+                 *
+                 * `drawing_now` vale (active_now && !s_menu_open), y
+                 * active_now es digi_panel_active(): o sea que esto solo
+                 * era cierto en los modos digitales. Escuchando en LSB
+                 * -que es lo normal- no se marcaba NUNCA, el contador de
+                 * la media se quedaba en cero y la celda llevaba dias
+                 * diciendo "0 ms" con la radio pintando cuarenta y cinco
+                 * veces por segundo.
+                 *
+                 * Cuarta vez que esta media mide la poblacion equivocada,
+                 * y las cuatro por la misma razon: la condicion se escribe
+                 * mirando el nombre de una variable en vez de lo que esa
+                 * variable quiere decir.
+                 *
+                 * Lo que de verdad quiere decir "esta vuelta ha dibujado"
+                 * es que el tramo del dibujo ha costado algo. Un
+                 * milisegundo de suelo deja fuera las vueltas que el
+                 * limitador de fotograma devuelve enseguida y no depende
+                 * del modo.
+                 */
+                if (d >= 1000UL) { hubo_dibujo = 1U; }
             }
             {
                 uint32_t t0 = DWT->CYCCNT;
@@ -2137,9 +2367,16 @@ int main(void)
                 if (!s_menu_open) {
                     uint32_t d = (DWT->CYCCNT - t0) / (SystemCoreClock / 1000000U);
                     s_tactil_us = (uint16_t)((d > 65535U) ? 65535U : d);
+                    tramo_us[TRAMO_TAC] = d;
                 }
             }
-            tune_encoder_poll();
+            {   /* El mando, que tampoco media nadie: un cambio de banda
+                 * mueve filtros, reprograma el sintetizador y deja los
+                 * ajustes sucios, y todo eso pasa aqui dentro. */
+                uint32_t t0 = DWT->CYCCNT;
+                tune_encoder_poll();
+                tramo_us[TRAMO_MAN] = (DWT->CYCCNT - t0) / (SystemCoreClock / 1000000U);
+            }
         }
         { uint32_t t_polls0 = DWT->CYCCNT;
         hora_poll();   /* pantalla de sincronizar la hora, si esta abierta */
@@ -2221,6 +2458,7 @@ int main(void)
         if (!s_menu_open) {
             uint32_t d = (DWT->CYCCNT - t_polls0) / (SystemCoreClock / 1000000U);
             s_polls_us = (d > 999999UL) ? 999999UL : d;
+            tramo_us[TRAMO_DEC] = s_polls_us;
         }
         }
 
@@ -2279,7 +2517,14 @@ int main(void)
          * Lo vigila tools/tactil_check.py: si alguien vuelve a dejar una
          * sola mirada por vuelta, la compilacion se para.
          */
-        if (!s_screen_asleep && !touch_calib_active()) { demo_touch_poll(); }
+        if (!s_screen_asleep && !touch_calib_active()) {
+            uint32_t t0 = DWT->CYCCNT;
+            demo_touch_poll();
+            /* Se SUMA al tramo del tactil, que son las dos miradas de la
+             * misma vuelta. s_tactil_us sigue contando solo la primera: ese
+             * numero quiere decir "lo que cuesta mirar una vez". */
+            tramo_us[TRAMO_TAC] += (DWT->CYCCNT - t0) / (SystemCoreClock / 1000000U);
+        }
         /*
          * EL AJUSTE AUTOMATICO DEL RTTY - 06/10/2026.
          *
@@ -2304,6 +2549,25 @@ int main(void)
          * primero que hace es salirse si esta apagada o si el RTTY no esta
          * puesto. Una llamada y un return por vuelta.
          */
+        /*
+         * EL SEGUNDO BLOQUE DE POLL, QUE NO MEDIA NADIE - 19/10/2026.
+         *
+         * s_polls_us se cierra mucho mas arriba, justo despues de los
+         * decodificadores. Todo lo de aqui abajo -captura, volcado de 4 kB
+         * por vuelta, fax, SSTV, Hell, RDS, la marquesina y el autoguardado
+         * de CONFIG.CSV- quedaba fuera de TODOS los cronometros.
+         *
+         * Y se noto: con la radio escuchando en 80 m, la vuelta tardaba 47
+         * ms, el dibujo 9, el tactil 1 y los poll 0. Treinta y siete
+         * milisegundos sin dueno, y la fila que tenia que senalarlos decia
+         * "poll 0" porque miraba el bloque equivocado.
+         *
+         * Es exactamente lo que avisa el comentario de s_polls_us doce
+         * pantallas mas arriba: "un instrumento que no cubre lo que vino
+         * despues es peor que no tenerlo, porque se le hace caso". Volvio a
+         * pasar con el mismo instrumento.
+         */
+        { uint32_t t_polls2_0 = DWT->CYCCNT;
         rtty_auto_poll();
         capt_poll();   /* la captura de pantalla, un bloque por vuelta - ver capt_pide() */
         capt_aviso_tick();  /* y el aviso de por que no se pudo, si lo hay */
@@ -2340,6 +2604,13 @@ int main(void)
 #if TOUCH_EDGE_DEBUG
         touch_debug_stream_poll(); /* see TOUCH_EDGE_DEBUG's comment */
 #endif
+        if (!s_menu_open) {
+            uint32_t d = (DWT->CYCCNT - t_polls2_0) / (SystemCoreClock / 1000000U);
+            s_polls2_us = (d > 999999UL) ? 999999UL : d;
+            if (s_polls2_us > s_polls2_max_us) { s_polls2_max_us = s_polls2_us; }
+            tramo_us[TRAMO_POL] = s_polls2_us;
+        }
+        }
 #endif
 
         g_fill_count++;
@@ -2414,10 +2685,38 @@ int main(void)
                 }
             }
         }
-        if (!s_menu_open) {
+        if (!s_menu_open && !menu_al_entrar) {
             uint32_t d = (DWT->CYCCNT - t_vuelta0) / (SystemCoreClock / 1000000U);
             s_bucle_us = (d > 999999UL) ? 999999UL : d;
-            if (s_bucle_us > s_bucle_max_us) { s_bucle_max_us = s_bucle_us; }
+            if (s_bucle_us > s_bucle_max_us) {
+                /* Y con el record se guarda DE QUIEN es: el tramo mas gordo
+                 * de esta misma vuelta. Ver k_tramo_nombre. */
+                uint8_t k, peor = 0U;
+                uint32_t suma = 0U;
+
+                /* Lo que no ha caido en ningun tramo. Ver TRAMO_RES. */
+                for (k = 0U; k < (uint8_t)TRAMO_RES; k++) { suma += tramo_us[k]; }
+                tramo_us[TRAMO_RES] = (s_bucle_us > suma) ? (s_bucle_us - suma) : 0U;
+                for (k = 1U; k < (uint8_t)TRAMO_N; k++) {
+                    if (tramo_us[k] > tramo_us[peor]) { peor = k; }
+                }
+                s_peor_tramo = peor;
+                s_peor_tramo_us = tramo_us[peor];
+                s_bucle_max_us = s_bucle_us;
+            }
+            /* SOLO las vueltas que han dibujado. La mayoria no dibuja -el
+             * limitador de fotograma las devuelve enseguida- y promediarlas
+             * todas daba menos de un milisegundo, o sea un cero que no dice
+             * nada mientras las que dibujan tardaban 24 ms. Tercera vez que
+             * este instrumento mide la poblacion equivocada. */
+            if (hubo_dibujo) {
+            s_bucle_suma += s_bucle_us;
+            s_bucle_n++;
+            }
+            if (s_bucle_n >= (uint16_t)BUCLE_MEDIA_N) {
+                s_bucle_media_us = s_bucle_suma / (uint32_t)s_bucle_n;
+                s_bucle_suma = 0U; s_bucle_n = 0U;
+            }
             if (s_polls_us > s_polls_max_us) { s_polls_max_us = s_polls_us; }
         }
     }
@@ -3007,8 +3306,6 @@ typedef struct {
      * Y EL DIECISIETE VA DESPUES DE `fam`, CONTRA LA COSTUMBRE DE AQUI
      * ARRIBA, Y A PROPOSITO - 11/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Los dos campos anteriores se metieron "al final, delante de fam"
      * porque la tabla lleva los interruptores POR POSICION y colarlos en
      * medio obliga a recolocar catorce ceros en cada uno de los veintidos
@@ -3042,8 +3339,6 @@ typedef struct {
 /*
  * Y UNA TERCERA FAMILIA, IMAGENES - 06/10/2026.
  *
- * Pedido por el usuario.
- *
  * EL MOTIVO INMEDIATO es que no cabia un modo mas. La rejilla de modos es
  * densa, 4x4, o sea UIC_CELLS = 16, y cfg_fill() recorre la tabla con
  * `n < UIC_CELLS` y para ahi: el diecisiete no se dibuja, no avisa nadie y el
@@ -3067,8 +3362,6 @@ typedef struct {
 #define MODO_FAM_IMG 2U
 /*
  * Y AERONAUTICA - 06/10/2026, el mismo dia y por el mismo criterio.
- *
- * Pedido por el usuario.
  *
  * Hoy entra UNA: el HFDL. Y una categoria de una celda se ve rara, asi que
  * conviene decir por que se hace igualmente.
@@ -3124,8 +3417,6 @@ static const demod_mode_entry_t k_demod_modes[] = {
     { "SAM", T("AM síncrona", "Synchronous AM"),         DEMOD_MODE_SAM, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA }, /* synchronous AM, 21/08/2026 - see sam.h */
     /*
      * LAS DOS MITADES DE SAM - 11/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Tres entradas, UN SOLO DEMODULADOR. No son modos nuevos: las tres
      * llevan DEMOD_MODE_SAM y lo que cambia es el ultimo campo. Ese reparto
@@ -3371,8 +3662,6 @@ static const demod_mode_entry_t k_demod_modes[] = {
     /*
      * PSK31, etapa 37. Conversacion escrita en 31 hercios.
      *
-     * Pedido por el usuario.
-     *
      * Es el modo de charla de la onda corta: dos personas escribiendose,
      * en directo, con la potencia de una bombilla. No lleva correccion de
      * errores ni indicativos empaquetados - es texto y ya esta, letra a
@@ -3431,8 +3720,6 @@ static const demod_mode_entry_t k_demod_modes[] = {
 /*
  * STANAG - etapa 40, 02/10/2026.
  *
- * Pedido por el usuario.
- *
  * Tiene razon y son dos cosas distintas, aunque hoy compartan toda la
  * maquinaria:
  *
@@ -3454,8 +3741,6 @@ static const demod_mode_entry_t k_demod_modes[] = {
     { "STANAG", T("Módem naval OTAN", "NATO naval modem"), DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, MODO_FAM_DIG },
 /*
  * IDENT - 05/10/2026.
- *
- * Pedido por el usuario.
  *
  * Este es ese boton, y es el reves del de arriba: STANAG se pone cuando YA
  * SABES lo que oyes, IDENT cuando no.
@@ -3537,7 +3822,6 @@ static const demod_mode_entry_t k_demod_modes[] = {
  * 10kHz step (BAND_STEP_10K) - the actual 40-channel CB spacing.
  */
 /*
- * Pedido por el usuario, 22/09/2026.
  *
  * Lo que habia eran doce entradas sueltas con una sigla cada una. Ahora:
  *
@@ -3776,8 +4060,6 @@ static uint8_t arm_rango_banda(uint16_t i, uint32_t *lo, uint32_t *hi,
  * 40 m entra en 7.150 de un rango que acaba en 7.200. Correcto para
  * fonia, y un fastidio si andabas en 7.040 con SSTV o en 14.074 con FT8:
  * tocar la banda te escupe al otro extremo y hay que volver girando.
- *
- * Pedido por el usuario.
  *
  * Asi que se recuerda. Al salir de una banda se apunta donde estabas -con
  * su modo y su paso, que tambien son parte de "donde lo deje"- y al volver
@@ -4083,8 +4365,6 @@ static uint8_t s_scale_adjust_max = 0U; /* 0 = knob moves db_min, 1 = moves db_m
 /*
  * TUS NUMEROS, APARTE DE LOS QUE PINTA LA AUTOESCALA - 10/10/2026.
  *
- * Pedido por el usuario.
- *
  * Eso es exactamente lo que hace, y es util: subir el suelo por encima
  * del ruido lo borra de la cascada, porque por debajo de db_min se pinta
  * el indice 0 del mapa de color, que es el color del panel. Un recorte
@@ -4207,8 +4487,6 @@ static uint8_t s_bd_espectro = 0U;
  * LA CACHE DE CARTELES - 15/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * De ahi salen las dos decisiones de aqui:
  *
  *   - EL CARTEL GUARDA SU FRECUENCIA, NO SU PIXEL. La x se recalcula en
@@ -4241,6 +4519,9 @@ static uint8_t s_bd_espectro = 0U;
  * en cuanto se suelta el mando se ponen al dia en el cuadro siguiente.
  */
 static spec_rotulos_t s_bd_rot;
+/* Ver bd_rotulos_textos(): los nombres de los carteles, leidos una vez y no
+ * en cada fotograma. */
+static uint8_t s_bd_txt_vale;
 static uint32_t       s_bd_visto_c = 0UL, s_bd_visto_s = 0UL;
 static uint16_t       s_bd_visto_min = 0xFFFFU;
 /* La sintonia entra en la llave del cache porque entra en la eleccion:
@@ -4543,8 +4824,6 @@ static void sam_calib_display_draw(void)
         /*
          * UN NUMERO INVENTADO ES PEOR QUE NINGUNO - 05/10/2026.
          *
-         * Pedido por el usuario.
-         *
          * 269 PPM a 7 MHz son dos kilohercios. Eso no es un cristal
          * desviado -seria un cristal de 26 MHz con siete kilohercios de
          * error-: es el lazo dando vueltas sin cogerse a nada, porque no
@@ -4575,8 +4854,6 @@ static void sam_calib_display_draw(void)
     top_sync();
     /*
      * SOLO SU HUECO, NO LA CABECERA ENTERA - 04/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Aqui ponia ui_top_draw(), que son la cabecera entera (800x64) MAS la
      * franja de estado entera (800x40): 83.200 pixeles compuestos y
@@ -4870,8 +5147,63 @@ static void time_display_draw(void)
         for (i = 0U; i < sizeof(s_time_buf); i++) { s_time_buf[i] = buf[i]; }
     }
     s_time_text = s_time_buf;
-    top_sync();
-    ui_top_draw(&s_top);
+    /*
+     * EL RELOJ SE LLEVA 109 ms DE UNA VUELTA DE 168 - 20/10/2026.
+     *
+     * Eso dijo la radio con el tramo ya partido. Y aqui dentro hay tres
+     * cosas que se arreglan de maneras completamente distintas, asi que
+     * se cronometran por separado:
+     *
+     *   syn  rellenar la ficha de la cabecera (top_sync): frecuencia,
+     *        modo, banda, bateria... Si es esto, hay una lectura cara
+     *        escondida en una funcion que parece de nada.
+     *   cab  COMPONER los 91.003 pixeles de la cabecera, el nombre y la
+     *        franja de estado. Si es esto, hay que repintar menos o
+     *        repintar menos veces.
+     *   bus  EMPUJAR esos pixeles al panel. Sale de g_lcd_ciclos, que es
+     *        el mismo contador que la fila "Fotograma" usa para separar
+     *        las dos mitades del espectro. Si es esto, es el bus o un
+     *        DMA, y no tiene nada que ver con el dibujo.
+     *
+     * Medido en el simulador contra este mismo ui_top.c: 91.003 accesos
+     * al bus, que a los 45 ns que dice la propia radio son 4,1 ms. O sea
+     * que `bus` TIENE que salir pequeño; si sale grande, lo que miente es
+     * el numero de nanosegundos.
+     */
+    {
+        uint32_t t0 = DWT->CYCCNT;
+        uint32_t b0, t1, bus;
+
+        top_sync();
+        t1 = DWT->CYCCNT;
+        b0 = g_lcd_ciclos;
+        /*
+         * SOLO SU ESQUINA, NO LA CABECERA ENTERA - 20/10/2026.
+         *
+         * Aqui ponia ui_top_draw(): la cabecera entera (800x64) MAS la
+         * marquesina MAS la franja de estado (800x40), 91.003 accesos al
+         * bus medidos en el simulador. Para cambiar cinco caracteres.
+         *
+         * Medido en la radio con los tramos partidos: 109 ms de una vuelta
+         * de 168, una vez por minuto. Es la cuarta vez que aparece el mismo
+         * fallo en este fichero -el S-metro el 30/09, el PPM del SAM el
+         * 04/10 y la frecuencia el 05/10- y se arregla igual: el mismo
+         * dibujo con la ventana recortada a donde vive lo que cambia. Ver
+         * ui_top_draw_hora() y UI_TOP_HORA_RX.
+         *
+         * La ventana coge el reloj Y la bateria porque estan pegados en la
+         * misma esquina, asi que battery_display_draw() usa esta misma.
+         */
+        ui_top_draw_hora(&s_top);
+        bus = g_lcd_ciclos - b0;
+
+        s_fra_syn = (t1 - t0) / (SystemCoreClock / 1000000U);
+        s_fra_bus = bus / (SystemCoreClock / 1000000U);
+        {
+            uint32_t d = (DWT->CYCCNT - t1) / (SystemCoreClock / 1000000U);
+            s_fra_cab = (d > s_fra_bus) ? (d - s_fra_bus) : 0U;
+        }
+    }
 }
 
 /*
@@ -4910,8 +5242,11 @@ static void time_display_draw(void)
  * cambio se revierte tocando una funcion, sin perseguir call sites. */
 static void battery_display_draw(void)
 {
+    /* La misma esquina que el reloj, y por la misma razon: repintar la
+     * cabecera entera para mover un porcentaje que cambia cada minuto son
+     * 91.003 accesos al bus. Ver ui_top_draw_hora(). */
     top_sync();
-    ui_top_draw(&s_top);
+    ui_top_draw_hora(&s_top);
 }
 
 /*
@@ -5594,8 +5929,6 @@ static void top_sync(void)
     /*
      * LOS VOLTIOS YA NO SE ESCRIBEN AQUI - 13/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Aqui se armaba "4,23 V" en un buffer propio para la esquina de la
      * cabecera. Ya no hay donde ponerlo -ui_top.c escribe el tanto por
      * ciento dentro del dibujo- asi que el buffer y la cuenta se van con
@@ -5654,8 +5987,6 @@ static void top_sync(void)
     }
     /*
      * Y SI ESO ES UNA BANDA DE VERDAD, APARTE. 11/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Tiene que guardarse AQUI, antes de la linea de abajo: esa rellena el
      * rotulo con "Bandas" para que el boton siga estando, asi que a partir
@@ -5793,6 +6124,36 @@ static void top_sync(void)
      * parentesis, que es donde hay sitio para decirlo. */
     s_top.att = k_att_siglas[s_att_suelo < 3U ? s_att_suelo : 0U];
     s_top.nco_on = s_nco_on;
+    /*
+     * Y A QUE DISTANCIA HA QUEDADO LA SINTONIA DEL OSCILADOR - 20/10/2026.
+     *
+     * Y la culpa era del sitio donde lo puse. El numero estaba en
+     * Informacion > Cuadratura I/Q, y la pregunta que contesta -"cuando el
+     * panorama se queda sordo, ¿pasa a una frecuencia fija o a una
+     * distancia fija del oscilador?"- hay que mirarla EN LA CASCADA. O sea
+     * que le estaba pidiendo que fuera y volviera entre dos pantallas
+     * anotando numeros a mano.
+     *
+     * Aqui se ve de un vistazo mientras mueve el dial. El chip del NCO ya
+     * estaba, y ya admitia valor como el de ATT: lo unico que faltaba era
+     * ponerselo.
+     *
+     * En kilohercios enteros a proposito: el paseo va de 6 a 40 kHz y lo
+     * que se mira es si son seis o cuarenta, no si son 12,3 o 12,4.
+     */
+    s_top.nco_off = 0;
+    if (s_nco_on && s_lo_hz != 0UL) {
+        uint32_t d = (s_tune_hz > s_lo_hz) ? (s_tune_hz - s_lo_hz)
+                                           : (s_lo_hz - s_tune_hz);
+        uint8_t  k = 0U;
+
+        s_top_nco_off[k++] = (char)((s_tune_hz >= s_lo_hz) ? '+' : '-');
+        aj_u2s(&s_top_nco_off[k], (d + 500UL) / 1000UL);
+        while (s_top_nco_off[k] != '\0') { k++; }
+        s_top_nco_off[k++] = 'k';
+        s_top_nco_off[k] = '\0';
+        s_top.nco_off = s_top_nco_off;
+    }
     s_top.jmp_on = s_jmp_on;
     /* La marquesina solo existe en FM ancha con el RDS puesto. Fuera de ahi
      * el puntero va a cero y la cabecera no pinta nada en ese hueco - que es
@@ -5915,9 +6276,8 @@ static const tema_t k_temas[] = {
       T("Verde fósforo sobre negro, como un terminal", "Phosphor green on black, like a terminal"),
       &k_pal_fosforo,   SPECTRUM_PALETTE_PHOSPHOR },
     /*
-     * 05/10/2026, de un issue: un panel que aplasta la zona oscura y deja
-     * los otros siete temas ilegibles. La paleta la escribio el que abrio
-     * el issue y va tal cual; el porque entero esta en palette.h.
+     * 05/10/2026: un panel que aplasta la zona oscura y deja
+     * los otros siete temas ilegibles. La paleta viene de fuera y va tal cual; el porque entero esta en palette.h.
      *
      * VA AL FINAL, y eso no se negocia: el tema se guarda en CONFIG.CSV por
      * INDICE, asi que colocarlo en cualquier hueco de en medio le cambiaria
@@ -5936,7 +6296,7 @@ static const tema_t k_temas[] = {
         "Paper white, black ink, for weak displays"),
       &k_pal_chemistry, SPECTRUM_PALETTE_SMOKE },
     /*
-     * LOS DIEZ CLAROS - 17/10/2026, del issue que pedia fondo claro
+     * LOS DIEZ CLAROS - 17/10/2026, de la peticion de fondo claro
      * para el espectro. Ver la cabecera del bloque en palette.h: los
      * colores estan calculados contra su propio fondo y medidos, y
      * son los primeros que estrenan espectro_claro = 1.
@@ -6148,8 +6508,6 @@ static void act_draw(void)
  * UNA SOLA CASILLA DE LA BARRA, LA QUE HA CAMBIADO - 11/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * De una revision a fondo salieron NUEVE fallos con la misma forma, y el
  * NR del 11/10 era solo el primero:
  *
@@ -6240,8 +6598,6 @@ static uint8_t s_rtty_baud_idx = 1U;
 
 /*
  * LOS DOS BOTONES DEL PANEL DE RTTY - 05/10/2026.
- *
- * Pedido por el usuario.
  *
  * Y tiene toda la razon, porque es justo lo que acababa de hacer a mano:
  * ver dos tonos en la pantalla, medirles el salto, irse a Ajustes ->
@@ -6925,8 +7281,6 @@ static void chrome_sync(spec_chrome_t *c)
 /*
  * QUIEN PUEDE PINTAR EN LA ZONA DEL ESPECTRO - 22/09/2026.
  *
- * Pedido por el usuario.
- *
  * Y era exactamente eso. La regla de frecuencias se repinta cada vez que
  * cambia la sintonia -girar el mando, tocar el espectro para sintonizar-, y
  * esas dos llamadas no miraban QUE hay dibujado ahi ahora mismo. En CW o en
@@ -7023,8 +7377,6 @@ static void bd_rotulos_refresca(uint32_t center_hz, uint32_t span_hz)
      * AQUI HABIA UN FRENO DE 120 ms, Y ERA EL QUE HACIA BAILAR A LOS
      * CARTELES MIENTRAS SE GIRA - 15/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * El freno estaba para no pedirle a la base una consulta por cuadro.
      * Pero lo que dejaba en pantalla mientras tanto era la lista de hasta
      * 120 ms ANTES, o sea la de otra ventana. Cada cartel sigue saliendo
@@ -7079,8 +7431,28 @@ static void bd_rotulos_refresca(uint32_t center_hz, uint32_t span_hz)
      * antena- con la traza quieta dejaria el cartel viejo en pantalla
      * hasta que se moviera una señal.
      */
+    /*
+     * SIEMPRE QUE SE LLEGUE AQUI, REPINTADO ENTERO - 19/10/2026.
+     *
+     * Antes solo se invalidaba si la LISTA habia cambiado, y por eso el
+     * espectro tenia que tratar la franja de los carteles como intocable:
+     * no se saltaba nunca y se montaba de ancho completo, "cueste el 16%
+     * del espectro en cada cuadro" (ver spectrum.h). Medido en antena con
+     * la lista llena, en onda larga: NUEVE milisegundos de los 38 que
+     * tardaba la traza.
+     *
+     * Pero a esta linea solo se llega cuando algo ha cambiado: la funcion
+     * vuelve pronto si el centro, el span, el minuto y la sintonia son los
+     * mismos. Y los carteles solo se mueven si cambia alguno de esos
+     * cuatro. O sea que invalidar aqui cubre tambien el caso que al
+     * forzado le faltaba -la lista igual pero las posiciones movidas, que
+     * es lo que pasa girando el dial- y encima cubre el otro: cuando no
+     * ha cambiado nada, los carteles no pueden haberse movido y esas
+     * bandas se pueden saltar como cualquier otra.
+     */
+    spectrum_invalida();
     if (n != antes_n || memcmp(antes_cl, s_bd_rot.clave, sizeof antes_cl) != 0) {
-        spectrum_invalida();
+        s_bd_txt_vale = 0U;   /* y los nombres hay que volver a leerlos */
     }
 
     s_bd_visto_c   = center_hz;
@@ -7111,9 +7483,37 @@ static spec_rot_txt_t *s_bd_txt;
 
 /* Resuelve los nombres de la lista y apaga los que acaben diciendo lo
  * mismo que un vecino. Dos lecturas cortas de flash por cartel. */
+/*
+ * LOS NOMBRES SE LEEN UNA VEZ, NO EN CADA FOTOGRAMA - 19/10/2026.
+ *
+ * emisoras_texto() hace DOS lecturas de la flash SPI por cartel -una para
+ * el desplazamiento y otra para la cadena- y esto se llamaba desde el
+ * camino de dibujo, o sea cuarenta y dos veces por segundo con hasta
+ * SPEC_ROT_MAX carteles.
+ *
+ * Medido en antena, en onda larga de noche y con la lista llena: la traza
+ * tardaba 41 ms de un tope de 22, con el bus de la pantalla en CERO. O sea
+ * que lo caro no era pintar: era ir a buscar los nombres.
+ *
+ * Los nombres cambian cuando cambia la lista -al cambiar de minuto o de
+ * frecuencia-, y eso ya se detecta unas lineas mas arriba para invalidar
+ * el repintado parcial. Se aprovecha lo mismo: alli se marca el cache como
+ * caducado y aqui se vuelve a leer. Entre medias, memcpy.
+ *
+ * El span entra en la llave porque spec_rotulos_limpia() recorta segun el
+ * ancho que se ve: el mismo nombre con otro span puede salir distinto.
+ */
+static spec_rot_txt_t s_bd_txt_cache;
+static uint32_t       s_bd_txt_span;
+
 static void bd_rotulos_textos(spec_rot_txt_t *t, uint32_t span_hz)
 {
     uint8_t i;
+
+    if (s_bd_txt_vale && (s_bd_txt_span == span_hz)) {
+        memcpy(t, s_bd_txt_cache, sizeof *t);
+        return;
+    }
 
     memset(t, 0, sizeof *t);
     for (i = 0U; i < s_bd_rot.n && i < SPEC_ROT_MAX; i++) {
@@ -7126,6 +7526,10 @@ static void bd_rotulos_textos(spec_rot_txt_t *t, uint32_t span_hz)
         spec_rotulos_recorta((*t)[i], largo);
     }
     spec_rotulos_limpia(&s_bd_rot, *t, span_hz);
+
+    memcpy(s_bd_txt_cache, *t, sizeof s_bd_txt_cache);
+    s_bd_txt_span = span_hz;
+    s_bd_txt_vale = 1U;
 }
 
 static void bd_rotulos_banda(gfx2_surf_t *sf)
@@ -7134,8 +7538,6 @@ static void bd_rotulos_banda(gfx2_surf_t *sf)
     if (s_bd_txt == 0) { return; }
     /*
      * PEGADO AL TECHO DE LA TRAZA - 15/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Empezaba dos pixeles por debajo. Esos dos pixeles eran justo los
      * que dejaban asomar restos de la franja de botones de arriba -la
@@ -7151,8 +7553,6 @@ static void bd_rotulos_banda(gfx2_surf_t *sf)
      */
     /*
      * EL COLOR SALE DEL PANEL, NO DEL CROMO - 15/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * PAL_INK es la tinta del cromo, y en los tres temas claros -Oliva,
      * Naranja y Chemistry- es NEGRA, porque va sobre barras claras. Estos
@@ -8136,18 +8536,6 @@ static void apply_demod_mode(demod_mode_t mode)
         /*
          * Y EL CHEQUEO DE BLOQUE CORRUPTO, QUE EN WFM SOBRA - 05/10/2026.
          *
-         * De un issue: siseo en WFM mientras se repinta el espectro. Ese
-         * chequeo mira si hay saltos de mas de 16000 entre muestras
-         * consecutivas, y en WFM -I/Q sin mezclar, a 192 kHz, desviacion de
-         * hasta 75 kHz- eso es lo NORMAL: basta una amplitud del 26% del
-         * fondo de escala para que lo cruce cada muestra. Daba por corruptos
-         * bloques buenos, y cada descarte repite 2,67 ms de audio ya sonado.
-         * La cuenta entera esta en sdr_rx.c.
-         *
-         * *** Y EN AM/SSB TAMPOCO VALE - 10/10/2026. LO MISMO, MEDIDO. ***
-         *
-         * Aquel arreglo lo dejo encendido para los demas modos con esta
-         * justificacion: "para AM/SSB se queda encendido: alli la senal SI
          * va mezclada a banda base y es estrecha comparada con la frecuencia
          * de muestreo". Y eso es falso SOBRE ESTE PUNTO DEL CAMINO: la
          * mezcla la hace nco_mezcla() DENTRO de demod_am_process_raw(), o
@@ -8727,8 +9115,6 @@ static void menu_tile_cal_callback(void *widget, ui_event_t event, void *user_da
  * LO QUE PONE LA FILA "CALIBRAR PPM" DESPUES DE PULSARLA, Y POR QUE ESTO
  * ESTABA ROTO - 05/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y estaba. No por la cuenta, que es correcta, sino porque NO DECIA NADA.
  * Este buffer se escribia en tres sitios -"SAM?", "LOCK?" y la correccion
  * aplicada- y no lo LEIA NADIE: era la etiqueta de una baldosa de la rejilla
@@ -8921,8 +9307,6 @@ static void menu_tile_exit_callback(void *widget, ui_event_t event, void *user_d
 /* ===========================================================================
  * AJUSTES, MODO Y PASOS: todo sobre la misma rejilla
  * ===========================================================================
- *
- * Pedido por el usuario, 22/09/2026.
  *
  * QUE HABIA
  * ---------
@@ -9154,8 +9538,6 @@ static void nco_conmutar(void)
 /*
  * EL INTERRUPTOR DEL SALTO DE EMISORA - 15/10/2026.
  *
- * Pedido por el usuario.
- *
  * NO SE ENCIENDE SI NO HAY BASE. Un modo que cambia lo que hace el mando y
  * que no puede hacer nada es peor que no tenerlo: se enciende el chip, el
  * mando deja de sintonizar y la radio parece rota. Sin EMISORAS.BIN, tocar
@@ -9174,6 +9556,53 @@ static void analiz_siguiente(void)
     s_analiz = (uint8_t)((s_analiz + 1U) % (ANALIZ_N + 1U));
     analiz_aplicar();
 }
+
+/*
+ * EL CENTRADO: LINEA ENTERA, NO UN RETOQUE - 20/10/2026.
+ *
+ * Nacio con un recorrido de +-49 puntos, porque la primera carta del
+ * usuario salia corrida 21 y me parecio que eso era "el" desajuste.
+ *
+ * La segunda carta salio corrida DOSCIENTOS SESENTA Y NUEVE. Medido sobre
+ * la columna del margen vertical, que en la primera estaba en x=734 y en
+ * la segunda en x=465.
+ *
+ * O sea que el desfase no es una propiedad de la emisora: depende de donde
+ * se enganche. El boton "Sincroniza" de al lado dice "la linea empieza
+ * aqui" en el instante en que lo tocas, y un dedo no acierta el instante.
+ * Con +-49 ese caso no tiene arreglo.
+ *
+ * Asi que el recorrido es la LINEA ENTERA y el paso 21 puntos -un 2,8%-,
+ * o sea 36 posiciones justas. Y el boton se parte en dos: la mitad
+ * izquierda corre hacia la izquierda y la derecha hacia la derecha, asi
+ * que el peor caso son 18 toques y lo normal son dos o tres.
+ *
+ * 21 y no 7: con 7 harian falta 54 toques para cruzar media linea, y el
+ * ojo no distingue 7 puntos de 14 en un margen. Si algun dia hace falta
+ * afinar mas, el sitio es este y no el enganche - ver wefax_set_centro().
+ */
+#define WFX_CENTRO_PASO  21
+#define WFX_CENTRO_N     (WEFAX_ANCHO / WFX_CENTRO_PASO)   /* 36 justas */
+_Static_assert((WEFAX_ANCHO % WFX_CENTRO_PASO) == 0U,
+               "el paso del centrado tiene que dividir a WEFAX_ANCHO, o la "
+               "vuelta entera no cae en cero");
+
+/*
+ * Mueve el centrado un paso en el sentido que se le diga, dando la vuelta
+ * por el otro lado. Se guarda centrado en cero -de -378 a +357- y no de 0
+ * a 755 para que el rotulo diga "-21" y no "+735", que es lo mismo pero no
+ * se lee igual.
+ */
+static void wfx_centro_mueve(int8_t dir)
+{
+    int16_t v = (int16_t)(wefax_centro() + (int16_t)(dir * WFX_CENTRO_PASO));
+
+    while (v >=  (int16_t)(WEFAX_ANCHO / 2U)) { v = (int16_t)(v - (int16_t)WEFAX_ANCHO); }
+    while (v <  -(int16_t)(WEFAX_ANCHO / 2U)) { v = (int16_t)(v + (int16_t)WEFAX_ANCHO); }
+    wefax_set_centro(v);
+}
+
+
 
 /* --- identificadores de ajuste --------------------------------------- */
 enum {
@@ -9261,7 +9690,6 @@ static const ajuste_t k_ajustes[] = {
     { T("Tema", "Theme"), AJ_PAG_PANTALLA, AJ_TEMA },
     { T("Volumen", "Volume"), AJ_PAG_PANTALLA, AJ_VOL },
     /*
-     * Pedido por el usuario.
      *
      * Estaba en Equipo desde que se movio para dejarle sitio a Tema, y ese
      * es justo el tipo de mudanza que deja las cosas donde no se buscan: el
@@ -9634,8 +10062,6 @@ static const char *ajuste_valor(uint8_t id, char *buf)
      * CALIBRAR PPM SI DICE SU VALOR, y es la mitad del arreglo del boton.
      * 05/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Es una accion, como calibrar el tactil, y por eso caia en el
      * `default: return 0` de mas abajo y la fila salia muda. Pero no es
      * como esa: esta ACCION DEPENDE DE UNA LECTURA, asi que la fila tiene
@@ -9943,8 +10369,6 @@ static void hora_sintoniza(void)
  * ======================================================================
  * LA PANTALLA DEL HUSO (GRID_HUSO) - 10/10/2026
  * ======================================================================
- *
- * Pedido por el usuario.
  *
  * Es una rejilla paginada y no una pantalla nueva A PROPOSITO: ui_grid.c ya
  * hace exactamente esto -celdas con tres renglones, paginacion, cursor del
@@ -10908,7 +11332,6 @@ static uint8_t ajuste_estados(uint8_t id)
 /*
  * EN QUE FORMATO SE GUARDAN LAS FOTOS DE SSTV
  * -------------------------------------------
- * Pedido por el usuario, 24/09/2026.
  *
  * sstv_linea() entrega tres bytes por punto, asi que un BMP de 24 bits es
  * copia directa: sin conversion, sin paleta, sin mascaras de bits, y lo
@@ -10949,7 +11372,6 @@ static uint8_t s_sstv_guarda;
 /*
  * EL MODO CON EL QUE ARRANCA "EMPEZAR"
  * ------------------------------------
- * Pedido por el usuario, 24/09/2026.
  *
  * Hasta hoy "Empezar" llamaba a sstv_fuerza(0U) con un comentario que
  * decia "Martin 1, el mas usado". Y es verdad que es el mas usado, pero la
@@ -10979,7 +11401,103 @@ static uint8_t s_sstv_modo_idx;
  * que no es solo disco: cuanto mas grande, mas facil es que no haya un
  * hueco entero donde meterlo.
  */
-#define WFX_ALTO_MAX  600U
+/*
+ * CUANTO MIDE UN FICHERO DE CARTA - 128 RENGLONES, 100 kB. 20/10/2026.
+ *
+ * Una carta se reserva DE UNA PIEZA -se escribe por direccion de chip- asi
+ * que lo que manda no es el hueco libre sino el hueco SEGUIDO mas grande. Y
+ * ese se parte en cuanto hay unos cuantos ficheros repartidos por el disco.
+ * Con 600 renglones hacen falta 448 kB seguidos, que es pedir muchisimo en
+ * un disco con uso.
+ *
+ * Con 128 son 100 kB. Eso entra en casi cualquier hueco, incluido el de 216
+ * que tenia el usuario cuando salio el cartel.
+ *
+ * El precio son mas ficheros: a 120 lpm, 128 renglones son 64 segundos, o
+ * sea una carta de diez minutos sale en diez ficheros seguidos
+ * -WFAX001..WFAX010- en vez de en dos. Molesta, y es infinitamente mejor
+ * que no grabar nada. Y no hay hueco entre uno y otro: cuando un fichero se
+ * llena, el siguiente se abre en la misma vuelta.
+ *
+ * Y ESO YA ESTA HECHO - 20/10/2026. Aqui ponia que el arreglo de verdad
+ * era pasar gsv_* a un fichero que crece. Se hizo, y la primera version
+ * -un trozo de 4 kB por llamada- paraba el bucle 303 ms cada dos segundos
+ * y medio, y con ella los botones dejaban de responder. La de ahora pide TRAMOS de
+ * 64 kB -spi_flash_amplia()- y dentro escribe a direcciones conocidas.
+ * Ver el comentario de s_gsv_ext_addr.
+ *
+ * Con eso, una carta cabe entera en un fichero y este troceado por altura
+ * solo salta a los 1024 renglones, o sea a los ocho minutos y medio.
+ */
+/*
+ * MIL QUINIENTOS TREINTA Y SEIS, Y ESTE SI SALE DE UNA CARTA MEDIDA.
+ * ---------------------------------------------------------------------
+ * 20/10/2026, tercer intento con este numero. Los dos primeros los elegi
+ * a ojo y los dos se quedaron cortos:
+ *
+ *     1024 -  8 min 32 s   (lo que habia)
+ *     1280 - 10 min 40 s   (lo puse porque "una carta dura unos diez")
+ *
+ * Y entonces aparecio la carta entera, en dos ficheros. Medida:
+ * 1024 + 328 = **1352 renglones**, 11 min 16 s. O sea que el segundo
+ * numero tambien se quedaba corto, por setenta y dos renglones.
+ *
+ * Asi que este sale de un dato y no de una impresion: 1536 son 12 min 48 s,
+ * un 14% por encima de la carta mas larga medida. 1.165.312 bytes, 285
+ * bloques, 288 contando los tramos redondeados hacia arriba.
+ *
+ * Y por eso sube tambien AMPLIA_TOPE_BLOQUES, de 256 a 320: con 256 esto
+ * no cabria y el _Static_assert de abajo pararia la compilacion, que es
+ * justo para lo que esta.
+ *
+ * Lo que cuesta: una flash de 8 MB pasa de ocho cartas enteras a seis. Si
+ * algun dia aparece una carta mas larga que esto, el numero se sube otra
+ * vez - pero despues de medirla, no antes.
+ *
+ * (El comentario de antes decia esto mismo con 1280. Se queda la historia
+ * entera a proposito: tres numeros elegidos a ojo seguidos es un patron,
+ * y el patron es mas util que el numero.)
+ * ---------------------------------------------------------------------
+ * MIL DOSCIENTOS OCHENTA, Y NO MIL VEINTICUATRO - 20/10/2026.
+ *
+ * Caber cabe, y de sobra. Pero al hacer la cuenta para contestarle salio
+ * que el numero estaba mal elegido:
+ *
+ *     1024 renglones = 8 min 32 s a 120 lpm
+ *
+ * y una carta del DWD dura del orden de diez minutos. O sea que el troceo
+ * por altura iba a partir en dos justo lo que lleva todo el dia pidiendo
+ * que salga de una pieza: UNA carta, UN fichero. El limite no estaba
+ * puesto por el tamaño de una carta - estaba puesto a ojo.
+ *
+ *     1280 renglones = 10 min 40 s, 949 kB
+ *
+ * Lo que cuesta: de diez cartas enteras en una flash de 8 MB se pasa a
+ * ocho. Barato al lado de partir una carta buena por la mitad.
+ *
+ * El tope de verdad lo pone AMPLIA_TOPE_BLOQUES: 240 bloques de los 256
+ * que admite spi_flash_amplia(), contando los tramos redondeados hacia
+ * arriba. Lo comprueba el _Static_assert de abajo, que es quien manda: si
+ * alguien sube esto sin mirar, no compila.
+ */
+#define WFX_ALTO_MAX  1536U
+
+/*
+ * Y QUE QUEPA EN EL TOPE DEL FICHERO QUE CRECE.
+ *
+ * spi_flash_amplia() no pasa de AMPLIA_TOPE_BLOQUES bloques de 4 kB -256,
+ * o sea 1 MB- y devuelve "ya tiene el maximo". Si alguien sube la altura
+ * por encima de eso, la carta se cortaria a mitad con un aviso en vez de
+ * no compilar. Mejor que no compile.
+ *
+ * Se cuenta con el tramo redondeado hacia arriba, que es lo que de verdad
+ * se pide: un fichero de 190 bloques ocupa doce tramos de dieciseis, o sea
+ * 192. Contar los 190 pelados dejaria pasar una altura que luego no cabe.
+ */
+_Static_assert(((((756UL * (uint32_t)WFX_ALTO_MAX + 4096UL + 4095UL) / 4096UL)
+                 + 15UL) / 16UL) * 16UL <= 320UL,
+               "una carta de WFX_ALTO_MAX renglones no cabe en el tope de "
+               "spi_flash_amplia()");
 
 enum { WFX_GUARDA_NO = 0, WFX_GUARDA_SI, WFX_GUARDA_N };
 
@@ -11030,6 +11548,8 @@ static void extras_leer(settings_extra_t *e)
     e->v[SET_X_NOTCH]      = anotch_activo() ? (int32_t)(anotch_fuerza() + 1) : 0;
     e->v[SET_X_SSTV_GUARDA] = (int32_t)s_sstv_guarda;
     e->v[SET_X_WFX_GUARDA]  = (int32_t)s_wfx_guarda;
+    e->v[SET_X_IQ_INV]      = (int32_t)lo_gen_gd32_invertido();
+    e->v[SET_X_WFX_CENTRO]  = (int32_t)wefax_centro();
     e->v[SET_X_IDIOMA]      = (int32_t)idioma();
     e->v[SET_X_ENC_INV]     = (int32_t)encoder_invertido();
     /*
@@ -11111,7 +11631,6 @@ static void extras_aplicar(const settings_extra_t *e)
     /*
      * El INTERRUPTOR de la reduccion de ruido, no solo su intensidad.
      *
-     * Pedido por el usuario.
      * Se guardaba "nr_strength" desde siempre y el encendido no, asi que la
      * NR arrancaba apagada por mucho que la dejaras puesta. Se noto por un
      * camino torcido: dos videos suyos con el mismo CONFIG.CSV y el boton
@@ -11295,6 +11814,17 @@ static void extras_aplicar(const settings_extra_t *e)
         s_sstv_guarda = (uint8_t)ex_rec(e->v[SET_X_SSTV_GUARDA], 0,
                                         (int32_t)SSTV_GUARDA_N - 1);
     }
+    if (EX_HAY(SET_X_IQ_INV)) {
+        lo_gen_gd32_invierte((uint8_t)ex_rec(e->v[SET_X_IQ_INV], 0, 1));
+    }
+    if (EX_HAY(SET_X_WFX_CENTRO)) {
+        /* Se recorta al recorrido de la tabla: un CONFIG.CSV con un numero
+         * de fuera -escrito a mano, o de una version futura- no puede dejar
+         * la carta corrida media pantalla. */
+        wefax_set_centro((int16_t)ex_rec(e->v[SET_X_WFX_CENTRO],
+                                         -(int32_t)(WEFAX_ANCHO / 2U),
+                                          (int32_t)(WEFAX_ANCHO / 2U)));
+    }
     if (EX_HAY(SET_X_WFX_GUARDA)) {
         s_wfx_guarda = (uint8_t)ex_rec(e->v[SET_X_WFX_GUARDA], 0,
                                        (int32_t)WFX_GUARDA_N - 1);
@@ -11394,6 +11924,7 @@ static void ajuste_accion(uint8_t id)
         if (s_settings_ready_for_autosave) { settings_mark_dirty(); }
         settings_value_redraw();
         break;
+
     case AJ_DORMIR:    menu_tile_sleep_callback(0, UI_EVENT_RELEASE, 0); break;
     case AJ_CAL_TACTIL: menu_tile_cal_callback(0, UI_EVENT_RELEASE, 0); break;
     case AJ_CAL_PPM:    menu_tile_cal_ppm_callback(0, UI_EVENT_RELEASE, 0); break;
@@ -11479,7 +12010,6 @@ static void ajuste_accion(uint8_t id)
 /* ===========================================================================
  * PANTALLA DE AJUSTES (columna de categorias a la izquierda)
  * ===========================================================================
- * Pedido por el usuario, 22/09/2026.
  *
  * Sustituye a la rejilla paginada. Con paginas, ir de Radio a Equipo eran dos
  * pulsaciones de "Siguiente" y leer la cabecera para saber donde estabas; con
@@ -12142,7 +12672,6 @@ _Static_assert(sizeof(k_tune_step_labels_ui) / sizeof(k_tune_step_labels_ui[0]) 
 /* ===========================================================================
  * PANTALLA DE INFORMACION
  * ===========================================================================
- * Pedido por el usuario, 22/09/2026.
  *
  * Solo se lee, no se toca nada. Reutiliza la rejilla comun, igual que
  * modos y pasos: una pantalla de solo lectura no merece codigo propio.
@@ -12188,8 +12717,6 @@ static volatile uint16_t s_wf_lps;      /* lineas por segundo conseguidas */
 
 /*
  * EL ULTIMO VALOR QUE SIGNIFICABA ALGO - 01/10/2026.
- *
- * Pedido por el usuario.
  *
  * Esa observacion hay que poder MEDIRLA, y hasta hoy no se podia. La fila
  * "Cascada" enseña s_wf_lps, pero dentro del menu la cascada no se dibuja,
@@ -12388,8 +12915,6 @@ static uint8_t  s_vol_sin_zona;
 /*
  * Y CUANDO ACABA, SE BORRA DEL DISCO.
  *
- * Pedido por el usuario.
- *
  * Medio mega en un disco de pocos no es poca cosa, y una vez el fichero
  * esta en la zona alta ya no pinta nada ahi. Esta bandera dice que el
  * volcado que hay en marcha es el de los aviones y no el de volcar la
@@ -12454,8 +12979,6 @@ static uint8_t  s_vol_aviones;
 /*
  * CARGAR LA BASE DE MODELOS DE AVION EN LA ZONA ALTA. 25/09/2026.
  *
- * Pedido por el usuario.
- *
  * Traslada ICAO24.BIN del disco USB a 0x101000, que es donde vivia la
  * fuente china del firmware de fabrica y donde icao24_db.c va a buscarla
  * (ver I24_BASE). De una sola vez: despues se borra del disco y el megabyte
@@ -12485,8 +13008,6 @@ static uint8_t  s_vol_aviones;
 
 /*
  * EL CARTEL DEL ARRANQUE. 25/09/2026.
- *
- * Pedido por el usuario.
  *
  * CUANTO CUESTA MIRARLO EN CADA ARRANQUE. No se contesta a ojo: el banco
  * de FAT tiene el chip simulado a nivel de pin y cuenta los bits que pasan
@@ -12506,8 +13027,6 @@ static uint8_t  s_vol_aviones;
 /*
  * CARGAR LA BASE DE MODELOS DE AVION EN LA ZONA ALTA. 25/09/2026.
  *
- * Pedido por el usuario.
- *
  * Traslada ICAO24.BIN del disco USB a 0x101000, que es donde vivia la
  * fuente china del firmware de fabrica y donde icao24_db.c va a buscarla
  * (ver I24_BASE). De una sola vez: despues se borra del disco y el megabyte
@@ -12537,8 +13056,6 @@ static uint8_t  s_vol_aviones;
 
 /*
  * EL CARTEL DEL ARRANQUE. 25/09/2026.
- *
- * Pedido por el usuario.
  *
  * CUANTO CUESTA MIRARLO EN CADA ARRANQUE. No se contesta a ojo: el banco
  * de FAT tiene el chip simulado a nivel de pin y cuenta los bits que pasan
@@ -12566,8 +13083,6 @@ static uint8_t  s_vol_aviones;
 /*
  * ES LA PANTALLA, NO UN CARTEL ENCIMA.
  *
- * Pedido por el usuario.
- *
  * El primer intento pintaba la radio entera y le plantaba encima un
  * recuadro. Esto pinta SU pantalla, copia entera, y vuelve; la radio se
  * dibuja despues, una vez y ya con todo hecho. Por eso puede ser
@@ -12588,8 +13103,6 @@ static void espera_ms(uint32_t ms)
 
 /*
  * CARGAR LAS BASES DE DATOS: UN SOLO FICHERO - 28/09/2026.
- *
- * Pedido por el usuario.
  *
  * Antes eran dos: ICAO24.BIN a 0x101000 y EMISORAS.BIN a 0x140000. Y ese
  * reparto era un numero escrito a mano en el firmware, o sea una decision
@@ -12615,7 +13128,26 @@ static void espera_ms(uint32_t ms)
  * Y cada fallo tiene SU motivo. Ver s_datos_porque.
  */
 #define DATOS_BASE ZA_BASE
-#define DATOS_TOPE ZA_TOPE
+/*
+ * EL TECHO ES EL DE LOS DATOS, NO EL DEL CHIP - 20/10/2026.
+ *
+ * Aqui ponia ZA_TOPE, que es la capacidad entera. Pero arriba del todo de
+ * la region vive el hueco del mapa (ZA_MAPA_BYTES, 196.608 bytes), y el
+ * comentario que lo reserva dice con todas las letras que el directorio
+ * no llega hasta alli: "ZA_TOPE_DATOS lo corta antes". Esta guardia era
+ * justo la que tenia que cortarlo, y cortaba 196.608 bytes mas arriba.
+ *
+ * Lo que dejaba pasar: un BD.BIN de entre 847.872 y 1.044.480 bytes se
+ * aceptaba y se escribia encima del mapa. No ha pasado porque el
+ * empaquetador del PC ya usa 847.872 como techo (ver TECHO en
+ * tools/datos_pack.py), o sea que la unica red que habia era que el
+ * fichero viniera de nuestra herramienta.
+ *
+ * Con el techo bueno, los dos numeros son el MISMO: ZA_TOPE_DATOS -
+ * ZA_BASE son exactamente los 847.872 del empaquetador en un chip de
+ * 2 MB, y en uno mas pequeño sale el numero que de verdad cabe.
+ */
+#define DATOS_TOPE ZA_TOPE_DATOS
 
 static const char *s_datos_porque;
 
@@ -12666,7 +13198,7 @@ static uint8_t datos_arranca(void)
      */
     if (DATOS_TOPE > spi_flash_capacidad() || DATOS_BASE < a->fs_bytes) {
         /*
-         * Y DECIR CUAL DE LAS DOS ES - 18/10/2026, de un issue.
+         * Y DECIR CUAL DE LAS DOS ES - 18/10/2026.
          *
          * Aqui habia un solo mensaje, "la zona alta de este chip no llega
          * hasta aqui", para dos averias que no se parecen en nada:
@@ -12688,7 +13220,7 @@ static uint8_t datos_arranca(void)
          * geo_lee() ya distingue los dos casos desde el 08/10 -es
          * GEO_MAS_GRANDE- y lo que faltaba era preguntarselo.
          */
-        if (a->fs_bytes > (spi_flash_capacidad() - ZA_BYTES_REGION)) {
+        if (a->fs_bytes > za_disco_de(spi_flash_capacidad())) {
             s_datos_porque = tr("el disco dice medir mas de lo que hay: formatealo",
                                 "the disk claims to be larger than it is: format it");
         } else {
@@ -12747,8 +13279,6 @@ static void datos_comprobando(uint32_t hechos, uint32_t total)
 /*
  * EL MAPA DEL DUEÑO: DEL PENDRIVE A LA FLASH - 12/10/2026.
  *
- * Pedido por el usuario.
- *
  * LA VERSION DE AYER NO HACIA ESO, Y EL COMENTARIO QUE HABIA AQUI DEFENDIA
  * NO HACERLO. Decía que copiar ocho kilobytes a la zona alta era
  * complicarlo para nada, porque el disco y la zona alta son el mismo chip
@@ -12761,15 +13291,6 @@ static void datos_comprobando(uint32_t hechos, uint32_t total)
  *     ve es un fallo que se achaca a otra cosa.
  *   - Y EL FICHERO SE QUEDABA EN EL DISCO para siempre, leído otra vez en
  *     cada arranque. BD.BIN se borra al acabar justo para que el disco sea
- *     del usuario y no del firmware.
- *
- * Ahora es el MISMO ritual que BD.BIN, con el mismo cartel y en el mismo
- * orden: buscar, copiar, comprobar la suma de lo copiado, y SOLO ENTONCES
- * borrar del disco. Mientras la copia no esté verificada, el fichero del
- * disco es la única copia que existe de ese mapa.
- *
- * EL NOMBRE NO SE SABE: lo elige quien se descarga el mapa. Se busca por
- * la EXTENSION, así que "27.map" vale tal cual.
  *
  * EL POZO PARA VERIFICARLO ES PRESTADO. Hace falta el fichero entero en
  * memoria -su suma está al final- y pedir ocho kilobytes fijos de .bss
@@ -12806,8 +13327,6 @@ static mapa_flash_r_t mapa_graba(const char n8[8], uint8_t *pozo, uint32_t cap)
     /*
      * AQUI HABIA UN TECHO QUE SOBRABA, Y SOLTO UN "no cabe en la flash"
      * SOBRE UNA FLASH CON 192 kB LIBRES - 12/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Era esto: se exigia que el .map entero cupiera en el pozo prestado
      * -unos 45 kB- porque la comprobacion de despues lo necesitaba en
@@ -12850,8 +13369,6 @@ static mapa_flash_r_t mapa_graba(const char n8[8], uint8_t *pozo, uint32_t cap)
 
 /*
  * EL RASTRO DE LO QUE PASO AL ARRANCAR CON EL MAPA - 12/10/2026.
- *
- * Pedido por el usuario.
  *
  * Y la fila "Mapa" no servia para averiguarlo, porque solo enseñaba el
  * veredicto del LECTOR del .map. Si lo que falla es un paso de antes -no
@@ -13045,8 +13562,6 @@ sigue:
 /*
  * EL BOTON DE GRABAR TROZOS SE HA IDO - 28/09/2026.
  *
- * Pedido por el usuario.
- *
  * Era el ensayo del camino de escritura al pendrive antes de confiarle una
  * imagen de verdad, y sirvio: con el se cazo que el escritor se llevaba
  * por delante a los ficheros vecinos. Lo que hacia -sacar un fichero de la
@@ -13099,8 +13614,6 @@ static uint8_t info_hex32(char *b, uint8_t i, uint32_t v)
  * cuestan, y mucho -ver el comentario de INFO_BASICAS-, y ademas son
  * herramientas de destripar, no informacion de diario.
  *
- * Pedido por el usuario, 24/09/2026.
- *
  * Compilado (la fecha de compilacion) y Equipo ("DEEPSDR 101") se fueron
  * enteras: la primera solo le dice algo a quien compila, y la segunda dice
  * el modelo de la radio a quien la tiene en la mano.
@@ -13108,7 +13621,6 @@ static uint8_t info_hex32(char *b, uint8_t i, uint32_t v)
 /*
  * LA PODA DE 02/10/2026
  * ---------------------
- * Pedido por el usuario.
  *
  * Se fueron NUEVE filas. No por hacer sitio -sobraba-, sino porque cada
  * una era una herramienta de una obra que ya termino, y una pantalla llena
@@ -13145,14 +13657,12 @@ static uint8_t info_hex32(char *b, uint8_t i, uint32_t v)
 /*
  * EL CAMBIO DE SITIO DE 06/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y las dos mitades tienen el mismo motivo, que es el de siempre en esta
  * pantalla: lo que se busca cuando algo NO FUNCIONA va delante, y lo que
  * se mira por curiosidad va detras.
  *
  * "Formatear disco" es lo que se busca cuando la radio dice que no
- * reconoce el volumen -el issue que trajo todo esto-, y esconderlo detras
+ * reconoce el volumen -que es lo que trajo todo esto-, y esconderlo detras
  * de cinco toques en la fila de la version es esconderlo justo de quien lo
  * necesita. "Cascada" dice cuantos kilobytes de RAM se ha prestado la
  * cascada: eso es de destripar, no de arreglar.
@@ -13196,8 +13706,6 @@ static void cat_freq_pon(uint32_t hz)
 
 /*
  * Y REPINTAR LO QUE ACABA DE CAMBIAR.
- *
- * Pedido por el usuario, 09/10/2026.
  *
  * Era cierto, y era un olvido mio: cat_freq_pon() movia el oscilador y no
  * repintaba nada. El camino del mando (tune_encoder_poll) si lo hace, y el
@@ -13393,8 +13901,6 @@ static void cat_pinta_pendiente(void)
 /*
  * EL PUERTO SERIE SUBE A LA PRIMERA PAGINA Y LA PILA BAJA - 09/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y es el criterio que ya rige esta pantalla, escrito tres parrafos mas
  * abajo: delante lo que se busca cuando algo NO FUNCIONA, detras lo que se
  * mira por curiosidad.
@@ -13418,7 +13924,9 @@ enum { INFO_VERSION = 0, INFO_MICRO, INFO_FLASH,
        INFO_XCHIP, INFO_XSERIE, INFO_XFS, INFO_XFORMATO, INFO_XMAPA,
        INFO_CASCADA,
        INFO_XSITIO, INFO_XAVIONES,
-       INFO_XIPA, INFO_XDMA, INFO_XBUS, INFO_XFRAME, INFO_XMSFRAME, INFO_XISR,
+       INFO_XIPA, INFO_XDMA, INFO_XBUS, INFO_XPEND, INFO_XFRAME,
+       INFO_XVUELTA, INFO_XPOLL2,
+       INFO_XMSFRAME, INFO_XISR,
        INFO_XREPARTO, INFO_XAUDIO,
        INFO_PILA, INFO_XAJUSTES, INFO_XARRANQUE, INFO_XRESET,
        INFO_IQ, INFO_Z7, INFO_ESPEJO, INFO_ARM, INFO_USBPAT,
@@ -13467,8 +13975,6 @@ static char    s_fmt_res[44] = "";   /* el veredicto, mientras se enseña */
 /*
  * LOS DOS TOQUES DE "BORRAR EL MAPA" - 12/10/2026.
  *
- * Pedido por el usuario.
- *
  * Dos toques y no uno, por lo mismo que Formatear: el mapa lo copió el
  * usuario a propósito y borrarlo de un roce en una fila que se mira para
  * LEER cuantos trazos tiene sería perderlo sin querer. Volver a ponerlo
@@ -13507,7 +14013,11 @@ static const texto_t k_info_nombres[INFO_COUNT] = {
     T("Sitio para fotos", "Room for photos"),
     T("Cargar datos", "Load data"),
     T("Acelerador IPA", "IPA accelerator"), T("DMA de pantalla", "Display DMA"),
-    T("Bus pantalla", "Display bus"), T("Fotograma", "Frame"),
+    T("Bus pantalla", "Display bus"),
+    T("Pendiente del bus", "Bus slew rate"),
+    T("Fotograma", "Frame"),
+    T("Vuelta del bucle", "Loop pass"),
+    T("Poll de pantalla", "Screen polls"),
     T("Tope de fotograma", "Frame budget"),
     T("Carga de audio", "Audio load"),
     T("Reparto del audio", "Audio breakdown"),
@@ -13675,8 +14185,6 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
         /*
          * LA VERSION LLEVA EL CRC DETRAS - 02/10/2026.
          *
-         * Pedido por el usuario.
-         *
          * Salieron SEIS update.bin distintos llamados todos V3.00. Subir
          * el numero cada vez es lo primero, pero depende de que yo me
          * acuerde, y eso ya se ha demostrado que no basta.
@@ -13735,8 +14243,6 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
     case INFO_MICRO: {
         /*
          * EL CHIP, PREGUNTADO - 16/10/2026.
-         *
-         * Pedido por el usuario.
          *
          * Aqui habia una cadena escrita a mano. Mientras solo hubo un
          * chip era verdad; desde que hay dos es una celda de diagnostico
@@ -13861,6 +14367,53 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
             while (*t != '\0') { buf[i++] = *t++; }
         }
         buf[i] = '\0';
+        /*
+         * Y DEBAJO, EL JEDEC CON EL MODELO DESCIFRADO - 20/10/2026.
+         *
+         * El nombre se saca del tercer byte y solo para Winbond (0xEF),
+         * que es de quien es la convencion W25Qxx. De otro fabricante se
+         * enseñan los tres bytes y ya: inventarle un nombre a un chip que
+         * no conocemos seria peor que no decir nada.
+         */
+        {
+            static const char k_h[] = "0123456789ABCDEF";
+            char     hex[12];
+            uint8_t  j = 0U, k, n = 0U;
+
+            /* Se arma aparte y se mete de una vez: en el pie solo
+             * escriben pie_txt() y pie_num(), que son las que respetan
+             * INFO_PIE_MAX. Lo vigila tools/pie_check.py. */
+            for (k = 0U; k < 3U; k++) {
+                if (k != 0U) { hex[n++] = ' '; }
+                hex[n++] = k_h[(a->jedec[k] >> 4) & 0x0FU];
+                hex[n++] = k_h[a->jedec[k] & 0x0FU];
+            }
+            hex[n] = '\0';
+            j = pie_txt(pie, j, hex);
+            if (a->jedec[0] == 0xEFU && a->jedec[2] >= 0x13U && a->jedec[2] <= 0x19U) {
+                /*
+                 * El nombre va en MEGABITS y con la convencion de
+                 * Winbond, que no es la que uno escribiria:
+                 *
+                 *   0x13  4 Mbit  512 kB   W25Q40    <- "40", no "04"
+                 *   0x14  8 Mbit    1 MB   W25Q80
+                 *   0x15 16 Mbit    2 MB   W25Q16    <- el de fabrica
+                 *   0x16 32 Mbit    4 MB   W25Q32
+                 *   0x17 64 Mbit    8 MB   W25Q64
+                 *   0x18 128 Mbit  16 MB   W25Q128
+                 *   0x19 256 Mbit  32 MB   W25Q256
+                 *
+                 * Los dos primeros llevan el numero al reves porque son
+                 * de una cifra: 4 Mbit es "40" y 8 es "80". A partir de
+                 * 16 ya se escribe tal cual.
+                 */
+                static const char *const k_n[] = {
+                    "40", "80", "16", "32", "64", "128", "256"
+                };
+                j = pie_txt(pie, j, "  W25Q");
+                (void)pie_txt(pie, j, k_n[a->jedec[2] - 0x13U]);
+            }
+        }
         return buf;
     }
     case INFO_XFS: {
@@ -13900,8 +14453,6 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
     case INFO_XSITIO: {
         /*
          * POR QUE NO CABE UNA FOTO - 05/10/2026.
-         *
-         * Pedido por el usuario.
          *
          * Pregunta buena, y la radio no sabia contestarla: decia "el disco
          * esta lleno" y ya. Una captura son 756 kB y no cabe por TRES
@@ -14026,8 +14577,6 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
         /*
          * CALIBRAR EL VOLTIMETRO CONTRA UN MULTIMETRO - 12/10/2026.
          *
-         * Pedido por el usuario.
-         *
          * Lo de la referencia interna ya esta hecho y es el grueso: el
          * abanico de lecturas entre unidades baja de 348 mV a 4 mV
          * (medido en sim/bateria.c). Lo que queda son dos cosas que NO se
@@ -14133,8 +14682,6 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
         /*
          * FORMATEAR EL DISCO DESDE LA PROPIA RADIO - 06/10/2026.
          *
-         * Pedido por el usuario.
-         *
          * Es la respuesta correcta al issue, y la razon esta en formato.h:
          * este driver no admite cualquier FAT, y Windows no tiene por que
          * elegir la que admite. Pedirle al usuario que acierte con las
@@ -14165,8 +14712,6 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
          */
         /*
          * Y TODO ESTO CABE EN LA CELDA - 06/10/2026, por la tarde.
-         *
-         * Pedido por el usuario.
          *
          * La celda mide 184 px con tipografia proporcional, asi que el
          * limite no son caracteres, son pixeles - la misma piedra que la
@@ -14361,8 +14906,6 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
          * CUANTO DEL PRESUPUESTO SE COME LA INTERRUPCION DEL AUDIO -
          * 30/09/2026.
          *
-         * Pedido por el usuario.
-         *
          * El desglose por etapas existe desde el 31/07, pero solo salia por
          * el puerto serie, que va apagado en la compilacion de verdad
          * (DEBUG_UART_ENABLED=0). O sea que la pregunta "¿cuanto cuesta la
@@ -14412,8 +14955,6 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
     case INFO_XREPARTO: {
         /*
          * EN QUE SE VA EL RESTO - 02/10/2026.
-         *
-         * Pedido por el usuario.
          *
          * El desglose por etapas existe en demod_am.c desde el 31/07, pero
          * solo salia por el puerto serie -apagado en la compilacion de
@@ -14511,8 +15052,6 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
         /*
          * SIN LETRAS Y EN TANTO POR CIENTO, Y NO POR GUSTO - 06/10/2026.
          *
-         * Pedido por el usuario.
-         *
          * La primera vez lo arregle contando caracteres y ampliando el
          * buffer. Y seguia cortado, porque el limite que manda NO es el
          * buffer: es el ANCHO DE LA CELDA, 192 px, con una fuente
@@ -14594,11 +15133,61 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
         uint32_t khz;
         uint8_t  i = 0U;
 
+        /*
+         * ==================================================================
+         * Y A QUE DISTANCIA HA QUEDADO LA EMISORA DEL OSCILADOR
+         * ==================================================================
+         *
+         * De ese hueco lo unico que hay es un resultado NEGATIVO:
+         * sim/lf_hueco.c barre 2.201 frecuencias del tramo con lupa y
+         * ninguna se sale de la ventana, o sea que la aritmetica de
+         * sintonia no tiene agujero. Lo que queda son DOS averias
+         * distintas con el mismo aspecto:
+         *
+         *   1. algo analogico delante del codec, y entonces el agujero
+         *      esta en una FRECUENCIA fija;
+         *   2. el aparcado dejando la emisora en el borde del antialias, y
+         *      entonces el agujero esta en una DISTANCIA al oscilador y se
+         *      mueve con el dial.
+         *
+         * Para separarlas hace falta leer esa distancia, y no se enseñaba
+         * en ningun sitio: s_lo_hz existia como variable y nadie la
+         * pintaba. Va en el pie de esta fila y no en una fila nueva porque
+         * la pagina de medidas esta a 12 de 12 - y porque es el mismo
+         * asunto: esta fila ya es la del oscilador.
+         *
+         * COMO SE LEE: se sube el dial despacio por el tramo malo mirando
+         * el SUELO DE RUIDO en la cascada -no hace falta oir una emisora,
+         * hace falta ver si el panorama se queda sordo-. Si el agujero cae
+         * siempre a la misma frecuencia, es lo primero. Si cae siempre que
+         * este numero es grande, y revive cuando el oscilador salta y el
+         * numero vuelve a ser pequeño, es lo segundo - y entonces el
+         * arreglo es NCO_OFF_MAX_96K, que ya se bajo una vez de 44 a
+         * 40 kHz por esta misma razon.
+         */
+        if (pie && s_lo_hz != 0UL) {
+            uint32_t d = (s_tune_hz > s_lo_hz) ? (s_tune_hz - s_lo_hz)
+                                               : (s_lo_hz - s_tune_hz);
+            char dec[3];
+            uint8_t k;
+
+            /* Por pie_txt()/pie_num() y no a mano: respetan INFO_PIE_MAX y
+             * lo que sobra sale cortado en vez de pisar la celda de al
+             * lado. Lo escribi a mano la primera vez y lo caso
+             * tools/pie_check.py, que existe justo para esto. */
+            k = pie_txt(pie, 0U, tr("emisora a ", "signal at "));
+            k = pie_txt(pie, k, (s_tune_hz >= s_lo_hz) ? "+" : "-");
+            k = pie_num(pie, k, d / 1000UL);
+            dec[0] = ',';
+            dec[1] = (char)('0' + (char)((d % 1000UL) / 100UL));
+            dec[2] = '\0';
+            k = pie_txt(pie, k, dec);
+            (void)pie_txt(pie, k, tr(" k del oscilador", " k from the LO"));
+        }
+
         if (s_lo_hz != 0UL && s_lo_hz < LO_GEN_CROSSOVER_HZ) {
             /*
              * Y DEBAJO DE 300 kHz, DONDE ESTA EL OSCILADOR - 09/10/2026.
-             *
-             * Pedido por el usuario.
              *
              * Aqui ponia "GD32, PA6/PA7" y se acababa. O sea que en toda la
              * banda que lleva este generador -DCF77, ALS162, RBU, las
@@ -14626,6 +15215,12 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
             else             { buf[k++] = '-'; aj_u2s(&buf[k], ped - real); }
             while (buf[k] != '\0') { k++; }
             buf[k++] = ')';
+            /* Y si la cuadratura va invertida, que se vea: es un ajuste
+             * que se pone una vez y luego nadie recuerda. Ver
+             * lo_gen_gd32_invierte(). */
+            if (lo_gen_gd32_invertido()) {
+                buf[k++] = ' '; buf[k++] = 'i'; buf[k++] = 'n'; buf[k++] = 'v';
+            }
             buf[k] = '\0';
             return buf;
         }
@@ -14646,10 +15241,6 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
     case INFO_Z7: {
         /*
          * EL MULTIPLICADOR DE LA ZONA 7, Y UN TOQUE PARA BARRERLO.
-         *
-         * *** Issue #35, 09/10/2026: "la recepcion entre 3,6 y 4,8 MHz es
-         * mas floja de lo esperado; con 189 en vez de 168 vuelve, pero sube
-         * la respuesta al tercer armonico". ***
          *
          * La tabla de zonas se derivo mirando SOLO que el fVCO cupiera en
          * [600, 908] MHz: la sensibilidad no fue un criterio, y por eso hay
@@ -14686,7 +15277,7 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
              * lo cerca que pasa del borde en los DOS extremos de la zona
              * entera, que es lo que decide si un valor se puede dejar puesto
              * de fabrica. Con 168 son 2 MHz y con 189 son 0: los dos valores
-             * que discute el issue #35 estan los dos pegados al borde, cada
+             * en discusion estan los dos pegados al borde, cada
              * uno al suyo, y eso no se veia. Ver
              * ms5351_lowband_z7_margen_mhz().
              */
@@ -14706,8 +15297,6 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
     case INFO_ESPEJO: {
         /*
          * EL NUMERO QUE DICE SI HAY ESPEJO Y CUANTO - 07/10/2026.
-         *
-         * Pedido por el usuario.
          *
          * Salen DOS rechazos de imagen y una fase, asi:
          *
@@ -14790,8 +15379,6 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
         /*
          * QUE SERVICIOS CONOCIDOS CAEN EN LOS ARMONICOS DEL LO - 07/10/2026.
          *
-         * Pedido por el usuario.
-         *
          * No lo habia. Lo que habia era el FT8 de 30 metros, en 10.136,
          * entrando por el TERCER armonico del oscilador: con el dial en
          * 3.411 el LO esta en 3.387 y 3 x 3.387 = 10.161, a 25 kHz.
@@ -14851,8 +15438,6 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
         /*
          * LA PREGUNTA DEL CONECTOR GRANDE, CONTESTADA POR LA RADIO.
          *
-         * Pedido por el usuario, 09/10/2026.
-         *
          * Para grabar en un pincho el GD32 tiene que hacer de anfitrion, y
          * en este encapsulado eso solo cabe en PA11/PA12 (USBFS): el otro
          * par posible -PB14/PB15, USBHS- son el bus I2S del codec, con las
@@ -14878,7 +15463,12 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
             uint8_t i = 0U;
 
             if (s_usb_barrido[0] != '\0') {
-                while ((s_usb_barrido[i] != '\0') && (i < 30U)) {
+                /* El tope es el del ARRAY y va comprobado ANTES de leer:
+                 * antes ponia 30 contra un array de 24 y la condicion iba
+                 * detras, asi que lo unico que paraba el bucle era el cero
+                 * del final. */
+                while ((i < (uint8_t)(sizeof s_usb_barrido - 1U)) &&
+                       (s_usb_barrido[i] != '\0')) {
                     buf[i] = s_usb_barrido[i]; i++;
                 }
                 buf[i] = '\0';
@@ -15042,9 +15632,18 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
         return buf;
     }
     case INFO_XBUS: {
-        /* Ciclos de dato y los nanosegundos que salen. Se toca para bajar un
-         * escalon. Ver rm68120_bus_dato_pon(): esto NO se guarda, asi que si
-         * te pasas y la pantalla se vuelve ilegible, apagar la arregla. */
+        /* Ciclos de dato y los nanosegundos que salen. Se toca para
+         * recorrer la tabla. Ver rm68120_bus_dato_pon(): esto NO se guarda,
+         * asi que si te pasas y la pantalla se vuelve ilegible, apagar la
+         * arregla.
+         *
+         * Y AQUI SE MIRA EL RUIDO, NO SOLO LA VELOCIDAD. Medido por el
+         * usuario en 97,8 MHz sin antena, en esta misma pagina y sin tocar
+         * nada mas: 40 ns dan S9+7 y 70 ns dan S9+21. Catorce decibelios.
+         * El valor del cargador -45 ns- cae en la zona silenciosa, asi que
+         * el que trae la radio de serie ya es bueno; esta fila sirve para
+         * comparar, no para mejorarlo. Si te pierdes, sigue tocando: la
+         * tabla da la vuelta y el de arranque esta dentro. */
         uint8_t i = 0U;
 
         aj_u2s(buf, (uint32_t)rm68120_bus_dato());
@@ -15054,6 +15653,28 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
         aj_u2s(&buf[i], (uint32_t)rm68120_bus_ns());
         while (buf[i] != '\0') { i++; }
         buf[i++] = ' '; buf[i++] = 'n'; buf[i++] = 's';
+        buf[i] = '\0';
+        return buf;
+    }
+    case INFO_XPEND: {
+        /*
+         * QUE NIVEL DE PENDIENTE HAY PUESTO. 20/10/2026.
+         *
+         * Esta fila se añadio sin su valor: enseñaba la etiqueta y nada
+         * mas, asi que tocarla cambiaba algo que no se veia. Un mando sin
+         * indicador no es un mando.
+         */
+        uint8_t i = 0U;
+        uint8_t n = rm68120_bus_pendiente();
+        const char *e;
+
+        switch (n) {
+        case 0U:  e = "0, 2 MHz";   break;
+        case 1U:  e = "1, 25 MHz";  break;
+        case 3U:  e = "3, máx";     break;
+        default:  e = "2, 50 MHz";  break;
+        }
+        while (*e != '\0') { buf[i++] = *e++; }
         buf[i] = '\0';
         return buf;
     }
@@ -15124,29 +15745,105 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
          *   b parecido a la suma -> entonces es espera, y hay que mirar
          *     quien la impone.
          */
-        buf[i++] = ' '; buf[i++] = 'b';
+        /*
+         * LA VUELTA ENTERA SE VA AL TERCER RENGLON - 19/10/2026.
+         *
+         * Estaba pegada detras del reparto del dibujo, en el mismo renglon,
+         * y NO CABIA: gfx2_text_in() recorta sin quejarse, asi que la celda
+         * enseñaba "... b53/1" y se comia justo el numero de los poll, que
+         * es EL QUE DICE DONDE SE VAN los milisegundos. El instrumento
+         * señalaba al culpable con el dedo fuera de la pantalla.
+         *
+         * La celda tiene tres renglones -los usa "Salud del audio"- y este
+         * no usaba el tercero. Ahora el dibujo va arriba y la vuelta abajo,
+         * y los dos caben. ui_grid_recortes() lo vigila desde hoy.
+         */
+        buf[i] = '\0';
+        return buf;
+    }
+    case INFO_XVUELTA: {
+        /*
+         * LA VUELTA ENTERA, EN SU PROPIA CELDA - 19/10/2026.
+         *
+         * Estaba pegada detras del reparto del dibujo, en el mismo renglon,
+         * y NO CABIA: gfx2_text_in() recorta sin quejarse, asi que la celda
+         * se comia justo el numero que dice donde se van los milisegundos.
+         * Hay sitio de sobra en esta pagina para una celda mas.
+         *
+         *   arriba:  lo que ha tardado la ultima vuelta, el tactil y los
+         *            dos bloques de poll;
+         *   abajo:   lo PEOR visto desde el arranque, que es lo que sigue
+         *            ahi cuando por fin se puede mirar la pantalla.
+         *
+         * La regla para leerlo: si la vuelta es mucho mayor que la suma de
+         * "Fotograma" y los dos poll son pequenos, lo que sobra no es ni
+         * dibujo ni decodificadores y hay que buscarlo fuera.
+         */
+        uint8_t i = 0U, j = 0U;
+
+        /* La media de las ultimas y, entre parentesis, la ultima suelta.
+         * Ver BUCLE_MEDIA_N: la ultima sola era una loteria. */
+        aj_u2s(buf, (uint32_t)(s_bucle_media_us / 1000U));
+        while (buf[i] != '\0') { i++; }
+        buf[i++] = ' '; buf[i++] = 'm'; buf[i++] = 's'; buf[i++] = ' '; buf[i++] = '(';
         aj_u2s(&buf[i], (uint32_t)(s_bucle_us / 1000U));
         while (buf[i] != '\0') { i++; }
-        buf[i++] = '/';
-        aj_u2s(&buf[i], (uint32_t)(s_tactil_us / 1000U));
-        while (buf[i] != '\0') { i++; }
-        buf[i++] = '/';
-        aj_u2s(&buf[i], (uint32_t)(s_polls_us / 1000U));
-        while (buf[i] != '\0') { i++; }
-        /* y lo PEOR visto desde el arranque, que es lo que sigue ahi cuando
-         * por fin se puede mirar la pantalla. Ver s_bucle_max_us. */
-        buf[i++] = ' '; buf[i++] = 'm';
-        aj_u2s(&buf[i], (uint32_t)(s_bucle_max_us / 1000U));
-        while (buf[i] != '\0') { i++; }
-        buf[i++] = '/';
-        aj_u2s(&buf[i], (uint32_t)(s_polls_max_us / 1000U));
-        while (buf[i] != '\0') { i++; }
-        /* y el tercero: el dibujo. Ver s_dibujo_max_us, que es el que parte
-         * en dos el caso "la vuelta es grande y los poll no". */
-        buf[i++] = '/';
-        aj_u2s(&buf[i], (uint32_t)(s_dibujo_max_us / 1000U));
-        while (buf[i] != '\0') { i++; }
+        buf[i++] = ')';
         buf[i] = '\0';
+
+        j = pie_txt(pie, j, "tac ");
+        j = pie_num(pie, j, (uint32_t)(s_tactil_us / 1000U));
+        j = pie_txt(pie, j, " max ");
+        j = pie_num(pie, j, (uint32_t)(s_bucle_max_us / 1000U));
+        /*
+         * AQUI IBA TAMBIEN EL PEOR DIBUJO, Y SE HA IDO - 20/10/2026.
+         *
+         * Medido en el simulador con la fuente de verdad: con el nombre
+         * del tramo y su numero detras, la fila mide 188 px de los 192
+         * del hueco, y a la primera cifra de mas gfx2_text_in() recorta
+         * sin quejarse - que es justo el fallo que ya nos costo una
+         * tarde. Quitando el peor dibujo quedan 165 y aguanta hasta
+         * cuatro cifras en cada numero.
+         *
+         * No se pierde nada: si el dibujo es quien hace el pico, el
+         * tramo se llama `dib` y lo dice con todas las letras. Y el
+         * numero sigue medido y sigue saliendo en el panel de STANAG,
+         * por ui_dibujo_peor_us().
+         */
+        /* Y de quien fue el record: tres letras detras del numero. Sin
+         * ellas la fila dice cuanto y no dice donde, que es justo la mitad
+         * que hace falta. Ver k_tramo_nombre. */
+        if (s_peor_tramo < (uint8_t)TRAMO_N) {
+            j = pie_txt(pie, j, " ");
+            j = pie_txt(pie, j, k_tramo_nombre[s_peor_tramo]);
+            /* Y CUANTO se llevo. Ver s_peor_tramo_us: el ganador es el
+             * tramo mas grande de esa vuelta, no necesariamente el que
+             * explica el pico, y sin este numero no hay forma de saber
+             * cual de las dos cosas es. */
+            j = pie_txt(pie, j, " ");
+            (void)pie_num(pie, j, (uint32_t)(s_peor_tramo_us / 1000U));
+        }
+        return buf;
+    }
+    case INFO_XPOLL2: {
+        /* Los DOS bloques de poll: el de los decodificadores y el de
+         * pantalla -captura, volcado, fax, SSTV, Hell, RDS, marquesina y
+         * autoguardado-, que hasta hoy no medía nadie. Ver el comentario que
+         * abre el segundo en el bucle principal. */
+        uint8_t i = 0U, j = 0U;
+
+        aj_u2s(buf, (uint32_t)(s_polls_us / 1000U));
+        while (buf[i] != '\0') { i++; }
+        buf[i++] = ' '; buf[i++] = '+'; buf[i++] = ' ';
+        aj_u2s(&buf[i], (uint32_t)(s_polls2_us / 1000U));
+        while (buf[i] != '\0') { i++; }
+        buf[i++] = ' '; buf[i++] = 'm'; buf[i++] = 's';
+        buf[i] = '\0';
+
+        j = pie_txt(pie, j, "max ");
+        j = pie_num(pie, j, (uint32_t)(s_polls_max_us / 1000U));
+        j = pie_txt(pie, j, " / ");
+        (void)pie_num(pie, j, (uint32_t)(s_polls2_max_us / 1000U));
         return buf;
     }
     case INFO_CASCADA: {
@@ -15214,9 +15911,18 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
      * Este numero lo dice. Cero despues de un rato largo en CW quiere
      * decir que el fallo del boton es OTRO y hay que seguir buscando.
      */
-    case INFO_XCHOQUES:
+    case INFO_XCHOQUES: {
+        /* Dos contadores que tienen que ser CERO los dos: los choques de la
+         * tira compositora y los renglones de celda que no han cabido. Ver
+         * gfx2_banda_choques() y ui_grid_recortes(). */
+        uint8_t i = 0U;
+
         aj_u2s(buf, (uint32_t)gfx2_banda_choques());
+        while (buf[i] != '\0') { i++; }
+        buf[i++] = ' '; buf[i++] = '/'; buf[i++] = ' ';
+        aj_u2s(&buf[i], (uint32_t)ui_grid_recortes());
         return buf;
+    }
 
     case INFO_PILA:
         /* Usada de disponible. El tope no es una constante escrita a mano:
@@ -15260,8 +15966,6 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
 /*
  * LOS CANALES DE HFDL QUE SE OYEN DESDE AQUI. 25/09/2026.
  *
- * Pedido por el usuario.
- *
  * LA TABLA ENTERA TIENE 105 FRECUENCIAS y estan casi todas de mas: son las
  * diecisiete estaciones de tierra del mundo, y desde Espana no se oyen ni
  * San Francisco ni Agana ni Auckland salvo milagro de propagacion. Meter
@@ -15302,8 +16006,6 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
  *
  * *** PERO BAHREIN NO ES ESO - 10/10/2026. ***
  *
- * Pedido por el usuario.
- *
  * Esa frecuencia no estaba en esta lista y la habia tecleado a mano. No
  * hacia falta que estuviera -el nombre de la estacion viaja DENTRO de la
  * trama, no sale de aqui- pero tener que teclearla si es un estorbo, y
@@ -15333,8 +16035,6 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
 #define HFDL_GRUPO_DIA     1U   /* Atlantico norte, por encima de 10 MHz */
 /*
  * HUBO UN TERCER GRUPO, "Bahrein", Y SE QUITO EL 11/10/2026.
- *
- * Pedido por el usuario.
  *
  * Y era cierto. Las ocho de Al Muharraq entraron el 10/10 en un grupo
  * propio, y eso metia DOS CRITERIOS DISTINTOS en una misma dimension: los
@@ -15396,8 +16096,6 @@ static char s_hfdl_khz_txt[UIG_CELLS][10];
 /*
  * CUANTAS TRAMAS BUENAS HA DADO CADA CANAL. 25/09/2026.
  *
- * Pedido por el usuario.
- *
  * Las listas generales de HFDL valen para empezar, pero lo que de verdad
  * sirve es lo que TU antena oye desde TU sitio: una frecuencia excelente
  * sobre el papel puede no llegarte nunca, y otra mediocre darte tramas todas
@@ -15416,8 +16114,6 @@ static char     s_hfdl_ok_txt[UIG_CELLS][12];
 
 /*
  * LAS FRECUENCIAS DE FT8 - 27/09/2026.
- *
- * Pedido por el usuario.
  *
  * No salen de mi memoria: comprobadas el 27/09/2026 contra sigidwiki. Las
  * de HFDL salieron de la tabla del propio proyecto y estas no tenian de
@@ -15487,8 +16183,6 @@ static void ft8_frec_siguiente(void)
 /*
  * LAS FRECUENCIAS DE JTTY - 28/09/2026.
  *
- * Pedido por el usuario.
- *
  * Y la tiene. Cuando escribi el modo dije que no habia frecuencias
  * asentadas que hubiera podido comprobar, y por eso no puse boton. Lo que
  * pasa es que no las busque donde estaban: **las trae el propio WSJT-X**,
@@ -15515,8 +16209,6 @@ static void ft8_frec_siguiente(void)
  * centro de su ventana de busqueda. No hay que sumar nada.
  *
  * Y CUATRO DE LAS NUEVE CAEN ENCIMA DE FT8. HAY QUE SABERLO.
- *
- * Pedido por el usuario.
  *
  * Tiene razon en el hecho, y la tabla tambien: en el MISMO fichero de
  * WSJT-X, cuatro renglones mas arriba, esta `{18100000, Modes::FT8}`. Los
@@ -15850,8 +16542,6 @@ static int16_t hfdl_canal_actual(void)
 /*
  * EL BOTON QUE RECORRE LA LISTA. 25/09/2026.
  *
- * Pedido por el usuario.
- *
  * El rotulo es la frecuencia en la que estas, en kHz con el punto de los
  * miles ("11.184"), y cada toque salta a la siguiente de k_hfdl_canales[].
  * Al llegar al final vuelve a empezar.
@@ -15886,8 +16576,6 @@ static const char *hfdl_frec_rotulo(void)
  * ======================================================================
  * EN ORDEN DE FRECUENCIA, NO DE INDICE - 11/10/2026
  * ======================================================================
- *
- * Pedido por el usuario.
  *
  * Y era cierto., aunque 13.312 SI esta en la tabla. El fallo era de
  * ORDEN. k_hfdl_canales[] va por GRUPOS -noche, dia, Bahrein- y dentro de
@@ -15992,8 +16680,6 @@ static uint16_t grid_total(void)
                                              : (uint16_t)INFO_BASICAS;
     /*
      * UNA CELDA MAS QUE MODOS: LA PRIMERA ES "AUTO" - 11/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * "Auto" no es un modo numero quince: es una FUENTE del modo, igual
      * que las otras catorce son el modo puesto a dedo, y por eso esta en
@@ -16347,8 +17033,6 @@ static void grid_fill(void)
 /*
  * LA PAGINA DE MEDIDAS SE REPINTA SOLA - 02/10/2026.
  *
- * Pedido por el usuario.
- *
  * La rejilla solo se rellena al tocar una celda, al cambiar de pagina y al
  * abrirla. El boton de Ruido esta en la barra de abajo, que es otro
  * widget, asi que al tocarlo la celda se quedaba con el texto de antes. Y
@@ -16370,8 +17054,6 @@ static void grid_fill(void)
  */
 /*
  * Y SOLO LAS CELDAS QUE HAN CAMBIADO - 06/10/2026.
- *
- * Pedido por el usuario.
  *
  * Medido en el audio de sus videos: el gruñido es una modulacion de la
  * envolvente a 2,00 Hz con armonico a 4,07 Hz, periodo 500 ms. O sea
@@ -16581,7 +17263,7 @@ static void grid_apply(uint8_t cel)
                     s_fmt_armado = 0U;
                     /*
                      * Y DESPUES SE COMPRUEBA. Ver formato_comprueba():
-                     * escribir sin error no demuestra nada, y el issue que
+                     * escribir sin error no demuestra nada, y el caso que
                      * trajo esto iba justo de un volumen escrito sin
                      * errores que el driver no podia usar.
                      */
@@ -16663,9 +17345,26 @@ static void grid_apply(uint8_t cel)
                  * chasquido, y no toca nada mas. Fuera de la banda baja
                  * no hace nada, que es lo correcto: ahi la cuadratura la
                  * pone el registro de fase y no hay maniobra que rehacer. */
-                ms5351_lowband_reengancha();
-                if (s_lo_hz != 0UL && s_lo_hz >= LO_GEN_CROSSOVER_HZ) {
-                    (void)ms5351_set_lo_freq(s_lo_hz);
+                /*
+                 * Y POR DEBAJO DE 300 kHz, EL TOQUE INVIERTE. 20/10/2026.
+                 *
+                 * Ahi el par lo hace un temporizador del GD32 y no hay
+                 * ninguna maniobra de 90 grados que rehacer: lo que hay que
+                 * poder hacer es cambiar el SENTIDO. Ver lo_gen_gd32.c: el
+                 * arranque ya no es aleatorio, pero en que sentido queda no
+                 * se puede medir desde aqui.
+                 *
+                 * Con una emisora de onda larga sintonizada, un toque y se
+                 * ve: o aparece o desaparece. Se guarda.
+                 */
+                if (s_lo_hz != 0UL && s_lo_hz < LO_GEN_CROSSOVER_HZ) {
+                    lo_gen_gd32_invierte((uint8_t)(lo_gen_gd32_invertido() ? 0U : 1U));
+                    settings_mark_dirty();
+                } else {
+                    ms5351_lowband_reengancha();
+                    if (s_lo_hz != 0UL) {
+                        (void)ms5351_set_lo_freq(s_lo_hz);
+                    }
                 }
             }
             else if (id == (uint8_t)INFO_Z7) {
@@ -16697,7 +17396,7 @@ static void grid_apply(uint8_t cel)
             }
             else if (id == (uint8_t)INFO_USBSER) {
                 /*
-                 * UN TOQUE CONMUTA. 09/10/2026, a peticion del usuario.
+                 * UN TOQUE CONMUTA. 09/10/2026.
                  *
                  * Sin confirmacion: esto no borra nada. Y apagarlo no
                  * desmonta el USB, solo lo desconecta -para el ordenador es
@@ -16715,8 +17414,6 @@ static void grid_apply(uint8_t cel)
             else if (id == (uint8_t)INFO_USBPAT) {
                 /*
                  * UN TOQUE BARRE LAS PATILLAS QUE EL FIRMWARE NO USA.
-                 *
-                 * Pedido por el usuario, 09/10/2026.
                  *
                  * Contando las pastillas de ese lado -25 exactas, un lado
                  * entero de LQFP100- las dos marcadas son la 7a y la 8a. Si
@@ -16739,6 +17436,19 @@ static void grid_apply(uint8_t cel)
             }
             else if (id == (uint8_t)INFO_XIPA)      { ipa_blit_pon(!ipa_blit_hay()); }
             else if (id == (uint8_t)INFO_XDMA)      { lcd_dma_pon(!lcd_dma_hay()); }
+            else if (id == (uint8_t)INFO_XVUELTA) {
+                /*
+                 * UN TOQUE PONE LOS MAXIMOS A CERO - 19/10/2026.
+                 *
+                 * ui_peores_cero() existia desde hace tiempo y NO LA LLAMABA
+                 * NADIE, asi que el peor caso venia acumulando desde el
+                 * arranque e incluia la carga de mapas y listas desde la
+                 * flash. Medido en antena: 173 ms de maximo con una vuelta
+                 * tipica de 16. Un pico que no se puede borrar no dice si
+                 * acaba de pasar o si fue al encender, o sea que no sirve.
+                 */
+                ui_peores_cero();
+            }
             else if (id == (uint8_t)INFO_XMSFRAME) {
                 /* 33 es el de siempre (30 fps), 16 son 60. Por debajo de lo
                  * que cuesta dibujar no sirve de nada: el limitador deja de
@@ -16753,24 +17463,57 @@ static void grid_apply(uint8_t cel)
             }
 
             else if (id == (uint8_t)INFO_XBUS) {
-                /* A LA MITAD por toque, y al llegar abajo vuelve a lo que
-                 * habia al arrancar. Partir por la mitad y no restar de uno
-                 * en uno porque no sabemos de que numero salimos -lo puso el
-                 * gestor de arranque, ver rm68120_bus_dato()- y podria ser
-                 * 39 o 200. Asi son cuatro o cinco toques hasta el limite
-                 * salga de donde salga, y la vuelta al valor seguro esta
-                 * siempre a un toque mas. */
-                /* De uno en uno por abajo, a la mitad por arriba. Empezo
-                 * siendo siempre a la mitad y en la radio salto de 5 a 2 -de
-                 * 45 ns a 30- y la pantalla se ensucio, saltandose el 4 y el
-                 * 3, que son los que podian valer. Cuando quedan pocos
-                 * escalones hay que pisarlos todos. */
+                /*
+                 * Y AHORA TAMBIEN HACIA MAS LENTO - 20/10/2026.
+                 *
+                 * Esta fila solo bajaba, o sea solo hacia el bus mas
+                 * rapido, porque se puso para ganar milisegundos. Pero
+                 * medido en la radio SIN ANTENA en 97,8 MHz, lo que hace
+                 * es mover un peine de armonicos por encima de la
+                 * emisora: 5 ciclos dan S9+7, 4 dan +14, 3 parpadea entre
+                 * los dos y 2 vuelve a +14. No sube y baja poco a poco:
+                 * cae dentro o cae fuera.
+                 *
+                 * Para poder sacarlo de donde moleste hay que poder ir
+                 * tambien a mas LENTO, que ademas baja el ritmo de flancos
+                 * entero. Se recorre una tabla y se vuelve al principio,
+                 * asi no hay forma de quedarse en un sitio del que no se
+                 * sepa salir, y el valor de arranque esta en ella.
+                 *
+                 * Lo que cuesta ir despacio esta medido y se ve: la traza
+                 * del espectro son 157.000 accesos, o sea 7 ms a 45 ns y
+                 * 21 a 135. Sale en la fila "Fotograma", en el numero
+                 * entre parentesis.
+                 *
+                 * Lo de antes -a la mitad por arriba, de uno en uno por
+                 * abajo y vuelta al de arranque- se cambia por la tabla
+                 * porque ya no vale: aquello solo sabia bajar.
+                 */
+                static const uint16_t k_d[] = { 4U, 5U, 6U, 8U, 10U, 12U, 15U };
                 uint16_t d = rm68120_bus_dato();
+                uint8_t  j;
 
-                if (d <= 2U)      { d = rm68120_bus_dato_arranque(); }
-                else if (d <= 8U) { d = (uint16_t)(d - 1U); }
-                else              { d = (uint16_t)(d / 2U); }
-                rm68120_bus_dato_pon(d);
+                /*
+                 * Y EL PRIMER ESCALON ES "AUTO" - 20/10/2026.
+                 *
+                 * Estando en automatico, el primer toque lo apaga y empieza
+                 * la tabla por el principio. Despues se recorre entera, y al
+                 * acabarla se vuelve a automatico: asi se da la vuelta
+                 * completa y no hay forma de quedarse en un sitio del que no
+                 * se sepa salir.
+                 */
+                for (j = 0U; j < (uint8_t)((sizeof k_d / sizeof k_d[0]) - 1U); j++) {
+                    if (k_d[j] == d) { break; }
+                }
+                rm68120_bus_dato_pon(k_d[(uint8_t)((j + 1U) % (sizeof k_d / sizeof k_d[0]))]);
+            }
+            else if (id == (uint8_t)INFO_XPEND) {
+                /* 2 (el de arranque) -> 1 -> 0 -> 2. El nivel 3 no se
+                 * ofrece: es mas pendiente todavia que el de arranque, o
+                 * sea mas ruido, y no hay ninguna razon para quererlo. */
+                uint8_t n = rm68120_bus_pendiente();
+
+                rm68120_bus_pendiente_pon((uint8_t)((n == 0U) ? 2U : (n - 1U)));
             }
             else { break; }
             grid_fill();
@@ -16821,8 +17564,6 @@ static void grid_show(grid_pant_t p)
     /*
      * LA REJILLA DE HFDL ABRE DONDE ESTAS, NO SIEMPRE EN LA PRIMERA
      * PAGINA. 11/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Estaba, en la TERCERA pagina -noche, dia, Bahrein-, detras de dos
      * toques de "Siguiente". Abrir siempre en la primera obliga a
@@ -16984,7 +17725,6 @@ static uint8_t grid_activa(void)
 /*
  * LOS BOTONES DE LA BARRA SE COMPORTAN COMO PESTAÑAS
  * --------------------------------------------------
- * Pedido por el usuario, 22/09/2026.
  *
  * Pulsar el boton de la pantalla que ya esta abierta vuelve a la principal;
  * pulsar el de otra cambia a esa. Es como se comporta cualquier barra de
@@ -17856,12 +18596,6 @@ static const texto_t k_kbd_hora_rot[UIK_KEYS] = {
 /*
  * LA SEGUNDA TECLA DE APLICAR, Y POR QUE SON DOS - 13/10/2026.
  *
- * *** De un issue: "FT8 and WSPR rely heavily on strict time
- * synchronization (within a 1-2 second window)... please consider at least
- * displaying the seconds counter in the time configuration menu, so users
- * can sync the clock manually by hitting Save exactly at the start of a new
- * minute." ***
- *
  * Tiene razon y la radio ya sabia la diferencia que hace falta, solo que no
  * habia forma de pedirla desde el teclado. Aqui hay DOS cosas distintas:
  *
@@ -17972,9 +18706,6 @@ static void kbd_lectura_hora(void)
 /*
  * EL SEGUNDERO DEL TECLADO DE LA HORA - 13/10/2026.
  *
- * *** Del mismo issue: "please consider at least displaying the seconds
- * counter in the time configuration menu". ***
- *
  * Va en la casilla de la unidad -la que en el teclado de frecuencia dice
  * "kHz"- porque ahi cabe y esta vacia en este modo.
  *
@@ -17983,8 +18714,7 @@ static void kbd_lectura_hora(void)
  * multiplo de minuto, o sea que mientras s_hora_anclada vale 0 el segundo
  * es la fase que heredo del arranque. Un numero cualquiera. Enseñarlo
  * tickeando seria dar por bueno algo que nadie ha medido, y ademas
- * invitaria a sincronizar CONTRA EL, que es lo contrario de lo que pide
- * quien abrio el issue.
+ * invitaria a sincronizar CONTRA EL, que es lo contrario de lo que hace falta.
  *
  * Con ":--" la pantalla dice la verdad -"no se en que segundo voy"- y en
  * cuanto se toca "En punto" empieza a contar. Esa transicion ES la
@@ -18777,8 +19507,6 @@ static void menu_screen_close(void)
     /*
      * EL HUECO ENTRE LOS DOS PANELES. 25/09/2026.
      *
-     * Pedido por el usuario.
-     *
      * Y era cierto. El menu tapa MENU_AREA entera -de SPEC_Y hasta el final
      * del panel de la cascada- pero al salir se repintan DOS PANELES, y
      * entre ellos hay dos filas que no son de ninguno: el panel del espectro
@@ -19013,8 +19741,6 @@ static void apply_lo_tune(uint32_t freq_hz)
             /*
              * Y SE APUNTA LO QUE HA SALIDO, NO LO QUE SE PIDIO - 09/10/2026.
              *
-             * Pedido por el usuario.
-             *
              * Por debajo de 300 kHz el oscilador lo hace un TEMPORIZADOR del
              * GD32, y el periodo de un temporizador es un numero ENTERO de
              * cuentas: lo que sale es TIMERCLK/(2*(ARR+1)) y lo pedido se
@@ -19223,8 +19949,6 @@ static void rf_agc_poll(void)
 #define RTTY_TEXT_PANEL_Y  (uint16_t)((WF_PANEL_Y + WATERFALL_ROWS + 4U) - RTTY_TEXT_PANEL_H)
 /*
  * EL PANEL DE FT8 SE QUEDA CON TODO - 25/09/2026.
- *
- * Pedido por el usuario.
  *
  * Y lleva razon. El osciloscopio de sintonia existe para llevar un pico
  * hasta una raya, que es lo que se hace en RTTY y en CW. En FT8 no se
@@ -19715,8 +20439,6 @@ static char s_ft8_barra[40];
 /*
  * Y EL "8/15", EN SU PROPIO TEXTO - 13/10/2026.
  *
- * Pedido por el usuario.
- *
  * Estaba al principio del renglon centrado, que es el extremo CONTRARIO al
  * punto que cuenta lo mismo que el. Ahora va aparte: ui_digi lo dibuja
  * pegado a la derecha, justo delante del punto, y los numeros de
@@ -19787,8 +20509,6 @@ static void hfdl_chapa(void)
     /*
      * EL EMBUDO DEL PREAMBULO, DENTRO DE LA BARRA. 25/09/2026.
      *
-     * Pedido por el usuario.
-     *
      * Es lo mas util de toda su pantalla. La FASE ya la dice el relleno de la
      * barra -de cero a tres- asi que el texto de dentro queda libre para algo
      * que no se pueda dibujar, y estos cuatro numeros son justo eso.
@@ -19820,8 +20540,6 @@ static void hfdl_chapa(void)
          * TRES NUMEROS, NO CUATRO - 10/10/2026
          * ======================================================================
          *
-         * Pedido por el usuario.
-         *
          * El cuarto numero ERA hfdl_modo_total(), que es EXACTAMENTE el
          * denominador de la chapa de al lado. En su pantalla el embudo
          * ponia 325>80>66>59 y la chapa 0%.../59: el mismo 59 dos veces.
@@ -19845,8 +20563,6 @@ static void hfdl_chapa(void)
         EMB_NUM(m1);
         /*
          * Y LOS DATOS DE USUARIO, QUE SON LOS QUE PUEDEN LLEVAR POSICION.
-         *
-         * Pedido por el usuario.
          *
          * El embudo de delante cuenta hasta la trama; esto cuenta lo que
          * pasa DESPUES, que es donde estaba la pregunta. "U3/0" es tres
@@ -20174,8 +20890,6 @@ static void wspr_chapa(void)
 /*
  * CUANTO HACE DE LA ULTIMA RAFAGA - 06/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y la pregunta es justa. Una red ALE no emite en continuo: cada estacion
  * suelta un sondeo de dos o tres segundos y se calla, y entre sondeo y
  * sondeo pueden pasar minutos u horas. Con la tabla vacia y la barra
@@ -20377,8 +21091,6 @@ static void ft8_chapa(void)
         /*
          * EL SEGUNDO DE LA RANURA, DENTRO DE LA BARRA - 13/10/2026.
          *
-         * Pedido por el usuario.
-         *
          * Se podia, y lo que lo hacia posible es que la chapa de FT8 decia
          * "8/15" -el segundo dentro de la ranura- que es EXACTAMENTE lo
          * que ya dibuja el RELLENO de esta barra. Dos sitios de la
@@ -20430,8 +21142,6 @@ static void ft8_chapa(void)
 
         /*
          * EL DESFASE MEDIO, EN SEGUNDOS DE VERDAD - 13/10/2026.
-         *
-         * Pedido por el usuario.
          *
          * Aqui ponia `dt / 100` para la parte entera y `(dt/10) % 10` para
          * la decimal, con dt en MILISEGUNDOS. O sea que 240 ms salian como
@@ -20507,8 +21217,6 @@ static void ft8_panel_reinicia(void)
 /*
  * EL MAPA DE FT8 - 28/09/2026.
  *
- * Pedido por el usuario.
- *
  * La lista contesta "quien"; el mapa contesta "por donde se oye hoy", que
  * es la pregunta de verdad cuando uno mira una banda: si lo que entra es
  * Europa, si ha abierto el Atlantico, si asoma Japon por el paso gris.
@@ -20541,8 +21249,6 @@ static mapa_caja_t *mapa_caja(void)
 
 /*
  * EL COLOR DEL PUNTO, EL MISMO EN LOS CINCO MODOS - 12/10/2026.
- *
- * Pedido por el usuario.
  *
  * Aqui habia DIEZ colores a pelo -verde para FT8, ambar para los aviones,
  * azul para los barcos, salmon para WSPR, lila para JTTY, cada uno con su
@@ -20644,8 +21350,6 @@ static void ft8_mapa_pinta(gfx2_surf_t *s, void *ctx)
 
             /*
              * EL FILTRO DE CQ TAMBIEN VALE PARA LOS PUNTOS - 13/10/2026.
-             *
-             * Pedido por el usuario.
              *
              * Porque el punto lo pone CUALQUIER mensaje que traiga
              * localizador y la etiqueta solo los CQ, que es lo que se
@@ -20938,8 +21642,6 @@ static void mapa_eti_llena(const mapa_caja_t *caja)
         /*
          * LOS AVIONES - 13/10/2026.
          *
-         * Pedido por el usuario.
-         *
          * Aqui no hay localizador que valga: un avion manda latitud y
          * longitud. Por eso mapa_eti_dx_t aprendio hoy a aceptar la
          * posicion a pelo -ver su comentario-; esta es la unica rama que
@@ -21023,8 +21725,6 @@ static void ft8_mapa_draw(void)
  * UN PASO DE ZOOM DEL MAPA, VENGA DE DONDE VENGA - 11/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * El zoom ya estaba hecho -mapa_zoom() con ancla, escalas 1, 2, 4 y 8- y
  * los botones de la esquina ya lo usaban. Lo que faltaba era el mando.
  *
@@ -21072,8 +21772,6 @@ static void mapa_zoom_pasos(int32_t pasos)
  */
 /*
  * QUIEN TIENE MAPA, EN UN SOLO SITIO - 28/09/2026.
- *
- * Pedido por el usuario.
  *
  * Y la tenia escrita A MANO EN DOS SITIOS: aqui, para decidir si se pinta
  * el mapa o la lista, y en el despacho del toque, para decidir si un dedo
@@ -21218,8 +21916,6 @@ static void ft8_panel_draw(void)
     /*
      * UNA VEZ POR FOTOGRAMA, NO UNA VEZ POR VUELTA - 05/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * El bucle principal llamaba a esto en CADA pasada, no por fotograma. El
      * repintado si esta condicionado a que cambie un contador, pero
      * digi_sync() -que reconstruye la estructura entera del panel: catorce
@@ -21301,8 +21997,6 @@ static void ft8_panel_draw(void)
     /*
      * STANAG: el panel se repinta cuando cambia la CUENTA DE MEDIDAS, no
      * cuando aparece un renglon nuevo.
-     *
-     * Pedido por el usuario.
      *
      * Y no estaba parado: estaba midiendo y NADIE REPINTABA. Lo que veia
      * era una foto del instante en que el panel se dibujo por ultima vez.
@@ -21609,8 +22303,6 @@ static void digi_sync(void)
     /*
      * EL PANEL DEL IDENT - 05/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * UNA SOLA COLUMNA DE TEXTO, sin titulos y sin cebra, y no por ahorrar:
      * lo que escribe ident.c no es una tabla. Son dos cosas de naturaleza
      * distinta pegadas -arriba el nombre o los nombres de lo que cuadra y
@@ -21718,8 +22410,6 @@ static void digi_sync(void)
              */
             /*
              * LA BARRA SE ACORTA PARA QUE QUEPA EL BOTON DE VELOCIDAD.
-             *
-             * Pedido por el usuario, 02/10/2026.
              *
              * No era que faltara el rotulo: btn3_w() de ui_digi.c
              * devuelve 0 si la barra no deja 70 px libres, y yo la
@@ -22036,8 +22726,6 @@ static void digi_sync(void)
             /*
              * EL VOLCADO, DEBAJO DE CADA FILA - 14/10/2026.
              *
-             * Pedido por el usuario.
-             *
              * Cada avion gasta DOS renglones: el suyo y, si ha mandado
              * datos de usuario, los bytes en crudo del ultimo. Caben menos
              * aviones a proposito: esto es una vista de diagnostico y lo
@@ -22088,7 +22776,6 @@ static void digi_sync(void)
         s_digi.btn   = tr("Borrar", "Clear");
         s_digi.btn2  = 0;   /* su hueco lo ocupa la barra de la ranura */
         /*
-         * Pedido por el usuario.
          *
          * Ese es el CUARTO, en la franja que va del final de la barra a la
          * chapa, y es el que el usuario pidio para ir probando frecuencias
@@ -22116,8 +22803,6 @@ static void digi_sync(void)
         s_digi.barra_dcha = 1U;  /* botones a la izquierda, barra a la derecha */
         /*
          * EL BOTON DE CQ - 13/10/2026.
-         *
-         * Pedido por el usuario.
          *
          * Y es el mismo criterio que ya pinta las CQ de otro color desde el
          * 27/09 -una CQ es la unica linea a la que se PUEDE contestar; el
@@ -22205,7 +22890,6 @@ static void digi_sync(void)
                 const char *l = ft8_modo_linea(idx[k]);
                 s_digi.fila[k] = l;
                 /*
-                 * Pedido por el usuario.
                  *
                  * Y tiene sentido mas alla de lo bonito: una CQ es la
                  * unica linea a la que se PUEDE contestar. El resto son
@@ -22326,8 +23010,6 @@ static void digi_sync(void)
     /*
      * EL BOTON DE APRENDIZAJE, SOLO EN CW - 08/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Apagado, la radio lee suponiendo la relacion de la norma -la raya
      * dura tres puntos-, que es lo que manda casi todo el mundo y con lo
      * que acierta mas. Encendido, mide como teclea esa estacion en vez de
@@ -22392,8 +23074,6 @@ static void digi_sync(void)
         /*
          * Y CON EL APRENDIZAJE ENCENDIDO, LA RELACION QUE HA MEDIDO.
          *
-         * Pedido por el usuario.
-         *
          * Sin este numero no hay forma de saber desde fuera si el
          * aprendizaje esta midiendo algo o esta parado, y yo no puedo
          * verlo porque lo que pasa en el aire no me llega. "30" es que
@@ -22415,8 +23095,6 @@ static void digi_sync(void)
         }
         /*
          * Y EL MARGEN ENTRE LAS DOS MEDIAS, EN DECIBELIOS - 09/10/2026.
-         *
-         * Pedido por el usuario.
          *
          * La velocidad SI estaba en pantalla -los "ppm" de aqui al lado-.
          * El nivel NO: cw.c persigue dos medias, la baja sobre el ruido y
@@ -22891,8 +23569,8 @@ static void fax_panel_linea(const uint8_t *l)
  * Ahora el tamaño lleva la cuenta al lado y un aserto que la ata: quien
  * añada otro campo tiene que venir aqui a sumarlo, y si no cabe no compila.
  */
-static char s_fax_txt[64];
-_Static_assert(sizeof s_fax_txt >= 46,
+static char s_fax_txt[96];
+_Static_assert(sizeof s_fax_txt >= 70,
                "la cabecera de WEFAX con la correccion de inclinacion no cabe");
 
 /*
@@ -22906,11 +23584,11 @@ _Static_assert(sizeof s_fax_txt >= 46,
  * entera son 240 kB a 24 bits, que no caben en la RAM que queda. Asi que
  * no hay un "guardar al final": se va escribiendo mientras entra.
  *
- * El fichero se monta con spi_flash_anade_trozo(), de 4096 en 4096, que es
- * el bloque de borrado del chip y el camino que se probo a mano 27 veces
- * antes de confiarle esto. La cabecera BMP ocupa un bloque entero (ver
- * bmp.h) justamente para que las cuentas salgan en multiplos exactos:
- * 61 bloques a 24 bits, 41 a 16.
+ * El fichero se escribe de 4096 en 4096, que es el bloque de borrado del
+ * chip. La cabecera BMP ocupa un bloque entero (ver bmp.h) justamente para
+ * que las cuentas salgan en multiplos exactos: 61 bloques a 24 bits, 41 a
+ * 16. El SSTV sabe su altura desde el primer renglon, asi que reserva de
+ * una pieza; el fax no, y por eso crece a tramos (ver s_gsv_ext_addr).
  *
  * LO QUE CUESTA Y POR QUE SE PUEDE PAGAR
  * --------------------------------------
@@ -22957,6 +23635,101 @@ static uint32_t s_gsv_ms;          /* cuando entro el ultimo renglon */
  * a borrar en la fila cero. Ver capt_poll().
  */
 static uint8_t  s_gsv_limpio;
+
+/*
+ * ======================================================================
+ * EL FICHERO QUE CRECE, EN VEZ DEL SITIO RESERVADO DE GOLPE. 20/10/2026.
+ * ======================================================================
+ *
+ * Las dos quejas son la misma cosa. Una carta se reservaba DE UNA PIEZA al
+ * abrir, asi que:
+ *
+ *   - para abrirla hacia falta un hueco SEGUIDO de ese tamaño, y ese hueco
+ *     se parte en cuanto hay ficheros repartidos por el disco;
+ *   - y para que el hueco fuera facil de encontrar habia que hacer los
+ *     ficheros pequeños... o sea trocear la carta en diez.
+ *
+ * No hay forma de ganar las dos con una reserva de una pieza. Asi que el
+ * fichero CRECE: spi_flash_amplia() le pega un tramo de 64 kB cada vez que
+ * se queda sin sitio, y cada tramo cae donde quepa. Hacen falta 64 kB
+ * seguidos, no 774, y eso lo hay casi siempre; si tampoco, se baja a la
+ * mitad hasta un solo bloque.
+ *
+ * O sea: UNA carta, UN fichero, y el disco partido deja de importar. Que es
+ * lo que el usuario llevaba pidiendo desde el principio.
+ *
+ * Y POR QUE NO DE 4 kB EN 4 kB, que era la primera version: porque el
+ * trabajo de FAT y directorio es el mismo tanto si se pide un bloque como
+ * si se piden dieciseis. Medido: 303 ms de media por trozo. A un trozo
+ * cada dos segundos y medio, la radio deja de atender el tactil.
+ *
+ * LA CABECERA. El BMP lleva la altura delante y una carta no sabe cuanto va
+ * a durar, asi que se escribe con el tope y al cerrar se rehace con la de
+ * verdad. Esta en el bloque 0, o sea al principio del PRIMER tramo, y esa
+ * direccion se guarda al escribirlo: ver s_gsv_addr en gsv_bloque().
+ *
+ * Esto es SOLO para el fax. El SSTV sabe su altura desde el primer renglon
+ * y la captura de pantalla tambien, asi que a esos dos la reserva de una
+ * pieza les va bien y no se tocan.
+ */
+static uint8_t  s_gsv_trozos;
+/*
+ * EL TRAMO EN CURSO - 20/10/2026.
+ *
+ * Y antes de eso, con la radio en la mano, los botones no respondian.
+ * Las dos cosas eran la misma: el fichero crecia llamando a
+ * spi_flash_anade_trozo() UNA VEZ POR BLOQUE DE 4 kB, y eso cuesta 303 ms
+ * de media -medido en sim/fatanade.c-. Trescientos milisegundos cada dos
+ * segundos y medio con el chip parado, y en ese rato nadie mira el tactil.
+ *
+ * Ahora el fichero se alarga de SESENTA Y CUATRO en sesenta y cuatro kB
+ * -spi_flash_amplia()- y dentro del tramo cada bloque es una escritura en
+ * una direccion que ya se sabe, unos 51 ms. El trabajo de FAT y
+ * directorio pasa de una vez por bloque a una vez cada dieciseis: a 120
+ * lineas por minuto, de cada dos segundos y medio a cada cuarenta.
+ *
+ * Y el fichero es UNO. Con el camino de antes, el primer fallo cerraba el
+ * fichero y el siguiente intento abria otro: de ahi la lista de
+ * WFAX001..WFAX020 de 4 kB, que es la cabecera y nada mas.
+ */
+#define WFX_TRAMO_BLOQUES 16U        /* 64 kB por tramo */
+static uint32_t s_gsv_ext_addr;      /* primer byte del tramo en curso */
+static uint16_t s_gsv_ext_n;         /* cuantos bloques trae */
+static uint16_t s_gsv_ext_i;         /* cuantos van escritos de el */
+static void wfx_avisa_fallo(void);
+
+/*
+ * ======================================================================
+ * AQUI HUBO UN BORRADO POR DELANTE, Y ME LLEVO EL CONFIG.CSV DE ALGUIEN.
+ * ======================================================================
+ *
+ * GSV_BORRADO_FUERA - 20/10/2026.
+ *
+ * La idea era buena y la cuenta salia: escribir 4 kB sobre flash sin
+ * borrar cuesta 51 ms medidos, y sobre flash ya borrada 6. Asi que se puso
+ * un cursor que iba borrando la reserva por delante, un borrado por vuelta
+ * del bucle.
+ *
+ * Y borro lo que no era suyo. El CONFIG.CSV aparecio con 1.536 bytes
+ * a 0xFF con la entrada de directorio intacta. Eso no lo hace un fichero
+ * mal escrito, lo hace un BORRADO DE SECTOR por direccion de chip.
+ *
+ * La causa esta en spi_flash_borrado_paso() -redondeaba el cursor hacia
+ * ABAJO, o sea podia empezar a borrar por debajo de donde le decian- y ahi
+ * esta arreglada, que es donde tenia que estarlo. Pero el borrado por
+ * delante NO VUELVE:
+ *
+ *   - lo que gana son 45 ms por bloque, uno cada dos minutos;
+ *   - lo que se jugaba eran los ajustes del usuario, o cualquier otro
+ *     fichero vecino;
+ *   - y ademas resulto que NO era la causa del atasco que fui a arreglar.
+ *     Eso lo midio sim/fax_bloqueo.c despues: 51 ms de cada 2.700 son el
+ *     2% del tiempo, no un tercio.
+ *
+ * O sea: riesgo alto, premio pequeño y encima no arreglaba el fallo. Fuera.
+ * Si algun dia hace falta de verdad, el camino es que la reserva empiece en
+ * un limite de 4 kB, no que el borrado adivine.
+ */
 /*
  * Y lo que distingue una foto de SSTV de una carta de fax, que es lo unico
  * que cambia entre los dos: el tamaño y como se llama el fichero. Todo lo
@@ -22971,7 +23744,6 @@ static char     s_gsv_pre[4];
 /*
  * CUANTO SE ESPERA UN RENGLON ANTES DE DAR LA FOTO POR TERMINADA
  * --------------------------------------------------------------
- * Pedido por el usuario, 24/09/2026.
  *
  * Con ruido, el decodificador puede cerrar UNA linea por casualidad. Si
  * esa cae en la fila 0, abre una foto y reserva 240 kB. Y como
@@ -22984,6 +23756,34 @@ static char     s_gsv_pre[4];
  * cortada se cierre sola mientras sigues mirando.
  */
 #define GSV_ESPERA_MS  10000UL
+
+/* Cuanto tiene que llevar el WEFAX fuera de imagen para dar la carta por
+ * acabada. Ver el comentario del cierre en fax_poll(): con medio segundo
+ * -que era lo de antes- un parpadeo del enganche partia la carta en dos
+ * ficheros, y veintisiete parpadeos en veintisiete. */
+#define WFX_FUERA_MS   5000UL
+
+/*
+ * EL CERROJO: UN MINUTO ENTRE UNA CARTA Y LA SIGUIENTE. 20/10/2026.
+ *
+ * Las dos veces fue un fallo distinto -primero el cierre al primer
+ * parpadeo, luego una reapertura automatica que puse yo- y las dos veces el
+ * sintoma fue el mismo: el disco lleno de ficheros de nada.
+ *
+ * Esto ya no intenta adivinar QUE lo dispara. Es un cerrojo: pase lo que
+ * pase ahi arriba, entre cerrar una carta y abrir la siguiente tiene que
+ * pasar un minuto. Una carta de verdad dura entre cinco y veinte, asi que
+ * no estorba a nadie; y lo peor que puede salir de cualquier fallo futuro
+ * en esta maquinaria es UN fichero por minuto en vez de veintisiete en un
+ * rato.
+ *
+ * Un cerrojo no sustituye a arreglar la causa. Pero cuando el mismo sintoma
+ * vuelve por una causa distinta, lo que hay que poner es un tope que no
+ * dependa de haber entendido la causa.
+ */
+#define WFX_CERROJO_MS 60000UL
+
+
 static spi_anade_r_t s_gsv_porque; /* por que se corto, si se corto */
 static uint8_t  s_gsv_fallo;
 
@@ -22994,23 +23794,88 @@ static uint8_t  s_gsv_fallo;
  * tocar la FAT, ni el directorio. Por eso cuesta ~130 ms en vez de los
  * 1205 que costaba montando el fichero a trozos.
  */
+/* Cerrar deja el fichero legible -cabecera con la altura de verdad y
+ * recorte-, y la rama de fallo de aqui abajo lo necesita. */
+static void gsv_cierra(void);
+
 static void gsv_bloque(void)
 {
     s_gsv_bloques++;
     if (s_gsv_blk >= s_gsv_blk_n) {
         /* Mas bloques de los reservados no deberia pasar nunca -la cuenta
          * de filas se para en SSTV_ALTO- pero escribir pasado el final del
-         * fichero es pisar al vecino, asi que se comprueba. */
-        s_gsv_on = 0U;
+         * fichero es pisar al vecino, asi que se comprueba.
+         *
+         * Y se cierra en condiciones, por lo mismo que la rama de abajo:
+         * un fichero abandonado promete una altura que no tiene. */
         s_gsv_fallo = 1U;
+        gsv_cierra();
         return;
     }
-    if (s_gsv_limpio) {
-        spi_flash_write_block_4k_borrado(
-            s_gsv_addr + (uint32_t)s_gsv_blk * GSV_BLOQUE, s_gsv_buf);
-    } else {
-        spi_flash_write_block_4k(
-            s_gsv_addr + (uint32_t)s_gsv_blk * GSV_BLOQUE, s_gsv_buf);
+    if (s_gsv_trozos) {
+        /*
+         * El fichero crece a tramos. Mientras quede sitio en el tramo en
+         * curso esto es una escritura normal; cuando se acaba, se le pide
+         * otro al volumen y se sigue EN EL MISMO FICHERO. Ver el
+         * comentario de s_gsv_ext_addr.
+         */
+        if (s_gsv_ext_i >= s_gsv_ext_n) {
+            uint32_t dados = 0UL;
+
+            if (!spi_flash_amplia(s_gsv_n8, "BMP", WFX_TRAMO_BLOQUES,
+                                  &s_gsv_ext_addr, &dados, &s_gsv_porque)) {
+                /*
+                 * Y SE DICE. Hasta hoy, quedarse sin sitio a mitad de carta
+                 * paraba la grabacion en silencio: el usuario veia la carta
+                 * entrando en pantalla y un fichero que dejaba de crecer.
+                 */
+                /*
+                 * Y SE CIERRA, no se abandona - 20/10/2026.
+                 *
+                 * Antes esto era "s_gsv_on = 0" a secas, y eso deja la
+                 * carta a medio escribir con la cabecera BMP diciendo que
+                 * mide WFX_ALTO_MAX renglones: el visor la abre y pinta
+                 * basura hasta abajo. Y ademas se queda con el tramo
+                 * entero reservado, hasta 64 kB que nadie usa, que es el
+                 * mismo fallo de los ficheros vacios de ayer con otro
+                 * numero - y encima justo cuando el disco se acaba de
+                 * llenar, que es cuando menos sobra.
+                 *
+                 * El fallo se marca ANTES de cerrar porque gsv_cierra() lo
+                 * mira para no volver a intentar volcar la cola, y se
+                 * cierra con s_gsv_on todavia a 1 para que entre.
+                 */
+                s_gsv_fallo = 1U;
+                gsv_cierra();          /* cabecera con la altura real y recorte */
+                wfx_avisa_fallo();
+                return;
+            }
+            s_gsv_ext_n = (uint16_t)dados;
+            s_gsv_ext_i = 0U;
+        }
+        /* El bloque 0 es la cabecera BMP, y al cerrar hay que rehacerla con
+         * la altura de verdad. Se guarda donde cayo: asi el cierre escribe
+         * en una direccion conocida y no tiene que ir a buscar el fichero
+         * por el directorio. */
+        if (s_gsv_blk == 0U) { s_gsv_addr = s_gsv_ext_addr; }
+        spi_flash_write_block_4k(s_gsv_ext_addr +
+                                 ((uint32_t)s_gsv_ext_i * (uint32_t)GSV_BLOQUE),
+                                 s_gsv_buf);
+        s_gsv_ext_i++;
+        s_gsv_blk++;
+        s_gsv_n = 0U;
+        return;
+    }
+    {
+        uint32_t a = s_gsv_addr + (uint32_t)s_gsv_blk * GSV_BLOQUE;
+
+        /* Borrado de antemano -solo la captura, que puede pararse a
+         * borrar su zona entera- o no. Ver GSV_BORRADO_FUERA. */
+        if (s_gsv_limpio) {
+            spi_flash_write_block_4k_borrado(a, s_gsv_buf);
+        } else {
+            spi_flash_write_block_4k(a, s_gsv_buf);
+        }
     }
     s_gsv_blk++;
     s_gsv_n = 0U;
@@ -23034,8 +23899,61 @@ static void gsv_mete(const uint8_t *d, uint32_t n)
     }
 }
 
-static void gsv_abre(uint16_t ancho, uint16_t alto, uint8_t bits, const char pre[4])
+/*
+ * EL AVISO DE QUE NO SE PUEDE GUARDAR, CON EL MOTIVO DE VERDAD. 20/10/2026.
+ *
+ * Dos cosas que estaban mal y se arreglan juntas:
+ *
+ *   - el cartel decia siempre "PIDE n kB SEGUIDOS", y desde que la carta se
+ *     monta a trozos ya no hace falta NI UN byte seguido. Mentia;
+ *   - y solo salia al ABRIR. Si el disco se llenaba a mitad de carta, la
+ *     grabacion se paraba en silencio.
+ *
+ * Ahora el motivo lo da quien lo sabe -spi_flash_anade_porque_txt(), que ya
+ * existia y nadie enseñaba- y el cartel sale en los dos sitios.
+ */
+static void capt_avisa(const char *msg);
+
+static void wfx_avisa_fallo(void)
 {
+    char     m[56];
+    uint32_t libre = 0UL, seguido = 0UL;
+    uint16_t hu = 0U, ra = 0U;
+    uint8_t  k = 0U;
+    const char *e;
+
+    e = tr("NO SE GUARDA: ", "NOT SAVING: ");
+    while (*e != '\0' && k < (uint8_t)(sizeof m - 30U)) { m[k++] = *e++; }
+
+    e = spi_flash_anade_porque_txt(s_gsv_porque);
+    while (*e != '\0' && k < (uint8_t)(sizeof m - 14U)) { m[k++] = *e++; }
+
+    /* Y cuanto queda, que es el numero que hace falta para entenderlo. */
+    (void)spi_flash_sitio(&libre, &seguido, &hu, &ra);
+    m[k++] = ' '; m[k++] = '('; 
+    aj_u2s(&m[k], libre);
+    while (m[k] != '\0') { k++; }
+    m[k++] = ' '; m[k++] = 'k'; m[k++] = 'B';
+    m[k++] = ')';
+    m[k] = '\0';
+    capt_avisa(m);
+}
+
+/*
+ * crece = 1 -> el fichero se monta a trozos y no reserva nada (las cartas
+ *              de fax, que no saben cuanto van a durar);
+ *         0 -> se reserva de una pieza (el SSTV y la captura, que si lo
+ *              saben).
+ *
+ * VA COMO PARAMETRO Y NO COMO VARIABLE GLOBAL puesta antes de llamar, que
+ * es como estuvo un rato: una global que el llamante tiene que acordarse de
+ * poner es una global que alguien se olvidara de poner, y entonces una
+ * carta reservaria medio mega de una pieza sin que nada lo avise.
+ */
+static void gsv_abre(uint16_t ancho, uint16_t alto, uint8_t bits,
+                     const char pre[4], uint8_t crece)
+{
+    s_gsv_trozos = crece;
     uint32_t idx, total;
     uint8_t  k;
 
@@ -23045,7 +23963,16 @@ static void gsv_abre(uint16_t ancho, uint16_t alto, uint8_t bits, const char pre
     idx = spi_flash_dir_max_indice(s_gsv_pre, "BMP") + 1UL;
 
     s_gsv_porque = SPI_ANADE_OK;   /* si falla sin llegar a reservar, se queda asi */
-    if (idx > 999UL) { s_gsv_fallo = 1U; return; }   /* no hay mas nombres */
+    if (idx > 999UL) {
+        /* Y este caso tenia su propio motivo y no lo contaba: el aviso
+         * acababa diciendo "NO SE GUARDA: bien", porque s_gsv_porque se
+         * habia quedado en OK. Se reutiliza el de directorio lleno, que es
+         * lo mas parecido y lo unico que el usuario puede arreglar: hacer
+         * sitio o vaciar. */
+        s_gsv_porque = SPI_ANADE_DIR_LLENO;
+        s_gsv_fallo  = 1U;
+        return;
+    }
 
     for (k = 0U; k < 4U; k++) { s_gsv_n8[k] = pre[k]; }
     s_gsv_n8[4] = (char)('0' + (idx / 100UL) % 10UL);
@@ -23060,9 +23987,20 @@ static void gsv_abre(uint16_t ancho, uint16_t alto, uint8_t bits, const char pre
      * cerrar. Un fax de 756 puntos no cuadra a bloque como cuadra SSTV. */
     total = ((total + GSV_BLOQUE - 1UL) / GSV_BLOQUE) * GSV_BLOQUE;
 
-    /* La foto entera de golpe. Si no hay un hueco seguido se dice y no se
-     * empieza: mejor que abrir una que no va a caber. */
-    if (!spi_flash_reserva(s_gsv_n8, "BMP", total, &s_gsv_addr, &s_gsv_porque)) {
+    if (s_gsv_trozos) {
+        /*
+         * A TRAMOS: aqui no se pide sitio todavia. El fichero nace con su
+         * primer tramo, y quien lo pide es gsv_bloque() al ir a escribir
+         * el bloque de la cabecera -el mismo camino que todos los demas,
+         * para que no haya dos sitios que reserven-. Ver s_gsv_ext_addr.
+         *
+         * Si no cabe ni un bloque en todo el disco, lo dira ese.
+         */
+        s_gsv_addr   = 0UL;
+        s_gsv_ext_n  = 0U;   /* sin tramo: el primer bloque pide uno */
+        s_gsv_ext_i  = 0U;
+    } else if (!spi_flash_reserva(s_gsv_n8, "BMP", total,
+                                  &s_gsv_addr, &s_gsv_porque)) {
         s_gsv_fallo = 1U;
         debug_print("sstv: no hay sitio seguido para la foto\n");
         return;
@@ -23077,18 +24015,57 @@ static void gsv_abre(uint16_t ancho, uint16_t alto, uint8_t bits, const char pre
     s_gsv_fallo = 0U;
     s_gsv_on = 1U;
     gsv_bloque();                /* y se escribe ya, que es el primero */
+    /* Con el fichero a trozos, ese primer bloque es tambien quien lo crea:
+     * si no cabe ni el, gsv_bloque() ya ha dejado el aviso puesto. */
 }
 
 /* Cierra. Si se corto antes de las 256 filas, se rehace la cabecera con la
  * altura de verdad para que el fichero no prometa mas de lo que trae. */
+/*
+ * ======================================================================
+ * EL CERROJO LO ARMA EL CIERRE, NO EL QUE CIERRA - 20/10/2026
+ * ======================================================================
+ *
+ * Y tiene razon, porque faltaba esto.
+ *
+ * El dueño -gsv_cierra_si_es()- arregla el cierre que SE CONOCE: el de
+ * sstv_poll(). Lo que no arregla es lo que convierte un cierre suelto en
+ * una RIADA de ficheros, que es otra cosa:
+ *
+ *   para que fax_poll() no vuelva a abrir enseguida hay un cerrojo de un
+ *   minuto, y ese cerrojo lo armaba EL QUE CERRABA.
+ *
+ * O sea: el cerrojo solo se armaba si quien cerraba se acordaba de
+ * armarlo. sstv_poll() no se acordaba -ni tenia por que: no sabia que el
+ * fichero era del fax- y por eso salian veintiun ficheros en un minuto en
+ * vez de uno.
+ *
+ * Asi que el cerrojo deja de depender de que alguien se acuerde. Lo arma
+ * el PROPIO CIERRE, aqui dentro, mirando de quien era el fichero. Con esto:
+ *
+ *   - si mañana aparece otro cerrador que no he visto -o alguien añade
+ *     uno-, lo peor que puede pasar es UN fichero por minuto, no veinte
+ *     por minuto;
+ *   - y no hay forma de escribir mal el call site, porque ya no hay call
+ *     site: no se puede cerrar una carta sin armar el cerrojo.
+ *
+ * Lo vigila tools/gsv_dueno_check.py, que exige que el cerrojo se toque
+ * AQUI y en ningun otro sitio.
+ */
+static uint8_t  s_wfx_hubo;    /* ya se cerro alguna carta... */
+static uint32_t s_wfx_ult;     /* ...y cuando. Ver arriba. */
+
 static void gsv_cierra(void)
 {
     if (!s_gsv_on) { return; }
     s_gsv_on = 0U;
+    if (s_gsv_pre[0] == 'W' && s_gsv_pre[1] == 'F' &&
+        s_gsv_pre[2] == 'A' && s_gsv_pre[3] == 'X') {
+        s_wfx_hubo = 1U;
+        s_wfx_ult  = g_msticks;
+    }
     /*
      * LO QUE QUEDABA EN EL BUFFER - 05/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * La linea blanca eran los ultimos 2.048 bytes de la foto, que no se
      * escribian NUNCA: gsv_bloque() vuelca cuando el buffer se llena, y si
@@ -23102,7 +24079,11 @@ static void gsv_cierra(void)
      * Se rellena con 0xFF lo que sobra del bloque -son bytes de relleno
      * detras de la ultima fila, no los ve nadie- y se vuelca.
      */
-    if (s_gsv_n > 0U && s_gsv_n < (uint16_t)GSV_BLOQUE) {
+    /* Salvo que lo que acaba de pasar sea justo que no se puede escribir:
+     * entonces volcar la cola es un segundo intento condenado que cuesta
+     * otros 300 ms de radio parada y no añade ni un renglon. Ver la rama
+     * de fallo de gsv_bloque(). */
+    if (!s_gsv_fallo && s_gsv_n > 0U && s_gsv_n < (uint16_t)GSV_BLOQUE) {
         while (s_gsv_n < (uint16_t)GSV_BLOQUE) {
             s_gsv_buf[s_gsv_n] = 0xFFU;
             s_gsv_n = (uint16_t)(s_gsv_n + 1U);
@@ -23110,7 +24091,126 @@ static void gsv_cierra(void)
         gsv_bloque();
     }
     s_gsv_limpio = 0U;
-    if (s_gsv_fila == 0U) { return; }
+
+    /*
+     * AQUI BORRABA LAS CARTAS CORTAS, Y SE QUITA. 20/10/2026.
+     *
+     * Lo meti esta misma mañana para no dejar ficheros de cero renglones
+     * detras de cada parpadeo del enganche. El parpadeo ya no abre
+     * ficheros -se arreglo en su sitio, que es el cierre- asi que esto
+     * sobraba... y mientras estuvo, era LO UNICO de todo este camino que
+     * DESTRUYE algo que el usuario ya tenia.
+     *
+     * Un fichero feo molesta. Tirar una carta de diez minutos no se
+     * arregla. Entre las dos no hay comparacion, asi que fuera.
+     */
+    /*
+     * UN FICHERO DE CERO RENGLONES DEVOLVIA EL SITIO... NO: SE LO QUEDABA.
+     * 20/10/2026.
+     *
+     * Aqui ponia `if (s_gsv_fila == 0U) { return; }` a secas: con cero
+     * renglones escritos se salia SIN RECORTAR. Y la reserva son 448 kB que
+     * se piden ENTEROS al abrir -la entrada de directorio se escribe ya con
+     * el tamaño final-, asi que cada fichero vacio se quedaba con 448 kB
+     * marcados como suyos en la tabla de asignacion. Catorce de esos son
+     * seis megas y medio.
+     *
+     * Y desde fuera no se ve: Windows enseña el tamaño de la entrada de
+     * directorio -8 kB, que es lo que el recorte deja en los que SI
+     * escribieron algo- mientras la tabla dice otra cosa. De ahi "tengo
+     * espacio de sobra" y un disco que no admite una carta mas.
+     *
+     * Ahora se recorta a un bloque. No se borra -borrar fue un error que ya
+     * cometi hoy- pero deja de ocupar medio mega por nada.
+     */
+    if (s_gsv_trozos) {
+        /*
+         * A TRAMOS: dos cosas, y en este orden.
+         *
+         * 1. La cabecera BMP se escribio con el tope de altura, porque una
+         *    carta no sabe cuanto va a durar. Se rehace con la de verdad.
+         *    Va a s_gsv_addr, que es donde cayo el bloque 0 - no hace falta
+         *    buscar el fichero por el directorio.
+         *
+         * 2. Y se devuelve lo que sobra del ultimo tramo. El fichero crece
+         *    de 64 en 64 kB, asi que al cerrar le sobran hasta quince
+         *    bloques: sin esto, cada carta se queda con sesenta kilobytes
+         *    marcados como suyos que nadie usa. Es exactamente el fallo de
+         *    los ficheros vacios de ayer, con otro numero.
+         *
+         *    Y con la que SIGUE LA CADENA, no con spi_flash_recorta(): un
+         *    fichero a tramos no es seguido, y aquella liberaria los
+         *    clusters que van detras del primer tramo, que son de otro.
+         */
+        /* s_gsv_addr a cero = no se llego a escribir ni el bloque 0, o sea
+         * que no hay fichero. Sin esta condicion, una carta que falla en su
+         * primera peticion de sitio escribiria la cabecera en la direccion
+         * 0 del chip, que es el sector de arranque del volumen. */
+        if (s_gsv_fila != 0U && s_gsv_addr != 0UL) {
+            /*
+             * ==========================================================
+             * LA CABECERA DICE LO QUE HAY ESCRITO, NO LO QUE SE INTENTO
+             * ==========================================================
+             *
+             * No llegue a ver ese fichero -lo borro- asi que no se si era
+             * esto. Pero esto estaba mal de todas formas, y es
+             * exactamente la forma de quedarse con un BMP corto:
+             *
+             * s_gsv_fila cuenta los renglones que ENTRARON por gsv_linea().
+             * Los que van en el buffer a medio llenar, o los del bloque
+             * que no se pudo escribir porque el disco se lleno, estan
+             * contados y NO estan en el fichero. Con la cabecera hecha
+             * con ese numero, el BMP promete mas imagen de la que tiene
+             * dentro - y un visor que lee hasta el final se encuentra el
+             * fichero acabado antes de tiempo. Eso es "dañada".
+             *
+             * Se mira entonces lo que de verdad hay: los bloques
+             * escritos menos el de la cabecera. En el cierre normal eso
+             * es mas que los renglones -el ultimo bloque lleva relleno-
+             * asi que se recorta a s_gsv_fila; en el cierre por fallo es
+             * menos, y entonces manda lo que hay.
+             *
+             * No hay banco que lo cubra, y lo digo aqui: gsv_* vive
+             * dentro de main.c y ningun banco puede enlazarlo. Es una
+             * razon mas para sacarlo a su propio fichero, que es lo que
+             * lleva apuntado desde esta noche.
+             */
+            uint32_t nf = bmp_fila_bytes(s_gsv_ancho, s_gsv_bits);
+            uint32_t hay = ((uint32_t)s_gsv_blk > 1UL)
+                           ? (((uint32_t)s_gsv_blk - 1UL) * (uint32_t)GSV_BLOQUE)
+                           : 0UL;
+            uint16_t filas = (nf != 0UL) ? (uint16_t)(hay / nf) : 0U;
+            uint32_t usado;
+
+            if (filas > s_gsv_fila) { filas = s_gsv_fila; }
+            if (filas == 0U) {
+                /* Ni un renglon entero en el disco: no hay imagen que
+                 * declarar. Se recorta a la cabecera y se deja estar. */
+                (void)spi_flash_recorta_cadena(s_gsv_n8, "BMP", GSV_BLOQUE);
+                s_gsv_ext_n = 0U;
+                s_gsv_ext_i = 0U;
+                debug_print("wefax: carta sin renglones enteros\n");
+                return;
+            }
+            s_gsv_fila = filas;
+            usado = (uint32_t)GSV_BLOQUE + nf * (uint32_t)filas;
+
+            (void)bmp_cabecera(s_gsv_buf, s_gsv_ancho, s_gsv_fila, s_gsv_bits);
+            spi_flash_write_block_4k(s_gsv_addr, s_gsv_buf);
+            (void)spi_flash_recorta_cadena(s_gsv_n8, "BMP", usado);
+            s_gsv_hechas++;
+        } else {
+            (void)spi_flash_recorta_cadena(s_gsv_n8, "BMP", GSV_BLOQUE);
+        }
+        s_gsv_ext_n = 0U;
+        s_gsv_ext_i = 0U;
+        debug_print("wefax: carta cerrada\n");
+        return;
+    }
+    if (s_gsv_fila == 0U) {
+        (void)spi_flash_recorta(s_gsv_n8, "BMP", GSV_BLOQUE);
+        return;
+    }
     if (s_gsv_fila < s_gsv_alto) {
         /*
          * Y se devuelve el sitio que no se llego a usar. Sin esto, una
@@ -23142,8 +24242,6 @@ static void gsv_cierra(void)
 /* ===========================================================================
  * LA CAPTURA DE PANTALLA
  * ===========================================================================
- *
- * Pedido por el usuario.
  *
  * DOS COSAS QUE HAY QUE SABER ANTES DE LEER ESTO.
  *
@@ -23204,8 +24302,6 @@ static uint8_t  s_capt_fallo;
 /*
  * LA FASE DE BORRADO - 05/10/2026.
  *
- * Pedido por el usuario.
- *
  * De esos 10 s, ocho y medio eran borrar: 45 ms de chip parado por cada uno
  * de los 189 sectores. El mismo chip borra 64 kB de golpe en 150 ms, asi
  * que ahora la captura empieza preparando TODA la zona reservada en trozos
@@ -23218,8 +24314,6 @@ static uint8_t  s_capt_fallo;
 /*
  * EL AVISO EN PANTALLA - 05/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y era cierto. dos veces: no avisaba, y ademas s_capt_fallo se escribia y
  * NO SE LEIA EN NINGUN SITIO -la misma familia de fallo que el boton de
  * ajustar ppm, que guardaba un texto que nadie pintaba-. Lo unico que se
@@ -23231,7 +24325,7 @@ static uint8_t  s_capt_fallo;
  * cabe -disco lleno, directorio lleno, formato raro...-.
  */
 #define CAPT_AVISO_MS 4000U
-static char     s_capt_msg[40];
+static char     s_capt_msg[72];   /* 40 se quedaba corto y RECORTABA el motivo del aviso sin decirlo: ver wfx_avisa_fallo() */
 static uint32_t s_capt_msg_ms;
 
 static uint8_t  s_capt_fase;      /* 0 = borrando, 1 = montando y escribiendo */
@@ -23241,8 +24335,6 @@ static uint32_t s_capt_borra_fin;
 
 /*
  * QUE PANTALLA DE MENU HAY DELANTE - 05/10/2026.
- *
- * Pedido por el usuario.
  *
  * Las seis pantallas de menu ocupan EL MISMO hueco, y=104..421, y solo
  * puede haber una. Cual, lo decidia hasta hoy una cadena de "si esta
@@ -23381,8 +24473,6 @@ static void capt_pinta(gfx2_surf_t *s, void *ctx)
 /*
  * LA BARRA, SIN PARPADEO - 05/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y es el mismo fallo, literalmente: la barra se BORRABA ENTERA a negro y
  * se volvia a pintar en cada paso -marco, relleno y rotulo-. Entre el
  * borrado y el repintado hay unos milisegundos en los que ahi no hay nada,
@@ -23491,8 +24581,6 @@ static void capt_restaura(void)
 /*
  * EL CARTEL, CON LA LETRA DE LA RADIO - 05/10/2026.
  *
- * Pedido por el usuario.
- *
  * Y era cierto.: iba con gfx_text(), que es la fuente de 5x7 puntos de
  * gfx.c estirada al doble. Esa fuente existe para lo que se pinta cuando
  * NO se puede usar el compositor -la barra de progreso de la captura, que
@@ -23538,8 +24626,6 @@ static void capt_avisa_pinta(void)
 
 /*
  * ¿HAY ALGO DE LA CAPTURA ENCIMA DE LA PANTALLA? - 05/10/2026.
- *
- * Pedido por el usuario.
  *
  * Y desaparecia porque el cartel esta en medio de la pantalla -de 206 a
  * 254- y ahi es justo donde repinta el espectro, el osciloscopio o el panel
@@ -23596,8 +24682,6 @@ static uint8_t capt_pide(void)
     /*
      * EN CUALQUIER PANTALLA MENOS CON EL PANEL APAGADO - 05/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Aqui ponia "solo en la pantalla de la radio", porque lo que se ve en
      * un menu lo dibujan otros ficheros y no habia forma de montarlo en una
      * banda. Ahora si la hay: las seis pantallas de menu tienen su
@@ -23627,7 +24711,7 @@ static uint8_t capt_pide(void)
      */
     if (gfx2_banda_coge() == (uint16_t *)0) { return 0U; }
 
-    gsv_abre(CAPT_ANCHO, CAPT_ALTO, BMP_16, "PANT");
+    gsv_abre(CAPT_ANCHO, CAPT_ALTO, BMP_16, "PANT", 0U);
     if (!s_gsv_on) {
         gfx2_banda_suelta();
         s_capt_fallo = 1U;
@@ -23774,23 +24858,57 @@ static void capt_poll(void)
 }
 
 /*
- * CERRAR LA FOTO DE OTRO, QUE NO SIEMPRE ES DE OTRO - 05/10/2026.
+ * ======================================================================
+ * CERRAR SOLO LO QUE ES TUYO - 20/10/2026
+ * ======================================================================
  *
- * El fax y el SSTV cierran la foto en curso cuando se sale de su modo o
- * cuando deja de llegar señal. Eso esta bien... hasta que la foto en curso
- * no es suya: la captura de pantalla usa la MISMA maquinaria de fichero, y
- * fax_poll() se llama en cada vuelta del bucle principal y cierra lo que
- * haya cuando WEFAX esta apagado, que es casi siempre.
+ * Y la causa no estaba en el fichero ni en la flash, que es donde pase el
+ * dia entero mirando. Estaba aqui.
  *
- * O sea que sin esto, una captura se cerraba sola en la vuelta siguiente a
- * empezarla, con un fichero de una fila dentro.
+ * gsv_* es UNA SOLA maquina de escribir ficheros, y la usan tres: el
+ * SSTV, el WEFAX y la captura de pantalla. El bucle principal llama a los
+ * polls de los dos primeros EN LA MISMA VUELTA y SIEMPRE, este activo el
+ * modo que este:
  *
- * Los seis sitios que cerraban "lo que hubiera" pasan por aqui. La captura
- * cierra con gsv_cierra() directamente, que es suya.
+ *     fax_poll();
+ *     sstv_poll();
+ *
+ * y sstv_poll() empezaba con "si el SSTV no esta activo, cierra lo que
+ * haya". O sea: en WEFAX, fax_poll() abria el fichero y escribia la
+ * cabecera, y LA LINEA SIGUIENTE DEL BUCLE lo cerraba. A la vuelta
+ * siguiente se abria otro, porque el cerrojo de un minuto solo se arma
+ * cuando cierra el propio fax_poll().
+ *
+ * Eso son 8 kB por fichero -la cabecera y el primer bloque de renglones- y
+ * uno nuevo cada pocos segundos. Es la explicacion de las CUATRO listas
+ * de ficheros que aparecieron en un mismo dia: los 27, los 26 de 8 kB, los 20 de
+ * 4 kB y los 21 de ahora. En las cuatro estuve mirando el camino de
+ * escritura.
+ *
+ * LO PEOR: el comentario que habia aqui ya describia este fallo exacto
+ * -"fax_poll() se llama en cada vuelta del bucle principal y cierra lo que
+ * haya cuando WEFAX esta apagado, que es casi siempre"- y solo lo tapo
+ * para la CAPTURA, con la bandera de abajo. El fax y el SSTV se quedaron
+ * cerrandose el fichero el uno al otro. Estaba escrito y no lo lei.
+ *
+ * ASI QUE AHORA EL FICHERO TIENE DUEÑO, y no es una bandera nueva: es
+ * s_gsv_pre, el prefijo con el que se abrio -"WFAX", "SSTV", "PANT"-, que
+ * ya estaba guardado. Quien cierra dice de quien es lo que viene a cerrar,
+ * y si no coincide no toca nada.
+ *
+ * Lo vigila tools/gsv_dueno_check.py: un cierre sin dueño no compila.
  */
-static void gsv_cierra_ajeno(void)
+static void gsv_cierra_si_es(const char pre[4])
 {
+    uint8_t k;
+
+    if (!s_gsv_on) { return; }
+    /* La captura es la dueña mientras dura, y cierra ella con
+     * gsv_cierra() directamente. Ver s_capt_on. */
     if (s_capt_on) { return; }
+    for (k = 0U; k < 4U; k++) {
+        if (s_gsv_pre[k] != pre[k]) { return; }
+    }
     gsv_cierra();
 }
 
@@ -23978,6 +25096,38 @@ static void img_hdr_limpia(void)
     s_digi.titulos        = (const char *)0;
 }
 
+/*
+ * EL ROTULO DEL CENTRADO - 20/10/2026.
+ *
+ * Va en el panel del fax y no en Ajustes por dos razones, y las dos son
+ * buenas: las cinco categorias de Ajustes estan a 9 de 9 -lo dijo
+ * sim/config.c al añadirlo alli, "la categoria Digital tiene 10 ajustes y
+ * solo se dibujan 9"-, y sobre todo porque esto se ajusta MIRANDO LA
+ * IMAGEN. Un mando que necesita ver el efecto no puede vivir detras de un
+ * menu que tapa lo que estas mirando.
+ */
+static const char *fax_rotulo_centro(void)
+{
+    static char b[12];
+    int16_t v = wefax_centro();
+    uint8_t i = 0U;
+
+    /*
+     * Y EN ASCII. La primera version llevaba una flecha de las de tres
+     * bytes; la fuente de esta cabecera es font_ui_14b y no hay nada que
+     * garantice que tenga ese punto de codigo. Un rotulo que sale como un
+     * cuadrado no se lee, y peor: no se nota al escribirlo, solo al
+     * mirarlo en la radio. El signo dice lo mismo y se dibuja seguro.
+     */
+    if (v == 0) { return tr("Centro", "Centre"); }
+    b[i++] = (char)((v < 0) ? '-' : '+');
+    aj_u2s(&b[i], (uint32_t)((v < 0) ? -v : v));
+    for ( ; b[i] != '\0'; i++) { }
+    b[i++] = ' '; b[i++] = 'p'; b[i++] = 'x';
+    b[i] = '\0';
+    return b;
+}
+
 static void fax_hdr_draw(void)
 {
     wefax_info_t in;
@@ -24009,6 +25159,40 @@ static void fax_hdr_draw(void)
                                            * lee mejor que uno corrido */
         p = hora_u4(p, (uint32_t)ppm);
     }
+    /*
+     * Y LO QUE ESTA HACIENDO EL GUARDADO, AQUI Y SIEMPRE. 20/10/2026.
+     *
+     * Eso no es un aviso, es una adivinanza. Ahora la cabecera del fax
+     * dice, mientras recibes y sin tocar nada, en cual de los cuatro
+     * estados esta:
+     *
+     *   "no guarda"        el boton esta en No guardar. Es el de arranque.
+     *   "listo"            va a guardar, esperando a que empiece la carta
+     *   "WFAX003 128"      grabando, y por que renglon va
+     *   "sin sitio"        lo intento y no pudo reservar
+     *
+     * Cuatro palabras que se leen de un vistazo y que separan "no estaba
+     * puesto" de "esta roto". Que es exactamente lo que no se podia
+     * distinguir.
+     */
+    *p++ = ' '; *p++ = '\xC2'; *p++ = '\xB7'; *p++ = ' ';
+    if (s_gsv_fallo) {
+        e = tr("sin sitio", "no room");
+        while (*e != '\0') { *p++ = *e++; }
+    } else if (s_wfx_guarda == WFX_GUARDA_NO) {
+        e = tr("no guarda", "not saving");
+        while (*e != '\0') { *p++ = *e++; }
+    } else if (s_gsv_on) {
+        uint8_t k;
+
+        for (k = 0U; k < 7U; k++) { *p++ = s_gsv_n8[k]; }
+        *p++ = ' ';
+        aj_u2s(p, (uint32_t)s_gsv_fila);
+        while (*p != '\0') { p++; }
+    } else {
+        e = tr("listo", "ready");
+        while (*e != '\0') { *p++ = *e++; }
+    }
     *p = '\0';
 
     s_digi.y = (int16_t)SPEC_Y;
@@ -24017,9 +25201,30 @@ static void fax_hdr_draw(void)
     s_digi.enganchado = (uint8_t)(in.estado == WEFAX_IMAGEN);
     s_digi.btn = tr("Sincroniza", "Sync");
     s_digi.btn2 = gsv_rotulo_fax();
+    /*
+     * El centrado fino. El boton de al lado -"Sincroniza"- es el ajuste
+     * GRUESO: dice "la linea empieza aqui". Este corre la imagen punto a
+     * punto sin tocar el enganche. Ver wefax_set_centro().
+     *
+     * Y HAY QUE HACERLE SITIO. btn3_w() de ui_digi.c no es un numero: es
+     * lo que queda entre donde acaba la ZONA DE LA BARRA y donde empieza
+     * la chapa, y si no llega a 70 px devuelve cero y el boton no se
+     * dibuja. Sin barra, esa zona vale sus 300 px enteros y el hueco sale
+     * negativo: lo puse sin esto y el usuario me dijo "en la ventana de
+     * wefax no" - el boton existia, respondia al dedo y no se veia.
+     *
+     * Con 160, btn3 cae en x=290 y mide 130, que es holgado para "Centro"
+     * y para una flecha con dos cifras. El segundo boton -el de guardar-
+     * no se mueve: mide 140 fijos desde x=120 y la zona de la barra sigue
+     * siendo mas ancha que el.
+     */
+    s_digi.barra_w = 160;
+    s_digi.btn3 = fax_rotulo_centro();
+    s_digi.btn3_press = (uint8_t)(wefax_centro() != 0);
     ui_digi_draw_chip(&s_digi);
     ui_digi_draw_boton(&s_digi);
     ui_digi_draw_boton2(&s_digi);
+    ui_digi_draw_boton3(&s_digi);
 }
 
 /*
@@ -24032,15 +25237,47 @@ static void fax_poll(void)
     const uint8_t *l;
     static uint32_t s_ult_hdr;
     static uint8_t  s_tapado;
-    static uint8_t  s_era_imagen;
     static uint16_t s_gy;          /* por que renglon del FICHERO vamos */
+    /* s_wfx_hubo y s_wfx_ult -el cerrojo- ya NO viven aqui: los arma
+     * gsv_cierra(), porque el cerrojo que depende de que el que cierra se
+     * acuerde de armarlo es justo el que no se armo. Ver su comentario.
+     *
+     * Siguen siendo una bandera y un reloj POR SEPARADO, y no un "cero
+     * significa nunca" metido en el reloj: ese truco ya me costo un fallo,
+     * porque un `| 1` sobre un milisegundo par deja la marca por delante
+     * del reloj y la resta da la vuelta. */
+    static uint8_t  s_estaba;      /* ya estabamos en el modo en la vuelta anterior */
     uint8_t pinta;
     wefax_info_t in;
 
     if (!wefax_activo()) {
-        gsv_cierra_ajeno();        /* si se sale del modo con una carta a medias */
-        s_era_imagen = 0U;
+        /* Salirse del modo cierra el fichero, que es la otra mitad de lo
+         * que pidio el usuario: "cuando se salgan o le den otra vez al
+         * boton que cierre el fichero". */
+        gsv_cierra_si_es("WFAX");   /* y el cerrojo lo arma el cierre */
+        s_estaba = 0U;
         return;
+    }
+
+    /*
+     * ENTRAR EN WEFAX NO GUARDA. GUARDAR ES DARLE AL BOTON. 20/10/2026.
+     *
+     * Y no le falta razon. El boton se guardaba en los ajustes, asi que si
+     * lo habia dejado puesto en otra sesion, al entrar en el modo se
+     * encontraba la radio abriendo fichero sola, sin haber tocado nada y
+     * sin que hubiera una carta enganchada. Un fichero lleno de ruido.
+     *
+     * "Cuando le den a guardar" quiere decir eso: el que abre el fichero es
+     * el DEDO. Asi que al entrar en el modo el boton arranca siempre en
+     * "No guardar", se vea lo que se vea en pantalla.
+     *
+     * No se ata al estado del decodificador -eso es lo que hizo la riada de
+     * ficheros de esta tarde-: simplemente no se enciende solo.
+     */
+    if (!s_estaba) {
+        s_estaba = 1U;
+        s_wfx_guarda = WFX_GUARDA_NO;
+        s_gsv_fallo  = 0U;     /* y el aviso viejo tampoco se hereda */
     }
 
     /*
@@ -24060,9 +25297,6 @@ static void fax_poll(void)
     /*
      * Y MIENTRAS EL DECODIFICADOR DE ANTES SIGA EN MARCHA, EL PANEL NO ES
      * NUESTRO TODAVIA - 13/10/2026.
-     *
-     * *** De un probador, con video: al pasar de RTTY a SSTV se queda en
-     * pantalla el boton "50 Bd" de RTTY, al lado de "Empezar". ***
      *
      * El 06/10 ya se arreglo la mitad: digi_sync() deja btn3 y btn4 a cero
      * en cuanto sstv_activo(), asi que la ESTRUCTURA del panel ya no los
@@ -24099,31 +25333,73 @@ static void fax_poll(void)
     }
 
     wefax_info(&in);
-    /* Una carta empieza cuando acaba la señal de fase. A diferencia de
-     * SSTV, aqui las lineas no traen numero: van seguidas, asi que el
-     * renglon del fichero lo cuenta este poll. */
-    if (!s_era_imagen && in.estado == WEFAX_IMAGEN) { s_gy = 0U; }
-    s_era_imagen = (uint8_t)(in.estado == WEFAX_IMAGEN);
+
+    /*
+     * EL BOTON MANDA. 20/10/2026.
+     *
+     * Y tiene toda la razon. Antes esto seguia al decodificador -abrir al
+     * entrar en imagen, cerrar al salir- y el decodificador entra y sale
+     * constantemente con señal justa. De ahi salieron en un mismo dia
+     * veintisiete ficheros, luego diez minutos sin grabar nada, y luego
+     * veintiseis ficheros de 8 kB. Tres intentos de hacer bien una maquina
+     * de estados que no tenia que existir.
+     *
+     * Ahora: boton puesto y sin fichero -> se abre. Boton quitado y con
+     * fichero -> se cierra. Y mientras este abierto se escribe TODO lo que
+     * salga del decodificador, este como este.
+     *
+     * El cerrojo de un minuto se queda, pero ya no deberia hacer falta
+     * nunca: con el boton mandando, para tener dos ficheros hay que tocar
+     * el boton dos veces.
+     */
+    if (s_wfx_guarda != WFX_GUARDA_NO) {
+        if (wfx_abre_toca(s_gsv_on, s_gsv_fallo, 1U)
+            && (!s_wfx_hubo
+                || (uint32_t)(g_msticks - s_wfx_ult) > WFX_CERROJO_MS)) {
+            gsv_abre(WEFAX_ANCHO, WFX_ALTO_MAX, BMP_8, "WFAX", 1U);
+            if (s_gsv_on) {
+                s_gy = 0U;
+            } else {
+                wfx_avisa_fallo();
+            }
+        }
+    } else {
+        gsv_cierra_si_es("WFAX");   /* y el cerrojo lo arma el cierre */
+    }
 
     s_gsv_bloques = 0U;
     while (s_gsv_bloques == 0U && (l = wefax_linea()) != 0) {
-        if (!s_gsv_on && s_era_imagen && s_gy == 0U &&
-            s_wfx_guarda != WFX_GUARDA_NO) {
-            gsv_abre(WEFAX_ANCHO, WFX_ALTO_MAX, BMP_8, "WFAX");
-        }
         gsv_linea(l, s_gy);
         s_gy++;
         if (pinta) { fax_panel_linea(l); }
+        /*
+         * Y SI EL FICHERO SE HA LLENADO, SE SIGUE EN EL SIGUIENTE.
+         *
+         * gsv_linea() cierra solo al llegar a la altura. Son 1024
+         * renglones, o sea ocho minutos y medio a 120 lpm: una carta mas
+         * larga que eso seguiria en WFAX002 sin perder un renglon.
+         *
+         * Esto NO es la reapertura que hizo la riada de ficheros de 8 kB.
+         * Aquella se disparaba con CUALQUIER cierre -y el decodificador
+         * cerraba a cada parpadeo-. Esta solo puede ocurrir despues de
+         * escribir 1024 renglones, o sea como mucho una vez cada ocho
+         * minutos, y ademas el boton sigue mandando.
+         */
+        if (!s_gsv_on && !s_gsv_fallo && s_wfx_guarda != WFX_GUARDA_NO
+            && s_gsv_fila >= s_gsv_alto) {
+            gsv_abre(WEFAX_ANCHO, WFX_ALTO_MAX, BMP_8, "WFAX", 1U);
+            if (s_gsv_on) { s_gy = 0U; } else { wfx_avisa_fallo(); }
+        }
     }
 
-    /* El tono de parada devuelve el estado a BUSCA: ahi acaba la carta. */
-    if (s_gsv_on && in.estado != WEFAX_IMAGEN) { gsv_cierra_ajeno(); }
-
-    if (s_gsv_on && !s_capt_on && (uint32_t)(g_msticks - s_gsv_ms) > GSV_ESPERA_MS) {
-        gsv_cierra();
-        debug_print("wefax: carta cerrada por silencio\n");
-    }
-
+    /*
+     * Y SI EL FICHERO SE LLENA, SE ABRE EL SIGUIENTE.
+     *
+     * Son 600 renglones, o sea cinco minutos a 120 lpm. Con el boton
+     * mandando esto solo puede pasar una vez cada cinco minutos, asi que no
+     * hay forma de que haga una riada: la reapertura pasa por el mismo
+     * cerrojo de un minuto que todo lo demas.
+     */
     /* La cabecera, dos veces por segundo: lo que pone cambia despacio. */
     if (pinta && (uint32_t)(g_msticks - s_ult_hdr) >= 500U) {
         s_ult_hdr = g_msticks;
@@ -24250,8 +25526,13 @@ static void sstv_poll(void)
 
     if (!sstv_activo()) {
         /* Se ha salido del modo con una foto a medias: se cierra con lo que
-         * haya en vez de dejar un fichero que promete 256 filas. */
-        gsv_cierra_ajeno();
+         * haya en vez de dejar un fichero que promete 256 filas.
+         *
+         * SUYA, no "lo que haya". Esta linea corre en CADA vuelta del bucle
+         * principal -sstv_poll() se llama siempre- y mientras el usuario
+         * esta en WEFAX cerraba la carta del fax recien abierta. Ver el
+         * comentario gordo de gsv_cierra_si_es(). */
+        gsv_cierra_si_es("SSTV");
         s_era_imagen = 0U;
         return;
     }
@@ -24276,9 +25557,6 @@ static void sstv_poll(void)
     /*
      * Y MIENTRAS EL DECODIFICADOR DE ANTES SIGA EN MARCHA, EL PANEL NO ES
      * NUESTRO TODAVIA - 13/10/2026.
-     *
-     * *** De un probador, con video: al pasar de RTTY a SSTV se queda en
-     * pantalla el boton "50 Bd" de RTTY, al lado de "Empezar". ***
      *
      * El 06/10 ya se arreglo la mitad: digi_sync() deja btn3 y btn4 a cero
      * en cuanto sstv_activo(), asi que la ESTRUCTURA del panel ya no los
@@ -24336,7 +25614,7 @@ static void sstv_poll(void)
         if (!s_gsv_on && y == 0U && s_sstv_guarda != SSTV_GUARDA_NO) {
             gsv_abre(SSTV_ANCHO, SSTV_ALTO,
                      (uint8_t)((s_sstv_guarda == SSTV_GUARDA_16) ? BMP_16 : BMP_24),
-                     "SSTV");
+                     "SSTV", 0U);
         }
         gsv_linea(l, y);                          /* siempre */
         if (pinta) { sstv_panel_linea(l, y); }    /* solo si se ve */
@@ -24345,12 +25623,16 @@ static void sstv_poll(void)
     /* Y si el decodificador deja de tener imagen -se perdio la señal, o
      * acabo- se cierra lo que hubiera abierto. */
     sstv_info(&in);
-    if (s_era_imagen && in.estado != SSTV_IMAGEN) { gsv_cierra_ajeno(); }
+    if (s_era_imagen && in.estado != SSTV_IMAGEN) { gsv_cierra_si_es("SSTV"); }
     s_era_imagen = (uint8_t)(in.estado == SSTV_IMAGEN);
 
     /* O si simplemente ha dejado de llegar nada. Ver GSV_ESPERA_MS. */
-    if (s_gsv_on && !s_capt_on && (uint32_t)(g_msticks - s_gsv_ms) > GSV_ESPERA_MS) {
-        gsv_cierra();
+    /* Y SOLO LA SUYA. Sin el dueño, esto cerraba tambien la carta de fax a
+     * los diez segundos de silencio - y el fax no se cierra por silencio,
+     * se cierra con el boton: "cuando se salgan o le den otra vez al boton
+     * que cierre el fichero. Punto". */
+    if (s_gsv_on && (uint32_t)(g_msticks - s_gsv_ms) > GSV_ESPERA_MS) {
+        gsv_cierra_si_es("SSTV");
         debug_print("sstv: foto cerrada por silencio\n");
     }
 
@@ -24480,9 +25762,6 @@ static void hell_poll(void)
     /*
      * Y MIENTRAS EL DECODIFICADOR DE ANTES SIGA EN MARCHA, EL PANEL NO ES
      * NUESTRO TODAVIA - 13/10/2026.
-     *
-     * *** De un probador, con video: al pasar de RTTY a SSTV se queda en
-     * pantalla el boton "50 Bd" de RTTY, al lado de "Empezar". ***
      *
      * El 06/10 ya se arreglo la mitad: digi_sync() deja btn3 y btn4 a cero
      * en cuanto sstv_activo(), asi que la ESTRUCTURA del panel ya no los
@@ -24777,8 +26056,6 @@ static uint8_t digi_panel_active(void)
     /*
      * SALE DE LA TABLA, NO DE UNA LISTA A MANO. 28/09/2026.
      *
-     * Pedido por el usuario.
-     *
      * Aqui habia una lista escrita a mano:
      *
      *     if (m == DEMOD_MODE_NFM) { return ax25_activo(); }
@@ -24951,8 +26228,6 @@ static uint8_t rtty_encoder_grabs_tuning(void)
 
 /*
  * LAS RAYAS DEL OSCILOSCOPIO, EN UN SITIO - 05/10/2026.
- *
- * Pedido por el usuario.
  *
  * Que rayas verticales lleva el osciloscopio y donde, lo decidia una cadena
  * de "si FT8... si CW... si APRS... si no, RTTY" dentro de rtty_scope_draw()
@@ -25350,11 +26625,6 @@ static void tune_encoder_poll(void)
      * immediately - same "intercept before the normal target logic"
      * shape as the long-press handler right after this block.
      *
-     * *** SOLO CUANDO EL MANDO ESTA SINTONIZANDO. 02/10/2026, por un
-     * fallo que nos reportaron: en los dos modos de RTTY se podia
-     * seleccionar el volumen -el boton se encendia en azul- pero el
-     * mando no cambiaba el nivel. ***
-     *
      * Y tenian razon. Esta rama estaba ANTES de mirar s_encoder_target,
      * asi que en RTTY se quedaba con TODOS los detentes pasara lo que
      * pasara: le dabas al boton VOL de la barra de abajo, se encendia en
@@ -25417,12 +26687,6 @@ static void tune_encoder_poll(void)
      */
     /*
      * EL VOLUMEN, CON EL MENU DELANTE - 05/10/2026.
-     *
-     * *** De un issue: con el menu de ajustes abierto, el volumen no
-     * respondia. La caja de volumen aparecia como se espera, pero el giro
-     * del mando seguia recorriendo las opciones de ajustes en vez de
-     * cambiar el volumen; y si eso era a proposito, entonces el boton de
-     * volumen no deberia ni poder activarse. ***
      *
      * Y era cierto en lo peor: el boton SI hacia algo -ponia el destino
      * del mando en VOLUMEN, encendia el boton y sacaba la caja- y despues
@@ -25495,8 +26759,6 @@ static void tune_encoder_poll(void)
      * ======================================================================
      * CON EL MAPA DELANTE, EL MANDO HACE ZOOM - 11/10/2026
      * ======================================================================
-     *
-     * Pedido por el usuario.
      *
      * Misma forma que la rejilla, el teclado y los ajustes de aqui arriba:
      * mientras esa vista esta delante, los detentes son suyos. Y con la
@@ -25922,8 +27184,6 @@ static void tune_encoder_poll(void)
     /*
      * CON JMP PUESTO, EL MANDO SALTA DE EMISORA - 15/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Va ANTES del paso de sintonia y hace su propio `changed`, no en
      * lugar del de abajo: lo de abajo sigue siendo el camino normal y no
      * se toca. Si aqui no hay base, o no hay nada hacia donde saltar, se
@@ -25935,8 +27195,6 @@ static void tune_encoder_poll(void)
      * barrido.
      *
      * EL PRESUPUESTO ES DEL SONDEO ENTERO, NO DE CADA SALTO - 15/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Era cierto, y el fallo era mio. El mando entrega los detentes
      * ACUMULADOS, asi que un giro rapido pedia hasta diez saltos y cada
@@ -26395,8 +27653,6 @@ static void radio_screen_draw(void)
 /*
  * TOCAR UNA SEÑAL Y CAER ENCIMA - etapa 21, 22/09/2026.
  *
- * Pedido por el usuario.
- *
  * Tocar el espectro ya sintonizaba desde hace tiempo, pero con dos cosas que
  * hacian que no se notara:
  *
@@ -26427,8 +27683,6 @@ static void radio_screen_draw(void)
  */
 /*
  * MOVER LA SINTONIA N PASOS, VOLVIENDO A LA REJILLA - 22/09/2026.
- *
- * Pedido por el usuario.
  *
  * Y no podia. Lo rompi yo en la etapa 21: al tocar una señal en el espectro
  * se cae en su frecuencia EXACTA, sin redondear -que es justo lo que se
@@ -26744,8 +27998,6 @@ static void demo_touch_poll(void)
      * LA CAPTURA DE PANTALLA: LA ESQUINA DE ARRIBA A LA IZQUIERDA, MANTENIDA.
      * 05/10/2026.
      *
-     * Pedido por el usuario.
-     *
      * Va ANTES que todo lo demas y no se mezcla con el reparto de gestos:
      * cuando salta, apaga el toque de la frecuencia -que vive en esa misma
      * esquina- para que al soltar no se abra el teclado encima. El resto del
@@ -26905,8 +28157,6 @@ static void demo_touch_poll(void)
          * SIN LISTA DE MODOS, Y POR EL MISMO MOTIVO QUE EL QUINTO BOTON -
          * 08/10/2026.
          *
-         * Pedido por el usuario.
-         *
          * Aqui habia una lista escrita a mano -SSTV, WEFAX y STANAG- y el
          * CW no estaba en ella, asi que el boton se dibujaba y el toque no
          * le llegaba nunca. Es EXACTAMENTE el fallo que cuenta el
@@ -26939,8 +28189,6 @@ static void demo_touch_poll(void)
          */
         /*
          * Y EN FT8 ESE TOQUE ESTA AHORA EN LA BARRA - 13/10/2026.
-         *
-         * Pedido por el usuario.
          *
          * El toque no se pierde, se MUDA con el numero que lo explica: en
          * FT8 cuadraba la ranura y estaba en la chapa porque era la chapa
@@ -27245,7 +28493,6 @@ static void demo_touch_poll(void)
     if (s_modo_tap && !pressed) {
         if (ft8_modo_activo()) {
             /*
-             * Pedido por el usuario.
              *
              * El cero de la ranura pasa a ser ESTE instante. Ver
              * ft8_modo_cuadra(): no toca el reloj, solo el desfase, porque a
@@ -27262,7 +28509,6 @@ static void demo_touch_poll(void)
             debug_print("ft8: ranura cuadrada a mano\n");
         } else if (hfdl_modo_activo()) {
             /*
-             * Pedido por el usuario.
              *
              * Y le salian porque este bloque era un if/else de dos ramas:
              * FT8 cuadraba la ranura y TODO LO DEMAS abria la rejilla de
@@ -27356,9 +28602,38 @@ static void demo_touch_poll(void)
         s_frec_tap = 0U;
         s_digi.btn3_press = 0U;
         /*
-         * EN FT8 ESTE BOTON ES EL FILTRO DE CQ - 13/10/2026.
+         * EN WEFAX ESTE BOTON ES EL CENTRADO - 20/10/2026.
          *
-         * Pedido por el usuario.
+         * derecha". Corre el renglon ya terminado; no toca el enganche.
+         * Ver wefax_set_centro().
+         *
+         * Va el primero, igual que el filtro de CQ de FT8, porque es el
+         * otro uso de este boton que no cambia nada de la radio: ni mueve
+         * el dial ni toca el demodulador, solo decide como se enseña.
+         */
+        if (wefax_activo()) {
+            /*
+             * LAS DOS MITADES DEL BOTON. La izquierda corre la imagen
+             * hacia la izquierda y la derecha hacia la derecha, que es lo
+             * unico que se puede adivinar sin leer el manual. Con un solo
+             * sentido, cruzar media linea serian 18 toques en vez de 9, y
+             * la segunda carta del usuario estaba a 269 puntos.
+             */
+            {
+                int16_t bx = ui_digi_btn3_x_dbg(&s_digi);
+                int16_t bw = ui_digi_btn3_w_dbg(&s_digi);
+
+                wfx_centro_mueve((int8_t)(((int16_t)x < bx + bw / 2) ? -1 : 1));
+            }
+            settings_mark_dirty();
+            fax_panel_reinicia();   /* lo ya pintado lleva el centrado viejo */
+            s_fax_limpio = 0U;
+            fax_hdr_draw();
+            debug_print("wefax: centrado cambiado\n");
+            goto fin;
+        }
+        /*
+         * EN FT8 ESTE BOTON ES EL FILTRO DE CQ - 13/10/2026.
          *
          * Va el primero de la cadena porque es el unico de los cuatro usos
          * de este boton que no cambia NADA de la radio: no mueve el dial,
@@ -27541,8 +28816,6 @@ static void demo_touch_poll(void)
         /*
          * UN TOQUE QUE NO HA ARRASTRADO ELIGE EL INDICATIVO QUE HAYA
          * DEBAJO - 12/10/2026.
-         *
-         * Pedido por el usuario.
          *
          * Y si no hay ninguno debajo, suelta el que estuviera: tocar el
          * mar es la forma evidente de cerrar la ficha, y pedir un boton de
@@ -27730,7 +29003,6 @@ fin:
         s_zoom_tap = 0U;
         s_mapabtn_tap = 0U;
         /*
-         * Pedido por el usuario, 24/09/2026.
          *
          * Faltaba esta linea. Esta funcion se llama tambien sin dedo en la
          * pantalla, y la rama de soltar solo mira "el latch esta puesto y
@@ -28076,8 +29348,6 @@ static uint8_t zoom_process_block(void)
 /*
  * LA FRANJA DE ARRIBA: RELOJ, MEDIDOR Y CALIBRACION - 25/09/2026.
  *
- * Pedido por el usuario.
- *
  * Y se atrasaba, pero no por el RTC. Todo esto vivia DENTRO de
  * sdr_spectrum_waterfall_tick(), con un comentario que decia que corria
  * siempre, "incluso con el menu abierto". Y era verdad con el menu abierto...
@@ -28106,8 +29376,6 @@ static uint8_t zoom_process_block(void)
  */
 /*
  * QUIEN EMITE EN LA FRECUENCIA QUE ESTAS OYENDO - 28/09/2026.
- *
- * Pedido por el usuario.
  *
  * VA EN EL HUECO DEL RDS, y no es un apaño: es exactamente el mismo hueco
  * para exactamente la misma pregunta. El RDS contesta "que estoy
@@ -28203,8 +29471,6 @@ static void emis_pon(uint32_t hz, uint16_t min_local)
 /*
  * LA MARQUESINA DE LAS EMISORAS - 28/09/2026.
  *
- * Pedido por el usuario.
- *
  * Grande no cabe: el hueco es lo que queda entre la pastilla de banda y el
  * reloj. Asi que los dos renglones corren - PERO SOLO EL QUE NO QUEPA-.
  *
@@ -28268,8 +29534,6 @@ static void emis_marq_poll(void)
 /*
  * CUANTO HAY QUE ESTARSE QUIETO ANTES DE PREGUNTARLE A LA BASE DE EMISORAS.
  * 05/10/2026.
- *
- * Pedido por el usuario.
  *
  * Esta es de las gordas, y no se ve en ningun sitio donde uno la buscaria.
  * emis_pon() le pregunta a la base de datos quien emite en esta frecuencia,
@@ -28360,6 +29624,8 @@ static void franja_arriba_tick(void)
      * el espectro. Es el mismo numero - ver su comentario alli. */
     s_prox_ms = g_msticks + s_frame_ms;
 
+    {
+    uint32_t t0 = DWT->CYCCNT;
     smeter_draw(smeter_segments_from_peak(demod_am_get_signal_peak()));
     smeter_dbfs_uart_report(demod_am_get_signal_peak()); /* see its own comment - S-meter calibration aid */
     /* *** 01/09/2026: replaces the old snr_update_and_draw() - reads
@@ -28368,10 +29634,15 @@ static void franja_arriba_tick(void)
      * does. See smeter_dbm_update_and_draw()'s own comment. */
     smeter_dbm_update_and_draw(demod_am_get_signal_peak());
     sam_calib_display_draw(); /* MS5351 PPM calibration readout, 21/08/2026 - see its own comment; needs to update live as the PLL converges, same cadence as the S-meter above */
+    /* Ver TRAMO_SMT: los tres de arriba van juntos porque los tres pintan
+     * su hueco de la cabecera y los tres corren en cada fotograma. */
+    s_fra_smt = (DWT->CYCCNT - t0) / (SystemCoreClock / 1000000U);
+    }
 
     min_ahora = reloj_ahora_ms() / 60000UL;
     if (min_ahora != s_min_visto) {
         s_min_visto = min_ahora;
+        /* Se cronometra por dentro: ver time_display_draw(). */
         time_display_draw();
     }
 
@@ -28396,7 +29667,11 @@ static void franja_arriba_tick(void)
             s_seg_visto = 0xFFFFFFFFUL;   /* al reabrir, que pinte a la primera */
         }
     }
-    emisoras_tick();   /* quien emite aqui - ver su comentario */
+    {
+        uint32_t t0 = DWT->CYCCNT;
+        emisoras_tick();   /* quien emite aqui - ver su comentario */
+        s_fra_emi = (DWT->CYCCNT - t0) / (SystemCoreClock / 1000000U);
+    }
 }
 
 static void sdr_spectrum_waterfall_tick(void)
@@ -28610,8 +29885,6 @@ static void sdr_spectrum_waterfall_tick(void)
      * EL VAIVEN DEL FOTOGRAMA: DESENGANCHAR EL DIBUJO DEL AUDIO - 06/10/2026
      * =====================================================================
      *
-     * Pedido por el usuario.
-     *
      * EL ENGANCHE, que estaba a la vista y nadie habia mirado. Veinte lineas
      * mas arriba, esta funcion entera vuelve si no ha llegado un bloque:
      *
@@ -28714,8 +29987,6 @@ static void sdr_spectrum_waterfall_tick(void)
      *
      * ---------------------------------------------------------------------
      * Y ESTO SE SACO DE DENTRO DEL "if (!s_menu_open)" EL 07/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * El fallo estaba aqui y es de los que dan vergüenza. La prueba A/B se
      * lanza desde la pagina de Informacion -no hay otro sitio donde esta la
@@ -28974,8 +30245,6 @@ static void sdr_spectrum_waterfall_tick(void)
                  * EL LADO LO DICE demod_am.c, NO UNA CADENA DE IF AQUI
                  * - 15/10/2026.
                  *
-                 * Pedido por el usuario.
-                 *
                  * Aqui habia `if USB ... else if LSB ... else simetrica`,
                  * escrito cuando SAM solo tenia una forma. SAM-U y SAM-L
                  * son un AJUSTE de SAM y no modos propios, asi que los dos
@@ -29059,8 +30328,6 @@ static void sdr_spectrum_waterfall_tick(void)
             /*
              * AQUI SE PROBO ESCONDER LOS NOMBRES MIENTRAS SE GIRA, Y SE
              * QUITO EL MISMO DIA - 15/10/2026.
-             *
-             * Pedido por el usuario.
              *
              * La idea era no pagar el refresco -hasta 350 lecturas- en cada
              * clic: nada de pintar nombres mientras el dial se mueve, y

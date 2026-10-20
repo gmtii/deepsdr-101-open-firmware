@@ -1,8 +1,6 @@
 /*
  * EL VOLTIMETRO CONTRA LA REFERENCIA INTERNA (User/battery.c).
  *
- * Pedido por el usuario, 12/10/2026.
- *
  * LO QUE SE MIDE AQUI, y por que este banco es el que decide si el
  * arreglo vale:
  *
@@ -179,7 +177,17 @@ int main(void)
     {
         uint16_t mv = battery_mv_de_raw(4095U, 3000U, 500);
 
-        di("y el tope de arriba tampoco se desborda", mv <= 65535U && mv > 0U, 0);
+        /* `mv` es uint16_t, asi que `mv <= 65535U` es SIEMPRE cierto: esta
+         * comprobacion solo miraba que no fuera cero y no podia ponerse roja
+         * por el desbordamiento que dice vigilar -que es justo el que su
+         * hermana de arriba cazo dando 65036-. Ahora se exige un valor
+         * creible: el fondo de escala del ADC con el mayor ajuste son 13,2 V
+         * -hay un divisor delante-, muy por encima de una bateria cargada y
+         * muy por debajo de los 65.036 del desbordamiento. */
+        char det[32];
+        snprintf(det, sizeof det, "%u mV", (unsigned)mv);
+        di("y el tope de arriba tampoco se desborda",
+           mv > 4200U && mv < 20000U, det);
     }
 
     /* ---------------------------------------------------------------- */

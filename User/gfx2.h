@@ -70,8 +70,6 @@
  * ETAPA 6 (25/09/2026, el mismo dia por la tarde): 8 filas = 12,5 kB. O sea
  * de vuelta a lo que habia en la etapa 1, y por una razon bonita.
  *
- * Pedido por el usuario.
- *
  * DE DONDE VIENE. FT8 no tiene memoria propia: le pide prestado el buffer de
  * la cascada. El proyecto padre guarda la cascada en RGB565 -dos bytes por
  * punto, 114.624 en total- y por eso puede prestarle a FT8 sus 1.600 Hz de
@@ -103,8 +101,6 @@
  * ETAPA 7 (25/09/2026, un rato despues): de vuelta a 16 filas, y sin
  * devolver nada a cambio.
  *
- * Pedido por el usuario.
- *
  * O sea que el par de milisegundos que la etapa 6 daba por buenos se NOTAN.
  * Lo vio en la radio, no en un banco, y eso manda.
  *
@@ -119,8 +115,53 @@
  * pelean por la memoria, antes de quitarle a una conviene mirar si la otra
  * la esta gastando bien. Aqui no la estaba gastando bien.
  */
+/*
+ * ETAPA 8 (19/10/2026): otra vez 8 filas, y esta vez NO por FT8.
+ *
+ * Pedido por el usuario despues de una revision a fondo del proyecto.
+ *
+ * LO QUE HA CAMBIADO DESDE LA ETAPA 7. Entonces las ocho filas se quitaban
+ * para que cupiera FT8 y se devolvieron porque el usuario NOTO el par de
+ * milisegundos en la radio. Hoy el motivo es otro: de SRAM quedaban 1.436
+ * bytes de 196.608 -el 0,7 %-, y con eso no cabe nada. Ni el anillo del
+ * decimador de FT8 con doble buffer, ni juntar los buffers de TCM de los
+ * modos que no corren a la vez, ni un banco nuevo que necesite memoria.
+ *
+ * LO QUE DA, MEDIDO CONSTRUYENDO EL FIRMWARE ENTERO DE LAS DOS MANERAS:
+ *
+ *     16 filas .... SRAM 195.172 de 196.608,   1.436 libres
+ *      8 filas .... SRAM 181.468 de 196.608,  15.140 libres
+ *
+ * 13.704 bytes. No son solo los 12.800 de la banda: mapa.c dimensiona
+ * s_cruce[], s_ncruce[] y s_cruce_lleno[] contra esta misma constante y
+ * devuelve otros 904. La flash no se mueve (+-72 B).
+ *
+ * LO QUE CUESTA, MEDIDO HOY CON LOS CONTADORES DEL SIMULADOR:
+ *
+ *     cabecera   16 filas .... 10 ventanas,  89.970 accesos
+ *     cabecera    8 filas .... 19 ventanas,  90.123 accesos   (+0,17 %)
+ *
+ * O sea bastante menos de lo que decia la etapa 6 (+0,3 % en el espectro),
+ * y la razon es que por el camino se han quitado cosas que se pagaban cada
+ * fotograma: la regla repintandose sin que cambie nada, la cabecera pintada
+ * dos veces al cambiar de banda, y el color del degradado calculado por
+ * pixel en vez de por fila. El fotograma de hoy no es el del 25/09.
+ *
+ * LO QUE NO SE PUEDE MEDIR AQUI, Y HAY QUE DECIRLO. El doble de ventanas son
+ * el doble de huecos entre tira y tira. Que eso se vea o no al repintar es
+ * algo que se mira en la radio, y la etapa 7 existe precisamente porque la
+ * vez anterior SE VIO. Si se vuelve a ver, esto se deshace en una linea y no
+ * hay que devolver nada a cambio: los 13.704 bytes eran holgura, no estaban
+ * pagando por nada.
+ *
+ * COMPROBADO ANTES DE ENTREGAR: la tanda entera con 8 filas, incluidos los
+ * doce bancos de dibujado y los catorce del mapa, en verde. La banda es
+ * memoria compartida con cerrojo -la usan el dibujo, el volcado de la
+ * cascada por IPA y el espectro, que la parte en dos mitades- y
+ * gfx2_banda_choques() sigue en cero.
+ */
 #ifndef GFX2_BAND_H
-#define GFX2_BAND_H 16
+#define GFX2_BAND_H 8
 #endif
 
 /* La banda compositora, prestada.
@@ -175,8 +216,6 @@ gfx2_surf_t gfx2_sub_y(const gfx2_surf_t *s, int16_t y, int16_t h);
 
 /*
  * LA VENTANA DE RECORTE EN X - 07/10/2026.
- *
- * Pedido por el usuario.
  *
  * Era cierto, y el sitio exacto es este. gfx2_sub_y() recorta SOLO en Y
  * -lo dice su nombre- porque una banda tiene el ancho entero de la pantalla

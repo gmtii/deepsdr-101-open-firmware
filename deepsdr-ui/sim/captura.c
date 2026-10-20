@@ -1,8 +1,6 @@
 /*
  * LA CAPTURA DE PANTALLA TIENE QUE SALIR IGUAL QUE LA PANTALLA.
  *
- * Pedido por el usuario.
- *
  * Esta radio no tiene copia de la pantalla en memoria -son 768 kB y quedan
  * menos de tres-, asi que una captura no es volcar lo que hay: es VOLVER A
  * DIBUJAR la pantalla entera, franja por franja, metiendola en el fichero.
@@ -79,8 +77,6 @@ static void estado(void)
     top.sam_ppm = 0;
     /*
      * EL NOMBRE LARGO Y CORRIENDO, NO UNO QUE QUEPA - 07/10/2026.
-     *
-     * Pedido por el usuario.
      *
      * Este banco llevaba desde el 05/10 comparando captura contra pantalla y
      * saliendo verde con la marquesina rota, porque usaba "RADIO EUROPA" -que
@@ -238,8 +234,6 @@ int main(void)
 
     /*
      * Y QUE NADIE LE ESCRIBA EN LA BANDA MIENTRAS LA TIENE COGIDA.
-     *
-     * Pedido por el usuario.
      *
      * Y se veia fatal: fondo morado, rayas negras, texto fantasma. No era
      * la captura: era gfx2_wf_blit() -el camino de respaldo de la cascada,

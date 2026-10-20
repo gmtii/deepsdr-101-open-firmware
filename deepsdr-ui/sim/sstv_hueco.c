@@ -3,8 +3,6 @@
  * LA FOTO SE CORROMPE A TROZOS CON LA SEÑAL PERFECTA - 13/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * En el video las barras de color salen rectas y en su sitio -o sea que el
  * reloj de linea esta bien- pero hay RENGLONES SUELTOS estropeados,
  * repartidos por la foto.

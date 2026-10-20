@@ -1,8 +1,6 @@
 /*
  * QUE LA TABLA DE JTTY CABE EN SUS COLUMNAS - 28/09/2026.
  *
- * Pedido por el usuario.
- *
  * El mismo banco que sim/wspr_cols.c y sim/hfdl_cols.c y por la misma
  * razon, que aqui ademas acaba de pasar: las columnas se acaban de mover
  * TODAS a la vez -entra una quinta y se estrechan dos- y mirando la

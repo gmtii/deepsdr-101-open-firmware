@@ -323,8 +323,6 @@ const uint16_t *spectrum_colormap_lut(void);
  * LO QUE VA ENCIMA DE LA TRAZA - 15/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * Los nombres de las emisoras se pintaban con un gfx2_render() APARTE,
  * justo despues de spectrum_draw(). Tres cosas iban mal y las tres son la
  * misma:
@@ -364,8 +362,6 @@ const uint16_t *spectrum_colormap_lut(void);
  *
  * SIN `alto`: LA ZONA LLEGA HASTA LA PRIMERA RAYA DE LA REJILLA - 15/10.
  *
- * Pedido por el usuario.
- *
  * Se lo pasaba el que engancha, y el que engancha pedia 46 filas para
  * sus tres renglones de texto. Pero la primera raya de la rejilla cae en
  * la 41 -el panel mide 208 y cuatro rayas lo parten en cinco-, asi que
@@ -383,8 +379,6 @@ void spectrum_encima(void (*fn)(gfx2_surf_t *s));
  * no se puede saltar nunca en el repintado parcial:
  *
  * `alto` ES OBLIGATORIO Y NO ES DECORACION - 15/10/2026.
- *
- * Pedido por el usuario.
  *
  * Y se movian con retraso porque este dibujo SE SALTA las bandas donde
  * la traza no llega (ver s_parcial_hay mas abajo): en el techo del

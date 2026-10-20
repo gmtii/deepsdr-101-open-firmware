@@ -84,11 +84,23 @@ static uint8_t chip_lee(uint32_t a)
     return g_chip[a % g_chip_bytes];
 }
 
-/* El log2 del tamaño, que es lo que el JEDEC pone en el tercer byte. */
+/*
+ * El log2 del tamaño, que es lo que el JEDEC pone en el tercer byte.
+ *
+ * Y SE PUEDE HACER QUE MIENTA, porque hay chips que mienten: un usuario
+ * del repositorio mando la foto de un W25Q16JVSIQ -2 MB- que contesta
+ * EF 40 14, o sea 1 MB. Ver sim/capacidad.c.
+ */
+static uint8_t s_jedec_falso;
+
+void w25q_jedec_capacidad(uint8_t codigo) { s_jedec_falso = codigo; }
+
 static uint8_t jedec_capacidad(void)
 {
     uint8_t n = 0U;
     uint32_t v = g_chip_bytes;
+
+    if (s_jedec_falso != 0U) { return s_jedec_falso; }
     while (v > 1U) { v >>= 1; n++; }
     return n;
 }
@@ -98,10 +110,33 @@ int      g_fallos_chip;
 uint32_t g_intocable_ini = 0xFFFFFFFFU, g_intocable_fin = 0xFFFFFFFFU;
 
 /*
+ * --- LO QUE EL CHIP TARDA EN SUS COSAS, PARA PODER MEDIRLO ------------
+ *
+ * Hasta ahora este chip contestaba "libre" siempre, asi que un banco
+ * podia contar operaciones pero no lo que CUESTAN: y lo que cuesta un
+ * borrado no lo pone el bus, lo pone el chip por dentro, y es con
+ * diferencia lo mas caro que hay en el camino de la flash.
+ *
+ * Con los tres tiempos puestos, el registro de estado contesta OCUPADO
+ * hasta que se ha mirado suficientes veces, y cada mirada adelanta el
+ * reloj `g_us_espera` -los 100 us que el firmware deja entre dos-. Asi
+ * g_us_bloqueado sale igual que en la radio: lo que el bucle principal
+ * se queda parado dentro de spi_wait_busy().
+ *
+ * Por omision los tres valen 0, o sea nunca ocupado: los bancos de
+ * siempre no notan nada. Los pone el que quiera medir.
+ */
+uint32_t g_us_sector;      /* borrado de 4 kB   (45.000 tipico) */
+uint32_t g_us_bloque;      /* borrado de 64 kB  (150.000 tipico) */
+uint32_t g_us_pagina;      /* grabar 256 bytes  (400 tipico) */
+uint32_t g_us_espera = 100U;
+uint64_t g_us_bloqueado;
+uint32_t g_miradas;
+static uint32_t s_pendiente_us;
+
+/*
  * UNA QUEJA DEL CHIP QUE NADIE ESPERABA TIENE QUE PODER TUMBAR EL BANCO
  * - 15/10/2026.
- *
- * Pedido por el usuario.
  *
  * sim/borrado.c llevaba tiempo imprimiendo
  *
@@ -192,11 +227,35 @@ static void cierra_orden(void)
             g_chip[a] = nuevo;
         }
         g_grabados++;
+        s_pendiente_us += g_us_pagina;
         s_wel = 0U;
     }
     s_pag_n = 0U;
     s_cmd = 0U;
     s_nbyte = 0U;
+}
+
+/*
+ * El registro de estado, con el bit de OCUPADO.
+ *
+ * Se llama UNA vez por orden, al recibir el 0x05, porque es ahi donde
+ * este simulador prepara el byte que saldra en el siguiente -el que el
+ * firmware lee de verdad-. Cada mirada adelanta el reloj del chip
+ * g_us_espera microsegundos, que es lo que spi_wait_busy() deja entre
+ * dos, y asi g_us_bloqueado sale lo mismo que se pierde en la radio.
+ */
+static uint8_t estado1(void)
+{
+    uint8_t ocupado = 0U;
+
+    g_miradas++;
+    if (s_pendiente_us != 0U) {
+        uint32_t paso = (s_pendiente_us < g_us_espera) ? s_pendiente_us : g_us_espera;
+        ocupado = 1U;
+        g_us_bloqueado += paso;
+        s_pendiente_us -= paso;
+    }
+    return (uint8_t)((s_wel ? 0x02U : 0x00U) | ocupado);
 }
 
 /* Un byte entero ha entrado. Decide que sale y que pasa. */
@@ -210,7 +269,7 @@ static void byte_entrado(uint8_t v)
         switch (s_cmd) {
         case 0x06U: s_wel = 1U; break;                    /* WRITE ENABLE */
         case 0x04U: s_wel = 0U; break;                    /* WRITE DISABLE */
-        case 0x05U: s_out = (uint8_t)(s_wel ? 0x02U : 0x00U); break; /* STATUS1: nunca ocupado */
+        case 0x05U: s_out = estado1(); break;              /* STATUS1 */
         case 0x9FU: s_out = 0xEFU; break;                 /* JEDEC: Winbond */
         default: break;
         }
@@ -224,7 +283,8 @@ static void byte_entrado(uint8_t v)
               : ((s_nbyte == 2U) ? jedec_capacidad() : 0xFFU);
         break;
     case 0x05U:
-        s_out = (uint8_t)(s_wel ? 0x02U : 0x00U);
+        /* Si alguien sigue sacando bytes, se le repite el mismo estado:
+         * el reloj lo adelanta la ORDEN, una vez, no cada byte. */
         break;
     case 0x03U:  /* READ: 3 bytes de direccion y luego sale dato */
         if (s_nbyte <= 3U) {
@@ -254,6 +314,7 @@ static void byte_entrado(uint8_t v)
                 mira_intocable(b, 65536U, "BLOCK_ERASE en zona intocable");
                 memset(&g_chip[b % g_chip_bytes], 0xFF, 65536U);
                 g_borrados++;
+                s_pendiente_us += g_us_bloque;
                 s_wel = 0U;
             }
         }
@@ -273,6 +334,7 @@ static void byte_entrado(uint8_t v)
                 mira_intocable(b, BLOQUE, "SECTOR_ERASE en zona intocable");
                 memset(&g_chip[b % g_chip_bytes], 0xFF, BLOQUE);
                 g_borrados++;
+                s_pendiente_us += g_us_sector;
                 s_wel = 0U;
             }
         }
@@ -325,4 +387,8 @@ void w25q_reset(void)
     g_borrados = 0U; g_grabados = 0U; g_fallos_chip = 0; g_bits = 0U;
     g_chip_espera = 0;   /* g_chip_sueltas NO se borra: es la cuenta de toda la corrida */
     g_intocable_ini = g_intocable_fin = 0xFFFFFFFFU;
+    /* El reloj del chip tambien: los tiempos los pone el banco que mide,
+     * y un reinicio deja el chip libre y la cuenta a cero. */
+    s_pendiente_us = 0U; g_us_bloqueado = 0U; g_miradas = 0U;
+    g_us_sector = 0U; g_us_bloque = 0U; g_us_pagina = 0U; g_us_espera = 100U;
 }

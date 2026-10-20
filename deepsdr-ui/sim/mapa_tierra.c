@@ -3,8 +3,6 @@
  * QUE LA TIERRA SE RELLENE, Y SOLO DONDE TOCA - 14/10/2026
  * ======================================================================
  *
- * Pedido por el usuario.
- *
  * Esto NO mide lo que costaria -eso es sim/mapa_relleno.c, que se hizo
  * antes de escribir una linea de firmware y dijo razon 0,19-. Esto mide que
  * EL DIBUJANTE DE LA RADIO lo haga, y que lo haga bien, pintando el mapa
