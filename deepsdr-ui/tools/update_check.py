@@ -23,14 +23,20 @@ Y de paso lo que la receta del Makefile no puede avisar: si el firmware
 pasara de 256K, el relleno sale negativo y el fichero se genera igual con
 la firma en el sitio equivocado. Aqui eso es un fallo con su nombre.
 
-LA IMAGEN GRANDE (27/09/2026)
------------------------------
+LA IMAGEN GRANDE (27/09/2026) - HISTORIA, YA NO SE USA
+------------------------------------------------------
+Lo que sigue describe la rama VIEJA, la del gestor de fabrica. Se deja
+porque el script todavia sabe leer ese formato, pero nada de esto
+corre hoy: ni User/firma_app.c ni la seccion .arriba existen ya en el
+arbol -se quitaron el 02/10/2026, ver la seccion "rama reload" de mas
+abajo y el comentario de GD32F450VE_FLASH.ld-.
 Desde que se desensamblo el gestor de arranque hay un segundo formato
 valido. El gestor acepta ficheros de hasta 0x50000 (327.680 bytes) y lo
 unico que comprueba de la imagen son ocho bytes en 0x08060000, o sea en
 el desplazamiento 0x40000 del fichero. Asi que una imagen de mas de
 0x40000 tambien arranca, siempre que lleve la firma DENTRO, en su sitio.
-El firmware la pone ahi con User/firma_app.c y un KEEP() en el enlazador.
+El firmware la ponia ahi con User/firma_app.c y un KEEP() en el
+enlazador; ninguno de los dos existe ya.
 
 En ese caso el relleno de la receta del Makefile sale negativo y no
 rellena nada -correcto, la firma ya va dentro- pero los ocho bytes se
@@ -48,12 +54,13 @@ LA RAMA "reload" (02/10/2026)
 -----------------------------
 Con cargador propio desaparece todo lo de arriba: la imagen va de una
 pieza desde 0x0800C000 y lo que la valida es una cabecera de 16 bytes en
-el desplazamiento 0x200 con magia, longitud y CRC32. Ahi update4.bin ES
-el firmware salvo esos 16 bytes, que el firmware trae a cero y rellena
+el desplazamiento 0x200 con magia, longitud y CRC32. Y el fichero ya no
+se llama update4.bin sino update.bin -o update_470.bin para el GD32F470-:
+ES el firmware salvo esos 16 bytes, que el firmware trae a cero y rellena
 tools/cabecera.py.
 
 Este script se entera solo de cual de los dos formatos tiene delante
--mira si update4.bin lleva la magia "DSDR" en 0x200- para que el mismo
+-mira si el fichero lleva la magia "DSDR" en 0x200- para que el mismo
 simulador valga para las dos ramas. Y en el formato nuevo recalcula el
 CRC por su cuenta, que es justo la pregunta que importa: "este fichero,
 tal y como esta, lo aceptaria el cargador?".
@@ -88,8 +95,11 @@ def u32(d, o):
     return d[o] | (d[o+1] << 8) | (d[o+2] << 16) | (d[o+3] << 24)
 
 
-def comprueba_reload(fw, up):
-    """El formato nuevo: update4 == firmware salvo los 16 bytes de cabecera."""
+def comprueba_reload(fw, up, nombre):
+    """El formato nuevo: el fichero ES el firmware salvo los 16 bytes de
+    cabecera. `nombre` es el del fichero que se esta mirando: en esta rama
+    se llama update.bin o update_470.bin, NO update4.bin, y decirlo mal es
+    la clase de detalle que manda a alguien a mirar el fichero que no es."""
     fallos = 0
     print('  formato "reload": cabecera con longitud y CRC32')
     print('  firmware  %7d bytes  (%.1f%% de los %d que caben)'
@@ -109,9 +119,9 @@ def comprueba_reload(fw, up):
     if fuera:
         print('  el contenido NO es este firmware: primer byte distinto en 0x%X'
               % fuera[0])
-        print('  (casi seguro es un update4.bin de una compilacion anterior)  MAL')
+        print('  (casi seguro es un %s de una compilacion anterior)  MAL' % nombre)
         return 1
-    print('  update4.bin es exactamente este firmware  ok')
+    print('  %s es exactamente este firmware  ok' % nombre)
 
     if fw[CAB_OFF:CAB_OFF + 16] != bytes(16):
         print('  el firmware NO trae la cabecera a cero en 0x%X: la seccion'
@@ -152,7 +162,7 @@ def main(fw_bin, up_bin):
     fallos = 0
 
     if len(up) > CAB_OFF + 16 and up[CAB_OFF:CAB_OFF + 4] == MAGIA:
-        return comprueba_reload(fw, up)
+        return comprueba_reload(fw, up, os.path.basename(up_bin))
 
     print('  firmware  %7d bytes  (%.1f%% de los %d que caben)'
           % (len(fw), 100.0 * len(fw) / (TOPE - 8), TOPE - 8))
@@ -184,10 +194,11 @@ def main(fw_bin, up_bin):
         # decir DONDE, que es lo que distingue "viejo" de "corrupto"
         n = next(i for i in range(len(up)) if up[i] != esperado[i])
         print('  el contenido NO es este firmware: primer byte distinto en 0x%X' % n)
-        print('  (casi seguro es un update4.bin de una compilacion anterior)  MAL')
+        print('  (casi seguro es un %s de una compilacion anterior)  MAL'
+              % os.path.basename(up_bin))
         fallos += 1
     else:
-        print('  update4.bin es exactamente este firmware  ok')
+        print('  %s es exactamente este firmware  ok' % os.path.basename(up_bin))
 
     if up[-8:] != FIRMA:
         print('  la firma final no esta  MAL'); fallos += 1

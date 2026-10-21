@@ -4,31 +4,32 @@
 #include <stdint.h>
 
 /*
- * VBAT monitoring via the GD32F450's built-in ADC0 channel 18. Per
- * gd32f4xx_adc.h's ADC_SYNCCTL_VBATEN comment ("channel 18 (1/4
- * voltage of external battery) enable of ADC0") and the GD32F450
- * datasheet's ADC chapter, enabling that switch internally routes
- * VBAT/4 onto channel 18 - the 1/4 divider is built into the ADC
- * peripheral itself, not a board-level resistor network, so
- * battery_get_millivolts() below undoes it (raw_adc_mV * 4) as part
- * of the conversion.
+ * LA BATERIA, POR EL CANAL 18 DEL ADC0 QUE LLEVA DENTRO EL GD32F450.
  *
- * DIODE DROP COMPENSATION (per the project owner, 31/07/2026): this
- * board's VBAT pin sits behind a series diode from the actual battery
- * terminals - a common reverse-polarity/back-feed protection on
- * battery inputs - so the pin itself reads LOWER than the real
- * battery voltage by that diode's forward drop. BATTERY_DIODE_DROP_MV
- * (700mV, a typical silicon diode Vf) is added back on top of the *4
- * result to approximate the actual battery terminal voltage.
+ * Segun el comentario de ADC_SYNCCTL_VBATEN en gd32f4xx_adc.h -"canal 18
+ * (un cuarto del voltaje de la bateria externa), habilitacion del ADC0"-
+ * y el capitulo del ADC de la hoja de datos del GD32F450, activar ese
+ * interruptor lleva VBAT/4 al canal 18 por dentro. El divisor por cuatro
+ * esta DENTRO del periferico, no es una red de resistencias de la placa,
+ * asi que battery_get_millivolts() lo deshace -multiplicando por 4- como
+ * parte de la conversion.
  *
- * This is a FIXED approximation, not a measured/temperature-
- * compensated Vf - real diodes drop somewhat less at low current and
- * more at high current or low temperature, so treat the result as
- * "close enough for a gauge", not a calibrated instrument. If it
- * reads consistently off against a multimeter on the actual battery
- * terminals, retune BATTERY_DIODE_DROP_MV - the ADC/divider math
- * above is exact per the datasheet, the diode drop is the only fudge
- * factor in this file.
+ * LA CAIDA DEL DIODO, pedido por el usuario el 31/07/2026: la patilla
+ * VBAT de esta placa esta detras de un diodo en serie desde los bornes de
+ * la bateria -la proteccion de siempre contra polaridad invertida y
+ * retorno de corriente-, asi que la patilla lee MENOS que la bateria de
+ * verdad, exactamente la caida directa de ese diodo.
+ * BATTERY_DIODE_DROP_MV son 700 mV, la Vf tipica de un diodo de silicio,
+ * y se suman despues del por cuatro para aproximar el voltaje real en los
+ * bornes.
+ *
+ * Es una aproximacion FIJA, no una Vf medida ni compensada en
+ * temperatura: un diodo de verdad cae algo menos a poca corriente y algo
+ * mas a mucha corriente o con frio. O sea que esto vale como medidor, no
+ * como instrumento calibrado. Si lee sistematicamente desviado contra un
+ * multimetro puesto en los bornes, se reajusta BATTERY_DIODE_DROP_MV: la
+ * cuenta del ADC y del divisor es exacta segun la hoja de datos, y la
+ * caida del diodo es el unico numero a ojo que hay en este fichero.
  */
 /*
  * EL VOLTAJE DE REFERENCIA YA NO SE SUPONE: SE MIDE - 12/10/2026.
@@ -141,12 +142,13 @@ int16_t  battery_temp_de_raw(uint16_t raw, uint16_t vdda_mv);
  * audio chain, so it can go anywhere in that sequence. */
 void battery_init(void);
 
-/* Blocking single conversion (~a few us, see battery.c) - reads VBAT
- * right now, undoes the /4 internal divider, and adds
- * BATTERY_DIODE_DROP_MV back on top. NOT ISR-safe (shares ADC0 with
- * nothing else today, but don't call this from the demod ISR context
- * if that ever changes) - intended for the main loop, polled
- * occasionally by battery_display_draw()'s call site in main.c. */
+/* Una conversion, esperando a que acabe: unos pocos microsegundos, ver
+ * battery.c. Lee VBAT ahora mismo, deshace el divisor por cuatro de
+ * dentro del chip y suma BATTERY_DIODE_DROP_MV. NO vale desde una
+ * interrupcion: hoy no comparte el ADC0 con nadie, pero si eso cambia
+ * algun dia, que no se llame desde la interrupcion de demodulacion. Esta
+ * pensado para el bucle principal, mirado de vez en cuando desde donde
+ * main.c llama a battery_display_draw(). */
 uint16_t battery_get_millivolts(void);
 
 /*

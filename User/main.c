@@ -90,6 +90,7 @@
 #include "rtc_hw.h"   /* el RTC de hardware - ver reloj_ahora_ms() */
 #include "navtex.h" /* decodificador de NAVTEX (SITOR-B) - ver k_demod_modes[] */
 #include "wefax.h"  /* facsimil meteorologico - ver k_demod_modes[] y fax_panel_*() */
+#include "wfx_recoloca.h" /* recolocar la carta al acabarla - 20/10/2026 */
 #include "wfx_guarda.h" /* cuando se abre el fichero de una carta - ver su cabecera */
 #include "sstv.h"   /* fotos por radio - mismo panel que el fax, en color */
 #include "hell.h"   /* telegrafia de imagen de 1929 - ver hell.h */
@@ -349,6 +350,13 @@ static void ale_reloj_borra(void);   /* el minutero de la ultima rafaga ALE */
 static void sdr_spectrum_waterfall_tick(void);
 static void franja_arriba_tick(void);
 static void demo_touch_poll(void);
+static void wfxr_poll(void);
+static uint8_t wfxr_toca(uint16_t x, uint16_t y, uint8_t nuevo);
+static uint8_t wfxr_dedo(uint8_t pulsado, uint16_t x, uint16_t y);
+static uint8_t wfxr_mando(int32_t detents);
+static uint8_t wfxr_tapando(void);
+static uint8_t wfxr_obra(void);
+static uint8_t wfxr_linea_puesta(void);
 static void freq_display_draw(void);
 static void step_display_draw(void);
 static void aux_row_display_draw(void);
@@ -360,6 +368,7 @@ static void capt_poll(void);     /* la captura de pantalla - ver capt_pide() */
 static uint8_t capt_pide(void);
 static void capt_aviso_tick(void);
 static uint8_t capt_tapando(void);  /* hay barra de progreso o cartel encima */
+static uint8_t capt_en_curso(void); /* hay una foto a medias - ver capt_pide() */
 static void time_display_draw(void);
 static void battery_display_draw(void);
 static void badges_draw(void);
@@ -426,6 +435,8 @@ static void fil_pon(uint16_t lo, uint16_t hi);
 /* El volcado de la zona alta avanza desde el bucle principal, que esta
  * mucho antes que donde vive - ver volcado_arranca(). */
 static void volcado_poll(void);
+static void chipborra_poll(void);  /* el borrado del chip entero, un paso por
+                                    * vuelta - ver s_chip_armado */
 /* La pagina de medidas de Informacion se repinta sola desde el bucle
  * principal, que esta mucho antes que ella - ver info_vivo_poll(). */
 static void info_vivo_poll(void);
@@ -2570,10 +2581,12 @@ int main(void)
         { uint32_t t_polls2_0 = DWT->CYCCNT;
         rtty_auto_poll();
         capt_poll();   /* la captura de pantalla, un bloque por vuelta - ver capt_pide() */
+        wfxr_poll();   /* y el recolocado de una carta, igual - ver wfxr_pide() */
         capt_aviso_tick();  /* y el aviso de por que no se pudo, si lo hay */
         tics_poll();   /* vigila que el reloj no pierda milisegundos - etapa 29 */
         info_vivo_poll();  /* la pagina de medidas, al dia - ver su comentario */
         volcado_poll();  /* un bloque de 4 kB por vuelta - ver volcado_arranca() */
+        chipborra_poll(); /* y el borrado del chip entero, un bloque por vuelta */
         fax_poll();    /* el WEFAX pinta imagen, no texto - etapa 26 */
         sstv_poll();   /* y el SSTV, en color - etapa 27 */
         hell_poll();   /* y el Feld-Hell, que es una cinta de papel - etapa 42 */
@@ -3960,9 +3973,41 @@ static const band_preset_t k_band_presets[] = {
      * decodificador lo busca. Si se sintonizara el centro del tono, la imagen
      * saldria toda blanca o toda negra.
      */
-    { T("FAX 4", "FAX 4"),  "DWD 3.855 kHz",       3855000UL, 3855000UL, 3855000UL,  DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
-    { T("FAX 8", "FAX 8"),  "DWD 7.880 kHz",       7880000UL, 7880000UL, 7880000UL,  DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
-    { T("FAX 14", "FAX 14"), "DWD 13.882,5 kHz",    13882500UL, 13882500UL, 13882500UL, DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
+    /*
+     * *** Y DURANTE UN MES FUERON EL CENTRO, NO LA PORTADORA - 21/10/2026. ***
+     *
+     * El parrafo de aqui arriba dice la regla correcta y los numeros de
+     * abajo la rompian: 3.855, 7.880 y 13.882,5 son las frecuencias que
+     * PUBLICA el DWD, y lo que publica es el CENTRO DE LA EMISION, no la
+     * portadora. La portadora esta 1,9 kHz por debajo, que es justo el
+     * numero que dice el parrafo.
+     *
+     * Con el dial en la publicada, los tonos de 1.500 a 2.300 Hz caen entre
+     * -400 y +400 Hz de audio, o sea en la banda lateral que la USB
+     * suprime: por esos tres botones no entra NADA. El comentario describia
+     * el fallo que las tres filas producian, debajo del propio comentario.
+     *
+     * LA CUENTA, CON LA MEDIDA DEL USUARIO. Sintonizando 3.853,10 kHz salia
+     * un tono fijo de 2.266 Hz, que es blanco de fax. 3.853,10 + 2,266 =
+     * 3.855,37 y la emision queda centrada en 3.853,10 + 1,9 = 3.855,00,
+     * que es exactamente lo que publica el DWD. O sea que la portadora es
+     * 3.855,0 - 1,9 = 3.853,1 y no 3.855,0.
+     *
+     * Y POR QUE SOLO LE PASA AL FAX. NAVTEX lleva los mismos numeros
+     * publicados y no se rompe porque navtex.c BUSCA su centro -ver
+     * navtex_set_centro_hz() y `desvio_hz`-. El fax no busca nada: sus
+     * 1.500 y 2.300 Hz estan fijos en wefax.h, asi que si el dial no esta
+     * en la portadora no hay nada que lo rescate.
+     *
+     * EL ROTULO DICE EL DIAL, no la publicada. Una pantalla que ponga
+     * "3.855" con el VFO en 3.853,10 se contradice a si misma, y de las dos
+     * la que importa para que entre la carta es el dial. La publicada, que
+     * es la que sale en los horarios del DWD, esta en el manual al lado de
+     * cada una.
+     */
+    { T("FAX 4", "FAX 4"),  "DWD 3.853,1 kHz",     3853100UL, 3853100UL, 3853100UL,  DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
+    { T("FAX 8", "FAX 8"),  "DWD 7.878,1 kHz",     7878100UL, 7878100UL, 7878100UL,  DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
+    { T("FAX 14", "FAX 14"), "DWD 13.880,6 kHz",    13880600UL, 13880600UL, 13880600UL, DEMOD_MODE_USB, BAND_STEP_100HZ, BAND_FAM_UTIL },
     /*
      * SSTV, 24/09/2026. 14,230 MHz es la frecuencia de llamada de imagen en
      * la banda de 20 metros y es donde esta casi todo el trafico que se puede
@@ -6470,7 +6515,15 @@ static void act_sync(void)
             s_act.active[i] = (uint8_t)(s_menu_open && s_grid_pant == GRID_PASOS);
         } else if (b == &s_btn_vol) {
             s_act.value[i]  = s_act_vol;
-            s_act.active[i] = (uint8_t)(s_encoder_target == ENCODER_TARGET_VOLUME);
+            /*
+             * Encendido solo si el mando es DE VERDAD del volumen ahora
+             * mismo. Mientras la linea de recolocar esta puesta no lo es
+             * -los detentes mueven la linea-, y un boton encendido que no
+             * hace lo que dice es justo lo que tools/mando_check.py vino a
+             * impedir. Se apaga, y vuelve solo al quitarse el cartel.
+             */
+            s_act.active[i] = (uint8_t)(s_encoder_target == ENCODER_TARGET_VOLUME
+                                        && !wfxr_linea_puesta());
         } else if (b == &s_btn_nr) {
             s_act.value[i]  = s_nr_on ? tr("activo", "on") : tr("apagado", "off");
             s_act.active[i] = s_nr_on;
@@ -9558,49 +9611,19 @@ static void analiz_siguiente(void)
 }
 
 /*
- * EL CENTRADO: LINEA ENTERA, NO UN RETOQUE - 20/10/2026.
+ * EL CENTRADO SE FUE DE AQUI - 20/10/2026.
  *
- * Nacio con un recorrido de +-49 puntos, porque la primera carta del
- * usuario salia corrida 21 y me parecio que eso era "el" desajuste.
+ * Hubo un boton en el panel del fax que corria la imagen 21 puntos por
+ * toque. Lo pedido fue quitarlo, y el motivo es bueno: el centrado de
+ * verdad se elige AL FINAL, con una linea vertical sobre la carta ya
+ * entera. Un centrado en vivo solo puede estorbar a esa linea -si la
+ * carta ya viene corrida, la columna que marcas no es la que crees-, y
+ * ademas obligaba a grabar el fichero con el centrado puesto, lo que
+ * dejaba una costura imposible de arreglar despues si lo tocabas a
+ * mitad.
  *
- * La segunda carta salio corrida DOSCIENTOS SESENTA Y NUEVE. Medido sobre
- * la columna del margen vertical, que en la primera estaba en x=734 y en
- * la segunda en x=465.
- *
- * O sea que el desfase no es una propiedad de la emisora: depende de donde
- * se enganche. El boton "Sincroniza" de al lado dice "la linea empieza
- * aqui" en el instante en que lo tocas, y un dedo no acierta el instante.
- * Con +-49 ese caso no tiene arreglo.
- *
- * Asi que el recorrido es la LINEA ENTERA y el paso 21 puntos -un 2,8%-,
- * o sea 36 posiciones justas. Y el boton se parte en dos: la mitad
- * izquierda corre hacia la izquierda y la derecha hacia la derecha, asi
- * que el peor caso son 18 toques y lo normal son dos o tres.
- *
- * 21 y no 7: con 7 harian falta 54 toques para cruzar media linea, y el
- * ojo no distingue 7 puntos de 14 en un margen. Si algun dia hace falta
- * afinar mas, el sitio es este y no el enganche - ver wefax_set_centro().
+ * Lo que hay en su lugar: wfx_rec_*(), al cerrar el fichero.
  */
-#define WFX_CENTRO_PASO  21
-#define WFX_CENTRO_N     (WEFAX_ANCHO / WFX_CENTRO_PASO)   /* 36 justas */
-_Static_assert((WEFAX_ANCHO % WFX_CENTRO_PASO) == 0U,
-               "el paso del centrado tiene que dividir a WEFAX_ANCHO, o la "
-               "vuelta entera no cae en cero");
-
-/*
- * Mueve el centrado un paso en el sentido que se le diga, dando la vuelta
- * por el otro lado. Se guarda centrado en cero -de -378 a +357- y no de 0
- * a 755 para que el rotulo diga "-21" y no "+735", que es lo mismo pero no
- * se lee igual.
- */
-static void wfx_centro_mueve(int8_t dir)
-{
-    int16_t v = (int16_t)(wefax_centro() + (int16_t)(dir * WFX_CENTRO_PASO));
-
-    while (v >=  (int16_t)(WEFAX_ANCHO / 2U)) { v = (int16_t)(v - (int16_t)WEFAX_ANCHO); }
-    while (v <  -(int16_t)(WEFAX_ANCHO / 2U)) { v = (int16_t)(v + (int16_t)WEFAX_ANCHO); }
-    wefax_set_centro(v);
-}
 
 
 
@@ -11549,7 +11572,6 @@ static void extras_leer(settings_extra_t *e)
     e->v[SET_X_SSTV_GUARDA] = (int32_t)s_sstv_guarda;
     e->v[SET_X_WFX_GUARDA]  = (int32_t)s_wfx_guarda;
     e->v[SET_X_IQ_INV]      = (int32_t)lo_gen_gd32_invertido();
-    e->v[SET_X_WFX_CENTRO]  = (int32_t)wefax_centro();
     e->v[SET_X_IDIOMA]      = (int32_t)idioma();
     e->v[SET_X_ENC_INV]     = (int32_t)encoder_invertido();
     /*
@@ -11816,14 +11838,6 @@ static void extras_aplicar(const settings_extra_t *e)
     }
     if (EX_HAY(SET_X_IQ_INV)) {
         lo_gen_gd32_invierte((uint8_t)ex_rec(e->v[SET_X_IQ_INV], 0, 1));
-    }
-    if (EX_HAY(SET_X_WFX_CENTRO)) {
-        /* Se recorta al recorrido de la tabla: un CONFIG.CSV con un numero
-         * de fuera -escrito a mano, o de una version futura- no puede dejar
-         * la carta corrida media pantalla. */
-        wefax_set_centro((int16_t)ex_rec(e->v[SET_X_WFX_CENTRO],
-                                         -(int32_t)(WEFAX_ANCHO / 2U),
-                                          (int32_t)(WEFAX_ANCHO / 2U)));
     }
     if (EX_HAY(SET_X_WFX_GUARDA)) {
         s_wfx_guarda = (uint8_t)ex_rec(e->v[SET_X_WFX_GUARDA], 0,
@@ -13156,30 +13170,68 @@ static uint8_t datos_arranca(void)
     const spi_flash_alta_t *a;
     uint32_t tam = 0UL, bloques;
 
+    /*
+     * *** ESTOS MOTIVOS NO CABIAN EN LA CELDA, Y UNO MENTIA - 21/10/2026. ***
+     *
+     * Avisado por un usuario del repositorio, que despues de formatear veia
+     * en esta fila «BD.bin esta en el disco p...» y no podia leer mas. Dos
+     * cosas a la vez, y las dos de aqui:
+     *
+     * 1. EL HUECO DE LA CELDA SON 184 px y los siete motivos de esta
+     *    funcion median entre 255 y 385. Los SIETE salian cortados, no
+     *    solo el suyo. Y sim/infotest.c, que existe justo para medir el
+     *    peor caso de cada celda, tenia apuntado como peor caso de esta
+     *    fila el texto del camino BUENO -«cargada · 99999 frec.», 163 px-
+     *    y ninguno de los siete malos. O sea que medía el unico que no se
+     *    sale;
+     *
+     * 2. Y EL QUE LE TOCO A EL DECIA LO CONTRARIO DE LO QUE PASABA.
+     *    spi_flash_fichero_tam() devuelve 0 cuando el fichero NO ESTA -lo
+     *    dice su propia cabecera- y aqui eso se contaba como «esta en el
+     *    disco pero no se puede medir». El habia formateado, que es lo que
+     *    borra BD.BIN, y la radio le decia que el fichero seguia ahi.
+     *
+     *    Es EXACTAMENTE el mismo fallo que ya se arreglo el 28/09 en la
+     *    otra mitad de esta misma fila -ver «Y AQUI NO SE DICE FALTA SIN
+     *    HABERLO COMPROBADO» mas abajo-: juntar varios motivos distintos
+     *    en una frase que afirma uno solo. Se arreglo un lado y el otro se
+     *    quedo.
+     *
+     * El motivo de verdad lleva desde siempre en s_vol_porque, que
+     * fichero_busca_interno() deja puesto y spi_flash_volcado_porque_txt()
+     * sabe contar -«no encuentro el .BIN», «el .BIN esta troceado»...-. Asi
+     * que cuando no hay fichero, esto NO se inventa una frase: deja
+     * s_datos_porque a cero y la fila tira de ese, que es lo que ya hace
+     * cuando esta funcion no tiene nada que decir.
+     */
     s_datos_porque = 0;
     if (s_vol_estado == 1U) {
-        s_datos_porque = tr("la flash esta ocupada con otra copia",
-                            "the flash is busy with another copy");
+        s_datos_porque = tr("otra copia en curso",
+                            "another copy running");
         return 0U;
     }
-    if (!spi_flash_fichero_tam("BD      ", "BIN", &tam) || tam == 0UL) {
-        s_datos_porque = tr("BD.BIN esta en el disco pero no se puede medir",
-                            "BD.BIN is on the disk but cannot be measured");
+    if (!spi_flash_fichero_tam("BD      ", "BIN", &tam)) {
+        /* Sin frase propia: la buena esta en s_vol_porque. */
+        s_vol_estado = 3U;
+        return 0U;
+    }
+    if (tam == 0UL) {
+        s_datos_porque = tr("BD.BIN mide cero", "BD.BIN is empty");
         s_vol_estado = 3U;
         return 0U;
     }
     bloques = (tam + 4095UL) & ~4095UL;
     if (bloques > (DATOS_TOPE - DATOS_BASE)) {
-        s_datos_porque = tr("BD.BIN es mayor que la zona alta",
-                            "BD.BIN is bigger than the upper area");
+        s_datos_porque = tr("BD.BIN no cabe arriba",
+                            "BD.BIN does not fit");
         s_vol_estado = 3U;
         return 0U;
     }
 
     a = alta_mira();
     if (a->fs_bytes == 0UL) {
-        s_datos_porque = tr("no se ha podido medir el sistema de ficheros",
-                            "the file system could not be measured");
+        s_datos_porque = tr("no mido el disco",
+                            "cannot measure disk");
         s_vol_sin_zona = 1U;
         s_vol_estado = 3U;
         return 0U;
@@ -13221,11 +13273,11 @@ static uint8_t datos_arranca(void)
          * GEO_MAS_GRANDE- y lo que faltaba era preguntarselo.
          */
         if (a->fs_bytes > za_disco_de(spi_flash_capacidad())) {
-            s_datos_porque = tr("el disco dice medir mas de lo que hay: formatealo",
-                                "the disk claims to be larger than it is: format it");
+            s_datos_porque = tr("disco mayor: formatea",
+                                "disk too big: format");
         } else {
-            s_datos_porque = tr("la zona alta de este chip no llega hasta aqui",
-                                "this chip's upper area does not reach that far");
+            s_datos_porque = tr("sin zona alta en el chip",
+                                "no upper area here");
         }
         s_vol_sin_zona = 1U;
         s_vol_estado = 3U;
@@ -13923,7 +13975,7 @@ enum { INFO_VERSION = 0, INFO_MICRO, INFO_FLASH,
        INFO_XDFU, INFO_XFORMATEAR,
        INFO_XCHIP, INFO_XSERIE, INFO_XFS, INFO_XFORMATO, INFO_XMAPA,
        INFO_CASCADA,
-       INFO_XSITIO, INFO_XAVIONES,
+       INFO_XSITIO, INFO_XAVIONES, INFO_XBORRACHIP,
        INFO_XIPA, INFO_XDMA, INFO_XBUS, INFO_XPEND, INFO_XFRAME,
        INFO_XVUELTA, INFO_XPOLL2,
        INFO_XMSFRAME, INFO_XISR,
@@ -13973,6 +14025,51 @@ static uint8_t s_dfu_armado = 0U;
 static uint8_t s_fmt_armado = 0U;
 static char    s_fmt_res[44] = "";   /* el veredicto, mientras se enseña */
 /*
+ * BORRAR EL CHIP ENTERO - 21/10/2026, pedido por el usuario.
+ *
+ * QUE PROBLEMA RESUELVE. "Formatear disco" no borra nada: reescribe la
+ * cabecera FAT12 -sector de arranque, las dos FAT y el directorio raiz- y
+ * los datos se quedan enteros, solo dejan de estar listados. Y la ZONA
+ * ALTA -el ultimo megabyte, donde vive BD.BIN desempaquetado- no la toca
+ * nadie nunca: esta por encima del volumen que se ve por USB.
+ *
+ * O sea que hasta hoy no habia forma de dejar el chip limpio de verdad.
+ * Esta fila lo hace: de la direccion 0 a spi_flash_capacidad(), todo a
+ * 0xFF, disco visible Y zona alta.
+ *
+ * POR QUE NO SE USA LA ORDEN DE BORRADO DE CHIP (0xC7). Porque
+ * spi_wait_busy() se rinde a los ~10 s -ver su comentario- y un borrado
+ * de chip entero en un W25Q16 son 25 s tipicos y hasta 50 de maximo: se
+ * quedaria esperando a medias y el firmware creeria que ya esta. Lo que
+ * si vale es lo que ya existe: spi_flash_borrado_paso(), que hace UN
+ * borrado por vuelta del bucle -el trozo mas grande que quepa- y es lo
+ * mismo que usa la captura de pantalla. El bucle se queda parado unos 150
+ * ms por borrado de 64 kB (ver sim/flash_bloqueo.c), no los 25 s de un
+ * golpe.
+ *
+ * NO LADRILLA NADA. El firmware y el cargador viven en la flash INTERNA
+ * del micro, no en este chip. La radio arranca igual con el chip a 0xFF.
+ * Lo que si se lleva por delante: CONFIG.CSV -o sea los ajustes, el QTH y
+ * el huso vuelven a los de fabrica-, los mapas, las capturas guardadas y
+ * las bases de datos de la zona alta.
+ *
+ * Y AL TERMINAR SE FORMATEA. Un chip a 0xFF no tiene volumen: el PC lo
+ * veria como un disco sin formato y el firmware no podria guardar una
+ * foto. Asi que en cuanto acaba el barrido se llama a formato_haz(), que
+ * es exactamente lo que hace la fila de al lado, y la radio vuelve
+ * usable sin que haya que acordarse de un segundo paso.
+ *
+ * DETRAS DE LOS CINCO TOQUES, al contrario que "Formatear disco", que
+ * esta en la pagina basica. Esto se lleva cosas que el usuario copio a
+ * mano y que cuestan de volver a poner; que haya que destapar la pagina
+ * avanzada antes es la guardia que le corresponde.
+ */
+static uint8_t  s_chip_armado = 0U;
+static uint8_t  s_chip_fase   = 0U;    /* 0 parado, 1 borrando, 2 formateando */
+static uint32_t s_chip_cursor = 0UL;
+static uint32_t s_chip_fin    = 0UL;
+static char     s_chip_res[44] = "";
+/*
  * LOS DOS TOQUES DE "BORRAR EL MAPA" - 12/10/2026.
  *
  * Dos toques y no uno, por lo mismo que Formatear: el mapa lo copió el
@@ -14012,6 +14109,7 @@ static const texto_t k_info_nombres[INFO_COUNT] = {
     T("Cascada", "Waterfall"),
     T("Sitio para fotos", "Room for photos"),
     T("Cargar datos", "Load data"),
+    T("Borrar el chip", "Erase whole chip"),
     T("Acelerador IPA", "IPA accelerator"), T("DMA de pantalla", "Display DMA"),
     T("Bus pantalla", "Display bus"),
     T("Pendiente del bus", "Bus slew rate"),
@@ -14735,6 +14833,32 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
         }
         return buf;
     }
+
+    case INFO_XBORRACHIP:
+        /*
+         * Lo que enseña la fila, en este orden: el veredicto si acaba de
+         * terminar, el progreso si esta en marcha, el aviso si esta
+         * armada, y si no, que hace. Ver s_chip_armado.
+         *
+         * El progreso va en por ciento y no en kB porque el chip puede ser
+         * de 2 MB o de 16 y la celda mide 184 px: un tanto por ciento cabe
+         * siempre y se lee igual de bien en los dos casos.
+         */
+        if (s_chip_res[0] != '\0') { return s_chip_res; }
+        if (s_chip_fase != 0U) {
+            uint8_t k = 0U;
+            uint32_t pc = (s_chip_fin != 0UL)
+                        ? ((s_chip_cursor / 1024UL) * 100UL / (s_chip_fin / 1024UL))
+                        : 100UL;
+            if (pc > 100UL) { pc = 100UL; }
+            k = pega_txt(buf, k, (uint8_t)sizeof buf, tr("borrando · ", "erasing · "));
+            k = pega_num(buf, k, (uint8_t)sizeof buf, pc);
+            (void)pega_txt(buf, k, (uint8_t)sizeof buf, "%");
+            return buf;
+        }
+        if (s_chip_armado) { return tr("BORRA TODO: confirma",
+                                       "ERASES ALL: tap again"); }
+        return tr("tocar: borra TODO", "tap: erases ALL");
 
     case INFO_XDFU:
         /*
@@ -17281,6 +17405,42 @@ static void grid_apply(uint8_t cel)
                     s_fmt_armado = 1U;
                 }
             }
+            else if (id == (uint8_t)INFO_XBORRACHIP) {
+                if (s_chip_res[0] != '\0') {
+                    /* Se estaba enseñando el veredicto: un toque lo quita
+                     * y la fila vuelve a ofrecerse. Igual que el formateo. */
+                    s_chip_res[0] = '\0';
+                } else if (s_chip_fase != 0U) {
+                    /* En marcha: los toques no hacen nada. No se deja
+                     * cancelar a medias a proposito - un chip medio borrado
+                     * sin volumen es peor que uno borrado del todo. */
+                } else if (s_chip_armado) {
+                    s_chip_armado = 0U;
+                    /*
+                     * Y NO SE EMPIEZA SI HAY OTRO ESCRIBIENDO EN EL CHIP.
+                     * La captura de pantalla y el volcado de ficheros van
+                     * por el mismo bus y a un bloque por vuelta: empezar a
+                     * borrar por debajo de ellos les dejaria escribiendo en
+                     * sectores que ya no son suyos.
+                     */
+                    if (capt_en_curso() || (s_vol_estado == 1U)) {
+                        (void)pega_txt(s_chip_res, 0U, (uint8_t)sizeof s_chip_res,
+                                       tr("espera: hay faena", "busy: try later"));
+                    } else {
+                        s_chip_cursor = 0UL;
+                        s_chip_fin    = spi_flash_capacidad();
+                        if (s_chip_fin == 0UL) {
+                            (void)pega_txt(s_chip_res, 0U,
+                                           (uint8_t)sizeof s_chip_res,
+                                           tr("no hay chip", "no chip"));
+                        } else {
+                            s_chip_fase = 1U;
+                        }
+                    }
+                } else {
+                    s_chip_armado = 1U;
+                }
+            }
             else if (id == (uint8_t)INFO_XVOLT) {
                 /* Un escalon por toque, y al llegar arriba vuelve abajo.
                  * Ver el texto de la fila para el porque del paso. */
@@ -17555,6 +17715,7 @@ static void grid_show(grid_pant_t p)
      * contestando a una pregunta que ya no se le hace.
      */
     s_fmt_armado  = 0U;
+    s_chip_armado = 0U;
     s_fmt_res[0]  = '\0';
     s_grid_pant = p;
     s_grid_page = 0U;
@@ -17857,9 +18018,38 @@ static void menu_mode_preset_callback(void *widget, ui_event_t event, void *user
         }
 
         /* Y el cuarto y el quinto: WEFAX y SSTV. Mismo trato. */
+        /*
+         * *** PERO EL FAX NO SE REINICIA SI YA ESTABA PUESTO - 21/10/2026. ***
+         *
+         * Esta funcion NO tiene salida temprana cuando el modo no cambia, y
+         * eso es a proposito -hay cosas que hay que reaplicar-. Lo que no
+         * puede reaplicarse es ARRANCAR DE CERO un decodificador que lleva
+         * diez minutos enganchado.
+         *
+         * wefax_start() pone el estado en BUSCA, borra el anillo, tira el
+         * reloj y el seguidor de fase. Y como fax_poll() cierra el fichero
+         * en la transicion de imagen a no-imagen, la carta que se estuviera
+         * grabando SE PARTE EN DOS FICHEROS, se arma el cerrojo y sale el
+         * cartel de recolocar ofreciendo girar media carta.
+         *
+         * Todo eso por una orden de modo que no cambia el modo. Y las manda
+         * cualquiera: un WSJT-X o un fldigi ponen el modo al arrancar
+         * -aunque sea el que ya esta- y un cambio de banda pasa por aqui.
+         * Tambien lo hace elegir WEFAX en la rejilla estando ya en WEFAX,
+         * que es lo que haria quien quiere mirar la lista de modos.
+         *
+         * Entrar en el modo en el que ya estas no puede costar la carta. Si
+         * lo que se quiere es volver a empezar, para eso esta el boton de
+         * Sincroniza.
+         *
+         * SSTV se queda como estaba: tiene el mismo problema y se mira en la
+         * revision del proyecto entero, no de pasada desde aqui.
+         */
         if (k_demod_modes[idx].fax) {
-            wefax_start(DEMOD_DEC_FS_HZ);
-            fax_panel_reinicia();
+            if (!wefax_activo()) {
+                wefax_start(DEMOD_DEC_FS_HZ);
+                fax_panel_reinicia();
+            }
         } else {
             wefax_stop();
         }
@@ -22685,7 +22875,7 @@ static void digi_sync(void)
         /*
          * LA ESTACION VA EN LA CABECERA, NO EN CADA FILA. 25/09/2026.
          *
-         * Igual que en la pantalla de Esteban, que pone "GS 3 REYKJAVIK"
+         * Igual que en la pantalla de otra radio igual, que pone "GS 3 REYKJAVIK"
          * arriba: estas en UNA frecuencia, o sea en UNA estacion, y
          * repetirla en las catorce filas gastaba una columna entera para
          * decir siempre lo mismo. Ese sitio se lo queda ahora la posicion.
@@ -23499,6 +23689,13 @@ static void rtty_poll(void)
 
 static uint16_t s_fax_fila;
 static uint8_t  s_fax_limpio;
+/*
+ * El renglon que se recoge del decodificador. Es una COPIA: wefax_linea_en()
+ * la saca de su anillo con las interrupciones cerradas, y a partir de ahi
+ * esto es nuestro y puede tardar lo que haga falta en grabarlo. Ver el
+ * comentario de esa funcion en User/wefax.c.
+ */
+static uint8_t  s_fax_linea[WEFAX_ANCHO];
 
 static void fax_panel_reinicia(void)
 {
@@ -23561,6 +23758,29 @@ static void fax_panel_linea(const uint8_t *l)
  *     el cero final                      1     46
  *
  * O sea SEIS BYTES fuera del array, en .bss, encima de lo que haya detras.
+ *
+ * *** Y LA CUENTA SE QUEDO EN EL CAMPO DE ANTES - 21/10/2026. ***
+ *
+ * El 20/10 se le pego OTRO campo -lo que esta haciendo el guardado- y se
+ * subio el aserto, pero esta tabla no se toco. O sea que la frase de abajo
+ * -"quien añada otro campo tiene que venir aqui a sumarlo"- la incumplio
+ * el campo siguiente, y lo que queda es un aserto con un numero que no
+ * sale de ninguna cuenta escrita. El numero esta bien; lo que faltaba era
+ * poder comprobarlo sin volver a contarlo a mano:
+ *
+ *     lo de arriba, sin el cero            45
+ *     " " + U+00B7 + " "  (2 bytes el ·)    4     49
+ *     el nombre del fichero, 7              7     56
+ *     " "                                   1     57
+ *     aj_u2s(s_gsv_fila), hasta 65535       5     62
+ *     el cero final                         1     63
+ *
+ * 63 en el peor caso, y es el peor de verdad: de las cuatro ramas del
+ * guardado la del fichero es la mas larga -"no guarda" 9, "sin sitio" 9,
+ * "not saving" 10, "listo" 5-, y de los cuatro estados el castellano
+ * "Esperando el tono de arranque" (29) gana al ingles (26) y a los demas.
+ *
+ * El aserto pide 70: siete de margen, que es lo que hay.
  * Y no es un caso raro: wefax.c solo pone s_ppm a cero al arrancar y al
  * cambiar de lpm, asi que en cuanto una carta deja aprendida cualquier
  * correccion, el estado vuelve a "Esperando el tono de arranque" CON el
@@ -23614,6 +23834,16 @@ _Static_assert(sizeof s_fax_txt >= 70,
  * borrado entero y suyo, asi que se puede rehacer sin tocar un solo punto.
  */
 #define GSV_BLOQUE  4096U
+/*
+ * Y QUE DE PARA EL RECOLOCADO, QUE SE LO PRESTA - 21/10/2026.
+ *
+ * wfx_recoloca_paso() lee un bloque entero del chip DENTRO de este buffer.
+ * Si alguna vez GSV_BLOQUE bajara, eso serian 4096 bytes escritos encima de
+ * lo que haya detras de s_gsv_buf, en silencio y en el bucle principal. El
+ * comentario de wfx_recoloca.h lo prometia en prosa; esto lo comprueba. */
+_Static_assert(GSV_BLOQUE >= WFX_REC_BLOQUE,
+               "s_gsv_buf se le presta a wfx_recoloca_paso(), que lee "
+               "WFX_REC_BLOQUE bytes del chip dentro");
 
 static uint8_t  s_gsv_on;          /* hay una foto en curso */
 static uint8_t  s_gsv_bits;        /* el formato con el que se abrio */
@@ -23757,14 +23987,21 @@ static char     s_gsv_pre[4];
  */
 #define GSV_ESPERA_MS  10000UL
 
-/* Cuanto tiene que llevar el WEFAX fuera de imagen para dar la carta por
- * acabada. Ver el comentario del cierre en fax_poll(): con medio segundo
- * -que era lo de antes- un parpadeo del enganche partia la carta en dos
- * ficheros, y veintisiete parpadeos en veintisiete. */
-#define WFX_FUERA_MS   5000UL
+/*
+ * AQUI VIVIO WFX_FUERA_MS, Y SE FUE EL 21/10/2026.
+ *
+ * Era "cuanto tiene que llevar el WEFAX fuera de imagen para dar la carta
+ * por acabada": el temporizador de la maquina de estados que seguia al
+ * decodificador, la que hizo los veintisiete ficheros en un dia. Esa
+ * maquina se quito el 20/10 -"el boton manda"- y la constante se quedo,
+ * definida y sin usar, con un comentario que explicaba un mecanismo que ya
+ * no existe. Quien lo leyera creeria que el fax se cierra solo a los cinco
+ * segundos de perder la imagen, y no es verdad: lo cierra el boton, el tono
+ * de fin o salirse del modo.
+ */
 
 /*
- * EL CERROJO: UN MINUTO ENTRE UNA CARTA Y LA SIGUIENTE. 20/10/2026.
+ * EL CERROJO ENTRE UNA CARTA Y LA SIGUIENTE. 20/10/2026.
  *
  * Las dos veces fue un fallo distinto -primero el cierre al primer
  * parpadeo, luego una reapertura automatica que puse yo- y las dos veces el
@@ -23772,16 +24009,45 @@ static char     s_gsv_pre[4];
  *
  * Esto ya no intenta adivinar QUE lo dispara. Es un cerrojo: pase lo que
  * pase ahi arriba, entre cerrar una carta y abrir la siguiente tiene que
- * pasar un minuto. Una carta de verdad dura entre cinco y veinte, asi que
- * no estorba a nadie; y lo peor que puede salir de cualquier fallo futuro
- * en esta maquinaria es UN fichero por minuto en vez de veintisiete en un
- * rato.
+ * pasar un rato. Lo peor que puede salir de cualquier fallo futuro en esta
+ * maquinaria es UN fichero por cerrojo en vez de veintisiete en un rato.
  *
  * Un cerrojo no sustituye a arreglar la causa. Pero cuando el mismo sintoma
  * vuelve por una causa distinta, lo que hay que poner es un tope que no
  * dependa de haber entendido la causa.
  */
-#define WFX_CERROJO_MS 60000UL
+/*
+ * *** ERA UN MINUTO, Y DESDE QUE EL TONO DE FIN CIERRA SE COMIA EL
+ * PRINCIPIO DE LA CARTA SIGUIENTE - 21/10/2026. ***
+ *
+ * El minuto se eligio con este argumento, escrito aqui mismo: "una carta de
+ * verdad dura entre cinco y veinte minutos, asi que no estorba a nadie". Eso
+ * valia cuando el UNICO cierre era el boton: el usuario cierra, y hasta que
+ * vuelve a darle pasa lo que pasa.
+ *
+ * Desde el 21/10 cierra tambien el TONO DE FIN, y entonces el numero que
+ * manda no es lo que dura una carta sino lo que hay entre el final de una y
+ * el principio de la siguiente. Eso es: lo que quede de tono de fin, el
+ * hueco, los cinco segundos del tono de arranque y la señal de fase entera.
+ * El banco lo mide -caso 12 de sim/wefaxtest.c- y con dos cartas seguidas da
+ * CUARENTA Y DOS segundos y medio. Con el cerrojo en sesenta, los primeros
+ * diecisiete segundos y medio de cada carta se decodificaban y no se
+ * guardaban: la franja de arriba, que es donde va la cabecera con la hora y
+ * el nombre de la estacion.
+ *
+ * VEINTICINCO SEGUNDOS, Y DE DONDE SALE. El caso peor legitimo no es el que
+ * mide el banco sino el mas apretado que existe: sin hueco ninguno entre las
+ * dos cartas y con una emisora que mande solo veinte segundos de fase en vez
+ * de treinta. Son 5 s de tono de arranque mas 20 de fase, o sea 25, mas lo
+ * que quede del tono de fin. Con el cerrojo en 25 s no llega a comerse ni
+ * ese.
+ *
+ * Y sigue siendo un cerrojo: nada legitimo vuelve a abrir en veinticinco
+ * segundos, porque para abrir hace falta un tono de arranque sostenido con
+ * su señal de fase detras. Quien lo suba otra vez que mire antes el numero
+ * que imprime el caso 12.
+ */
+#define WFX_CERROJO_MS 25000UL
 
 
 static spi_anade_r_t s_gsv_porque; /* por que se corto, si se corto */
@@ -23797,7 +24063,39 @@ static uint8_t  s_gsv_fallo;
 /* Cerrar deja el fichero legible -cabecera con la altura de verdad y
  * recorte-, y la rama de fallo de aqui abajo lo necesita. */
 static void gsv_cierra(void);
+static void wfxr_pide(const char n8[8], uint16_t filas);
 
+/*
+ * *** ESTA FUNCION CIERRA EL FICHERO, Y ESO ES UN CICLO - 21/10/2026. ***
+ *
+ * gsv_bloque() llama a gsv_cierra() en sus dos ramas de fallo, y
+ * gsv_cierra() -por su cuerpo, gsv_cierra_interno()- llama a gsv_bloque()
+ * para volcar lo que quede. O sea una recursion, y tools/pila.py la ve y lo
+ * dice: "AVISO: recursion en gsv_cierra - estos caminos no quedan
+ * acotados". Cuando lo avisa, ademas, el coste de ese camino lo cuenta como
+ * CERO: el peor caso de pila que publica el README se queda corto en un
+ * marco de gsv_cierra().
+ *
+ * ESTA ACOTADA, Y SE PUEDE DECIR POR QUE:
+ *
+ *   1. gsv_cierra_interno() pone `s_gsv_on = 0U` en su SEGUNDA linea, antes
+ *      de poder llegar a ningun gsv_bloque();
+ *   2. gsv_cierra() empieza con `if (!s_gsv_on) { return; }`.
+ *
+ * Asi que la reentrada vuelve inmediatamente y la profundidad extra es UN
+ * marco de gsv_cierra(), no una pila que crece.
+ *
+ * Pero eso son dos lineas en dos funciones distintas, y lo que las ata no
+ * esta escrito en ninguna de las dos: quien mueva el `s_gsv_on = 0U` detras
+ * del primer volcado, o quite la guarda del envoltorio, abre la recursion
+ * de verdad sin que nada chille. Por eso lo vigila
+ * deepsdr-ui/tools/gsv_dueno_check.py.
+ *
+ * Romper el ciclo de verdad -que gsv_bloque() marcara el fallo y el que
+ * llama cerrara- es lo correcto y no se hace aqui: gsv_bloque() tiene
+ * media docena de llamantes y esto es la revision del WEFAX, no la del
+ * grabador. Queda apuntado para la del proyecto entero.
+ */
 static void gsv_bloque(void)
 {
     s_gsv_bloques++;
@@ -24055,7 +24353,102 @@ static void gsv_abre(uint16_t ancho, uint16_t alto, uint8_t bits,
 static uint8_t  s_wfx_hubo;    /* ya se cerro alguna carta... */
 static uint32_t s_wfx_ult;     /* ...y cuando. Ver arriba. */
 
+/*
+ * EL CIERRE, EN DOS PIEZAS - 21/10/2026.
+ *
+ * LO QUE PASO. La pregunta de recolocar se armaba en la ULTIMA linea de
+ * esta funcion. Se entrego, y en la radio no salia nunca.
+ *
+ * Porque el cuerpo de abajo tiene CINCO `return`, y el camino de una carta
+ * de fax -el de los ficheros por tramos- sale por el PRIMERO de ellos,
+ * cientos de lineas antes del final. O sea que lo escrito al final corria
+ * para la captura de pantalla y para el SSTV, y justo para el fax no.
+ *
+ * No se arregla poniendo la llamada antes de cada `return`: eso es "el que
+ * se acuerde", que es la forma exacta en que ya se perdio el cerrojo de los
+ * sesenta segundos y en que un cerrador ajeno se llevaba por delante el
+ * fichero del fax. Un sitio que hay que recordar es un sitio que se olvida,
+ * y el que escriba el sexto `return` manana no va a leer esto.
+ *
+ * Asi que el cuerpo pasa a llamarse gsv_cierra_interno() y lo de "pase lo
+ * que pase al cerrar" vive AQUI, donde no hay forma de saltarselo: salga
+ * por donde salga el cuerpo, se vuelve a esta funcion.
+ *
+ * tools/gsv_dueno_check.py lo vigila: exige que gsv_cierra() sea el
+ * envoltorio y que el cuerpo no llame a wfxr_pide() por su cuenta.
+ */
+static void gsv_cierra_interno(void);
+
 static void gsv_cierra(void)
+{
+    uint8_t era_fax;
+
+    if (!s_gsv_on) { return; }
+
+    /* Quien era el dueño se mira ANTES: el cuerpo deja de ser suyo. */
+    era_fax = (uint8_t)(s_gsv_pre[0] == 'W' && s_gsv_pre[1] == 'F' &&
+                        s_gsv_pre[2] == 'A' && s_gsv_pre[3] == 'X');
+
+    gsv_cierra_interno();
+
+    /*
+     * Y la pregunta de recolocar, con la carta ya entera y recortada: aqui
+     * s_gsv_fila son los renglones que de verdad quedaron en el fichero,
+     * que es lo que el cuerpo acaba de dejar puesto.
+     *
+     * wfxr_pide() se calla sola si no estamos en fax, si la carta es un
+     * recorte de menos de 32 renglones o si ya hay una pregunta a medias.
+     */
+    /*
+     * Y NO SI EL CIERRE FUE POR UN FALLO, QUE AQUI NO LO DECIA NADIE -
+     * 21/10/2026.
+     *
+     * `!s_gsv_fallo` llevaba aqui desde el principio sin motivo escrito, en
+     * una funcion donde todo lo demas lo tiene. El motivo es bueno y
+     * conviene dejarlo puesto: cuando el cierre viene de un fallo -el disco
+     * se lleno a mitad de carta- quien lo provoco, gsv_bloque(), llama
+     * JUSTO DESPUES a wfx_avisa_fallo(). Preguntar ahi seria poner un
+     * cartel modal encima de un aviso que el usuario todavia no ha leido, y
+     * los dos se pintan en la misma franja de la pantalla.
+     *
+     * Lo que se pierde es poco: la carta truncada queda recortada y valida,
+     * y girarla no necesita sitio nuevo -se reescribe en los bloques que ya
+     * tiene-. Pero el usuario tiene otras cosas de que ocuparse en ese
+     * momento, y el fichero sigue ahi para la proxima vez.
+     */
+    if (era_fax && !s_gsv_fallo) {
+        /*
+         * *** PERO SOLO SI LA CARTA SE HA ACABADO DE VERDAD - 21/10/2026. ***
+         *
+         * Este cierre tambien lo dispara el RELEVO por altura: a los 1.536
+         * renglones gsv_linea() cierra el fichero y fax_poll() abre el
+         * siguiente en la misma vuelta, porque la carta sigue entrando. Ahi
+         * preguntar es el peor momento posible, y no por molestar:
+         *
+         *   - el cartel es modal y se come el tactil, asi que el usuario no
+         *     puede ni quitar el boton de guardar para parar lo que se esta
+         *     grabando;
+         *   - y el recolocado usa PRESTADO el mismo buffer de 4 kB que el
+         *     grabador (s_gsv_buf). Con el fichero nuevo abierto, los dos
+         *     escriben en el a la vez: la carta nueva sale con tiras de 4 kB
+         *     de la vieja dentro y la vieja con renglones de la nueva.
+         *
+         * "Acabada" es lo que se pidio: o el usuario ha quitado el boton de
+         * guardar, o ha llegado el tono de fin -y entonces el decodificador
+         * ya no esta en imagen-. Si el boton sigue puesto y el
+         * decodificador sigue pintando, esto es un relevo y no hay nada que
+         * preguntar.
+         */
+        wefax_info_t in;
+        wefax_info(&in);
+        if (s_wfx_guarda == WFX_GUARDA_NO || !wefax_activo()
+            || in.estado != WEFAX_IMAGEN) {
+            wfxr_pide(s_gsv_n8, s_gsv_fila);
+        }
+    }
+}
+
+static void gsv_cierra_interno(void)
 {
     if (!s_gsv_on) { return; }
     s_gsv_on = 0U;
@@ -24184,6 +24577,13 @@ static void gsv_cierra(void)
 
             if (filas > s_gsv_fila) { filas = s_gsv_fila; }
             if (filas == 0U) {
+                /* Y se deja dicho que no hay renglones: el envoltorio lee
+                 * s_gsv_fila para decidir si ofrece recolocar, y con el
+                 * valor viejo ofreceria girar un fichero que solo tiene
+                 * cabecera. Hoy esta rama solo se alcanza con s_gsv_fallo
+                 * puesto -que ya lo impide-, pero la seguridad no puede
+                 * venir de otra variable. */
+                s_gsv_fila = 0U;
                 /* Ni un renglon entero en el disco: no hay imagen que
                  * declarar. Se recorta a la cabecera y se deja estar. */
                 (void)spi_flash_recorta_cadena(s_gsv_n8, "BMP", GSV_BLOQUE);
@@ -24211,6 +24611,7 @@ static void gsv_cierra(void)
         (void)spi_flash_recorta(s_gsv_n8, "BMP", GSV_BLOQUE);
         return;
     }
+
     if (s_gsv_fila < s_gsv_alto) {
         /*
          * Y se devuelve el sitio que no se llego a usar. Sin esto, una
@@ -24237,6 +24638,22 @@ static void gsv_cierra(void)
     }
     s_gsv_hechas++;
     debug_print("sstv: foto guardada\n");
+
+    /*
+     * Y SI LO QUE ACABA DE CERRARSE ES UNA CARTA, SE OFRECE RECOLOCARLA.
+     *
+     * Aqui y en ningun otro sitio, por lo mismo que el cerrojo de arriba:
+     * este es el unico instante en que la carta esta entera y ya no va a
+     * entrar un renglon mas, venga el cierre del tono de fin, del boton de
+     * guardar o de salirse del modo. Si se preguntara desde los sitios que
+     * llaman, el que se olvidara no preguntaria -y el que se escribiera
+     * manana, tampoco-.
+     *
+     * Y NO SE PONE AQUI, AL FINAL. Ver gsv_cierra(), el envoltorio: esta
+     * funcion tiene CINCO salidas y la del fax -la de los tramos- es la
+     * primera de ellas, asi que lo que se escriba al final no corre nunca
+     * para una carta. Es exactamente el fallo que se entrego hoy.
+     */
 }
 
 /* ===========================================================================
@@ -24645,6 +25062,38 @@ static uint8_t capt_tapando(void)
 static void capt_avisa(const char *msg)
 {
     uint8_t i;
+
+    /*
+     * *** Y NO ENCIMA DEL CARTEL DE RECOLOCAR - 21/10/2026. ***
+     *
+     * Los dos viven en el mismo sitio de la pantalla, y se solapan:
+     *
+     *     cartel de recolocar   y 144 .. 235
+     *       sus dos botones     y 186 .. 223
+     *     este aviso            y 204 .. 247
+     *
+     * Treinta y dos renglones del cartel, y VEINTE de los treinta y ocho
+     * que miden los botones. O sea que el aviso se pinta por encima de la
+     * mitad de abajo de «Si» y «No».
+     *
+     * Y lo peor es lo que pasa DESPUES. Al caducar, capt_aviso_tick() llama
+     * a capt_restaura(), que repinta la pantalla de la radio... pero no el
+     * panel -eso lo hace cada modo a su ritmo, lo dice su propio
+     * comentario- y desde luego no este cartel, que no sabe que existe. El
+     * cartel se queda con la mitad de abajo en blanco hasta que caduque a
+     * los cinco minutos, con los botones medio borrados y respondiendo
+     * igual.
+     *
+     * Se llega: con el cartel puesto llega la carta siguiente, fax_poll()
+     * intenta abrir su fichero -el cartel no lo impide, solo la obra lo
+     * impide- y si el disco esta lleno sale por aqui.
+     *
+     * Mientras el cartel se vea, el aviso no se pone. Lo que diria -que no
+     * hay sitio- lo dice ya la chapa del fax, que pone «sin sitio» detras
+     * del estado y no tapa nada.
+     */
+    if (wfxr_tapando()) { return; }
+
     for (i = 0U; (i < sizeof s_capt_msg - 1U) && (msg[i] != '\0'); i++) {
         s_capt_msg[i] = msg[i];
     }
@@ -24676,6 +25125,12 @@ static uint8_t capt_pide(void)
 {
     if (s_capt_on) { return 0U; }               /* una foto cada vez */
     if (s_gsv_on) {
+        capt_avisa(tr("GUARDANDO OTRA FOTO", "SAVING ANOTHER PICTURE"));
+        return 0U;
+    }
+    /* Y el recolocado de una carta tiene prestado el mismo buffer: ver el
+     * comentario de sstv_poll(). Por la misma razon y con el mismo aviso. */
+    if (wfxr_obra()) {
         capt_avisa(tr("GUARDANDO OTRA FOTO", "SAVING ANOTHER PICTURE"));
         return 0U;
     }
@@ -24774,6 +25229,49 @@ static uint8_t capt_pide(void)
  * ~130 ms. Mismo reparto que volcado_poll(): trabajo acotado por vuelta en
  * vez de un bloqueo de veinticinco segundos.
  */
+/*
+ * UN BORRADO POR VUELTA, Y AL FINAL UN FORMATEO.
+ *
+ * Ver el comentario de s_chip_armado para el por que de todo esto. Aqui
+ * solo esta la mecanica: mientras quede chip por delante se da un paso
+ * -spi_flash_borrado_paso() elige el trozo mas grande que cabe- y cuando
+ * el cursor llega al final se formatea y se guarda el veredicto en
+ * s_chip_res, que es lo que enseña la fila.
+ *
+ * El formateo va en su propia fase y no pegado al ultimo borrado a
+ * proposito: asi la vuelta del bucle que acaba de tragarse un borrado de
+ * 64 kB no se come ademas el formateo entero.
+ */
+static void chipborra_poll(void)
+{
+    formato_r_t r;
+
+    if (s_chip_fase == 0U) { return; }
+
+    if (s_chip_fase == 1U) {
+        if (spi_flash_borrado_paso(&s_chip_cursor, s_chip_fin)) { return; }
+        s_chip_fase = 2U;
+        return;
+    }
+
+    /* fase 2: el volumen nuevo, y se comprueba que de verdad sirve */
+    r = formato_haz();
+    if (r == FORMATO_OK) { r = formato_comprueba(); }
+    (void)pega_txt(s_chip_res, 0U, (uint8_t)sizeof s_chip_res,
+                   (r == FORMATO_OK)
+                     ? tr("hecho: chip en blanco", "done: chip is blank")
+                     : formato_porque_txt(r));
+    s_chip_fase = 0U;
+}
+
+/* 1 mientras hay una captura a medias. Existe para que el borrado del chip
+ * -que esta MUY por encima en el fichero- pueda preguntarlo sin ver
+ * s_capt_on, que se declara aqui abajo. Ver s_chip_armado. */
+static uint8_t capt_en_curso(void)
+{
+    return s_capt_on;
+}
+
 static void capt_poll(void)
 {
     uint16_t *banda;
@@ -24876,7 +25374,7 @@ static void capt_poll(void)
  * y sstv_poll() empezaba con "si el SSTV no esta activo, cierra lo que
  * haya". O sea: en WEFAX, fax_poll() abria el fichero y escribia la
  * cabecera, y LA LINEA SIGUIENTE DEL BUCLE lo cerraba. A la vuelta
- * siguiente se abria otro, porque el cerrojo de un minuto solo se arma
+ * siguiente se abria otro, porque el cerrojo solo se arma
  * cuando cierra el propio fax_poll().
  *
  * Eso son 8 kB por fichero -la cabecera y el primer bloque de renglones- y
@@ -25022,6 +25520,32 @@ static void gsv_linea(const uint8_t *l, uint16_t y)
             x = (uint16_t)(x + m);
         }
     }
+    /*
+     * *** Y SI EL RENGLON NO CABIA, NO SE CUENTA - 21/10/2026. ***
+     *
+     * gsv_mete() puede CERRAR el fichero por el camino: si el bloque que
+     * toca volcar no cabe, gsv_bloque() marca el fallo y llama a
+     * gsv_cierra(). Y lo que hace gsv_cierra_interno() al cerrar es, entre
+     * otras cosas, poner s_gsv_fila en los renglones que de verdad quedaron
+     * ESCRITOS -ver su comentario, «la cabecera dice lo que hay escrito, no
+     * lo que se intento»-.
+     *
+     * Este `++` se ejecutaba despues de eso y se llevaba por delante esa
+     * correccion, dejando la cuenta en uno mas de los que hay en el disco.
+     *
+     * Hoy no muerde, y conviene decir por que para que se vea que no es por
+     * construccion: el unico que lee s_gsv_fila despues de un cierre es la
+     * pregunta de recolocar, y esa se salta los cierres por fallo; y la
+     * reapertura por fichero lleno tambien los descarta. O sea que la unica
+     * razon de que no se note es que OTRA variable -s_gsv_fallo- tapa el
+     * agujero en los dos sitios. Es el mismo argumento que esta escrito
+     * cuatro pantallas mas arriba, en la rama de «filas == 0»: la seguridad
+     * no puede venir de otra variable.
+     *
+     * Con el fichero cerrado no hay nada que contar, ni marca de tiempo que
+     * poner, ni altura que comprobar.
+     */
+    if (!s_gsv_on) { return; }
     s_gsv_fila++;
     s_gsv_ms = g_msticks;
 
@@ -25096,36 +25620,816 @@ static void img_hdr_limpia(void)
     s_digi.titulos        = (const char *)0;
 }
 
+
+static void fax_hdr_draw(void);
+
+/* --- RECOLOCAR LA CARTA, AL ACABARLA -------------------------------- */
 /*
- * EL ROTULO DEL CENTRADO - 20/10/2026.
+ * EL PORQUE ENTERO ESTA EN User/wfx_recoloca.h. Aqui va solo la pantalla:
+ * el cartel que pregunta, la linea vertical y la barra del trabajo.
  *
- * Va en el panel del fax y no en Ajustes por dos razones, y las dos son
- * buenas: las cinco categorias de Ajustes estan a 9 de 9 -lo dijo
- * sim/config.c al añadirlo alli, "la categoria Digital tiene 10 ajustes y
- * solo se dibujan 9"-, y sobre todo porque esto se ajusta MIRANDO LA
- * IMAGEN. Un mando que necesita ver el efecto no puede vivir detras de un
- * menu que tapa lo que estas mirando.
+ * LA SECUENCIA, QUE ES LO PEDIDO:
+ *
+ *   1. Acaba la carta -tono de fin, o se deja de guardar-.
+ *   2. Sale un cartel: "¿Recolocar la imagen?"  [Si] [No]
+ *   3. Si dice que si, EL MISMO CARTEL se convierte en un [OK] y aparece
+ *      una linea negra vertical sobre la imagen.
+ *   4. La linea se mueve con el mando y tocando la pantalla.
+ *   5. Al pulsar OK, esa columna es el nuevo borde izquierdo y se
+ *      reescribe el fichero de la flash, con su barra de progreso.
+ *
+ * LO QUE SE ENSEÑA DEBAJO DE LA LINEA no es lo que quedo pintado mientras
+ * entraba la carta: eso es un panel que da la vuelta y se sobrescribe a si
+ * mismo, o sea que arriba hay renglones nuevos y abajo viejos. Contra una
+ * imagen asi, una linea vertical no significa nada. Lo que se pinta es el
+ * FINAL DEL FICHERO, leido de la flash y en orden, que es la imagen sobre
+ * la que se va a decidir.
+ *
+ * LAS DIRECCIONES DE SUS BLOQUES SE GUARDAN UNA VEZ (s_wfxr_blq). El
+ * fichero de una carta no es seguido -crece a tramos de 64 kB-, asi que
+ * cada byte hay que buscarlo por la cadena de la FAT; hacerlo en cada
+ * movimiento de la linea seria recorrer la FAT entera por cada detente.
  */
-static const char *fax_rotulo_centro(void)
+
+/*
+ * *** "NO HAY LINEA" NO ES LA COLUMNA CERO - 21/10/2026. ***
+ *
+ * Al acabar la reescritura se enseña la carta ya girada, que es la prueba
+ * de que salio bien, y para eso se quitaba la linea vertical poniendo
+ * `s_wfxr_x = 0`. Pero cero es una columna como las demas: wfxr_fila()
+ * compara `x == s_wfxr_x` punto a punto, asi que lo que salia era la carta
+ * recolocada CON UNA RAYA NEGRA pegada al borde izquierdo. Y justo ahi,
+ * donde el usuario acaba de pedir que empiece la carta, una raya negra se
+ * lee como «el giro ha dejado una costura».
+ *
+ * Con -1 la comparacion no la cumple ningun punto -wfxr_fila() castea a
+ * uint16_t, y 65535 no es ninguna de las 756 columnas- y wfxr_columna() se
+ * vuelve sola para una x negativa. O sea que es "ninguna columna" de
+ * verdad, y no una columna que casi no se ve.
+ */
+#define WFXR_SIN_LINEA  ((int16_t)-1)
+
+#define WFXR_BLQ_MAX    64U      /* 256 kB de imagen visible, de sobra */
+#define WFXR_MIN_FILAS  32U      /* por debajo de esto no hay carta que recolocar */
+
+#define WFXR_C_W   (int16_t)560
+#define WFXR_C_H   (int16_t)92
+#define WFXR_C_X   (int16_t)(FAX_X + ((int16_t)FAX_ANCHO - WFXR_C_W) / 2)
+#define WFXR_C_Y   (int16_t)(FAX_Y + 10)
+#define WFXR_B_W   (int16_t)180
+#define WFXR_B_H   (int16_t)38
+#define WFXR_B_Y   (int16_t)(WFXR_C_Y + WFXR_C_H - WFXR_B_H - 12)
+
+typedef enum {
+    WFXR_NO = 0,    /* no hay nada */
+    WFXR_PIDE,      /* el cartel con Si y No */
+    WFXR_LINEA,     /* la linea, y el cartel con OK */
+    WFXR_OBRA,      /* reescribiendo, con su barra */
+    WFXR_DICHO      /* el resultado, unos segundos */
+} wfxr_t;
+
+static uint8_t     s_wfxr;
+static char        s_wfxr_n8[8];
+static uint16_t    s_wfxr_alto;
+static int16_t     s_wfxr_x;
+static uint32_t    s_wfxr_blq[WFXR_BLQ_MAX];
+static uint16_t    s_wfxr_nblq;
+static uint32_t    s_wfxr_p0;
+static uint16_t    s_wfxr_vis;
+static const char *s_wfxr_dicho;
+static uint32_t    s_wfxr_dicho_ms;
+static uint8_t     s_wfxr_pct;      /* el ultimo pintado, para no repintar igual */
+static uint8_t     s_wfxr_fila[FAX_ANCHO];  /* el renglon que se lee para enseñar */
+static uint32_t    s_wfxr_ms;       /* cuando se armo, para que caduque */
+/*
+ * *** Y SI EL DEDO SIGUE SIENDO EL MISMO - 21/10/2026. ***
+ *
+ * El despacho del tactil llama a wfxr_toca() en CADA vuelta mientras haya
+ * dedo -tiene que ser asi: la linea sigue al dedo mientras se arrastra, y
+ * eso es lo que promete el manual-. O sea que un toque de dos decimas son
+ * muchas llamadas con las mismas coordenadas, no una.
+ *
+ * Eso se llevaba por delante todos los avisos del cartel. «La carta se
+ * deja como esta», «No se puede leer la carta», «Ahora no se puede: se
+ * esta guardando» y «No se ha podido recolocar» salen de pulsar un boton,
+ * y lo PRIMERO que hace wfxr_toca() con un aviso puesto es retirarlo. Con
+ * el dedo todavia encima del boton que lo acaba de poner, el aviso vivia
+ * una vuelta del bucle: unos milisegundos. El mensaje estaba escrito,
+ * traducido, documentado en el manual y nadie lo habia visto nunca.
+ *
+ * Y hay un segundo caso, este sin dedo de por medio: el cartel lo arma el
+ * TONO DE FIN, que llega cuando llega. Si en ese momento habia un dedo
+ * apoyado en la franja de los botones -arrastrando el espectro, por
+ * ejemplo-, la pregunta se contestaba sola.
+ *
+ * Asi que los BOTONES y el retirar el aviso piden dedo NUEVO; el arrastre
+ * de la linea no, que es lo unico que necesita todas las vueltas. El dedo
+ * se lleva apuntado aqui y se apunta SIEMPRE, se vea el cartel o no: si
+ * solo se apuntara mientras se ve, una suelta fuera de el no se enteraria
+ * y el cartel siguiente naceria creyendo que el dedo ya estaba puesto.
+ */
+static uint8_t     s_wfxr_dedo;     /* habia dedo en la vuelta anterior */
+
+#define WFXR_DICHO_MS  4000UL
+/*
+ * Y LA PREGUNTA CADUCA - 21/10/2026.
+ *
+ * WFXR_PIDE y WFXR_LINEA no tenian ningun tope: si nadie contesta, el
+ * cartel se queda puesto para siempre, comiendose el tactil y el mando, y
+ * la carta siguiente entra por detras. Cinco minutos es mas de lo que
+ * tarda nadie en decidir y menos de lo que tarda en entrar otra carta.
+ *
+ * Caduca en NO: no tocar el fichero es siempre la respuesta segura.
+ */
+#define WFXR_PIDE_MS   300000UL
+
+/*
+ * *** "TAPANDO" ES QUE SE VEA, NO QUE EXISTA - 21/10/2026. ***
+ *
+ * Esto devolvia 1 con solo que hubiera un estado puesto, y de ahi salio la
+ * radio que parece rota: wfxr_cartel() no pinta con un menu delante, con la
+ * pantalla dormida ni fuera del fax, y wfxr_poll() NO retira el cartel
+ * durante la obra -no puede: cortar la reescritura deja la carta medio
+ * girada-. O sea que un mando CAT por USB a mitad de obra dejaba quince
+ * segundos de tactil muerto y de mando muerto, sin nada en pantalla que lo
+ * explicara. Es el fallo que wfxr_pide() documenta y evita al armar,
+ * reintroducido por el unico estado que no se puede retirar.
+ *
+ * Lo que se come los toques tiene que ser exactamente lo que el usuario
+ * VE. Lo otro -que nadie abra un fichero mientras la reescritura tiene
+ * prestado el buffer- no es cosa de esto: de eso se ocupa wfxr_obra(), que
+ * no depende de si hay algo pintado.
+ */
+static uint8_t wfxr_tapando(void)
 {
-    static char b[12];
-    int16_t v = wefax_centro();
-    uint8_t i = 0U;
+    if (s_wfxr == WFXR_NO) { return 0U; }
+    if (s_screen_asleep || s_menu_open || !wefax_activo()) { return 0U; }
+    return 1U;
+}
+
+/*
+ * *** Y ESTO ES OTRA COSA: SI EL BUFFER DE 4 kB ES SUYO - 21/10/2026. ***
+ *
+ * wfxr_tapando() dice "hay un cartel encima del panel". Eso NO puede parar
+ * la grabacion: el cartel sale justo cuando acaba una carta, y con el nuevo
+ * cierre por tono de ARRANQUE sale cuando ya esta entrando la siguiente.
+ * Bloquear la grabacion mientras alguien decide perdia la carta entera - y
+ * la caducidad son cinco minutos.
+ *
+ * Lo que de verdad no puede convivir con el grabador es la REESCRITURA, que
+ * usa s_gsv_buf entero como bloque de trabajo. Eso dura unos quince
+ * segundos y es lo unico que bloquea.
+ *
+ * La vista previa y la linea no necesitan los 4 kB: leen un renglon, y para
+ * eso tienen el suyo (s_wfxr_fila).
+ */
+static uint8_t wfxr_obra(void)
+{
+    return (uint8_t)(s_wfxr == WFXR_OBRA);
+}
+
+/* Si la LINEA esta puesta, o sea si los detentes son suyos. Lo mira el
+ * boton de Volumen para no encenderse prometiendo lo que no hace. */
+static uint8_t wfxr_linea_puesta(void)
+{
+    return (uint8_t)(s_wfxr == WFXR_LINEA);
+}
+
+/* El byte de imagen (fila visible, columna) dentro del fichero. */
+static uint32_t wfxr_byte(uint16_t y, uint16_t x)
+{
+    return s_wfxr_p0 + (uint32_t)y * (uint32_t)FAX_ANCHO + (uint32_t)x;
+}
+
+/* Y su direccion en el chip, por la tabla de bloques. 0 si se sale. */
+static uint32_t wfxr_dir(uint32_t p)
+{
+    uint32_t b0 = s_wfxr_p0 / GSV_BLOQUE;
+    uint32_t b  = p / GSV_BLOQUE;
+
+    if (b < b0) { return 0UL; }
+    b -= b0;
+    if (b >= (uint32_t)s_wfxr_nblq) { return 0UL; }
+    return s_wfxr_blq[b] + (p % GSV_BLOQUE);
+}
+
+/*
+ * Lee `n` bytes de imagen a partir de `p`. Puede cruzar la frontera de un
+ * bloque, y los dos trozos estan en sitios distintos del chip: por eso no
+ * es una lectura sino hasta dos.
+ */
+static uint8_t wfxr_lee(uint32_t p, uint8_t *dst, uint32_t n)
+{
+    while (n > 0UL) {
+        uint32_t d = wfxr_dir(p);
+        uint32_t cabe = GSV_BLOQUE - (p % GSV_BLOQUE);
+        uint32_t m = (n < cabe) ? n : cabe;
+
+        if (d == 0UL) { return 0U; }
+        spi_flash_read(d, dst, m);
+        dst += m; p += m; n -= m;
+    }
+    return 1U;
+}
+
+/* Guarda las direcciones de los bloques que cubren lo que se va a enseñar. */
+static uint8_t wfxr_mapa(void)
+{
+    spi_bloques_t it;
+    uint32_t a, b = 0UL, b0, b1;
+    uint16_t vis;
+
+    s_wfxr_nblq = 0U;
+
+    vis = (uint16_t)((s_wfxr_alto < (uint16_t)FAX_ALTO) ? s_wfxr_alto
+                                                        : (uint16_t)FAX_ALTO);
+    /* Que lo visible quepa en la tabla de bloques. Con 64 bloques caben
+     * 346 renglones y el panel tiene menos, pero el tope va escrito y no
+     * supuesto: un panel mas alto mañana no puede escribir fuera. */
+    while (((uint32_t)vis * (uint32_t)FAX_ANCHO + GSV_BLOQUE)
+           > ((uint32_t)WFXR_BLQ_MAX * GSV_BLOQUE)) {
+        vis--;
+        if (vis == 0U) { return 0U; }
+    }
+    s_wfxr_vis = vis;
+    s_wfxr_p0  = (uint32_t)(s_wfxr_alto - vis) * (uint32_t)FAX_ANCHO;
+
+    b0 = s_wfxr_p0 / GSV_BLOQUE;
+    b1 = (s_wfxr_p0 + (uint32_t)vis * (uint32_t)FAX_ANCHO - 1UL) / GSV_BLOQUE;
+
+    if (!spi_flash_bloques_abre(s_wfxr_n8, "BMP", &it)) { return 0U; }
+    /* El bloque 0 del fichero es la cabecera del BMP; la imagen empieza en
+     * el 1, y por eso el indice de imagen lleva uno de mas aqui. */
+    if (!spi_flash_bloques_sig(&it, &a)) { return 0U; }
+    while (spi_flash_bloques_sig(&it, &a)) {
+        if (b >= b0 && b <= b1) {
+            if (s_wfxr_nblq >= (uint16_t)WFXR_BLQ_MAX) { return 0U; }
+            s_wfxr_blq[s_wfxr_nblq++] = a;
+        }
+        if (b >= b1) { break; }
+        b++;
+    }
+    return (uint8_t)((s_wfxr_nblq == (uint16_t)(b1 - b0 + 1UL)) ? 1U : 0U);
+}
+
+/* Un renglon de la imagen en la pantalla. */
+static void wfxr_fila(uint16_t y)
+{
+    uint8_t *f = s_wfxr_fila;        /* suyo: el grabador puede estar activo */
+    uint16_t x;
+
+    if (!wfxr_lee(wfxr_byte(y, 0U), f, (uint32_t)FAX_ANCHO)) { return; }
+    rm68120_set_window((uint16_t)FAX_X, (uint16_t)(FAX_Y + y),
+                       (uint16_t)(FAX_X + FAX_ANCHO - 1U),
+                       (uint16_t)(FAX_Y + y));
+    for (x = 0U; x < FAX_ANCHO; x++) {
+        rm68120_dato((x == (uint16_t)s_wfxr_x) ? 0x0000U : fax_gris565(f[x]));
+    }
+}
+
+/* Una columna: la de la linea, o la que deja de serlo. */
+static void wfxr_columna(int16_t x, uint8_t es_linea)
+{
+    uint16_t y;
+
+    if (x < 0 || x >= (int16_t)FAX_ANCHO) { return; }
+    rm68120_set_window((uint16_t)(FAX_X + x), (uint16_t)FAX_Y,
+                       (uint16_t)(FAX_X + x),
+                       (uint16_t)(FAX_Y + s_wfxr_vis - 1U));
+    for (y = 0U; y < s_wfxr_vis; y++) {
+        uint8_t v = 0U;
+        if (!es_linea) {
+            if (!wfxr_lee(wfxr_byte(y, (uint16_t)x), &v, 1UL)) { v = 0U; }
+            rm68120_dato(fax_gris565(v));
+        } else {
+            rm68120_dato(0x0000U);
+        }
+    }
+}
+
+static void wfxr_imagen(void)
+{
+    uint16_t y;
 
     /*
-     * Y EN ASCII. La primera version llevaba una flecha de las de tres
-     * bytes; la fuente de esta cabecera es font_ui_14b y no hay nada que
-     * garantice que tenga ese punto de codigo. Un rotulo que sale como un
-     * cuadrado no se lee, y peor: no se nota al escribirlo, solo al
-     * mirarlo en la radio. El signo dice lo mismo y se dibuja seguro.
+     * Con la pantalla dormida esto serian 288 x 756 escrituras por el bus
+     * del panel que no se ven: justo el trafico que dormir existe para
+     * callar.
+     *
+     * Y con un menu delante, o fuera del fax, seria peor que no verse: la
+     * obra dura quince segundos y puede acabar con la radio ya en otro modo
+     * -un mando CAT por USB cambia el modo sin tocar la pantalla-, y
+     * entonces esto estampa la carta vieja encima de lo que este pintando
+     * el modo nuevo.
      */
-    if (v == 0) { return tr("Centro", "Centre"); }
-    b[i++] = (char)((v < 0) ? '-' : '+');
-    aj_u2s(&b[i], (uint32_t)((v < 0) ? -v : v));
-    for ( ; b[i] != '\0'; i++) { }
-    b[i++] = ' '; b[i++] = 'p'; b[i++] = 'x';
-    b[i] = '\0';
-    return b;
+    if (s_screen_asleep || s_menu_open || !wefax_activo()) { return; }
+    for (y = 0U; y < s_wfxr_vis; y++) { wfxr_fila(y); }
+}
+
+/* --- el cartel ------------------------------------------------------- */
+
+static void wfxr_boton(gfx2_surf_t *s, int16_t x, const char *txt, uint8_t vivo)
+{
+    gfx2_fill(s, x, WFXR_B_Y, WFXR_B_W, WFXR_B_H,
+              gfx2_rgb(vivo ? PAL_ACCENT : PAL_SURF_2));
+    gfx2_text_in(s, x, (int16_t)(WFXR_B_Y + 11), WFXR_B_W, txt, &font_ui_14b,
+                 gfx2_rgb(vivo ? PAL_SURF_0 : PAL_INK), GFX2_ALIGN_C);
+}
+
+static void wfxr_cartel_pinta(gfx2_surf_t *s, void *ctx)
+{
+    const char *t;
+    char n[24];
+    uint8_t i, k;
+
+    (void)ctx;
+    gfx2_fill(s, WFXR_C_X, WFXR_C_Y, WFXR_C_W, WFXR_C_H, gfx2_rgb(PAL_SURF_0));
+    gfx2_hline(s, WFXR_C_X, WFXR_C_Y, WFXR_C_W, gfx2_rgb(PAL_ACCENT));
+    gfx2_hline(s, WFXR_C_X, (int16_t)(WFXR_C_Y + WFXR_C_H - 1), WFXR_C_W,
+               gfx2_rgb(PAL_ACCENT));
+    gfx2_vline(s, WFXR_C_X, WFXR_C_Y, WFXR_C_H, gfx2_rgb(PAL_ACCENT));
+    gfx2_vline(s, (int16_t)(WFXR_C_X + WFXR_C_W - 1), WFXR_C_Y, WFXR_C_H,
+               gfx2_rgb(PAL_ACCENT));
+
+    switch (s_wfxr) {
+    case WFXR_PIDE:
+        t = tr("¿Recolocar la imagen?", "Re-align the picture?");
+        break;
+    case WFXR_LINEA:
+        t = tr("Pon la linea donde parte la carta", "Put the line where the chart splits");
+        break;
+    case WFXR_OBRA:
+        t = tr("Recolocando...", "Re-aligning...");
+        break;
+    default:
+        t = s_wfxr_dicho ? s_wfxr_dicho : "";
+        break;
+    }
+    gfx2_text_in(s, WFXR_C_X, (int16_t)(WFXR_C_Y + 14), WFXR_C_W, t,
+                 &font_ui_18b, gfx2_rgb(PAL_INK), GFX2_ALIGN_C);
+
+    /*
+     * *** Y EL MOTIVO, QUE SE ESTABA TIRANDO - 21/10/2026. ***
+     *
+     * wfx_recoloca.c nombra las tres formas en que un fichero del disco
+     * puede no ser lo que su entrada de directorio dice -«el fichero se
+     * acaba antes de tiempo», «la cadena del fichero se rompe», «el giro se
+     * ha descolocado»- y las deja en wfx_recoloca_porque() para enseñarlas.
+     * Lo dice su cabecera: "Por que fallo, PARA ENSEÑARLO".
+     *
+     * Y no las enseñaba nadie. Aqui solo salia «Cortado: la carta queda a
+     * medias», que dice lo IMPORTANTE -que el fichero quedo a medio girar-
+     * pero no dice nada de por que, y el usuario se queda sin lo unico que
+     * le permitiria distinguir un disco con la FAT tocada de un fallo mio.
+     *
+     * El manual, ademas, prometia que la radio los nombra. O sea que el
+     * dato existia, estaba traducido, estaba documentado y se tiraba en la
+     * ultima linea.
+     *
+     * Va en el renglon de abajo y en la letra pequeña: lo primero que hay
+     * que leer sigue siendo que la carta quedo a medias. El hueco es el de
+     * los botones, que en este estado no hay.
+     */
+    if (s_wfxr == WFXR_DICHO) {
+        const char *porque = wfx_recoloca_porque();
+
+        if (porque != 0) {
+            gfx2_text_in(s, WFXR_C_X, (int16_t)(WFXR_B_Y + 11), WFXR_C_W,
+                         porque, &font_ui_14b, gfx2_rgb(PAL_INK),
+                         GFX2_ALIGN_C);
+        }
+    }
+
+    if (s_wfxr == WFXR_PIDE) {
+        wfxr_boton(s, (int16_t)(WFXR_C_X + 40), tr("Si", "Yes"), 1U);
+        wfxr_boton(s, (int16_t)(WFXR_C_X + WFXR_C_W - 40 - WFXR_B_W),
+                   tr("No", "No"), 0U);
+    } else if (s_wfxr == WFXR_LINEA) {
+        /*
+         * El numero al lado del OK. No es adorno: es lo unico que permite
+         * repetirlo igual en otra carta de la misma emisora, y lo que deja
+         * contar por que se fue tanto la segunda vez.
+         */
+        k = 0U;
+        aj_u2s(n, (uint32_t)s_wfxr_x);
+        for (i = 0U; n[i] != '\0'; i++) { k = (uint8_t)(i + 1U); }
+        n[k++] = ' '; n[k++] = 'p'; n[k++] = 'x'; n[k] = '\0';
+        gfx2_text_in(s, (int16_t)(WFXR_C_X + 40), (int16_t)(WFXR_B_Y + 11),
+                     WFXR_B_W, n, &font_ui_14b, gfx2_rgb(PAL_INK),
+                     GFX2_ALIGN_C);
+        wfxr_boton(s, (int16_t)(WFXR_C_X + WFXR_C_W - 40 - WFXR_B_W), "OK", 1U);
+    } else if (s_wfxr == WFXR_OBRA) {
+        int16_t w = (int16_t)(((int32_t)(WFXR_C_W - 80) *
+                               (int32_t)wfx_recoloca_pct()) / 100);
+        gfx2_fill(s, (int16_t)(WFXR_C_X + 40), WFXR_B_Y,
+                  (int16_t)(WFXR_C_W - 80), WFXR_B_H, gfx2_rgb(PAL_SURF_2));
+        if (w > 0) {
+            gfx2_fill(s, (int16_t)(WFXR_C_X + 40), WFXR_B_Y, w, WFXR_B_H,
+                      gfx2_rgb(PAL_ACCENT));
+        }
+    }
+}
+
+static void wfxr_cartel(void)
+{
+    /* Mismo motivo que wfxr_imagen(): la obra puede acabar con un menu
+     * delante o ya fuera del fax. */
+    if (s_screen_asleep || s_menu_open || !wefax_activo()) { return; }
+    gfx2_render(WFXR_C_X, WFXR_C_Y, WFXR_C_W, WFXR_C_H, wfxr_cartel_pinta, 0);
+}
+
+/* --- entradas y salidas ---------------------------------------------- */
+
+static void wfxr_cierra(void)
+{
+    uint8_t habia = (uint8_t)(s_wfxr != WFXR_NO);
+
+    s_wfxr = WFXR_NO;
+    s_wfxr_dicho = 0;
+    wfx_recoloca_olvida();
+    /*
+     * El panel vuelve a ser del fax... si sigue siendo el fax. Con el menu
+     * delante o en otro modo, fax_hdr_draw() estamparia la chapa y los dos
+     * botones de WEFAX encima de lo que haya, y ademas img_hdr_limpia()
+     * borraria los botones 3 y 4 del decodificador que este activo.
+     *
+     * s_fax_limpio y fax_panel_reinicia() si se tocan siempre: no pintan,
+     * solo dejan dicho que hay que repintar cuando se pueda.
+     */
+    if (habia) {
+        s_fax_limpio = 0U;
+        fax_panel_reinicia();
+        if (!s_screen_asleep && !s_menu_open && wefax_activo()) {
+            fax_hdr_draw();
+        }
+    }
+}
+
+/*
+ * Se arma al CERRAR el fichero, y solo desde ahi: es el unico instante en
+ * que la carta esta entera y ya no entra nada mas. Ver gsv_cierra().
+ */
+static void wfxr_pide(const char n8[8], uint16_t filas)
+{
+    uint8_t i;
+
+    if (s_wfxr != WFXR_NO) { return; }      /* ya hay una a medias */
+    if (!wefax_activo()) { return; }        /* se ha ido del modo */
+    if (filas < (uint16_t)WFXR_MIN_FILAS) { return; }
+    /*
+     * *** Y SOLO SI SE PUEDE VER - 21/10/2026. ***
+     *
+     * Este cartel es MODAL: mientras esta puesto se come todos los toques y
+     * todos los detentes. Armarlo cuando no se pinta -pantalla dormida, o
+     * un menu delante- deja la radio sin tactil y sin mando, sin nada en
+     * pantalla que explique por que. Y peor: los botones invisibles siguen
+     * respondiendo, asi que un toque a ciegas puede aceptar un recorte que
+     * nadie ha elegido y REESCRIBIR EL FICHERO.
+     *
+     * La carta ya esta guardada y a salvo; lo unico que se pierde es la
+     * oferta de recolocarla, que es mejor que una radio que parece rota.
+     */
+    if (s_screen_asleep || s_menu_open) { return; }
+
+    for (i = 0U; i < 8U; i++) { s_wfxr_n8[i] = n8[i]; }
+    s_wfxr_alto = filas;
+    s_wfxr_x    = 0;
+    s_wfxr      = WFXR_PIDE;
+    s_wfxr_ms   = g_msticks;
+    wfxr_cartel();
+}
+
+/* El mando: un punto por detente. El dedo es el gesto grueso. */
+static uint8_t wfxr_mando(int32_t detents)
+{
+    int32_t v;
+
+    if (s_wfxr != WFXR_LINEA || detents == 0) { return 0U; }
+    v = (int32_t)s_wfxr_x + detents;
+    while (v >= (int32_t)FAX_ANCHO) { v -= (int32_t)FAX_ANCHO; }
+    while (v < 0)                   { v += (int32_t)FAX_ANCHO; }
+    if (v == (int32_t)s_wfxr_x) { return 1U; }
+
+    wfxr_columna(s_wfxr_x, 0U);             /* borra la de antes */
+    s_wfxr_x = (int16_t)v;
+    s_wfxr_ms = g_msticks;                  /* se esta usando: no caduca */
+    wfxr_columna(s_wfxr_x, 1U);             /* y pinta la nueva */
+    wfxr_cartel();                          /* el numero del rotulo */
+    return 1U;
+}
+
+static void wfxr_acepta(void)
+{
+    /*
+     * *** PRIMERO SE QUEDA EL BUFFER, DESPUES LO USA - 21/10/2026. ***
+     *
+     * La reescritura usa s_gsv_buf entero como bloque de trabajo, y ese
+     * buffer es del grabador. Mientras se decidia podia haberse abierto un
+     * fichero nuevo -la carta siguiente entra por la antena mientras tanto,
+     * y eso es DESEABLE: bloquear la grabacion durante los cinco minutos de
+     * la pregunta perdia la carta entera-. Pero empezar a girar con ese
+     * fichero abierto pone a los dos a escribir en el mismo buffer, y
+     * entonces la carta nueva sale con tiras de 4 kB de la vieja dentro y
+     * la vieja con renglones de la nueva.
+     *
+     * Asi que al aceptar se cierra lo que haya abierto. Y hay que decir el
+     * precio entero, que no son solo los quince segundos de la obra:
+     *
+     *   - la carta que se estaba grabando queda CORTADA donde iba. El
+     *     fichero es valido y se lee, pero le falta el final;
+     *   - ese cierre arma el cerrojo -WFX_CERROJO_MS-, asi que no se
+     *     vuelve a grabar hasta veinticinco segundos despues del OK. La
+     *     obra dura unos quince y cabe entera dentro de esa espera;
+     *   - y esa carta cortada pierde su propia oferta de recolocar: la
+     *     pregunta que lanzaria su cierre se la traga la guarda de
+     *     wfxr_pide(), porque ya hay una a medias.
+     *
+     * Se paga solo si el usuario PIDE recolocar, y es el unico momento en
+     * que las dos cosas se disputan el buffer.
+     *
+     * Y queda un invariante que se puede comprobar: durante WFXR_OBRA no
+     * hay fichero abierto. Lo vigila tools/gsv_dueno_check.py.
+     */
+    /*
+     * *** LA COLUMNA CERO NO ES UN FALLO: ES "DEJALO COMO ESTA" - 21/10/2026. ***
+     *
+     * La linea se puede llevar hasta el borde izquierdo, con el mando -da
+     * la vuelta- o tocando la primera columna del panel. Y girar por la
+     * columna cero es no girar: el fichero se queda exactamente igual.
+     *
+     * wfx_recoloca_empieza() rechaza corte == 0 por la razon correcta -no
+     * va a reescribir 1,2 MB para dejarlo todo donde estaba- pero el que
+     * llamaba se quedaba con el "no" y enseñaba "No se ha podido
+     * recolocar". O sea que la respuesta a mirar la carta y decidir que ya
+     * esta bien era un mensaje de error.
+     *
+     * Y no era solo el mensaje: abajo se cierra la carta que se estuviera
+     * grabando para pedir prestado su buffer, con todo lo que eso cuesta
+     * -ver el bloque de arriba-. Pagarlo para no mover nada es lo peor de
+     * las dos cosas, asi que esto va ANTES del cierre.
+     */
+    /*
+     * *** Y ESTA COMPROBACION LLEVABA DOS DIAS SIN EJECUTARSE - 21/10/2026. ***
+     *
+     * Arriba del todo de esta funcion habia quedado el guarda de antes:
+     *
+     *     if (s_wfxr_x == 0) { wfxr_cierra(); return; }   // nada que mover
+     *
+     * O sea que el arreglo de abajo -y las treinta lineas que explican por
+     * que hacia falta- no se ejecutaba NUNCA. Quien dejaba la linea en el
+     * borde izquierdo y pulsaba OK seguia viendo lo de siempre: el cartel
+     * se cierra en silencio, sin decir que la carta se queda como esta.
+     *
+     * Un arreglo que se escribe DEBAJO de una salida temprana con la misma
+     * condicion no es un arreglo, es codigo muerto con buena prosa. Y no se
+     * ve leyendo el trozo nuevo, que esta bien: se ve leyendo la funcion
+     * entera, que es justo lo que no se hace al añadir algo.
+     *
+     * Lo vigila tools/guarda_muerta.py, que busca en todo el arbol la misma
+     * forma: una condicion que ya se decidio mas arriba, en la misma
+     * funcion, sin que nada haya podido cambiarla por el camino.
+     */
+    if (s_wfxr_x == 0) {
+        s_wfxr       = WFXR_DICHO;
+        s_wfxr_dicho = tr("La carta se deja como esta",
+                          "The chart is left as it is");
+        s_wfxr_dicho_ms = g_msticks;
+        wfxr_cartel();
+        return;
+    }
+
+    gsv_cierra_si_es("WFAX");
+    if (s_gsv_on) {
+        /* No era nuestro y sigue abierto: antes de girar con el buffer de
+         * otro, no se gira. */
+        s_wfxr       = WFXR_DICHO;
+        s_wfxr_dicho = tr("Ahora no se puede: se esta guardando",
+                          "Not now: something is being saved");
+        s_wfxr_dicho_ms = g_msticks;
+        wfxr_cartel();
+        return;
+    }
+    if (!wfx_recoloca_empieza(s_wfxr_n8, "BMP", (uint16_t)FAX_ANCHO,
+                              s_wfxr_alto, (uint16_t)s_wfxr_x, s_gsv_buf)) {
+        s_wfxr       = WFXR_DICHO;
+        s_wfxr_dicho = tr("No se ha podido recolocar", "Could not re-align");
+        s_wfxr_dicho_ms = g_msticks;
+        wfxr_cartel();
+        return;
+    }
+    s_wfxr = WFXR_OBRA;
+    s_wfxr_pct = 255U;      /* que el primer paso repinte la barra */
+    wfxr_cartel();
+}
+
+/*
+ * El dedo. Devuelve 1 si se ha quedado con el toque.
+ *
+ * `nuevo` es 1 solo en la vuelta en que el dedo BAJA. Lo piden los botones
+ * y el retirar el aviso; el arrastre de la linea no. Ver s_wfxr_dedo.
+ */
+static uint8_t wfxr_toca(uint16_t x, uint16_t y, uint8_t nuevo)
+{
+    int16_t xi = (int16_t)x, yi = (int16_t)y;
+
+    if (s_wfxr == WFXR_NO || s_wfxr == WFXR_OBRA) { return 0U; }
+
+    if (s_wfxr == WFXR_DICHO) {
+        /* Con el dedo que acaba de poner el aviso, no: lo quitaria antes
+         * de que se pueda leer. Ver s_wfxr_dedo. */
+        if (nuevo) { wfxr_cierra(); }
+        return 1U;
+    }
+
+    /* Los botones, solo con el dedo nuevo. Con el dedo que viene de antes
+     * esto se cae a la guarda de «dentro del cartel» de mas abajo, que se
+     * lo traga sin hacer nada - que es justo lo que tiene que pasar. */
+    if (nuevo && yi >= WFXR_B_Y && yi < (int16_t)(WFXR_B_Y + WFXR_B_H)) {
+        int16_t dx = (int16_t)(WFXR_C_X + WFXR_C_W - 40 - WFXR_B_W);
+
+        if (s_wfxr == WFXR_PIDE) {
+            if (xi >= (int16_t)(WFXR_C_X + 40)
+                && xi < (int16_t)(WFXR_C_X + 40 + WFXR_B_W)) {
+                /* Si: se pinta la carta de verdad y sale la linea. */
+                if (!wfxr_mapa()) {
+                    s_wfxr       = WFXR_DICHO;
+                    s_wfxr_dicho = tr("No se puede leer la carta",
+                                      "The chart cannot be read");
+                    s_wfxr_dicho_ms = g_msticks;
+                    wfxr_cartel();
+                    return 1U;
+                }
+                s_wfxr   = WFXR_LINEA;
+                s_wfxr_ms = g_msticks;
+                s_wfxr_x = (int16_t)(FAX_ANCHO / 2U);
+                wfxr_imagen();
+                wfxr_cartel();
+                return 1U;
+            }
+            if (xi >= dx && xi < (int16_t)(dx + WFXR_B_W)) {
+                wfxr_cierra();
+                return 1U;
+            }
+        } else if (s_wfxr == WFXR_LINEA) {
+            if (xi >= dx && xi < (int16_t)(dx + WFXR_B_W)) {
+                wfxr_acepta();
+                return 1U;
+            }
+        }
+    }
+
+    /*
+     * *** Y DENTRO DEL CARTEL NO HAY CARTA QUE TOCAR - 21/10/2026. ***
+     *
+     * El cartel se dibuja ENCIMA de la imagen -su rectangulo cae dentro del
+     * panel- asi que un toque en el mensaje, o en el hueco entre los dos
+     * botones, se colaba a la rama de abajo y movia la linea a esa columna.
+     * El dedo esta señalando un texto y lo que pasa es que salta la linea, a
+     * un sitio que ademas no se ve porque lo tapa el propio cartel: solo
+     * cambia el numero de puntos de al lado del OK.
+     *
+     * Los botones se miran arriba y se vuelven, asi que esto solo se come
+     * lo que no es boton.
+     */
+    if (xi >= WFXR_C_X && xi < (int16_t)(WFXR_C_X + WFXR_C_W)
+        && yi >= WFXR_C_Y && yi < (int16_t)(WFXR_C_Y + WFXR_C_H)) {
+        return 1U;
+    }
+
+    /* Y fuera de los botones, en la imagen: la linea salta ahi. */
+    if (s_wfxr == WFXR_LINEA
+        && xi >= (int16_t)FAX_X && xi < (int16_t)(FAX_X + FAX_ANCHO)
+        && yi >= (int16_t)FAX_Y
+        && yi < (int16_t)(FAX_Y + (int16_t)s_wfxr_vis)) {
+        int16_t nx = (int16_t)(xi - (int16_t)FAX_X);
+
+        s_wfxr_ms = g_msticks;              /* se esta usando: no caduca */
+        if (nx != s_wfxr_x) {
+            wfxr_columna(s_wfxr_x, 0U);
+            s_wfxr_x = nx;
+            wfxr_columna(s_wfxr_x, 1U);
+            wfxr_cartel();
+        }
+        return 1U;
+    }
+
+    /* Con el cartel puesto, lo de debajo no se toca. */
+    return 1U;
+}
+
+/*
+ * LA CUENTA DEL DEDO, Y EL UNICO SITIO POR DONDE SE ENTRA - 21/10/2026.
+ *
+ * Lo llama el despacho del tactil en CADA vuelta, haya dedo o no y se vea
+ * el cartel o no. Devuelve 1 si el cartel se ha quedado con la vuelta, que
+ * es lo que el despacho necesita para irse a `fin`.
+ *
+ * Se apunta siempre por lo que dice s_wfxr_dedo: una suelta que ocurra con
+ * el cartel ya retirado tiene que contarse igual, o el cartel siguiente
+ * nace creyendo que el dedo ya estaba puesto y no responde al primer toque.
+ *
+ * Y es la UNICA puerta: wfxr_toca() no se llama desde ningun otro sitio.
+ * Lo vigila deepsdr-ui/tools/gsv_dueno_check.py, porque un segundo llamante
+ * tendria que inventarse el `nuevo` y lo natural seria pasarle un 1.
+ */
+static uint8_t wfxr_dedo(uint8_t pulsado, uint16_t x, uint16_t y)
+{
+    uint8_t nuevo;
+
+    if (!pulsado) {
+        s_wfxr_dedo = 0U;
+        return wfxr_tapando();
+    }
+    nuevo = (uint8_t)(s_wfxr_dedo == 0U);
+    s_wfxr_dedo = 1U;
+    if (!wfxr_tapando()) { return 0U; }
+    (void)wfxr_toca(x, y, nuevo);
+    return 1U;
+}
+
+/* Un bloque por vuelta del bucle, como la captura de pantalla. */
+static void wfxr_poll(void)
+{
+
+    /*
+     * Si la pantalla se duerme -o se abre un menu- con el cartel puesto, se
+     * retira: dejarlo invisible y modal es lo que describe wfxr_pide().
+     * Pero NO durante la obra: ahi se esta reescribiendo la flash bloque a
+     * bloque y cortar por la mitad deja la carta medio girada. Se deja
+     * acabar, que son unos segundos, y el resultado caduca solo.
+     */
+    /*
+     * *** Y SE RETIRA SI YA NO ESTAMOS EN EL FAX - 21/10/2026. ***
+     *
+     * wfxr_pide() comprueba wefax_activo() AL ARMAR, y nadie lo volvia a
+     * mirar. Se sale del modo sin tocar el tactil: un mando CAT por USB
+     * -cualquier WSJT-X o fldigi manda uno al arrancar- llama a
+     * apply_demod_mode() y la radio cambia de modo con el cartel puesto.
+     * A partir de ahi el cartel seguia siendo modal hasta cinco minutos:
+     * sin tactil, con un cartel dibujado sobre un panel que ya no es suyo,
+     * y con los botones invisibles vivos.
+     *
+     * Durante la OBRA no se retira: se esta reescribiendo la flash bloque a
+     * bloque y cortar deja la carta medio girada. Se deja acabar.
+     */
+    if (s_wfxr != WFXR_NO && s_wfxr != WFXR_OBRA && !wefax_activo()) {
+        wfxr_cierra();
+        return;
+    }
+    if (s_wfxr == WFXR_PIDE || s_wfxr == WFXR_LINEA || s_wfxr == WFXR_DICHO) {
+        if (s_screen_asleep || s_menu_open
+            || (s_wfxr != WFXR_DICHO
+                && (uint32_t)(g_msticks - s_wfxr_ms) > WFXR_PIDE_MS)) {
+            wfxr_cierra();
+            return;
+        }
+    }
+
+    if (s_wfxr == WFXR_DICHO) {
+        if ((uint32_t)(g_msticks - s_wfxr_dicho_ms) > WFXR_DICHO_MS) {
+            wfxr_cierra();
+        }
+        return;
+    }
+    if (s_wfxr != WFXR_OBRA) { return; }
+
+    switch (wfx_recoloca_paso()) {
+    case WFX_REC_ANDA:
+        if (wfx_recoloca_pct() != s_wfxr_pct) {
+            s_wfxr_pct = wfx_recoloca_pct();
+            wfxr_cartel();
+        }
+        break;
+    case WFX_REC_BIEN:
+        s_wfxr       = WFXR_DICHO;
+        s_wfxr_dicho = tr("Carta recolocada", "Chart re-aligned");
+        s_wfxr_dicho_ms = g_msticks;
+        /* Y se enseña ya recolocada, que es la prueba de que salio bien.
+         * SIN la linea: ver WFXR_SIN_LINEA, que es lo que no era el cero. */
+        s_wfxr_x = WFXR_SIN_LINEA;
+        wfxr_imagen();
+        wfxr_cartel();
+        break;
+    default:
+        /*
+         * *** Y SE DICE QUE LA CARTA QUEDO A MEDIAS - 21/10/2026. ***
+         *
+         * Aqui ponia "No se pudo", que se lee como "no se ha tocado nada".
+         * Es falso: para llegar a esta rama ya se han reescrito N bloques
+         * en el chip, asi que la carta tiene la mitad de arriba girada y la
+         * de abajo sin girar. Es la misma costura que esto viene a quitar,
+         * y encima volver a intentarlo giraria dos veces la parte ya hecha.
+         *
+         * No hay deshacer -no cabe una copia de 1,2 MB- asi que lo unico
+         * honrado es decirlo.
+         */
+        s_wfxr       = WFXR_DICHO;
+        s_wfxr_dicho = tr("Cortado: la carta queda a medias",
+                          "Cut short: the chart is half done");
+        s_wfxr_dicho_ms = g_msticks;
+        wfxr_cartel();
+        break;
+    }
 }
 
 static void fax_hdr_draw(void)
@@ -25167,13 +26471,27 @@ static void fax_hdr_draw(void)
      * estados esta:
      *
      *   "no guarda"        el boton esta en No guardar. Es el de arranque.
-     *   "listo"            va a guardar, esperando a que empiece la carta
+     *   "listo"            el boton esta puesto y todavia no hay fichero
      *   "WFAX003 128"      grabando, y por que renglon va
      *   "sin sitio"        lo intento y no pudo reservar
      *
      * Cuatro palabras que se leen de un vistazo y que separan "no estaba
      * puesto" de "esta roto". Que es exactamente lo que no se podia
      * distinguir.
+     *
+     * *** Y "LISTO" NO ES "ESPERANDO A QUE EMPIECE LA CARTA" - 21/10/2026. ***
+     *
+     * Eso ponia aqui, y describe la maquina de estados que se quito el
+     * mismo 20/10: la de abrir el fichero al entrar el decodificador en
+     * imagen. Desde "el boton manda", el fichero se abre EN CUANTO se puede
+     * y el estado del decodificador no pinta nada, asi que "listo" no
+     * espera a ninguna carta: espera a lo unico que puede retrasar la
+     * apertura, que es el cerrojo de WFX_CERROJO_MS o la reescritura de una
+     * carta anterior. Dura segundos y no minutos.
+     *
+     * El rotulo de pantalla no cambia -«listo» sigue siendo la palabra
+     * buena- pero lo que significa estaba escrito mal en los dos sitios que
+     * lo cuentan: aqui y el manual.
      */
     *p++ = ' '; *p++ = '\xC2'; *p++ = '\xB7'; *p++ = ' ';
     if (s_gsv_fallo) {
@@ -25201,36 +26519,15 @@ static void fax_hdr_draw(void)
     s_digi.enganchado = (uint8_t)(in.estado == WEFAX_IMAGEN);
     s_digi.btn = tr("Sincroniza", "Sync");
     s_digi.btn2 = gsv_rotulo_fax();
-    /*
-     * El centrado fino. El boton de al lado -"Sincroniza"- es el ajuste
-     * GRUESO: dice "la linea empieza aqui". Este corre la imagen punto a
-     * punto sin tocar el enganche. Ver wefax_set_centro().
-     *
-     * Y HAY QUE HACERLE SITIO. btn3_w() de ui_digi.c no es un numero: es
-     * lo que queda entre donde acaba la ZONA DE LA BARRA y donde empieza
-     * la chapa, y si no llega a 70 px devuelve cero y el boton no se
-     * dibuja. Sin barra, esa zona vale sus 300 px enteros y el hueco sale
-     * negativo: lo puse sin esto y el usuario me dijo "en la ventana de
-     * wefax no" - el boton existia, respondia al dedo y no se veia.
-     *
-     * Con 160, btn3 cae en x=290 y mide 130, que es holgado para "Centro"
-     * y para una flecha con dos cifras. El segundo boton -el de guardar-
-     * no se mueve: mide 140 fijos desde x=120 y la zona de la barra sigue
-     * siendo mas ancha que el.
-     */
-    s_digi.barra_w = 160;
-    s_digi.btn3 = fax_rotulo_centro();
-    s_digi.btn3_press = (uint8_t)(wefax_centro() != 0);
     ui_digi_draw_chip(&s_digi);
     ui_digi_draw_boton(&s_digi);
     ui_digi_draw_boton2(&s_digi);
-    ui_digi_draw_boton3(&s_digi);
 }
 
 /*
  * Saca las lineas del decodificador y las pinta. Va desde el bucle principal
  * -pintar 756 pixeles por el bus del panel no se hace desde una interrupcion-
- * y por eso el decodificador tiene DOS renglones: ver wefax.c.
+ * y por eso el decodificador tiene un ANILLO de ocho renglones: ver wefax.c.
  */
 static void fax_poll(void)
 {
@@ -25292,7 +26589,13 @@ static void fax_poll(void)
      */
     pinta = (uint8_t)(!s_menu_open && !s_screen_asleep);
     if (!pinta) { s_tapado = 1U; }
-    else if (s_tapado) { s_tapado = 0U; s_fax_limpio = 0U; s_fax_fila = 0U; }
+    else if (s_tapado) {
+        s_tapado = 0U;
+        s_fax_fila = 0U;
+        /* Al destapar se repinta desde cero... salvo que lo que haya encima
+         * sea el cartel de recolocar, que es suyo. */
+        if (!wfxr_tapando()) { s_fax_limpio = 0U; }
+    }
 
     /*
      * Y MIENTRAS EL DECODIFICADOR DE ANTES SIGA EN MARCHA, EL PANEL NO ES
@@ -25324,9 +26627,39 @@ static void fax_poll(void)
      * Cuesta un borrado por vuelta durante las pocas vueltas que dura el
      * solape, y en esas vueltas todavia no hay imagen que parpadee.
      */
-    if (rtty_get_enabled()) { s_fax_limpio = 0U; }
+    /* Y no mientras el cartel esta puesto: rtty_scope_panel_reset() borra la
+     * zona ENTERA, cartel y vista previa incluidos, y nadie los repinta
+     * hasta el siguiente cambio de estado. */
+    if (rtty_get_enabled() && !wfxr_tapando()) { s_fax_limpio = 0U; }
 
-    if (pinta && !s_fax_limpio) {
+    /*
+     * *** Y LA GUARDA VA TAMBIEN AQUI, NO SOLO ARRIBA - 21/10/2026. ***
+     *
+     * Arriba se protege UN camino -el rearme de RTTY- y el BORRADO se dejo
+     * suelto. Y hay otro camino, que no es un dedo y por eso no lo tapa la
+     * guarda del tactil: un mando CAT por USB.
+     *
+     * apply_demod_mode() no tiene salida temprana si el modo no cambia, asi
+     * que CUALQUIER orden de modo -y un WSJT-X o un fldigi mandan una al
+     * arrancar, aunque sea la que ya esta puesta- vuelve a entrar por la
+     * rama del fax y llama a fax_panel_reinicia(), que pone s_fax_limpio a
+     * cero. La vuelta siguiente borraba la zona entera.
+     *
+     * Y nadie la repinta. Lo que queda es exactamente la radio que parece
+     * rota que describe wfxr_pide(): el cartel y la vista previa
+     * desaparecen, pero s_wfxr sigue en WFXR_PIDE, asi que wfxr_tapando()
+     * sigue devolviendo 1 y el despacho del tactil se lo sigue tragando
+     * TODO -ver el `goto fin` de ahi- sin nada dibujado que lo explique,
+     * hasta que caduca a los cinco minutos. En WFXR_LINEA se sale girando
+     * el mando, que repinta el cartel; en WFXR_PIDE el mando no hace nada y
+     * no hay salida.
+     *
+     * Protegiendo el BORRADO en vez de cada uno de los que ponen la
+     * bandera, da igual cuantos caminos haya: mientras el cartel se vea, la
+     * zona no se borra. Y la bandera se queda a cero, asi que en cuanto el
+     * cartel se va, el borrado y el repintado ocurren igual.
+     */
+    if (pinta && !s_fax_limpio && !wfxr_tapando()) {
         rtty_scope_panel_reset();   /* borra la zona entera con el fondo del tema */
         s_fax_limpio = 1U;
         s_ult_hdr = 0UL;
@@ -25348,12 +26681,37 @@ static void fax_poll(void)
      * fichero -> se cierra. Y mientras este abierto se escribe TODO lo que
      * salga del decodificador, este como este.
      *
-     * El cerrojo de un minuto se queda, pero ya no deberia hacer falta
+     * El cerrojo se queda, pero ya no deberia hacer falta
      * nunca: con el boton mandando, para tener dos ficheros hay que tocar
      * el boton dos veces.
      */
     if (s_wfx_guarda != WFX_GUARDA_NO) {
-        if (wfx_abre_toca(s_gsv_on, s_gsv_fallo, 1U)
+        /*
+         * *** CON LA OBRA EN MARCHA NO SE ABRE NADA. CON EL CARTEL, SI -
+         * 21/10/2026. ***
+         *
+         * Lo que no puede convivir con el grabador es la REESCRITURA: tiene
+         * prestado s_gsv_buf entero, que es del grabador, y abrir un fichero
+         * mientras tanto pone a los dos a escribir en el mismo buffer y
+         * destroza los dos. Son unos quince segundos.
+         *
+         * La PREGUNTA no: mientras alguien decide se sigue grabando, y tiene
+         * que ser asi. El cartel sale al cerrar una carta, o sea cuando la
+         * siguiente ya esta entrando por la antena, y caduca a los cinco
+         * minutos: parar la grabacion mientras tanto perderia la carta
+         * entera. Por eso la guarda es wfxr_obra() y no wfxr_tapando(), que
+         * es la que dice si hay algo pintado encima del panel.
+         *
+         * Aqui ponia justo lo contrario -"con el cartel puesto no se abre
+         * nada... mientras se decide, no se graba"-, que es lo que hacia la
+         * version anterior y lo que este mismo arreglo vino a quitar. El
+         * codigo estaba bien y el comentario se quedo describiendo lo de
+         * antes: quien se lo creyera cambiaria esta linea por
+         * wfxr_tapando() y perderia una carta por cada pregunta. Lo dicen
+         * tambien, y bien, wfxr_obra() y capt_avisa().
+         */
+        if (!wfxr_obra()
+            && wfx_abre_toca(s_gsv_on, s_gsv_fallo, 1U)
             && (!s_wfx_hubo
                 || (uint32_t)(g_msticks - s_wfx_ult) > WFX_CERROJO_MS)) {
             gsv_abre(WEFAX_ANCHO, WFX_ALTO_MAX, BMP_8, "WFAX", 1U);
@@ -25367,25 +26725,70 @@ static void fax_poll(void)
         gsv_cierra_si_es("WFAX");   /* y el cerrojo lo arma el cierre */
     }
 
+    /*
+     * EL TONO DE FIN TAMBIEN CIERRA - 21/10/2026.
+     *
+     * Lo pedido era que la carta se cerrara "ya sea porque el usuario le ha
+     * dado al boton para parar de guardar o que le ha llegado la señal de
+     * fin desde la propia carta". La primera mitad estaba; la segunda no:
+     * con el boton puesto, el fichero seguia abierto despues del tono de
+     * fin y se tragaba el silencio, el ruido y el principio de la carta
+     * siguiente.
+     *
+     * Y NO ES LA MAQUINA DE ESTADOS QUE HIZO LA RIADA. Aquella cerraba al
+     * SALIR DE IMAGEN, y el decodificador entra y sale de imagen a cada
+     * parpadeo con señal justa: de ahi salieron veintisiete ficheros en un
+     * dia. Esto no mira si estamos en imagen: mira la TRANSICION de imagen
+     * a buscar, que en wefax.c solo la provoca el tono de parada de 450 Hz
+     * sostenido -apt_mira(), la unica salida de WEFAX_IMAGEN que existe-.
+     * O sea, una vez por carta y no una vez por parpadeo.
+     *
+     * Y el cerrojo que arma el cierre impide que un tono raro
+     * pueda hacer dos ficheros seguidos aunque me equivoque en esto.
+     */
+    {
+        static uint8_t s_era_imagen;
+        uint8_t ahora = (uint8_t)(in.estado == WEFAX_IMAGEN);
+
+        if (s_era_imagen && !ahora && s_gsv_on) {
+            debug_print("wefax: tono de fin, se cierra la carta\n");
+            gsv_cierra_si_es("WFAX");
+        }
+        s_era_imagen = ahora;
+    }
+
     s_gsv_bloques = 0U;
-    while (s_gsv_bloques == 0U && (l = wefax_linea()) != 0) {
+    while (s_gsv_bloques == 0U && wefax_linea_en(s_fax_linea)) {
+        l = s_fax_linea;
         gsv_linea(l, s_gy);
         s_gy++;
-        if (pinta) { fax_panel_linea(l); }
+        /*
+         * *** Y NO SE PINTA ENCIMA DEL CARTEL - 21/10/2026. ***
+         *
+         * El fichero se sigue escribiendo -eso no se para por un cartel-
+         * pero el panel es del cartel mientras este puesto. Sin esto, los
+         * renglones que quedaran sin recoger al llegar el tono de fin se
+         * pintan encima del cartel recien dibujado; y si entra la carta
+         * SIGUIENTE mientras alguien decide, se pinta entera encima de la
+         * vista previa: la imagen sobre la que se elige el corte deja de
+         * ser la del fichero, y los botones quedan tapados pero vivos.
+         */
+        if (pinta && !wfxr_tapando()) { fax_panel_linea(l); }
         /*
          * Y SI EL FICHERO SE HA LLENADO, SE SIGUE EN EL SIGUIENTE.
          *
-         * gsv_linea() cierra solo al llegar a la altura. Son 1024
-         * renglones, o sea ocho minutos y medio a 120 lpm: una carta mas
+         * gsv_linea() cierra solo al llegar a la altura. Son WFX_ALTO_MAX
+         * renglones -1.536, doce minutos y medio a 120 lpm-: una carta mas
          * larga que eso seguiria en WFAX002 sin perder un renglon.
          *
          * Esto NO es la reapertura que hizo la riada de ficheros de 8 kB.
          * Aquella se disparaba con CUALQUIER cierre -y el decodificador
          * cerraba a cada parpadeo-. Esta solo puede ocurrir despues de
-         * escribir 1024 renglones, o sea como mucho una vez cada ocho
-         * minutos, y ademas el boton sigue mandando.
+         * escribir WFX_ALTO_MAX renglones -1.536, o sea doce minutos y
+         * medio a 120 lpm-, y ademas el boton sigue mandando.
          */
         if (!s_gsv_on && !s_gsv_fallo && s_wfx_guarda != WFX_GUARDA_NO
+            && !wfxr_obra()         /* el buffer es del recolocado, ver arriba */
             && s_gsv_fila >= s_gsv_alto) {
             gsv_abre(WEFAX_ANCHO, WFX_ALTO_MAX, BMP_8, "WFAX", 1U);
             if (s_gsv_on) { s_gy = 0U; } else { wfx_avisa_fallo(); }
@@ -25395,10 +26798,15 @@ static void fax_poll(void)
     /*
      * Y SI EL FICHERO SE LLENA, SE ABRE EL SIGUIENTE.
      *
-     * Son 600 renglones, o sea cinco minutos a 120 lpm. Con el boton
-     * mandando esto solo puede pasar una vez cada cinco minutos, asi que no
-     * hay forma de que haga una riada: la reapertura pasa por el mismo
-     * cerrojo de un minuto que todo lo demas.
+     * Son WFX_ALTO_MAX renglones -1.536, doce minutos y medio a 120 lpm-.
+     * Con el boton mandando esto solo puede pasar una vez cada doce
+     * minutos, asi que no hay forma de que haga una riada.
+     *
+     * Y NO pasa por el cerrojo, al reves de lo que decia aqui:
+     * llama a gsv_abre() directamente. Es lo correcto para un relevo -con
+     * el cerrojo se perderian sesenta segundos de carta en medio- pero el
+     * comentario decia lo contrario, y quien se lo creyera y le añadiera el
+     * cerrojo partiria todas las cartas largas.
      */
     /* La cabecera, dos veces por segundo: lo que pone cambia despacio. */
     if (pinta && (uint32_t)(g_msticks - s_ult_hdr) >= 500U) {
@@ -25611,7 +27019,17 @@ static void sstv_poll(void)
         /* Una foto se abre por el principio y no a mitad: engancharse en la
          * fila 137 daria una imagen cuyo tercio de arriba es negro y nadie
          * sabria que ese negro no es de verdad. */
-        if (!s_gsv_on && y == 0U && s_sstv_guarda != SSTV_GUARDA_NO) {
+        /*
+         * Y NO CON EL RECOLOCADO EN MARCHA - 21/10/2026. El recolocado de
+         * una carta de fax tiene prestado s_gsv_buf, que es de este
+         * grabador. Abrir aqui pone a los dos a escribir en el mismo
+         * buffer: la foto sale con tiras de 4 kB de la carta dentro y la
+         * carta con renglones de la foto. Hoy no se puede salir de WEFAX
+         * con el cartel puesto, pero eso lo garantiza el repartidor de
+         * toques, no esta maquina.
+         */
+        if (!s_gsv_on && y == 0U && s_sstv_guarda != SSTV_GUARDA_NO
+            && !wfxr_obra()) {
             gsv_abre(SSTV_ANCHO, SSTV_ALTO,
                      (uint8_t)((s_sstv_guarda == SSTV_GUARDA_16) ? BMP_16 : BMP_24),
                      "SSTV", 0U);
@@ -26561,6 +27979,57 @@ static void tune_encoder_poll(void)
      * Lo acumulado se tira; volver a la frecuencia de antes al acabar seria
      * peor sorpresa que no haber girado. */
     if (s_capt_on) { return; }
+
+    /*
+     * Y CON EL CARTEL DE RECOLOCAR PUESTO, EL MANDO ES SUYO.
+     *
+     * Es modal: encima de la carta hay una linea vertical que decide por
+     * donde se recorta, y lo pedido es que se mueva "tanto con el encoder
+     * como pulsando de modo tactil". El dedo es el gesto grueso -salta a
+     * donde apuntas- y el mando el fino, un punto por detente. Sin el
+     * mando no hay forma de afinar un punto.
+     *
+     * SI, TAMBIEN CUANDO EL MANDO ESTA EN EL VOLUMEN
+     * (ENCODER_TARGET_VOLUME), y eso es una decision, no un descuido:
+     * tools/mando_check.py existe justo para que nadie se quede los
+     * detentes sin haberse hecho esta pregunta. La respuesta aqui es que
+     * el cartel tapa la carta, dura lo que dura una decision y se quita
+     * solo o con un dedo; durante esos segundos no hay ninguna otra cosa
+     * razonable que girar. El volumen vuelve a ser del mando en cuanto el
+     * cartel se va, sin tocar nada.
+     *
+     * Se come tambien la pulsacion: con el cartel delante, apretar el
+     * mando significa "esto de aqui", no lo que significara en el modo.
+     */
+    if (wfxr_tapando()) {
+        if (s_wfxr != WFXR_LINEA) {
+            /*
+             * Preguntando, recolocando o diciendo el resultado el cartel
+             * NO necesita el mando: ahi los detentes siguen siendo del
+             * volumen, como en el teclado y en la rejilla. Solo se come la
+             * pulsacion, que con un cartel delante significa "esto".
+             */
+            if (press) { return; }
+        } else {
+            /*
+             * Con la linea puesta si, y tambien si el mando esta en el
+             * volumen: es lo pedido -"que se pueda mover tanto con el
+             * encoder como pulsando de modo tactil"- y sin el mando no hay
+             * forma de afinar un punto.
+             *
+             * Lo que no vale es quedarselo EN SILENCIO, que es lo que
+             * vigila tools/mando_check.py: por eso, mientras dura la
+             * linea, el boton de Volumen se apaga en vez de seguir
+             * prometiendo lo que no hace. Ver s_btn_vol mas arriba.
+             */
+            if (detents != 0 && s_encoder_target == ENCODER_TARGET_VOLUME) {
+                debug_print("wefax: la linea se queda el mando del volumen\n");
+            }
+            (void)wfxr_mando(detents);
+            (void)long_press;
+            return;
+        }
+    }
 
     uint8_t changed = 0;
 
@@ -28042,6 +29511,37 @@ static void demo_touch_poll(void)
      * suelta- para que el propio gesto de la esquina, que acaba de poner el
      * cartel al soltar, no se lo quite a si mismo.
      */
+    /*
+     * EL CARTEL DE RECOLOCAR SE QUEDA CON EL DEDO. Va aqui arriba, antes
+     * de que nadie decida de quien es el gesto, porque es modal: mientras
+     * esta puesto no hay ningun otro mando que tenga sentido tocar.
+     *
+     * Se atiende la PULSACION y no la suelta: la linea tiene que seguir al
+     * dedo mientras se arrastra, que es como se busca el sitio.
+     *
+     * Y por eso se entra SIEMPRE, haya dedo o no: wfxr_dedo() necesita ver
+     * la suelta para saber cual es la vuelta en que el dedo baja. Los
+     * botones y el retirar un aviso piden esa vuelta; el arrastre, no. Ver
+     * s_wfxr_dedo.
+     */
+    /*
+     * Y SE SALE POR `fin`, NO CON UN `return` - 21/10/2026.
+     *
+     * En `fin` es donde se bajan los pestillos del gesto en curso
+     * -s_touch_active, s_fmt_tap, s_freq_tap_active...-. Saliendo con
+     * `return` se quedan puestos, y entonces el PRIMER toque de despues no
+     * entra por `pressed && !s_touch_active`: no se decide de quien es el
+     * gesto, y al soltar dispara el pestillo viejo. El comentario de la
+     * etiqueta ya avisa de esto con todas las letras, y estos dos returns
+     * se escribieron hoy sin leerlo.
+     *
+     * Pasa de verdad: el cartel lo arma el TONO DE FIN, que no depende del
+     * dedo. Basta con estar arrastrando el espectro cuando llega.
+     */
+    if (wfxr_dedo(pressed, x, y)) {
+        goto fin;
+    }
+
     if (pressed && !s_touch_active && s_capt_msg_ms != 0UL) {
         /* Se le resta la espera entera en vez de ponerlo a cero: cero
          * significa "no hay cartel" y entonces nadie repintaria la
@@ -28574,6 +30074,51 @@ static void demo_touch_poll(void)
         }
         if (wefax_activo()) {
             s_wfx_guarda = (uint8_t)((s_wfx_guarda + 1U) % WFX_GUARDA_N);
+            /*
+             * *** Y EL DEDO MANDA SOBRE LAS DOS COSAS QUE LO CALLABAN -
+             * 21/10/2026. ***
+             *
+             * El boton es un interruptor y asi esta escrito en todas
+             * partes -«lo pones y abre un fichero», lo dice wfx_guarda.h y
+             * lo dice el manual-. No lo era, por dos motivos distintos que
+             * se arreglan en la misma linea:
+             *
+             * 1. EL AVISO DE QUE NO HAY SITIO. wfx_abre_toca() se niega a
+             *    abrir mientras s_gsv_fallo este puesto, y hace bien: sin
+             *    el, un disco lleno haria que esto recorriera la tabla de
+             *    asignacion entera en cada vuelta del bucle. Pero su
+             *    cabecera dice, con todas las letras, que se queda quieto
+             *    «hasta que el usuario toque el boton, QUE ES LO QUE
+             *    LIMPIA ESE AVISO» - y nadie lo limpiaba. Una vez lleno el
+             *    disco, el boton del fax quedaba muerto hasta salirse del
+             *    modo y volver a entrar, que es lo unico que lo ponia a
+             *    cero. Y el rotulo seguia ofreciendo guardar.
+             *
+             * 2. EL CERROJO DE LOS 25 SEGUNDOS. Existe para que una RIADA
+             *    de cierres automaticos no haga una riada de ficheros, y
+             *    para eso sigue puesto. Pero tambien paraba al dedo:
+             *    quitar el boton y volver a ponerlo -que es lo que hace
+             *    cualquiera para empezar un fichero nuevo- dejaba
+             *    veinticinco segundos sin grabar nada, con la chapa
+             *    diciendo «listo», que segun el manual significa «va a
+             *    guardar, esperando a que empiece la carta». O sea
+             *    exactamente la confusion que esa chapa se puso para
+             *    quitar: no se distinguia «no estaba puesto» de «esta
+             *    roto».
+             *
+             * Un dedo no es una riada: con el boton mandando, para tener
+             * dos ficheros hay que tocarlo dos veces. Lo dice el
+             * comentario del propio cerrojo.
+             *
+             * Y el orden sale solo: esta pulsacion es la que APAGA o la
+             * que ENCIENDE. Si apaga, fax_poll() cerrara el fichero en la
+             * vuelta siguiente y volvera a armar el cerrojo -que es lo
+             * suyo: ese cierre es un cierre-. Si enciende, lo encuentra
+             * limpio y abre. O sea que hace falta limpiarlo en las dos, y
+             * solo sirve en la segunda.
+             */
+            s_gsv_fallo = 0U;
+            s_wfx_hubo  = 0U;
         } else {
             s_sstv_guarda = (uint8_t)((s_sstv_guarda + 1U) % SSTV_GUARDA_N);
         }
@@ -28601,37 +30146,6 @@ static void demo_touch_poll(void)
     if (s_frec_tap && !pressed) {
         s_frec_tap = 0U;
         s_digi.btn3_press = 0U;
-        /*
-         * EN WEFAX ESTE BOTON ES EL CENTRADO - 20/10/2026.
-         *
-         * derecha". Corre el renglon ya terminado; no toca el enganche.
-         * Ver wefax_set_centro().
-         *
-         * Va el primero, igual que el filtro de CQ de FT8, porque es el
-         * otro uso de este boton que no cambia nada de la radio: ni mueve
-         * el dial ni toca el demodulador, solo decide como se enseña.
-         */
-        if (wefax_activo()) {
-            /*
-             * LAS DOS MITADES DEL BOTON. La izquierda corre la imagen
-             * hacia la izquierda y la derecha hacia la derecha, que es lo
-             * unico que se puede adivinar sin leer el manual. Con un solo
-             * sentido, cruzar media linea serian 18 toques en vez de 9, y
-             * la segunda carta del usuario estaba a 269 puntos.
-             */
-            {
-                int16_t bx = ui_digi_btn3_x_dbg(&s_digi);
-                int16_t bw = ui_digi_btn3_w_dbg(&s_digi);
-
-                wfx_centro_mueve((int8_t)(((int16_t)x < bx + bw / 2) ? -1 : 1));
-            }
-            settings_mark_dirty();
-            fax_panel_reinicia();   /* lo ya pintado lleva el centrado viejo */
-            s_fax_limpio = 0U;
-            fax_hdr_draw();
-            debug_print("wefax: centrado cambiado\n");
-            goto fin;
-        }
         /*
          * EN FT8 ESTE BOTON ES EL FILTRO DE CQ - 13/10/2026.
          *
@@ -28991,6 +30505,17 @@ fin:
         s_time_tap_active = 0U;
         s_band_tap_active = 0U;
         s_borrar_tap = 0U;
+        /*
+         * Y EL DIBUJO DEL PRIMER BOTON, QUE SE QUEDABA HUNDIDO - 21/10/2026.
+         *
+         * s_digi.btn_press solo se bajaba dentro de la rama
+         * `s_borrar_tap && !pressed`, o sea solo si el gesto llegaba hasta
+         * ahi. Con una salida que viene aqui por arriba -el `goto fin` del
+         * cartel de recolocar- el pestillo se baja y el dibujo no: el boton
+         * "Sincroniza" se quedaba pintado hundido hasta que alguien lo
+         * volviera a pulsar. Los de btn3 y btn4 ya se bajaban aqui.
+         */
+        s_digi.btn_press = 0U;
         /* El de frecuencias de HFDL entra en la misma limpieza: si se pulsa
          * y el dedo se sale del boton antes de soltar, no tiene que quedarse
          * armado para el toque siguiente. */

@@ -114,36 +114,31 @@ int main(void)
 
     /*
      * ======================================================================
-     * Y EL TERCER BOTON: QUE SE DIBUJE DE VERDAD
+     * Y QUE LA CABECERA DEL FAX NO SE QUEDE CON EL BOTON DE AYER
      * ======================================================================
      *
-     * Y no estaba. El centrado del fax lo puse en btn3 y lo di por hecho:
-     * el boton existia, respondia al dedo y NO SE DIBUJABA.
+     * Aqui habia un caso que exigia que el TERCER boton del fax -el del
+     * centrado- se dibujara de verdad. Nacio de una entrega en la que ese
+     * boton existia, respondia al dedo y no se veia: btn3_w() de ui_digi.c
+     * no es un numero, es una resta -lo que queda entre donde acaba la
+     * zona de la barra y donde empieza la chapa-, y sin acortar la barra
+     * con barra_w el hueco sale negativo y no se pinta nada.
      *
-     * Porque btn3_w() de ui_digi.c no es un numero, es una resta: lo que
-     * queda entre donde acaba la ZONA DE LA BARRA y donde empieza la
-     * chapa. Sin barra esa zona vale sus 300 px enteros, el hueco sale
-     * negativo, la funcion devuelve 0 y no se pinta nada. Hay que
-     * acortarla con barra_w para hacerle sitio.
+     * El boton se fue el 20/10/2026: el centrado se elige al acabar la
+     * carta, con una linea vertical sobre la imagen entera.
      *
-     * Nada lo comprobaba, asi que se entrego. Esto lo comprueba: monta la
-     * cabecera del fax con los MISMOS campos que fax_hdr_draw() y exige
-     * que el boton tenga ancho, que su rotulo mas largo quepa, y que no
-     * pise ni al de guardar ni a la chapa.
+     * Pero el caso no se borra, se le da la vuelta, porque s_digi es UNA
+     * estructura compartida: si al quitar el boton se hubiera quedado un
+     * barra_w de 160 puesto por el modo anterior, la cabecera del fax
+     * saldria con la barra corta y la chapa encogida, y eso NO salta a la
+     * vista en una captura -se lee como que el texto de estado es corto-.
+     * Lo que se exige ahora es lo contrario de antes: que no haya tercer
+     * boton y que la chapa recupere su ancho entero.
      * ====================================================================== */
-    printf("\n  el tercer boton del fax (el centrado)\n");
+    printf("\n  la cabecera del fax, ya sin tercer boton\n");
     {
-        /* Los mismos campos que pone fax_hdr_draw(). Si alli cambia el
-         * ancho reservado, aqui hay que cambiarlo tambien - y entonces
-         * este banco dira si el nuevo numero sirve. */
-        /* El peor caso del rotulo con el recorrido de linea entera:
-         * +-378 lleva tres cifras y el signo. Si manana el paso cambia y
-         * el recorrido tambien, esto tiene que seguir cuadrando. */
-        static const char *k_rotulos[] = { "Centro", "Centre",
-                                           "+357 px", "-378 px" };
-        ui_digi_state_t st;
-        int16_t x3, w3, xc;
-        size_t k;
+        ui_digi_state_t st, sucia;
+        int16_t xc_limpia, xc_sucia;
 
         memset(&st, 0, sizeof st);
         st.y = HDR_Y;
@@ -151,48 +146,43 @@ int main(void)
         st.chip = "Recibiendo - 120 lpm - WFAX003 176";
         st.btn  = "Sincroniza";
         st.btn2 = "Guardando 003";
-        st.barra_w = 160;              /* <- lo que le hace sitio */
-        st.btn3 = k_rotulos[0];
+        /* btn3 y barra_w a cero: es lo que deja img_hdr_limpia() antes de
+         * que fax_hdr_draw() monte la cabecera. */
 
-        w3 = ui_digi_btn3_w_dbg(&st);
-        x3 = ui_digi_btn3_x_dbg(&st);
-        xc = ui_digi_chip_x_dbg(&st);
-        printf("    boton3 en x=%d, %d px de ancho; la chapa empieza en %d\n",
-               x3, w3, xc);
-
-        if (w3 <= 0) {
-            printf("    *** no se dibuja: btn3_w() devuelve %d. Hay que acortar"
-                   " la zona de la barra con barra_w ***\n", w3);
-            fallos++;
-        }
-        if (x3 < UDG_BTN2_X + UDG_BTN2_W) {
-            printf("    *** pisa al boton de guardar ***\n");
-            fallos++;
-        }
-        if (w3 > 0 && x3 + w3 > xc) {
-            printf("    *** pisa la chapa ***\n");
-            fallos++;
-        }
-        for (k = 0; k < sizeof k_rotulos / sizeof k_rotulos[0]; k++) {
-            int ancho = gfx2_text_w(k_rotulos[k], &font_ui_14b);
-            /* Cuatro pixeles de aire a cada lado, que es lo que deja
-             * pinta_uno() antes de que el texto toque el borde. */
-            if (ancho + 8 > w3) {
-                printf("    *** \"%s\" no cabe: %d px en %d ***\n",
-                       k_rotulos[k], ancho, w3);
-                fallos++;
-            } else {
-                printf("    \"%s\" cabe: %d px en %d\n", k_rotulos[k], ancho, w3);
-            }
-        }
-
-        /* Y que sin barra_w NO se dibujara, o sea que esta prueba prueba
-         * algo: un banco que pasa con y sin el arreglo no es un banco. */
-        st.barra_w = 0;
         if (ui_digi_btn3_w_dbg(&st) > 0) {
-            printf("    *** sin acortar la barra tambien sale: esta prueba no"
-                   " esta midiendo lo que dice ***\n");
+            printf("    *** sigue habiendo un tercer boton ***\n");
             fallos++;
+        } else {
+            printf("    no hay tercer boton  ok\n");
+        }
+
+        xc_limpia = ui_digi_chip_x_dbg(&st);
+
+        /*
+         * Y LA PRUEBA DE QUE ESTO MIDE ALGO: la cabecera de ANTES, con su
+         * tercer boton y su barra acortada a 160, montada aqui al lado. La
+         * chapa empezaba mas a la derecha, o sea que era mas estrecha: eso
+         * es lo que costaba el boton y lo que se recupera al quitarlo.
+         *
+         * Si alguien vuelve a poner un btn3 en el fax sin pensarlo, este
+         * numero se mueve y el banco lo dice.
+         */
+        memcpy(&sucia, &st, sizeof st);
+        sucia.btn3    = "-378 px";
+        sucia.barra_w = 160;
+        xc_sucia = ui_digi_chip_x_dbg(&sucia);
+        printf("    la chapa empieza en %d; con el boton de antes, en %d\n",
+               xc_limpia, xc_sucia);
+        if (xc_limpia > xc_sucia) {
+            printf("    *** la chapa no ha recuperado su ancho ***\n");
+            fallos++;
+        } else if (xc_limpia == xc_sucia) {
+            printf("    *** el tercer boton no encogia la chapa: esta prueba no"
+                   " mide lo que dice ***\n");
+            fallos++;
+        } else {
+            printf("    la chapa recupera los %d px que costaba el boton  ok\n",
+                   xc_sucia - xc_limpia);
         }
     }
 

@@ -3495,6 +3495,37 @@ comprueba: pga
 # al reves de lo que uno espera: cuanto mas floja la modulacion, peor sonaba.
 # Esto mide el error, la PENDIENTE cerca de cero -que el error maximo no
 # enseña- y la THD del discriminador contra atan2f(). Ver sim/atantest.c.
+# LA TRANSFORMADA, BIT A BIT CONTRA LA DE ANTES - 21/10/2026.
+#
+# El comentario de fft_run() decia "lo comprueba sim/ffttest.c" y ese
+# fichero NO EXISTIA: dos dias con una afirmacion sobre coma flotante y
+# nada detras. Este banco lleva dentro las mariposas en el orden viejo y
+# compara las dos salidas patron de bits contra patron de bits.
+#
+# Incluye fft.c en vez de enlazarlo, a proposito: hacen falta las tablas
+# de giro y los buffers, que son static. Ver sim/ffttest.c.
+out/ffttest: sim/ffttest.c $(FIRMWARE)/User/fft.c $(FIRMWARE)/User/fft.h
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ sim/ffttest.c $(LDLIBS)
+
+.PHONY: fftbit
+fftbit: out/ffttest ; ./out/ffttest
+comprueba: fftbit
+
+# LA MISMA PREGUNTA PARA LA TRANSFORMADA DEL DETECTOR - 21/10/2026.
+#
+# Alli el comentario decia "bit a bit" y ponia de prueba tres bancos de
+# decodificacion, que no pueden ver una diferencia de un bit. Medido: NO es
+# bit a bit, porque el giro cero de esa tabla no es 1+0i. Da 1,5e-07 en el
+# peor caso. Ver sim/stanag_fft.c.
+out/stanagfft: sim/stanag_fft.c $(FIRMWARE)/User/stanag_det.c $(FIRMWARE)/User/stanag_det.h
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ sim/stanag_fft.c $(LDLIBS)
+
+.PHONY: stanagfft
+stanagfft: out/stanagfft ; ./out/stanagfft
+comprueba: stanagfft
+
 out/atantest: sim/atantest.c $(FIRMWARE)/User/rapido.c
 	@mkdir -p out
 	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ sim/atantest.c \
@@ -4907,3 +4938,254 @@ extremo: out/extremo ; ./out/extremo
 ifneq ($(wildcard vendor/gfx.c),)
 comprueba: extremo
 endif
+
+# EL PWM DE LA RETROILUMINACION DEL CARGADOR - 20/10/2026.
+#
+# El cargador se salia de sus 32 KB por 136 bytes. Lo que lo sacaba eran
+# seis funciones de Firmware/Source/gd32f4xx_timer.c que el enlazador trae
+# enteras -con su switch de catorce temporizadores o de cuatro canales-
+# para configurar UN canal de UN temporizador: 896 bytes para encender la
+# luz de la pantalla. boot/retro_pwm.h las cambia por las escrituras a
+# registro que esas funciones hacen de verdad.
+#
+# Si esa lectura del fuente del fabricante estuviera mal, la radio
+# arrancaria a oscuras, y esa es justo la averia que no se puede arreglar
+# desde la propia radio. Asi que el banco no lo comprueba a ojo: compila
+# gd32f4xx_timer.c SIN TOCARLO contra un mapa de registros en memoria
+# -sim/gd32shim/gd32f4xx.h-, ejecuta la secuencia vieja y la nueva, y
+# exige que dejen los mismos registros con los mismos valores.
+#
+# El -I de gd32shim va DELANTE del de hostinc a proposito: los dos traen
+# un gd32f4xx.h y aqui hace falta el que sabe de registros.
+out/bootpwm: sim/bootpwm.c sim/gd32shim/gd32f4xx.h $(FIRMWARE)/boot/retro_pwm.h $(FIRMWARE)/Firmware/Source/gd32f4xx_timer.c
+	@mkdir -p out
+	$(CC) -O1 -Wall -I sim/gd32shim -I $(FIRMWARE)/Firmware/Include -I $(FIRMWARE)/boot -o $@ sim/bootpwm.c $(FIRMWARE)/Firmware/Source/gd32f4xx_timer.c $(LDLIBS)
+
+bootpwm: out/bootpwm ; ./out/bootpwm
+
+comprueba: bootpwm
+
+# EL BLOQUE «Estado» DEL README - 20/10/2026.
+#
+# Seis de sus once renglones estaban mal el dia que se publico el
+# repositorio: la flash sobraba 4.096, la RAM faltaba 5.976 y los tres
+# numeros de la pila eran de otra epoca. Y el parrafo de debajo remataba
+# con "99,98 %, treinta y dos bytes libres", que ya se contradecia con el
+# bloque de encima.
+#
+# Es lo primero que lee quien llega al repositorio, y lo escribia una
+# persona a mano cada vez que se acordaba. Un numero copiado a mano a un
+# documento se pudre solo; el unico que se entera es un desconocido.
+#
+# Necesita los dos firmwares y el cargador compilados: si falta alguno lo
+# dice y no tumba nada, porque "no se puede comprobar" no es "esta mal".
+.PHONY: estado
+estado:
+	python3 $(FIRMWARE)/tools/estado_check.py
+
+comprueba: estado
+
+# EL GIRO DE UNA CARTA YA GRABADA - 20/10/2026.
+#
+# La formula se puede escribir al reves sin que se note al leerla:
+# dst[i] = src[(c+i)%a] y dst[(i+c)%a] = src[i] son las dos de una linea y
+# las dos "parecen" bien. La diferencia solo se ve en la imagen, y cuando
+# se ve ya esta el fichero reescrito encima del bueno.
+#
+# Asi que este banco no comprueba la formula: graba una carta con una barra
+# negra en una columna conocida, la recoloca, LA RELEE DEL CHIP y mira
+# donde quedo, dibujandolo en ASCII. Con la formula del reves, la barra se
+# va al otro lado y salen 30.240 puntos fuera de sitio.
+#
+# Y va con DOS volumenes: el fichero de una carta crece a tramos de 64 kB,
+# o sea que en un volumen repartido no es seguido. Un giro que suponga que
+# el bloque 100 esta pegado al 99 escribe encima del vecino, que es la
+# averia que ya se llevo por delante un CONFIG.CSV; por eso el segundo caso
+# deja un vecino al lado y lo comprueba byte a byte al acabar.
+out/recoloca: sim/recoloca.c sim/w25q_sim.c sim/gd32_pines.c $(FIRMWARE)/User/spi_flash.c $(FIRMWARE)/User/bmp.c $(FIRMWARE)/User/wfx_recoloca.c $(FIRMWARE)/User/wfx_recoloca.h
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -Ihostinc -Isim -o $@ \
+	      sim/recoloca.c sim/w25q_sim.c sim/gd32_pines.c \
+	      $(FIRMWARE)/User/spi_flash.c $(FIRMWARE)/User/bmp.c \
+	      $(FIRMWARE)/User/wfx_recoloca.c $(LDLIBS)
+
+recoloca: out/recoloca out/fat12_vacio.img ; ./out/recoloca out/fat12_vacio.img
+
+comprueba: recoloca
+
+# EL CERROJO DE WEFAX - 21/10/2026.
+#
+# wefax.c reparte su trabajo entre la interrupcion de audio y el bucle
+# principal, y su cabecera pone dos reglas para lo que tocan los dos:
+# `volatile`, y las escrituras del bucle dentro de WFX_CIERRA()/WFX_ABRE().
+#
+# Las dos se han roto ya, y las dos se rompen EN SILENCIO: lo que sale es
+# un boton que a veces no hace nada, o un anillo descolocado para siempre.
+# No hay banco de pruebas que las vea -en el simulador no hay interrupcion
+# que interrumpa nada- asi que o se comprueban leyendo la fuente o no se
+# comprueban.
+#
+# Se probo con seis roturas a proposito: quitar el volatile de s_fase_n,
+# quitarselo a s_lpm_i -que el bucle escribe y la interrupcion solo lee-,
+# sacar fase_cero() del cerrojo en wefax_set_lpm(), sacar el
+# s_linea_lista-- del de wefax_linea_en(), subir s_lineas a 64 bits y sacar
+# del cerrojo el memcpy que copia el renglon. Las seis salen en rojo.
+#
+# Las dos ultimas son de la regla 3, que es de la pasada 21: lo que escribe
+# la interrupcion y solo lee el bucle estaba FUERA del guion con un motivo
+# escrito que no era el suyo. Ver la cabecera del guion.
+.PHONY: cerrojo
+cerrojo:
+	python3 $(FIRMWARE)/tools/cerrojo_check.py
+
+comprueba: cerrojo
+
+# LA GUARDA QUE YA SE DECIDIO MAS ARRIBA - 21/10/2026.
+#
+# Ver la cabecera de tools/guarda_muerta.py. Busca, en los 403 ficheros de
+# User/ y de los bancos, un `if` cuya condicion ya se decidio antes en la
+# misma funcion, saliendo por return, sin que nada haya podido cambiarla por
+# el camino. Ese segundo `if` no se ejecuta nunca y el compilador no dice
+# nada, porque no sabe que la condicion no ha cambiado.
+#
+# Lo encontro la pasada 21: en wfxr_acepta() el arreglo de la columna cero
+# -con treinta lineas de comentario explicando por que hacia falta- se
+# escribio DEBAJO del guarda viejo y no se ejecuto ni una vez.
+#
+# Probado con dos roturas a proposito -devolver aquel guarda, y doblar el de
+# s_fase_tira en wefax.c-: las dos salen en rojo y nombran la linea de la
+# que viene la decision. Con el arbol entero sano da UN renglon.
+.PHONY: guardamuerta
+guardamuerta:
+	python3 $(FIRMWARE)/tools/guarda_muerta.py
+
+comprueba: guardamuerta
+
+# LOS NUMEROS DE WEFAX, PROBADOS POR MUTACION - 21/10/2026.
+#
+# Ver la cabecera de tools/wefax_mutantes.py. Rompe a proposito quince
+# decisiones de User/wefax.c -umbrales, topes, el tamaño del anillo- y mira
+# cuantas caza el banco. Si el banco sigue en verde con la decision rota, esa
+# decision no la vigila nadie.
+#
+# La pasada 26 lo hizo a mano y DIEZ de las quince sobrevivian, entre ellas
+# la capacidad util del anillo -el fallo del renglon partido-, el umbral que
+# impide que una trama de semitono parta el fichero, y el que impide que un
+# tono de fin desvanecido se pierda y se cosan dos cartas. Se cerraron seis
+# con casos nuevos; las cuatro que quedan estan explicadas en el guion, y una
+# de ellas sobrevive porque el codigo mutado es igual de bueno.
+#
+# Cuesta 45 s -quince compilaciones y treinta ejecuciones- y cuelga de
+# comprueba igual: un guardian que hay que acordarse de correr no se corre.
+#
+# Desde la pasada 27 son DOS frentes: la señal (wefax.c contra wefaxtest y
+# wefaxfuzz) y el giro del fichero (wfx_recoloca.c contra recoloca). Treinta
+# mutaciones en total, 1m10s, y el volumen FAT12 vacio hace falta para el
+# segundo - por eso cuelga de el.
+.PHONY: mutantes
+mutantes: out/fat12_vacio.img
+	python3 tools/wefax_mutantes.py
+
+comprueba: mutantes
+
+# LOS BANCOS DEL FAX, CON LOS DETECTORES PUESTOS - 21/10/2026.
+#
+# Los dos bancos del fax -la señal y el giro del fichero- se compilan
+# tambien con los detectores de tiempo de ejecucion de gcc y se vuelven a
+# correr. No prueban nada nuevo: prueban lo mismo mirando si por el camino
+# se hace algo que el lenguaje no define.
+#
+# *** Y EL QUE HACE FALTA NO ESTA EN -fsanitize=undefined. ***
+#
+# El fallo mas feo que encontro la revision de WEFAX -pasada 5- era este:
+#
+#     s_fase = (uint32_t)((int32_t)s_fase + (int32_t)(d * 4294967296.0f));
+#
+# con `d` bajando hasta -0,975, o sea un float de -4,1e9 convertido a un
+# int32_t que llega a -2,15e9. Comportamiento indefinido, compilado a -O2, y
+# el efecto era que la mitad de los enganches corregian la fase a medias.
+#
+# Se comprobo: con `-fsanitize=undefined` a secas, el banco pasa en verde
+# con ese codigo dentro. Hace falta nombrar float-cast-overflow, que en este
+# gcc NO entra en el paquete. Con el, sale:
+#
+#     wefax.c: runtime error: -4.09954e+09 is outside the range of
+#              representable values of type 'int'
+#
+# Asi que la lista va escrita entera y a mano, y quien la toque que mire
+# esto antes.
+#
+# -fno-sanitize-recover=all para que el primer aviso pare el banco en vez de
+# seguir e imprimir "TODO CORRECTO" al final.
+#
+# Si el gcc de turno no trae los detectores, se dice y no se tumba nada:
+# "no se puede comprobar" no es "esta mal".
+SANI = -fsanitize=undefined,address,float-cast-overflow,signed-integer-overflow,bounds,shift \
+       -fno-sanitize-recover=all -fno-omit-frame-pointer -g -O1
+
+.PHONY: sanitiza
+sanitiza: out/fat12_vacio.img
+	@mkdir -p out
+	@if $(CC) $(SANI) -std=gnu99 -I$(FIRMWARE)/User -Ihostinc -Isim \
+	     -o out/wefaxtest_san sim/wefaxtest.c $(FIRMWARE)/User/wefax.c \
+	     $(FIRMWARE)/User/disc_fm.c $(FIRMWARE)/User/nco.c \
+	     $(FIRMWARE)/User/nco_tabla.c $(LDLIBS) 2>/dev/null; then \
+	    echo "  el banco de la señal, con los detectores puestos"; \
+	    ./out/wefaxtest_san > out/wefaxtest_san.txt 2>&1 || \
+	      { echo "  *** ALGO QUE EL LENGUAJE NO DEFINE ***"; \
+	        grep -i "runtime error" out/wefaxtest_san.txt | sort -u; exit 1; }; \
+	    echo "    nada indefinido por el camino   ok"; \
+	else \
+	    echo "  este gcc no trae los detectores: no se puede comprobar"; \
+	fi
+	@if $(CC) $(SANI) -std=gnu99 -I$(FIRMWARE)/User -Ihostinc -Isim \
+	     -o out/wefaxfuzz_san sim/wefaxfuzz.c $(FIRMWARE)/User/wefax.c \
+	     $(FIRMWARE)/User/disc_fm.c $(FIRMWARE)/User/nco.c \
+	     $(FIRMWARE)/User/nco_tabla.c $(LDLIBS) 2>/dev/null; then \
+	    echo "  el fax aporreado, con los detectores puestos"; \
+	    ./out/wefaxfuzz_san > out/wefaxfuzz_san.txt 2>&1 || \
+	      { echo "  *** ALGO QUE EL LENGUAJE NO DEFINE ***"; \
+	        grep -i "runtime error" out/wefaxfuzz_san.txt | sort -u; exit 1; }; \
+	    echo "    nada indefinido por el camino   ok"; \
+	else \
+	    echo "  este gcc no trae los detectores: no se puede comprobar"; \
+	fi
+	@if $(CC) $(SANI) -std=gnu99 -I$(FIRMWARE)/User -Ihostinc -Isim -Igfx2 \
+	     -o out/recoloca_san sim/recoloca.c sim/w25q_sim.c sim/gd32_pines.c \
+	     $(FIRMWARE)/User/spi_flash.c $(FIRMWARE)/User/bmp.c \
+	     $(FIRMWARE)/User/wfx_recoloca.c $(LDLIBS) 2>/dev/null; then \
+	    echo "  el banco del giro, con los detectores puestos"; \
+	    ./out/recoloca_san out/fat12_vacio.img > out/recoloca_san.txt 2>&1 || \
+	      { echo "  *** ALGO QUE EL LENGUAJE NO DEFINE ***"; \
+	        grep -i "runtime error" out/recoloca_san.txt | sort -u; exit 1; }; \
+	    echo "    nada indefinido por el camino   ok"; \
+	else \
+	    echo "  este gcc no trae los detectores: no se puede comprobar"; \
+	fi
+
+comprueba: sanitiza
+
+# EL FAX APORREADO. Ver la cabecera de sim/wefaxfuzz.c: manda ruido, tonos,
+# fase e imagen en el orden que salga, con los botones pulsados al azar, y
+# despues una carta limpia. Lo que comprueba es que la carta limpia ENTRA:
+# que no hay combinacion que deje el decodificador clavado.
+#
+# Existe porque las pasadas 6 a 11 de la revision de WEFAX encontraron
+# cuatro fallos de la MISMA familia -estado que sobrevive a una transicion
+# que nadie probo- y las cuatro se encontraron leyendo, porque ningun banco
+# mandaba las transiciones en un orden que a nadie se le ocurriria.
+#
+# Probado devolviendo el fallo de la pasada 5 -quitarle a apt_mira() la
+# salida de imagen por el tono de arranque-: dice "el estado es 3, no la
+# señal de fase" y "entran 109 renglones de los 40 de la carta". Las dos
+# mitades hacen falta: contando renglones solo por abajo, 109 pasaba.
+out/wefaxfuzz: sim/wefaxfuzz.c $(FIRMWARE)/User/wefax.c $(FIRMWARE)/User/disc_fm.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ sim/wefaxfuzz.c \
+	      $(FIRMWARE)/User/wefax.c $(FIRMWARE)/User/disc_fm.c \
+	      $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c $(LDLIBS)
+
+.PHONY: wefaxfuzz
+wefaxfuzz: out/wefaxfuzz ; ./out/wefaxfuzz
+
+comprueba: wefaxfuzz

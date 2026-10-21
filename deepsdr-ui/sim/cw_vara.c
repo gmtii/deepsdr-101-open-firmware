@@ -114,7 +114,7 @@ static void pasada(const char *texto, float wpm, float snr_db,
 }
 
 static const char *k_msg =
-    "CQ CQ DE EA4XYZ EA4XYZ K = UR RST 579 579 NAME OSCAR QTH MADRID = "
+    "CQ CQ DE EA4XYZ EA4XYZ K = UR RST 579 579 NAME PEDRO QTH MADRID = "
     "HW? AR DL1ABC DE EA4XYZ KN";
 
 static int detallado = 0;

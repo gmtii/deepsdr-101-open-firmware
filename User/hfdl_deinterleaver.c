@@ -83,6 +83,7 @@ uint8_t hfdl_deinterleaver_pop(hfdl_deinterleaver_t *d)
 
 /* ---- self-test ---- */
 
+
 /* Static, not stack-local: at 15120 bytes (worst case) this is
  * comfortably within the project's free-RAM budget (see the
  * architecture document) but not something to put on a call stack,

@@ -30,6 +30,7 @@
 extern usb_core_driver g_usb;   /* en soporte.c, compartido con usb_it.c */
 #include "gfx2_font.h"
 #include "font_boot.h"
+#include "retro_pwm.h"
 #include <string.h>
 
 #define NEGRO   0x0000U
@@ -243,7 +244,7 @@ static void borra_linea(uint16_t y)
  * SUBIRLA al tocar cualquier cosa del cargador. Si no se sube, miente, y
  * un numero de version que miente es peor que no tenerlo.
  */
-#define CARGADOR_VERSION  "v2.17"
+#define CARGADOR_VERSION  "v2.19"
 
 /*
  * Y CUAL DE LOS DOS, EN LA MISMA LINEA - 16/10/2026.
@@ -806,34 +807,14 @@ static void pines_de_la_placa(void)
      * se queda corriendo y la aplicacion solo le quita el pin.
      */
     {
-        timer_parameter_struct    t;
-        timer_oc_parameter_struct oc;
-
         rcu_periph_clock_enable(RCU_TIMER4);
 
         gpio_mode_set(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO_PIN_3);
         gpio_output_options_set(GPIOA, GPIO_OTYPE_PP, GPIO_OSPEED_2MHZ, GPIO_PIN_3);
         gpio_af_set(GPIOA, GPIO_AF_2, GPIO_PIN_3);
 
-        timer_deinit(TIMER4);
-        timer_struct_para_init(&t);
-        t.prescaler         = 7U;
-        t.alignedmode       = TIMER_COUNTER_EDGE;
-        t.counterdirection  = TIMER_COUNTER_UP;
-        t.clockdivision     = TIMER_CKDIV_DIV1;
-        t.period            = 375U;
-        t.repetitioncounter = 0U;
-        gd32_timer_init(TIMER4, &t);
-
-        timer_channel_output_struct_para_init(&oc);
-        oc.outputstate = TIMER_CCX_ENABLE;
-        oc.ocpolarity  = TIMER_OC_POLARITY_HIGH;
-        timer_channel_output_config(TIMER4, TIMER_CH_3, &oc);
-        timer_channel_output_mode_config(TIMER4, TIMER_CH_3, TIMER_OC_MODE_PWM0);
-        timer_channel_output_pulse_value_config(TIMER4, TIMER_CH_3, 188U);
-
-        timer_auto_reload_shadow_enable(TIMER4);
-        timer_enable(TIMER4);
+        /* El temporizador, en boot/retro_pwm.h: ahi esta el porque. */
+        retro_pwm_timer4();
     }
 }
 

@@ -211,8 +211,7 @@ static const char *const k_extra_claves[] = {
     "sam_margen_hz",    /* SET_X_SAM_MARG    */
     "bd_espectro",      /* SET_X_BD_ESPECTRO */
     "jmp",              /* SET_X_JMP         */
-    "iq_inv",           /* SET_X_IQ_INV      */
-    "wefax_centro"      /* SET_X_WFX_CENTRO  */
+    "iq_inv"            /* SET_X_IQ_INV      */
 };
 _Static_assert(sizeof(k_extra_claves) / sizeof(k_extra_claves[0]) == (size_t)SET_X_N,
                "k_extra_claves[] y settings_extra_id_t se han desincronizado");

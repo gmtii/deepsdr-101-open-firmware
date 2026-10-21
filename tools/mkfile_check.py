@@ -240,15 +240,67 @@ def main():
     """
     fallos += requisitos_que_no_estan()
 
+    #
+    # *** "YA NO LO LEE NADIE" NO ERA VERDAD - 21/10/2026. ***
+    #
+    # Esto listaba como muerto CUALQUIER fichero llamado Makefile, razonando
+    # solo con el orden en que GNU make elige el suyo: GNUmakefile gana, asi
+    # que Makefile ya no se lee.
+    #
+    # Es falso en cuanto el trampolin lo INCLUYE. Y eso es justo lo que hace
+    # deepsdr-ui/trampolin.mk en su ultima linea: `include Makefile`. Ahi el
+    # Makefile no es una foto congelada, es EL makefile del simulador -sus
+    # 192 lineas de reglas-, y el .mk de al lado solo decide si se lee tal
+    # cual o con dos objetivos quitados cuando no hay vendor/.
+    #
+    # Lo que paso: este aviso se leyo como un permiso, el fichero se borro, y
+    # con el se fueron todos los bancos. Un guardian que senala a un inocente
+    # es peor que no tenerlo, porque viene firmado.
+    #
+    # Asi que ahora se mira quien lo incluye ANTES de llamarlo muerto. Se
+    # recorren los .mk del sitio -no solo el que nombra SITIOS: un trampolin
+    # puede incluir a otro- y se busca un include de ese nombre.
+    #
     muertos = []
+    vivos = []
     for sitio, _ in SITIOS:
         donde = os.path.join(RAIZ, sitio) if sitio else RAIZ
+        incluidos = set()
+        try:
+            for f in os.listdir(donde):
+                if not f.endswith(".mk"):
+                    continue
+                try:
+                    txt = open(os.path.join(donde, f), encoding="utf-8",
+                               errors="replace").read()
+                except OSError:
+                    continue
+                for m in re.finditer(r"^\s*(?:-|s)?include\s+(\S+)\s*$",
+                                     txt, re.M):
+                    incluidos.add((m.group(1), f))
+        except OSError:
+            pass
         for n in ("Makefile", "Makefile.nuevo", "makefile"):
-            p = os.path.join(donde, n)
-            if os.path.isfile(p):
-                muertos.append(os.path.relpath(p, RAIZ))
+            ruta = os.path.join(donde, n)
+            if not os.path.isfile(ruta):
+                continue
+            quien = [f for (obj, f) in incluidos if obj == n]
+            rel = os.path.relpath(ruta, RAIZ)
+            if quien:
+                vivos.append((rel, sorted(set(quien))))
+            else:
+                muertos.append(rel)
+
+    if vivos:
+        print("\n  y esto SI lo lee alguien, aunque se llame Makefile:")
+        for rel, quien in vivos:
+            print("        %-24s lo incluye %s" % (rel, ", ".join(quien)))
+        print("  NO SE BORRA. Lleva reglas de verdad; el trampolin solo")
+        print("  decide como leerlo. Ver el comentario de esta funcion.")
+
     if muertos:
-        print("\n  y esto ya no lo lee nadie (GNU make coge el GNUmakefile):")
+        print("\n  y esto ya no lo lee nadie (ni GNU make, que coge el")
+        print("  GNUmakefile, ni ningun .mk de al lado por include):")
         for m in muertos:
             print("        %s" % m)
         print("  No estorba. Pero es una foto congelada de como se compilaba")

@@ -8,7 +8,8 @@
  * analysed: ICAO address, model, last flight ID, last position, time and kind of the last
  * message, and how many messages were heard. The table logic and the text of each screen
  * row live here, with no hardware dependency, so they are tested on the PC
- * (test/host/hfdl_aircraft_test.c). Drawing is in main.c.
+ * (deepsdr-ui/sim/hfdl_aviones.c, que es quien mira la fusion de los dos
+ * registros de un mismo avion). Drawing is in main.c.
  *
  * An aircraft is identified by its ICAO address when a logon message told us that. Until then
  * (a downlink message whose aircraft ID we could not map to an ICAO, e.g. the logon happened

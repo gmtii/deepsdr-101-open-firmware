@@ -92,3 +92,15 @@ deepsdr-ui/datos/aoki.txt
 # El puntero al espejo de trabajo; no es del proyecto.
 .repo
 out/mapas_tmp/
+
+# Restos que deja el propio trabajo en la carpeta del simulador y que no son
+# del proyecto. Anadidos el 21/10/2026, al barrer la carpeta entera fichero a
+# fichero para dejarla igual aqui y en la maquina del usuario:
+#
+#   gmon.out   lo escribe un ejecutable compilado con -pg al terminar.
+#   $@         un fallo de una regla: el make escribio el nombre de la
+#              variable en vez de su valor. Cero bytes.
+#   .x         marca de un tanteo viejo. Cero bytes.
+deepsdr-ui/gmon.out
+deepsdr-ui/$@
+deepsdr-ui/sim/.x

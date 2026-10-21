@@ -140,8 +140,21 @@ static void fft_run(void)
      *
      * Las mariposas son las mismas y en el mismo orden dentro de cada una,
      * asi que el resultado es el mismo bit a bit. Lo comprueba
-     * sim/ffttest.c, y el espectro entero lo comprueba sim/espectro_oro.c
-     * contra una imagen patron.
+     * sim/ffttest.c -que lleva dentro las mariposas en el orden viejo y
+     * compara PATRON DE BITS contra patron de bits, no con tolerancia-, y
+     * el espectro entero lo comprueba sim/espectro_oro.c contra una imagen
+     * patron.
+     *
+     * DE QUE DEPENDE QUE LA PRIMERA ETAPA SE PUEDA SACAR ASI. De que el
+     * giro numero cero sea exactamente +1 y exactamente cero. El coseno lo
+     * es. El seno sale CERO NEGATIVO, no positivo: el angulo de fft_init()
+     * para n = 0 es -2*pi*0/N, o sea -0.0f, y dentro de
+     * sinf_approx_local() la comparacion `x < 0.0f` es falsa para -0.0, asi
+     * que el -0.0 sale tal cual. Da igual para el resultado -medido, con
+     * ocho repartos de ceros de los dos signos- pero no es gratis: si
+     * alguien vuelve a pasar la primera etapa por la tabla, o toca la
+     * aproximacion del seno, esa es la cuenta que cambia. Esta en la
+     * cabecera de sim/ffttest.c con el detalle.
      *
      * El mismo cambio, por el mismo motivo, esta en la transformada de
      * stanag_det.c.

@@ -805,3 +805,44 @@ uint8_t spi_flash_fichero_hay(const char name8[8], const char ext3[3]);
  * cadena se sigue por la FAT -no se supone que los clusters vayan
  * seguidos-, porque estos ficheros los ha escrito un PC. */
 uint8_t spi_flash_fichero_borra(const char name8[8], const char ext3[3]);
+
+/*
+ * --- LOS BLOQUES DE UN FICHERO, EN ORDEN - 20/10/2026 ----------------
+ *
+ * Para releer y reescribir un fichero que NO es seguido. El de la carta de
+ * fax crece a tramos de 64 kB, asi que es seguido a trozos: suponer que el
+ * bloque 100 esta pegado al 99 es exactamente el fallo que se llevo por
+ * delante un CONFIG.CSV, y por eso esto va por la cadena.
+ *
+ * No se guarda la lista: seria un cluster por cada 512 bytes de fichero.
+ * Se guarda el cluster en curso y cada paso lee del chip los dos bytes de
+ * su entrada en la FAT. Son unos 25 ms en una carta entera, frente a los
+ * catorce segundos que cuestan sus borrados: no se nota.
+ *
+ *   spi_bloques_t it;
+ *   if (spi_flash_bloques_abre("WFAX001", "BMP", &it)) {
+ *       while (spi_flash_bloques_sig(&it, &addr)) { ... }
+ *   }
+ *
+ * Entre un paso y el siguiente se puede escribir en el bloque entregado:
+ * la cadena vive en la FAT y escribir datos no la toca. Lo que NO se puede
+ * es alargar, recortar ni borrar el fichero con el recorrido abierto.
+ */
+typedef struct {
+    uint32_t cl;        /* cluster por el que va */
+    uint32_t quedan;    /* bloques de 4 kB que faltan por entregar */
+    uint8_t  vale;      /* 0 = el recorrido se rompio y ya no entrega nada */
+} spi_bloques_t;
+
+/* Prepara el recorrido. Devuelve 0 si el fichero no esta, si su tamaño no
+ * es multiplo de 4 kB o si el volumen no se entiende. */
+uint8_t spi_flash_bloques_abre(const char name8[8], const char ext3[3],
+                               spi_bloques_t *it);
+
+/* El siguiente bloque de 4 kB, en *addr (direccion del chip). Devuelve 0
+ * cuando se acaban o cuando la cadena deja de tener sentido, que no es lo
+ * mismo: it->vale lo distingue. */
+uint8_t spi_flash_bloques_sig(spi_bloques_t *it, uint32_t *addr);
+
+/* Cuantos bloques de 4 kB tiene el fichero. 0 si no esta. */
+uint32_t spi_flash_bloques_n(const char name8[8], const char ext3[3]);

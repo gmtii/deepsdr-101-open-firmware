@@ -147,6 +147,17 @@ son trabajo; quitar la línea no lo es, y además no funciona.
 
 ---
 
+### `capturas/` — fotos de la pantalla, y qué sale en ellas
+
+Dieciséis capturas de la radio funcionando, hechas con la propia función de
+captura. Son nuestras. Lo que se ve dentro son indicativos de estaciones
+**recibidas en antena** (FT8, HFDL, RTTY): datos que esas estaciones emiten
+en abierto, del mismo tipo que publica cualquier captura de WSJT-X. No
+aparece el indicativo ni el localizador exacto de nadie de este proyecto; el
+localizador que se ve es el de serie, IN80dk, Madrid capital.
+
+---
+
 ## 2. Lo que se escribió mirando una referencia ajena
 
 Esto es la parte larga, y está documentada **dentro de cada fichero**, no aquí.

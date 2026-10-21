@@ -4,175 +4,204 @@
 #include <stdint.h>
 
 /*
- * AM envelope demodulator, from baseband I/Q to the speaker.
+ * El demodulador de AM por envolvente, desde el I/Q en banda base hasta el
+ * altavoz.
  *
- * SIGNAL PATH: the QSD mixes the antenna signal with the quadrature
- * LO, so a station tuned on the VFO arrives here as a complex
- * baseband signal centered at (or near) DC. For AM, the transmitted
- * information IS the envelope, and the envelope of the complex
- * baseband is simply |I + jQ| - which has the classic property of
- * being INSENSITIVE to small tuning error: a carrier offset only
- * rotates the phasor, |z| doesn't change. You don't need to zero-beat
- * the station; anywhere within the audio filter's reach sounds the
- * same.
+ * EL CAMINO DE LA SEÑAL. El detector en cuadratura mezcla lo que entra por
+ * la antena con el oscilador local en cuadratura, asi que una emisora
+ * sintonizada en el VFO llega aqui como una señal compleja en banda base
+ * centrada en continua, o cerca. En AM la informacion que se transmite ES
+ * la envolvente, y la envolvente de la banda base compleja es simplemente
+ * |I + jQ|, que tiene la propiedad clasica de ser INSENSIBLE a un error
+ * pequeño de sintonia: un desplazamiento de la portadora solo gira el
+ * fasor, y |z| no cambia. No hace falta batir a cero con la emisora:
+ * suena igual en cualquier punto al alcance del filtro de audio.
  *
- * Per-block chain (at the full 192kHz rate, no decimation - the DAC
- * runs at 192kHz on the same I2S bus anyway). As of 30/07/2026, the
- * two heaviest stages run through CMSIS-DSP (arm_biquad_cascade_df1_f32,
- * arm_cmplx_mag_f32) instead of a hand-rolled per-sample scalar loop -
- * see CMSIS/DSP/Include/cmsis_compiler.h for why that needed a small
- * shim on top of this project's pre-5.0 CMSIS-Core. Everything else
- * (DC blocker, AGC) is cheap enough per-sample that a CMSIS block
- * call wouldn't pay for itself, so it stays scalar:
+ * La cadena, bloque a bloque, a los 192 kHz enteros y sin diezmar -el
+ * convertidor de salida va a 192 kHz por el mismo bus I2S de todas
+ * formas-. Desde el 30/07/2026 las dos etapas mas caras van por CMSIS-DSP
+ * (arm_biquad_cascade_df1_f32 y arm_cmplx_mag_f32) en vez de por un bucle
+ * escalar escrito a mano muestra a muestra; por que eso necesito un
+ * pequeño apaño encima del CMSIS-Core anterior al 5.0 de este proyecto
+ * esta en CMSIS/DSP/Include/cmsis_compiler.h. Lo demas -el bloqueador de
+ * continua y el automatico de ganancia- es lo bastante barato por muestra
+ * como para que una llamada de bloque de CMSIS no se pagara sola, asi que
+ * se queda escalar:
  *
- *   0a. DOWN-MIX: digitally shift the raw IQ by DEMOD_IF_OFFSET_HZ
- *      (see the LOW-IF TUNING note below for why), only while
- *      s_mix_hz no es cero. Skip this entirely and everything
- *      downstream is unchanged from before.
- *   0b. CHANNEL FILTER: a 4th-order Butterworth low-pass (2 cascaded
- *      CMSIS biquad DF1 stages), applied IDENTICALLY to I and Q via
- *      arm_biquad_cascade_df1_f32() = a complex low-pass centered on
- *      the VFO (-3dB at ~4kHz, ~-57dB by +/-20kHz). This is what
- *      makes the receiver demodulate AT THE CENTER LINE of the
- *      panadapter instead of hearing the strongest station anywhere
- *      in the +/-96kHz window. Must come BEFORE the envelope
- *      detector: |z| is nonlinear and would intermodulate everything
- *      it sees. Coefficients in CHF_COEFFS were designed offline via
- *      bilinear transform with prewarping (see the design script
- *      referenced in the project notes) - to retune, regenerate the
- *      whole 10-value array, don't hand-edit individual numbers.
- *   1. |z| via arm_cmplx_mag_f32() on the filtered, interleaved I/Q -
- *      true magnitude using the Cortex-M4F's hardware VSQRT.F32,
- *      replacing the earlier alpha-max-beta-min approximation (no
- *      accuracy trade-off needed once sqrt is a single FPU
- *      instruction rather than a libm call).
- *   2. DC blocker (one-pole HPF ~15Hz): removes the carrier's DC
- *      term so the AGC and the DAC see only audio. Left as a scalar
- *      per-sample loop - a single MAC, not worth a CMSIS block call.
- *   3. Audio low-pass: another 4th-order Butterworth (2 more CMSIS
- *      biquad DF1 stages, separate instance/state from the channel
- *      filter), -3dB at ~6kHz - steeper (~24dB/oct) than the two
- *      one-pole sections it replaces (~12dB/oct), same corner.
- *   4. AGC: instant-attack / slow-release peak follower normalizing
- *      to a comfortable output level, with bounded gain so pure
- *      noise doesn't get amplified to full scale. Scalar (branchy
- *      control loop, not a filter CMSIS has a block primitive for).
- *   5. Same sample to L and R, int16, into the I2S TX stream buffer.
+ *   0a. BAJADA EN FRECUENCIA: correr digitalmente el I/Q crudo
+ *      DEMOD_IF_OFFSET_HZ -el por que esta en la nota de SINTONIA POR
+ *      FRECUENCIA INTERMEDIA BAJA, mas abajo-, y solo mientras s_mix_hz
+ *      no sea cero. Saltandose esto, todo lo que viene detras se queda
+ *      igual que antes.
+ *   0b. FILTRO DE CANAL: un paso bajo Butterworth de cuarto orden -dos
+ *      biquads DF1 de CMSIS en cascada- aplicado IGUAL a I y a Q con
+ *      arm_biquad_cascade_df1_f32(), que es un paso bajo complejo
+ *      centrado en el VFO: -3 dB a unos 4 kHz y unos -57 dB a +/-20 kHz.
+ *      Esto es lo que hace que el receptor demodule LA LINEA DEL CENTRO
+ *      del panadaptador en vez de oir a la emisora mas fuerte de toda la
+ *      ventana de +/-96 kHz. Tiene que ir ANTES del detector de
+ *      envolvente: |z| no es lineal e intermodularia todo lo que viera.
+ *      Los coeficientes de CHF_COEFFS se diseñaron aparte, por
+ *      transformada bilineal con precompensacion -ver el guion de diseño
+ *      que citan las notas del proyecto-: para retocar el filtro se
+ *      regenera el array de diez valores entero, no se editan numeros
+ *      sueltos a mano.
+ *   1. |z| con arm_cmplx_mag_f32() sobre el I/Q ya filtrado e
+ *      intercalado: el modulo de verdad, usando la raiz cuadrada por
+ *      hardware VSQRT.F32 del Cortex-M4F, en lugar de la aproximacion
+ *      alfa-max-beta-min de antes. Ya no hace falta cambiar precision por
+ *      velocidad cuando la raiz es una sola instruccion de la unidad de
+ *      coma flotante y no una llamada a libm.
+ *   2. Bloqueador de continua, un paso alto de un polo a unos 15 Hz:
+ *      quita el termino de continua de la portadora para que el
+ *      automatico de ganancia y el convertidor solo vean audio. Se deja
+ *      como bucle escalar muestra a muestra: es una sola multiplicacion
+ *      con acumulacion y no compensa una llamada de bloque de CMSIS.
+ *   3. Paso bajo de audio: otro Butterworth de cuarto orden -dos biquads
+ *      DF1 mas de CMSIS, con instancia y estado propios, aparte de los
+ *      del filtro de canal-, -3 dB a unos 6 kHz. Cae mas rapido -unos 24
+ *      dB por octava- que las dos secciones de un polo a las que
+ *      sustituye -unos 12-, con el mismo codo.
+ *   4. Automatico de ganancia: seguidor de pico de ataque instantaneo y
+ *      soltada lenta, que normaliza a un nivel de salida comodo, con la
+ *      ganancia acotada para que el ruido puro no se amplifique a fondo
+ *      de escala. Escalar: es un lazo de control lleno de bifurcaciones,
+ *      no un filtro de los que CMSIS tiene resueltos por bloques.
+ *   5. La misma muestra a izquierda y derecha, en entero de 16 bits, al
+ *      buffer de transmision del I2S.
  *
- * RAM BUDGET (added by the CMSIS-DSP migration, all static/.bss, ISR-
- * safe): i_buf + q_buf (512*4*2 = 4096B) + iq_cplx (512*2*4 = 4096B)
- * + env (512*4 = 2048B) + biquad state (3 instances * 2 stages * 4
- * floats * 4B = 96B) = ~10.2KB. The decimated SSB chain (30/07/2026)
- * adds: 2x decimator state ((161+512-1)*4*2 = 5376B) + Hilbert state
- * ((63+32-1)*4 = 376B) + interpolator state ((10+32-1)*4 = 164B) +
- * the 12kHz working buffers (4x32 floats + delay hist/work 31+63
- * floats = ~890B) = ~6.8KB more, ~17KB total. WFM (31/07/2026) adds:
- * its own audio-LPF biquad state (2 stages * 4 floats * 4B = 32B) +
- * discriminator/de-emphasis scalars (3 floats = 12B) - negligible,
- * ~17KB total is still accurate to a rounding error. NFM (also
- * 31/07/2026, right after WFM) adds its own channel-filter biquad
- * state, same size as WFM's audio-LPF state (2 instances * 2 stages *
- * 4 floats * 4B = 64B) and no new scalars (shares WFM's discriminator
- * state) - again negligible. Combined with the existing s_audio_out
- * buffer and everything else in fft.c/waterfall.c, still comfortably
- * within the GD32F450VET6's SRAM.
+ * LO QUE OCUPA EN RAM -todo estatico, en .bss y apto para interrupcion-,
+ * contando lo que añadio el paso a CMSIS-DSP: i_buf y q_buf (512*4*2 =
+ * 4.096 B) + iq_cplx (512*2*4 = 4.096 B) + env (512*4 = 2.048 B) + el
+ * estado de los biquads (3 instancias * 2 etapas * 4 floats * 4 B = 96 B)
+ * = unos 10,2 kB. La cadena de banda lateral diezmada, del 30/07/2026,
+ * añade: el estado de los dos diezmadores ((161+512-1)*4*2 = 5.376 B) +
+ * el del Hilbert ((63+32-1)*4 = 376 B) + el del interpolador
+ * ((10+32-1)*4 = 164 B) + los buffers de trabajo a 12 kHz (4*32 floats
+ * mas el historico y el trabajo del retardo, 31+63 floats = unos 890 B) =
+ * unos 6,8 kB mas, unos 17 kB en total. El WFM, del 31/07/2026, añade su
+ * propio estado de biquad para el paso bajo de audio (2 etapas * 4 floats
+ * * 4 B = 32 B) mas los escalares del discriminador y el desenfasis (3
+ * floats, 12 B): despreciable, los 17 kB siguen siendo buenos salvo
+ * redondeo. El NFM -tambien del 31/07/2026, justo despues del WFM- añade
+ * su propio estado de filtro de canal, del mismo tamaño que el del paso
+ * bajo del WFM (2 instancias * 2 etapas * 4 floats * 4 B = 64 B) y ningun
+ * escalar nuevo, porque comparte el estado del discriminador con el WFM;
+ * otra vez despreciable. Con el buffer s_audio_out ya existente y todo lo
+ * de fft.c y waterfall.c, sigue cabiendo de sobra en la SRAM del
+ * GD32F450VET6.
  *
- * LOW-IF TUNING - history (30/07/2026), why this exists, and why it
- * was tried twice: this is a zero-IF/direct-conversion QSD, so tuning
- * the LO exactly on the station puts BOTH the wanted carrier AND the
- * QSD's own LO-leakage self-mixing artifact at exactly 0Hz in the
- * complex baseband. For AM you can't just notch DC to remove the
- * leakage - the carrier IS the thing envelope detection needs, so
- * removing it removes the signal too. That's the blob of distortion
- * that always sits on the center line; it's the zero-IF architecture
- * itself, not this filter chain.
+ * SINTONIA POR FRECUENCIA INTERMEDIA BAJA: la historia (30/07/2026), por
+ * que existe y por que se intento dos veces. Esto es un detector en
+ * cuadratura de conversion directa, o sea de frecuencia intermedia cero,
+ * asi que sintonizar el oscilador local justo encima de la emisora pone
+ * TANTO la portadora que se quiere COMO el artefacto que genera el propio
+ * oscilador al mezclarse consigo mismo exactamente en 0 Hz de la banda
+ * base compleja. En AM no se puede quitar esa fuga con un filtro de
+ * muesca en continua: la portadora ES lo que necesita la deteccion de
+ * envolvente, asi que quitarla se lleva la señal por delante. Ese es el
+ * borron de distorsion que siempre se sienta en la linea del centro: es
+ * la arquitectura de frecuencia intermedia cero, no esta cadena de
+ * filtros.
  *
- *   1st attempt (Fs/8 = 24kHz, cos/sin NCO table): implemented, then
- *   caused a broadband noise floor / jumping spectrum on hardware and
- *   was fully reverted. The person confirmed the I2S signals and the
- *   MS5351's LO were both fine on their own, which ruled out "the
- *   retuning broke the LO" as the explanation.
+ *   PRIMER INTENTO (Fs/8 = 24 kHz, con tabla de seno y coseno): se hizo,
+ *   luego dio un suelo de ruido de banda ancha y un espectro saltarin
+ *   sobre la placa, y se deshizo entero. El usuario confirmo que las
+ *   señales del I2S y el oscilador local del MS5351 estaban bien cada uno
+ *   por su lado, lo que descarto "la resintonia ha roto el oscilador"
+ *   como explicacion.
  *
- *   Root cause (found afterwards, unrelated to tuning): the SAME day,
- *   the project-wide build moved from -O0 to -O2 for the framerate
- *   fix. i2c_bitbang.c's delay_i2c() - an admittedly uncalibrated
- *   NOP-counting loop - got compiled tighter at -O2, shrinking its
- *   real wall-clock delay enough to slice into the I2C bit-bang edge
- *   timing on the bus shared by the AIC3204 codec AND the MS5351 - a
- *   garbled I2C write during codec/LO setup, not the tuning offset,
- *   was the actual cause. Fixed by pinning delay_i2c() (and touch.c's
- *   equally-uncalibrated delay_us_approx()) to -O0 via
- *   __attribute__((optimize("O0"))), independent of the project's
- *   CFLAGS from then on.
+ *   LA CAUSA DE VERDAD, encontrada despues y sin relacion con la
+ *   sintonia: EL MISMO DIA la compilacion del proyecto entero paso de -O0
+ *   a -O2 para arreglar la tasa de cuadros. delay_i2c() de i2c_bitbang.c
+ *   -un bucle de contar NOP sin calibrar, hay que reconocerlo- salio mas
+ *   apretado con -O2, y su retardo real en reloj de pared se encogio lo
+ *   justo para comerse los tiempos de flanco del I2C a pedales en el bus
+ *   que comparten el codec AIC3204 Y el MS5351. O sea: una escritura de
+ *   I2C que salio mal durante la puesta en marcha del codec o del
+ *   oscilador, y no el desplazamiento de sintonia. Arreglado clavando
+ *   delay_i2c() -y el delay_us_approx() de touch.c, igual de sin
+ *   calibrar- a -O0 con __attribute__((optimize("O0"))), independiente de
+ *   los CFLAGS del proyecto desde entonces.
  *
- *   2nd attempt (this one, Fs/4 = 48kHz, sign-flip rotation): once
- *   the real bug above was found and fixed, low-IF tuning was tried
- *   again with a different, simpler algorithm (provided by the
- *   project owner as known-working elsewhere): at exactly Fs/4 the
- *   rotation e^(+j*2*pi*n/4) cycles through 1, j, -1, -j, so it needs
- *   NO multiplications at all - just sign flips and an I/Q swap. See
- *   the block comment above s_mix_hz in demod_am.c for the
- *   exact per-sample mapping.
+ *   SEGUNDO INTENTO (este, Fs/4 = 48 kHz, girando por cambios de signo):
+ *   una vez encontrado y arreglado el fallo de verdad, se volvio a
+ *   intentar la sintonia por frecuencia intermedia baja con otro
+ *   algoritmo, mas simple, que el usuario aporto porque ya lo tenia
+ *   funcionando en otro sitio: justo en Fs/4 el giro e^(+j*2*pi*n/4)
+ *   recorre 1, j, -1, -j, asi que NO hace falta ninguna multiplicacion,
+ *   solo cambios de signo y un intercambio de I con Q. La correspondencia
+ *   exacta muestra a muestra esta en el comentario de bloque que hay
+ *   encima de s_mix_hz en demod_am.c.
  *
- * Mechanics (same for either offset value): the LO is tuned
- * DEMOD_IF_OFFSET_HZ below the selected station (see main.c's
- * tune_encoder_poll()), so the wanted signal arrives away from 0Hz in
- * the raw IQ while the LO-leakage artifact (which self-mixes to 0Hz
- * regardless of tuning) stays put. demod_am_process_raw() then
- * digitally mixes the block back so the wanted signal lands on DC -
- * right where CHF_COEFFS already expects it, no filter redesign
- * needed - moving the leakage artifact safely outside the channel
- * filter's ~+/-4kHz passband. s_mix_hz (see demod_am.c)
- * keeps the digital down-mix in sync with whatever's actually
- * programmed on the LO: it starts at 0 (the boot tune is still the
- * untouched byte-exact captured replay, no offset - see main.c) and
- * only tune_encoder_poll() turns it on, once the LO is genuinely
- * offset-tuned. Getting this out of sync shifts the wanted signal OUT
- * of the channel filter's passband instead of into it.
+ * COMO FUNCIONA, valga el desplazamiento que valga: el oscilador local se
+ * sintoniza DEMOD_IF_OFFSET_HZ por debajo de la emisora elegida -ver
+ * tune_encoder_poll() en main.c-, asi que la señal que se quiere llega
+ * lejos de 0 Hz en el I/Q crudo mientras el artefacto de la fuga del
+ * oscilador -que se mezcla consigo mismo a 0 Hz se sintonice donde se
+ * sintonice- se queda donde estaba. Despues demod_am_process_raw() mezcla
+ * el bloque digitalmente de vuelta para que la señal buena caiga en
+ * continua, justo donde CHF_COEFFS ya la espera y sin rediseñar ningun
+ * filtro, y eso deja el artefacto de la fuga fuera del paso de banda de
+ * +/-4 kHz del filtro de canal. s_mix_hz -ver demod_am.c- mantiene la
+ * bajada digital de acuerdo con lo que de verdad esta programado en el
+ * oscilador: empieza en 0, porque la sintonia de arranque sigue siendo la
+ * repeticion byte a byte de lo capturado, sin desplazamiento -ver main.c-,
+ * y solo tune_encoder_poll() la enciende, una vez que el oscilador esta
+ * de verdad sintonizado con desplazamiento. Que esos dos se
+ * desincronicen saca la señal buena FUERA del paso de banda del filtro de
+ * canal en vez de meterla dentro.
  *
- * SIDE EFFECT ON THE PANADAPTER: the waterfall/spectrum FFT still
- * reads the raw (non-shifted) IQ from sdr_rx_poll_block_iq(), and its
- * center line is defined as "wherever the LO actually is" - so with
- * this offset tuning, a station you land on will show up
- * DEMOD_IF_OFFSET_HZ off from dead-center rather than exactly on the
- * center line. This is expected and is how real low-IF SDR receivers
- * using this trick normally look; it's cosmetic only (the demod audio
- * is correct either way). If you want the panadapter's center line to
- * track the *selected* station instead of the raw LO, that's a
- * separate change in spectrum.c/main.c (shift the displayed axis, or
- * apply the same down-mix before the FFT) - out of scope here.
+ * EFECTO SECUNDARIO EN EL PANADAPTADOR: la FFT de la cascada y del
+ * espectro sigue leyendo el I/Q crudo, sin desplazar, de
+ * sdr_rx_poll_block_iq(), y su linea central esta definida como "donde
+ * este el oscilador local". O sea que con esta sintonia desplazada, una
+ * emisora en la que te pongas aparecera DEMOD_IF_OFFSET_HZ fuera del
+ * centro exacto en vez de justo encima de la linea. Es lo esperado y es
+ * como se ven normalmente los receptores reales que usan este truco; es
+ * solo estetico, el audio demodulado esta bien de las dos maneras. Si se
+ * quiere que la linea central del panadaptador siga a la emisora ELEGIDA
+ * en vez de al oscilador crudo, eso es otro cambio, en spectrum.c y
+ * main.c -correr el eje que se dibuja, o aplicar la misma bajada antes de
+ * la FFT-, y queda fuera de lo que cuenta este fichero.
  *
- * SSB (USB/LSB) - added 30/07/2026, phasing method, DECIMATED
- * architecture (same day, second iteration): shares steps 0a-0c with
- * AM (down-mix, channel filter) unchanged, then branches: decimate
- * I/Q by 16 to 12kHz (arm_fir_decimate_f32), Hilbert-shift Q and
- * delay-match I at that rate, combine into single-sideband audio, and
- * interpolate back up to 192kHz (arm_fir_interpolate_f32) straight
- * into the shared s_env[] buffer - everything downstream (DC blocker,
- * audio LPF, AGC, output) is identical to AM. See the PIPELINE
- * comment above DECIM_COEFFS in demod_am.c for the design numbers.
+ * BANDA LATERAL (USB/LSB): añadida el 30/07/2026, por el metodo de
+ * desfase y con arquitectura DIEZMADA -el mismo dia, en una segunda
+ * vuelta-. Comparte con el AM los pasos 0a a 0c sin cambios -bajada en
+ * frecuencia y filtro de canal- y luego se separa: diezma I y Q por 16
+ * hasta 12 kHz (arm_fir_decimate_f32), desplaza Q con el Hilbert y
+ * retrasa I para que casen a esa velocidad, los combina en audio de una
+ * sola banda lateral, e interpola de vuelta hasta 192 kHz
+ * (arm_fir_interpolate_f32) directamente dentro del buffer compartido
+ * s_env[]. Todo lo que viene detras -bloqueador de continua, paso bajo de
+ * audio, automatico de ganancia y salida- es identico al de AM. Los
+ * numeros del diseño estan en el comentario de CADENA que hay encima de
+ * DECIM_COEFFS en demod_am.c.
  *
- * WHY DECIMATED - the first iteration ran a Hilbert FIR at the full
- * 192kHz rate and real DWT cycle counts showed the problem: the ISR
- * fit its own block budget (~79% at 63 taps) but at NVIC priority 6
- * that duty cycle starved the main loop, stretching frame times
- * 3.6-4.8x - spectrum/touch/encoder all crawled, reported as "the
- * system hangs when switching mode". At 12kHz the Hilbert covers
- * 300Hz-6kHz FAR better than the full-rate version ever could
- * (|H|=0.913 @ 300Hz vs 0.164) while the whole SSB chain costs a
- * fraction of the old one - the decimator only evaluates at the
- * output rate, so even its 161 anti-alias taps are cheap. Verify on
- * hardware with demod_am_get_last_cycles() - expected to land close
- * to the AM path's ~136k cycles, far from the old 422k.
+ * POR QUE DIEZMADA: la primera vuelta corria un Hilbert FIR a los 192 kHz
+ * enteros, y las cuentas de ciclos de verdad con el DWT enseñaron el
+ * problema. La interrupcion cabia en su propio presupuesto de bloque -un
+ * 79 % con 63 tomas- pero con prioridad 6 en el NVIC ese ciclo de trabajo
+ * mataba de hambre al bucle principal y estiraba los tiempos de cuadro
+ * entre 3,6 y 4,8 veces: el espectro, el tactil y el mando iban a rastras,
+ * y eso se informo como "el sistema se cuelga al cambiar de modo". A 12
+ * kHz el Hilbert cubre de 300 Hz a 6 kHz MUCHO mejor de lo que la version
+ * a velocidad entera podria haber cubierto nunca -|H| = 0,913 a 300 Hz
+ * contra 0,164- y la cadena de banda lateral entera cuesta una fraccion
+ * de la vieja: el diezmador solo evalua a la velocidad de salida, asi que
+ * hasta sus 161 tomas de antialias salen baratas. Se comprueba sobre la
+ * placa con demod_am_get_last_cycles(): se espera que caiga cerca de los
+ * 136.000 ciclos del camino de AM, lejos de los 422.000 de antes.
  *
- * EXECUTION CONTEXT - IMPORTANT: demod_am_process_raw() is designed
- * to run from the RX DMA interrupt (registered via
- * sdr_rx_set_block_hook()), NOT from the main loop. The main loop
- * blocks for longer than one 2.67ms block while drawing a spectrum
- * frame, so audio fed from there would gap ~30 times a second. In
- * the ISR it's immune to whatever the display is doing. The FPU is
- * safe to use here: Cortex-M4F lazy stacking handles float in
- * interrupt context.
+ * DONDE SE EJECUTA, Y ESTO IMPORTA: demod_am_process_raw() esta pensada
+ * para correr desde la interrupcion de DMA de recepcion -se registra con
+ * sdr_rx_set_block_hook()-, NO desde el bucle principal. El bucle
+ * principal se bloquea mas de lo que dura un bloque de 2,67 ms mientras
+ * pinta un cuadro de espectro, asi que el audio alimentado desde alli se
+ * cortaria unas treinta veces por segundo. Dentro de la interrupcion es
+ * inmune a lo que este haciendo la pantalla. La unidad de coma flotante
+ * se puede usar aqui sin problema: el apilado perezoso del Cortex-M4F se
+ * encarga de los floats en contexto de interrupcion.
  */
 
 /* Fixed output gain trim applied after the AGC (1.0 = none). */
@@ -195,169 +224,186 @@ typedef enum {
 } demod_mode_t;
 
 /*
- * NFM (narrowband FM - ham/PMR-style voice channels) - added
- * 31/07/2026, right after WFM, and deliberately built to share as
- * much of WFM's machinery as makes sense while keeping the parts that
- * genuinely differ separate:
+ * NFM -FM de banda estrecha, los canales de voz tipo radioaficion o PMR-,
+ * añadido el 31/07/2026 justo despues del WFM, y hecho a proposito para
+ * compartir con el WFM todo lo que tenga sentido compartir y separar lo
+ * que de verdad es distinto:
  *
- * SHARES WITH WFM: the discriminator itself (delay-and-conjugate-
- * multiply -> atan2f(), see WFM's note above for the full derivation
- * - factored into a single fm_discriminate() helper in demod_am.c
- * that both modes call, rather than duplicating the loop) and its
- * shared prev-sample state (s_fm_i_prev/s_fm_q_prev) - safe to share
- * since WFM and NFM are never active at once (same "one stale sample
- * on mode entry" tradeoff already accepted for that state).
+ * COMPARTE CON EL WFM: el discriminador en si -retrasar, conjugar,
+ * multiplicar y sacar el angulo con atan2f(); la deduccion entera esta
+ * en la nota del WFM, mas abajo-, sacado a una sola funcion auxiliar
+ * fm_discriminate() en demod_am.c a la que llaman los dos modos en vez
+ * de duplicar el bucle, y el estado de la muestra anterior que comparten
+ * (s_fm_i_prev y s_fm_q_prev). Compartirlo no da problemas porque el WFM
+ * y el NFM nunca estan activos a la vez; es la misma contrapartida de
+ * "una muestra rancia al entrar en el modo" que ya se acepto para ese
+ * estado.
  *
- * DIFFERS FROM WFM: NFM keeps the down-mix + channel filter front-end
- * (like AM/USB/LSB), it just uses its OWN channel filter
- * (NFM_CHF_COEFFS in demod_am.c) instead of CHF_COEFFS - a narrowband
- * FM channel needs the down-mix's DC-leakage workaround just as much
- * as AM/SSB do (small, single-station bandwidth, no reason to burn
- * the full +/-96kHz WFM needs), but CHF_COEFFS' ~4kHz corner is sized
- * for AM/SSB's plain audio bandwidth and would clip a narrowband FM
- * signal's frequency-modulated SIDEBANDS before they ever reach the
- * discriminator - not just filter the resulting audio, but actively
- * distort the FM information itself. NFM_CHF_COEFFS is instead sized
- * to Carson's-rule bandwidth for a 12.5kHz-spaced narrowband channel
- * (+/-2.5kHz max deviation, ~3kHz voice) - see its own comment in
- * demod_am.c for the exact numbers. main.c's apply_lo_tune() and the
- * MODE cycle need NO special case for NFM here (unlike WFM) - it's
- * grouped with AM/USB/LSB in the "keep the low-IF offset" branch by
- * simply NOT being WFM, since that's the only mode apply_lo_tune()
- * singles out.
+ * SE DIFERENCIA DEL WFM EN: el NFM se queda con la bajada en frecuencia y
+ * el filtro de canal de delante -como AM, USB y LSB-, solo que usa SU
+ * PROPIO filtro de canal (NFM_CHF_COEFFS en demod_am.c) en vez de
+ * CHF_COEFFS. Un canal de FM de banda estrecha necesita el apaño de la
+ * fuga de continua tanto como el AM o la banda lateral -es una emisora
+ * sola, de poco ancho, no hay razon para gastar los +/-96 kHz que pide el
+ * WFM-, pero el codo de unos 4 kHz de CHF_COEFFS esta dimensionado para
+ * el ancho de audio pelado de AM y banda lateral, y recortaria las
+ * BANDAS LATERALES moduladas en frecuencia de una señal de FM estrecha
+ * antes de que llegaran al discriminador: no filtraria el audio
+ * resultante, destrozaria la informacion de FM en si. NFM_CHF_COEFFS esta
+ * dimensionado en cambio al ancho que da la regla de Carson para un canal
+ * estrecho con separacion de 12,5 kHz -+/-2,5 kHz de desviacion maxima,
+ * unos 3 kHz de voz-; los numeros exactos estan en su propio comentario
+ * en demod_am.c. Ni apply_lo_tune() de main.c ni el ciclo del boton MODE
+ * necesitan aqui ningun caso especial para NFM -al contrario que para
+ * WFM-: cae en el grupo de AM/USB/LSB, el de "manten el desplazamiento de
+ * frecuencia intermedia", simplemente POR NO SER WFM, que es el unico
+ * modo que apply_lo_tune() señala aparte.
  *
- * NO DE-EMPHASIS: unlike WFM, NFM does NOT apply the 50us de-emphasis
- * (or any de-emphasis) - narrowband ham/PMR FM voice radios don't
- * follow the same standardized broadcast pre-emphasis convention WFM
- * relies on, so guessing a time constant here would be as likely to
- * make things WORSE (audibly wrong tonal balance) as better. If NFM
- * audio comes out sounding thin/dull on real signals, that's the
- * first thing to revisit - not a sign anything else is broken.
+ * SIN DESENFASIS: al contrario que el WFM, el NFM NO aplica el desenfasis
+ * de 50 us, ni ningun otro. Las radios de voz de FM estrecha de
+ * radioaficion o PMR no siguen el mismo convenio normalizado de preenfasis
+ * en el que se apoya el WFM, asi que adivinar aqui una constante de tiempo
+ * tendria tantas papeletas de EMPEORAR las cosas -un equilibrio tonal
+ * audiblemente mal- como de mejorarlas. Si el audio de NFM sale fino o
+ * apagado con señales de verdad, eso es lo primero que hay que revisar, y
+ * no una señal de que haya nada roto.
  *
- * AUDIO LPF: reuses the EXISTING ALPF_COEFFS/s_alpf_inst (~6kHz, same
- * as AM/SSB) rather than WFM's wider WFM_ALPF_COEFFS - narrowband FM
- * voice audio is the same ballpark bandwidth as AM/SSB voice, no
- * reason for a separate filter instance here.
+ * PASO BAJO DE AUDIO: reaprovecha los ALPF_COEFFS y s_alpf_inst que YA
+ * existen -unos 6 kHz, los mismos que AM y banda lateral- en vez de los
+ * WFM_ALPF_COEFFS, mas anchos, del WFM: el audio de voz en FM estrecha
+ * anda por el mismo ancho que el de AM o banda lateral, y no hay razon
+ * para una instancia de filtro aparte.
  *
- * ASSUMPTION WORTH FLAGGING: NFM_CHF_COEFFS is sized for 12.5kHz
- * channel spacing (the common case for ham/PMR narrowband FM in
- * Europe). If this ever needs to receive 25kHz-spaced channels
- * (+/-5kHz deviation) instead, NFM_CHF_COEFFS' corner is too narrow
- * and would need widening - not a code structure change, just new
- * filter coefficients.
+ * UNA SUPOSICION QUE CONVIENE DEJAR DICHA: NFM_CHF_COEFFS esta
+ * dimensionado para separacion de canal de 12,5 kHz, que es lo corriente
+ * en FM estrecha de radioaficion y PMR en Europa. Si algun dia hace falta
+ * recibir canales separados 25 kHz -+/-5 kHz de desviacion-, el codo de
+ * NFM_CHF_COEFFS se queda estrecho y habria que ensancharlo: no es un
+ * cambio de estructura del codigo, son coeficientes nuevos y ya.
  */
 
 /*
- * WFM (broadcast wide FM, mono) - added 31/07/2026.
+ * WFM -la FM comercial de banda ancha, en mono-, añadido el 31/07/2026.
  *
- * WHY NO DOWN-MIX AND NO CHANNEL FILTER (per the project owner's
- * request): AM/USB/LSB are narrowband, so it's worth spending the
- * complex baseband's full +/-24kHz (was +/-96kHz @ 192kHz before
- * 04/08/2026 - see sdr_rx.h's SDR_RX_BLOCK_SAMPLES comment) just to
- * reach one station, and the CHF_COEFFS channel filter (-3dB ~4kHz)
- * is what makes that possible. A broadcast FM channel is ~200kHz wide
- * with up to +/-75kHz peak deviation - CHF_COEFFS would butcher it
- * beyond recognition, and the DEMOD_IF_OFFSET_HZ (12kHz, was 48kHz)
- * low-IF down-mix would shove a good chunk of that 200kHz channel
- * outside the Nyquist window instead of centering it. So WFM skips
- * BOTH steps entirely (see the mode check around 0b/0c in
- * demod_am_process_raw()) and runs the discriminator directly on the
- * raw, full-bandwidth deinterleaved I/Q - this only works because the
- * station is tuned dead-center (LO exactly on frequency, no offset).
+ * POR QUE NO LLEVA NI BAJADA EN FRECUENCIA NI FILTRO DE CANAL, pedido por
+ * el usuario: AM, USB y LSB son de banda estrecha, asi que compensa
+ * gastar los +/-24 kHz enteros de la banda base compleja -eran +/-96 kHz
+ * a 192 kHz antes del 04/08/2026, ver el comentario de
+ * SDR_RX_BLOCK_SAMPLES en sdr_rx.h- solo para llegar a una emisora, y el
+ * filtro de canal CHF_COEFFS -3 dB a unos 4 kHz- es lo que lo hace
+ * posible. Un canal de FM comercial son unos 200 kHz de ancho con hasta
+ * +/-75 kHz de desviacion de pico: CHF_COEFFS lo destrozaria hasta
+ * hacerlo irreconocible, y la bajada de DEMOD_IF_OFFSET_HZ -12 kHz, eran
+ * 48- empujaria un buen trozo de esos 200 kHz fuera de la ventana de
+ * Nyquist en vez de centrarlo. Asi que el WFM se salta los DOS pasos
+ * enteros -ver la comprobacion de modo alrededor de 0b y 0c en
+ * demod_am_process_raw()- y corre el discriminador directamente sobre el
+ * I/Q crudo, de ancho completo y ya desintercalado. Esto solo funciona
+ * porque la emisora esta sintonizada justo en el centro: el oscilador
+ * local exactamente en frecuencia, sin desplazamiento.
  *
- * *** 04/08/2026: this whole approach is now fundamentally
- * insufficient for WFM, not just imperfect *** - a +/-24kHz Nyquist
- * window (down from +/-96kHz) genuinely cannot contain a ~200kHz-wide
- * broadcast FM channel AT ALL, centered or not; this isn't a filter
- * or offset tuning problem anymore, it's a hard physical bandwidth
- * limit. WFM stays wired up and selectable (per the project owner:
- * accept the degradation for now rather than block today's 48kHz work
- * on it, or hide the mode), but expect it to sound badly aliased/
- * distorted, not just "a bit narrow", until a future dual-rate design
- * gives WFM its own wider-bandwidth capture again (see this project's
- * 48kHz migration notes for that deferred plan).
+ * *** 04/08/2026: este planteamiento entero ya no es que sea imperfecto,
+ * es que se queda CORTO para el WFM ***. Una ventana de Nyquist de
+ * +/-24 kHz -bajando desde +/-96- sencillamente no puede contener un
+ * canal de FM comercial de unos 200 kHz, este centrado o no; esto ya no
+ * es un problema de filtro ni de sintonia desplazada, es un limite fisico
+ * de ancho de banda. El WFM se queda conectado y se puede elegir -decision
+ * del usuario: aceptar de momento que suene peor antes que bloquear el
+ * trabajo de los 48 kHz por esto, o esconder el modo-, pero hay que
+ * esperar que suene mal, con solapamiento y distorsion, y no solo "un
+ * poco estrecho", hasta que un diseño futuro de doble velocidad le
+ * devuelva al WFM su propia captura de banda ancha; ese plan aplazado
+ * esta en las notas de la migracion a 48 kHz de este proyecto.
  *
- * main.c's tune_encoder_poll() and
- * the MODE button handler both need to know this: whenever the mode
- * is WFM, they must program the LO at the plain selected frequency
- * (not freq - DEMOD_IF_OFFSET_HZ) and call
- * demod_am_set_mix_hz(0) - getting that out of sync would
- * center the discriminator on empty spectrum 12kHz off the actual
- * station. This board's tuning range (4.8-180MHz, see main.c's
- * TUNE_MIN_HZ/MAX_HZ) already covers the 88-108MHz broadcast band -
- * in fact the byte-exact captured boot tune (MS5351_CAPTURED_LO_HZ,
- * see ms5351.h) sits at 90.8MHz, right in it.
+ * Tanto tune_encoder_poll() de main.c como el que atiende al boton MODE
+ * tienen que saber esto: siempre que el modo sea WFM tienen que programar
+ * el oscilador en la frecuencia elegida a secas -no en freq menos
+ * DEMOD_IF_OFFSET_HZ- y llamar a demod_am_set_mix_hz(0). Que eso se
+ * desincronice centraria el discriminador en espectro vacio, 12 kHz fuera
+ * de la emisora de verdad. El margen de sintonia de esta placa -de 4,8 a
+ * 180 MHz, ver TUNE_MIN_HZ y TUNE_MAX_HZ en main.c- ya cubre la banda
+ * comercial de 88 a 108 MHz; de hecho la sintonia de arranque capturada
+ * byte a byte (MS5351_CAPTURED_LO_HZ, ver ms5351.h) cae en 90,8 MHz,
+ * justo dentro.
  *
- * BANDWIDTH BUDGET: +/-96kHz of complex Nyquist bandwidth against a
- * +/-75kHz-deviation, ~200kHz-wide broadcast signal is tight but
- * workable for MONO reception - there's no room left to also decode
- * the 19kHz stereo pilot + 38kHz L-R subcarrier (stereo would need
- * clean baseband out past 53kHz, which doesn't fit inside +/-96kHz
- * with any anti-alias margin left). This implementation is mono-only;
- * the WFM audio LPF below is deliberately steep enough to knock the
- * pilot down hard (~-9dB @ 19kHz, ~-16dB @ 23kHz, ~-36dB @ 38kHz -
- * verified numerically) rather than let it beat audibly against the
- * audio band.
+ * LO QUE DA EL ANCHO DE BANDA: +/-96 kHz de Nyquist complejo contra una
+ * señal comercial de unos 200 kHz de ancho y +/-75 kHz de desviacion va
+ * justo, pero se puede trabajar en MONO. No queda sitio para decodificar
+ * ademas el piloto de 19 kHz y la subportadora de L-R en 38 kHz: el
+ * estereo necesitaria banda base limpia mas alla de 53 kHz, que no entra
+ * en +/-96 kHz dejando algun margen de antialias. Esta implementacion es
+ * solo mono, y el paso bajo de audio del WFM que hay mas abajo es a
+ * proposito lo bastante empinado para hundir el piloto -unos -9 dB a 19
+ * kHz, -16 a 23 y -36 a 38, comprobado con numeros- en vez de dejar que
+ * bata audiblemente contra la banda de audio.
  *
- * DISCRIMINATOR: delay-and-conjugate-multiply (a.k.a. differentiate-
- * and-cross-multiply), the standard SDR FM discriminator - avoids an
- * actual derivative/differencing of the noisy instantaneous phase.
- * For consecutive complex baseband samples z[n] = I[n] + jQ[n]:
+ * EL DISCRIMINADOR: retrasar, conjugar y multiplicar -o, dicho de otra
+ * forma, derivar y multiplicar cruzado-, que es el discriminador de FM de
+ * siempre en radio definida por software; asi se evita derivar o restar
+ * de verdad una fase instantanea llena de ruido. Para dos muestras
+ * consecutivas de banda base compleja z[n] = I[n] + jQ[n]:
  *
  *   z[n] * conj(z[n-1]) = (I[n]*I[n-1] + Q[n]*Q[n-1])
  *                       + j*(Q[n]*I[n-1] - I[n]*Q[n-1])
  *
- * ...and the ANGLE of that product is exactly the phase step between
- * consecutive samples, i.e. the instantaneous frequency - which is
- * what FM demodulation wants. Computed per-sample via atan2f() from
- * newlib (NOT CMSIS's arm_atan2_f32(): this project's CMSIS-DSP tree
- * only carries FilteringFunctions/ComplexMathFunctions/etc - see the
- * Makefile's C_SOURCES comment - arm_atan2_f32.c's home,
- * Source/FastMathFunctions/, isn't part of it, so pulling that one
- * function in would mean sourcing extra files from upstream CMSIS-DSP
- * rather than just adding one line to the Makefile). At the 200MHz
- * core clock / 192kHz sample rate this project runs at, that's
- * ~1041 cycles of budget per sample with NOTHING else running in this
- * mode (no CHF, no down-mix) - libm's atan2f should have plenty of
- * room, but this is reasoned from the datasheet numbers, not measured
- * on hardware. VERIFY with demod_am_get_last_cycles() after flashing,
- * same as the SSB path was verified (see its note above) - if it ever
- * comes back close to the ~534k-cycle full block budget, that's the
- * signal to reconsider (e.g. sourcing arm_atan2_f32.c for real, or a
- * cheaper polynomial atan2 approximation).
+ * ...y el ANGULO de ese producto es exactamente el salto de fase entre
+ * dos muestras seguidas, o sea la frecuencia instantanea, que es lo que
+ * la demodulacion de FM quiere. Se calcula muestra a muestra con el
+ * atan2f() de newlib, NO con el arm_atan2_f32() de CMSIS: el arbol de
+ * CMSIS-DSP de este proyecto solo trae FilteringFunctions,
+ * ComplexMathFunctions y alguna mas -ver el comentario de C_SOURCES del
+ * Makefile-, y la carpeta donde vive arm_atan2_f32.c,
+ * Source/FastMathFunctions/, no esta, asi que traerse esa unica funcion
+ * significaria sacar ficheros nuevos del CMSIS-DSP original en vez de
+ * añadir una linea al Makefile. Con el nucleo a 200 MHz y los 192 kHz de
+ * muestreo a los que corre esto, eso son unos 1.041 ciclos de presupuesto
+ * por muestra SIN nada mas corriendo en este modo -ni filtro de canal ni
+ * bajada en frecuencia-: el atan2f de libm deberia ir sobrado. Pero esto
+ * esta razonado desde los numeros de la hoja de datos, no medido sobre la
+ * placa. COMPRUEBALO con demod_am_get_last_cycles() despues de grabar,
+ * igual que se comprobo el camino de banda lateral -ver su nota mas
+ * arriba-: si alguna vez vuelve cerca de los 534.000 ciclos del
+ * presupuesto entero de bloque, esa es la señal para replantearlo, por
+ * ejemplo trayendo arm_atan2_f32.c de verdad o una aproximacion
+ * polinomica mas barata del atan2.
  *
- * No ambiguity/wraparound risk: at +/-75kHz deviation the phase step
- * per sample tops out at ~2.454 rad (2*pi*75000/192000), comfortably
- * inside atan2's +/-pi range.
+ * No hay riesgo de ambiguedad ni de vuelta: con +/-75 kHz de desviacion
+ * el salto de fase por muestra se queda como mucho en unos 2,454 radianes
+ * (2*pi*75000/192000), comodamente dentro del margen de +/-pi del atan2.
  *
- * GAIN: WFM_DISC_GAIN (in demod_am.c) scales the raw radians-per-
- * sample output so a full +/-75kHz deviation lands in the same
- * ballpark as AM/SSB's pre-AGC signal level - not that it matters
- * much, since the AGC peak-normalizes downstream regardless (see step
- * 4 in demod_am.c), just keeps the AGC's gain excursion sane rather
- * than starting from a near-zero or wildly-clipped raw signal.
+ * LA GANANCIA: WFM_DISC_GAIN, en demod_am.c, escala la salida en radianes
+ * por muestra para que una desviacion de +/-75 kHz caiga mas o menos
+ * donde cae el nivel de AM o banda lateral antes del automatico de
+ * ganancia. Tampoco es que importe mucho, porque el automatico normaliza
+ * al pico de todas formas mas adelante -ver el paso 4 en demod_am.c-;
+ * simplemente deja la excursion de ganancia del automatico en algo
+ * razonable en vez de arrancar desde una señal casi nula o recortada a lo
+ * bestia.
  *
- * DE-EMPHASIS + AUDIO LPF: broadcast FM pre-emphasizes highs at the
- * transmitter (a fixed time-constant, 50us in Europe/CCIR - this
- * receiver assumes that, since it's built and tuned in Spain; US/NTSC
- * broadcasts use 75us instead, see WFM_DEEMPH_ALPHA's comment in
- * demod_am.c if that ever needs to be selectable), so the receiver
- * must de-emphasize (a matching single-pole LOWpass, -3dB ~3.18kHz)
- * or the audio comes out badly treble-heavy. Applied AFTER the shared
- * DC blocker (step 2, unchanged - here it mainly soaks up any DC term
- * from a small tuning/LO error, not a carrier) and BEFORE a WFM-
- * specific audio LPF (WFM_ALPF_COEFFS, ~15kHz -3dB, replacing
- * ALPF_COEFFS' ~6kHz corner only for this mode - AM/SSB's narrower
- * voice-bandwidth LPF would strip most of the fidelity broadcast FM
- * is for). Everything after that (AGC, L/R output) is the same shared
- * code AM/SSB already use.
+ * DESENFASIS Y PASO BAJO DE AUDIO: la FM comercial preenfatiza los agudos
+ * en el transmisor con una constante de tiempo fija -50 us en Europa, por
+ * el CCIR, que es lo que este receptor supone porque esta hecho y
+ * ajustado en España; las emisiones de Estados Unidos usan 75 us, ver el
+ * comentario de WFM_DEEMPH_ALPHA en demod_am.c por si algun dia hay que
+ * poder elegirlo-, asi que el receptor tiene que desenfatizar con un paso
+ * bajo de un polo que le case, -3 dB a unos 3,18 kHz, o el audio sale
+ * cargadisimo de agudos. Se aplica DESPUES del bloqueador de continua
+ * compartido -el paso 2, sin cambios; aqui lo que se come sobre todo es
+ * el termino de continua de un error pequeño de sintonia o de oscilador,
+ * no una portadora- y ANTES de un paso bajo de audio propio del WFM
+ * (WFM_ALPF_COEFFS, -3 dB a unos 15 kHz, que sustituye al codo de 6 kHz
+ * de ALPF_COEFFS solo para este modo: el paso bajo mas estrecho de voz de
+ * AM y banda lateral se llevaria por delante casi toda la fidelidad para
+ * la que existe la FM comercial). Todo lo que viene despues -automatico
+ * de ganancia y salida a izquierda y derecha- es el mismo codigo
+ * compartido que ya usan AM y banda lateral.
  */
 
-/* Selects the demodulation mode. Safe to call at any time, including
- * from the main loop while the ISR is running (see demod_am.c: the
- * mode variable is a single aligned uint8_t, and worst case a stale
- * read for one block just demodulates that one block in the previous
- * mode - not worth a critical section for). */
+/* Elige el modo de demodulacion. Se puede llamar en cualquier momento,
+ * incluso desde el bucle principal con la interrupcion corriendo: ver
+ * demod_am.c, la variable del modo es un uint8_t alineado y lo peor que
+ * puede pasar es que una lectura rancia demodule UN bloque en el modo
+ * anterior. No merece una seccion critica. */
 void demod_am_set_mode(demod_mode_t mode);
 
 /* Query the current mode - used by main.c for the on-screen mode
@@ -380,39 +426,44 @@ uint8_t demod_am_sam_enganchado(void);
 float demod_am_sam_enganche(void);
 
 /*
- * AM/SSB AUDIO FILTER WIDTH - added 02/08/2026, extended to a 3-way
- * selector 02/08/2026 (per the project owner: the main-screen BW
- * badge itself became the control, so a plain WIDE/NARROW toggle grew
- * a third step). Picks between three dedicated audio LPFs - AUDIO_BW_4K0
- * (~4.0kHz, ALPF_4K0_COEFFS), AUDIO_BW_2K3 (~2.3kHz, ALPF_2K3_COEFFS),
- * AUDIO_BW_1K8 (~1.8kHz, ALPF_1K8_COEFFS) - same idea as the WIDE/
- * NARROW/NARROWER filter switch on a typical HF transceiver for
- * crowded-band SSB/AM work. See each *_COEFFS array's comment in
- * demod_am.c for its design/verification.
+ * EL ANCHO DEL FILTRO DE AUDIO DE AM Y BANDA LATERAL. Añadido el
+ * 02/08/2026 y ampliado a un selector de tres posiciones ese mismo dia,
+ * pedido por el usuario: la propia chapa de BW de la pantalla principal
+ * se convirtio en el mando, asi que un simple ANCHO/ESTRECHO gano un
+ * tercer paso. Elige entre tres pasos bajos de audio dedicados:
+ * AUDIO_BW_4K0 -unos 4,0 kHz, ALPF_4K0_COEFFS-, AUDIO_BW_2K3 -unos 2,3
+ * kHz, ALPF_2K3_COEFFS- y AUDIO_BW_1K8 -unos 1,8 kHz, ALPF_1K8_COEFFS-.
+ * Es la misma idea que el selector ANCHO/ESTRECHO/MAS ESTRECHO de un
+ * transceptor de HF corriente para trabajar banda lateral o AM en bandas
+ * llenas. El diseño y la comprobacion de cada uno estan en el comentario
+ * de su array *_COEFFS en demod_am.c.
  *
- * NONE of these three is the same filter NFM uses (ALPF_COEFFS,
- * s_alpf_inst, still ~6kHz, completely untouched by this selector) -
- * deliberately kept separate so tightening AM/SSB's audio bandwidth
- * can never accidentally narrow NFM's too. Setting this while in NFM
- * is harmless (no audible effect until you switch to AM/USB/LSB - the
- * state itself is unconditional, only its APPLICATION in
- * demod_am_process_raw() is mode-gated).
+ * NINGUNO de los tres es el filtro que usa el NFM (ALPF_COEFFS,
+ * s_alpf_inst, que siguen en unos 6 kHz y a los que este selector no
+ * toca). Estan separados a proposito, para que apretar el ancho de audio
+ * de AM y banda lateral no pueda estrechar tambien el del NFM sin
+ * querer. Cambiar esto estando en NFM no hace daño: no se oye nada hasta
+ * que pasas a AM, USB o LSB, porque el estado se guarda siempre y lo que
+ * depende del modo es solo su APLICACION dentro de
+ * demod_am_process_raw().
  *
- * *** 01/09/2026: WFM is DIFFERENT from NFM here - this selector now
- * DOES have an audible, immediate effect in WFM too *** - see
- * demod_wfm_process_raw()'s own WFM_ALPF_WIDE/NORM/NARROW_COEFFS
- * selection in demod_am.c. Same three enum values, same underlying
- * s_audio_bw storage and BW tile, but a completely different set of
- * three filters (15kHz/8kHz/4kHz, not 4.0kHz/2.3kHz/1.8kHz) - the
- * value only means one specific filter once combined with the
- * CURRENT mode, never on its own. main.c's badges_draw()/
- * menu_tile_bw_refresh() swap the displayed label text between the
- * two meanings depending on demod_am_get_mode(), so the screen never
- * shows "BW 4K0" while WFM is actually narrowed to 4kHz or vice versa.
+ * *** 01/09/2026: el WFM es DISTINTO del NFM en esto; este selector SI
+ * tiene efecto, audible e inmediato, tambien en WFM ***. Ver la eleccion
+ * entre WFM_ALPF_WIDE/NORM/NARROW_COEFFS que hace
+ * demod_wfm_process_raw() en demod_am.c. Los mismos tres valores de la
+ * enumeracion, el mismo s_audio_bw guardado debajo y la misma casilla BW,
+ * pero un juego de tres filtros completamente distinto -15 kHz, 8 kHz y
+ * 4 kHz, no 4,0 / 2,3 / 1,8-: el valor solo significa un filtro concreto
+ * una vez combinado con el modo ACTUAL, nunca por si solo. badges_draw()
+ * y menu_tile_bw_refresh() de main.c cambian el texto del rotulo entre
+ * los dos significados segun lo que diga demod_am_get_mode(), asi que la
+ * pantalla nunca pone "BW 4K0" mientras el WFM esta estrechado de verdad
+ * a 4 kHz, ni al reves.
  *
- * Same "single aligned uint8_t-sized enum, no critical section"
- * reasoning as demod_am_set_mode()'s comment above - safe to call from
- * the main loop while the ISR runs.
+ * El mismo razonamiento de "una enumeracion del tamaño de un uint8_t
+ * alineado, sin seccion critica" que el comentario de
+ * demod_am_set_mode() de mas arriba: se puede llamar desde el bucle
+ * principal con la interrupcion corriendo.
  */
 typedef enum {
     AUDIO_BW_4K0 = 0,
@@ -651,70 +702,75 @@ typedef enum {
     AGC_PROFILE_FAST
 } agc_profile_t;
 
-/* Safe to call at any time (same reasoning as demod_am_set_mode() -
- * see its comment), including from the main loop while the ISR runs. */
+/* Se puede llamar en cualquier momento -el mismo razonamiento que
+ * demod_am_set_mode(), ver su comentario-, incluso desde el bucle
+ * principal con la interrupcion corriendo. */
 void demod_am_set_agc_profile(agc_profile_t profile);
 
 /* Query the current profile - used by main.c for the badge. */
 agc_profile_t demod_am_get_agc_profile(void);
 
 /*
- * --- Squelch (AM + NFM) --------------------------------------------------
+ * --- El silenciador (AM y NFM) -------------------------------------------
  *
- * Added 31/07/2026 for NFM, EXTENDED to AM the same day per the
- * project owner: a classic RF-level squelch. UNLIKE a noise-band
- * squelch (which filters the discriminator's AUDIO output above the
- * voice band and measures hiss energy there - the other common
- * technique), this measures the average magnitude of the down-mixed,
- * channel-filtered COMPLEX BASEBAND itself (CHF_COEFFS for AM,
- * NFM_CHF_COEFFS for NFM - each mode's own channel filter, see their
- * respective notes above), i.e. how strong the actual in-channel RF
- * signal is, BEFORE the audio-extraction stage - see demod_am.c's
- * shared squelch block, which runs right after step 1's AM/WFM/NFM/
- * SSB branch (not inside any one of them - it's the same code for
- * both AM and NFM). This was picked over a noise-band squelch because
- * it doesn't depend on what the signal is doing: for NFM specifically,
- * a loud sustained voice peak can't fool it into reading "no carrier"
- * for an instant, since FM's constant-envelope carrier stays at
- * roughly the same amplitude whether or not it's being modulated
- * hard. For AM the same metric is, if anything, an even more natural
- * fit - carrier presence there IS amplitude, by definition, so this
- * is close to how a classic AM squelch works.
+ * Añadido el 31/07/2026 para el NFM y AMPLIADO al AM ese mismo dia,
+ * pedido por el usuario: un silenciador clasico, por nivel de
+ * radiofrecuencia. AL CONTRARIO que un silenciador por banda de ruido
+ * -que filtra la salida de AUDIO del discriminador por encima de la banda
+ * de voz y mide alli la energia del siseo, que es la otra tecnica
+ * corriente-, este mide el modulo medio de la propia BANDA BASE COMPLEJA
+ * ya bajada en frecuencia y filtrada de canal -CHF_COEFFS en AM,
+ * NFM_CHF_COEFFS en NFM; el filtro de canal de cada modo, ver sus notas
+ * respectivas de mas arriba-, o sea, como de fuerte es la señal de
+ * radiofrecuencia que hay DENTRO del canal, ANTES de la etapa que extrae
+ * el audio. Ver el bloque compartido del silenciador en demod_am.c, que
+ * corre justo despues de la bifurcacion AM/WFM/NFM/banda lateral del paso
+ * 1, y no dentro de ninguna de ellas: es el mismo codigo para AM y para
+ * NFM. Se eligio asi, y no por banda de ruido, porque no depende de lo
+ * que este haciendo la señal: en NFM concretamente, un pico de voz fuerte
+ * y sostenido no puede engañarlo para que lea "no hay portadora" ni un
+ * instante, porque la portadora de FM es de envolvente constante y se
+ * queda mas o menos a la misma amplitud este muy modulada o nada. En AM
+ * la misma medida es, si acaso, todavia mas natural: alli que haya
+ * portadora ES amplitud, por definicion, asi que esto se parece mucho a
+ * como funciona un silenciador de AM de toda la vida.
  *
- * WFM and SSB don't get this: WFM's front-end skips the channel
- * filter entirely (no down-mix, no CHF - see its own note), so
- * there's no equivalent in-channel RF level to measure the same way.
- * SSB shares AM's exact front-end (down-mix + CHF_COEFFS) and could
- * reuse this identically, but hasn't been asked for and isn't wired
- * up yet - straightforward to add the same way if it's ever wanted.
+ * El WFM y la banda lateral no lo tienen. La entrada del WFM se salta el
+ * filtro de canal entero -ni bajada en frecuencia ni filtro, ver su
+ * nota-, asi que no hay un nivel de radiofrecuencia dentro del canal
+ * equivalente que medir de la misma forma. La banda lateral comparte
+ * exactamente la entrada del AM -bajada mas CHF_COEFFS- y podria
+ * reaprovechar esto tal cual, pero nadie lo ha pedido y no esta
+ * conectado; añadirlo igual seria sencillo si alguna vez se quiere.
  *
- * UNCALIBRATED, same caveat as the spectrum's dB scale (see
- * SDR_DB_MIN/MAX's original comment, main.c): the threshold is in dB
- * (20*log10 of the linear magnitude, a REAL log10f() this time, not
- * fft.c's bit-manipulation approximation), but there's no reference
- * level tying it to anything absolute - it has to be dialed in by
- * watching demod_am_get_squelch_level_db() (or just listening)
- * against real signals and real band noise on actual hardware, the
- * same way AGC_PEAK_MIN and the WFM/NFM discriminator gains were
- * tuned by reasoning + a target ballpark rather than a lab reference.
- * AM and NFM's channel filters have different passband gains/noise
- * bandwidths (CHF_COEFFS ~4kHz vs NFM_CHF_COEFFS ~6.25kHz), so the
- * SAME threshold value may not read the same "distance above the
- * noise floor" in both modes - if that turns out to matter in
- * practice, splitting into two independent thresholds (one per mode)
- * is a small change; they're deliberately shared for now, simplicity
- * first.
+ * SIN CALIBRAR, con el mismo aviso que la escala de dB del espectro -ver
+ * el comentario original de SDR_DB_MIN y SDR_DB_MAX en main.c-: el umbral
+ * va en dB (20*log10 del modulo lineal, y esta vez con un log10f() de
+ * verdad, no con la aproximacion por manipulacion de bits de fft.c), pero
+ * no hay ningun nivel de referencia que lo ate a nada absoluto. Hay que
+ * ajustarlo mirando demod_am_get_squelch_level_db() -o simplemente
+ * escuchando- contra señales de verdad y ruido de banda de verdad sobre
+ * la placa, igual que AGC_PEAK_MIN y las ganancias de los discriminadores
+ * de WFM y NFM se ajustaron razonando y apuntando a un orden de magnitud
+ * y no contra una referencia de laboratorio. Los filtros de canal de AM y
+ * de NFM tienen ganancias de paso de banda y anchos de ruido distintos
+ * -unos 4 kHz CHF_COEFFS contra unos 6,25 kHz NFM_CHF_COEFFS-, asi que el
+ * MISMO valor de umbral puede no leerse como la misma "distancia por
+ * encima del suelo de ruido" en los dos modos. Si eso resulta importar en
+ * la practica, partirlo en dos umbrales independientes -uno por modo- es
+ * un cambio pequeño; de momento se comparten a proposito, primero lo
+ * simple.
  *
- * DEFAULT: -100dB, i.e. effectively OFF (nothing realistic reads that
- * low) - so AM/NFM behave EXACTLY as they did before squelch existed
- * until the threshold is deliberately raised. Raising it toward the
- * noise floor (as read on real hardware) is what actually engages
- * muting.
+ * POR DEFECTO: -100 dB, o sea APAGADO en la practica, porque nada real
+ * lee tan bajo. Asi AM y NFM se comportan EXACTAMENTE igual que antes de
+ * que el silenciador existiera, hasta que alguien suba el umbral a
+ * proposito. Subirlo hacia el suelo de ruido -el que se lea sobre la
+ * placa- es lo que de verdad hace que silencie.
  *
- * HYSTERESIS: opening and closing use different trip points (+/-1.5dB
- * around the threshold, see SQUELCH_HYSTERESIS_DB in demod_am.c)
- * so a signal sitting right at the threshold doesn't chatter open/
- * closed every block.
+ * HISTERESIS: abrir y cerrar usan puntos de disparo distintos, +/-1,5 dB
+ * alrededor del umbral, ver SQUELCH_HYSTERESIS_DB en demod_am.c. Asi una
+ * señal que se quede justo en el umbral no castañetea abriendo y cerrando
+ * en cada bloque.
  */
 
 /* Sets the squelch threshold in dB - see the block comment above for
@@ -727,10 +783,11 @@ void demod_am_set_squelch_db(float threshold_db);
 /* Query the current threshold - used by main.c for the readout. */
 float demod_am_get_squelch_db(void);
 
-/* Query the LAST BLOCK's smoothed RF level, in the same dB units as
- * the threshold - lets main.c (or a future debug view) show where the
- * signal/noise floor actually sits, which is what you need to see to
- * set the threshold sensibly in the first place. */
+/* Pregunta por el nivel de radiofrecuencia suavizado del ULTIMO BLOQUE,
+ * en las mismas unidades de dB que el umbral. Asi main.c -o alguna vista
+ * de depuracion futura- puede enseñar donde esta de verdad la señal o el
+ * suelo de ruido, que es justo lo que hay que ver para poner el umbral
+ * con algun criterio. */
 float demod_am_get_squelch_level_db(void);
 
 /* Query whether the squelch is currently PASSING audio (1) or MUTING
@@ -748,34 +805,43 @@ uint8_t demod_am_get_squelch_open(void);
 uint32_t demod_am_get_last_cycles(void);
 
 /*
- * Per-stage cycle breakdown of the LAST call to demod_am_process_raw()
- * - added 31/07/2026 to pin down exactly where an ISR block's cycles
- * go, after the whole-ISR total (demod_am_get_last_cycles() above)
- * came back higher than expected for USB/LSB once WFM was added
- * alongside it. Same DWT->CYCCNT read-and-subtract pattern, same
- * "cheap enough not to matter, no UART here" reasoning - see
- * demod_am_get_last_cycles()'s comment. Stages:
- *   frontend: step 0a-0c (deinterleave, low-IF down-mix, channel
- *             filter) - skipped entirely for WFM, see demod_am.h.
- *   extract:  step 1 (mode-specific: AM magnitude / WFM discriminator
- *             / SSB decimated Hilbert chain) - the one most likely to
- *             explain a USB/LSB-specific change.
- *   audio:    steps 2-3 (DC blocker, audio LPF or WFM de-emphasis+LPF)
- *   nr:       Spectral Subtraction NR cost - added 03/08/2026, revised
- *             04/08/2026 when SSB's path changed (see demod_am.c's NR
- *             INTEGRATION comment): for AM it's step 3b's dedicated
- *             decimate/nr_ss_process/interpolate; for USB/LSB it's
- *             step 2d's cost instead, running NR inline on the SSB
- *             chain's own already-12kHz buffer (cheaper - no separate
- *             decimate/interpolate pair). Always 0 for WFM/NFM (the
- *             stage is skipped entirely for those modes, not just
- *             cheap) or whenever NR is switched off. THE number to
- *             watch when checking whether this fits the ISR's
- *             real-time budget - see nr_ss.c's header comment.
- *   agc_out:  steps 4-5 (AGC, clamp, I2S write)
- * Sum of the five should land close to demod_am_get_last_cycles()'s
- * total (a few cycles off is normal - the reads themselves aren't
- * free). Safe to poll from the main loop, same as the total. */
+ * El reparto de ciclos por etapa de la ULTIMA llamada a
+ * demod_am_process_raw(). Añadido el 31/07/2026 para clavar donde se van
+ * exactamente los ciclos de un bloque de la interrupcion, despues de que
+ * el total de la interrupcion entera -demod_am_get_last_cycles(), mas
+ * arriba- volviera mas alto de lo esperado en USB/LSB en cuanto se añadio
+ * el WFM al lado. El mismo patron de leer el CYCCNT del DWT y restar, y
+ * el mismo razonamiento de "lo bastante barato como para no importar, y
+ * aqui no hay puerto serie": ver el comentario de
+ * demod_am_get_last_cycles(). Las etapas:
+ *   frontend: pasos 0a a 0c -desintercalar, bajar en frecuencia y filtro
+ *             de canal-. En WFM se salta entera, ver demod_am.h.
+ *   extract:  paso 1, lo propio de cada modo: el modulo en AM, el
+ *             discriminador en WFM o la cadena diezmada con Hilbert en
+ *             banda lateral. Es la que con mas papeletas explica un
+ *             cambio que solo se note en USB o LSB.
+ *   audio:    pasos 2 y 3 -bloqueador de continua y paso bajo de audio,
+ *             o desenfasis mas paso bajo en WFM-.
+ *   nr:       lo que cuesta la reduccion de ruido por sustraccion
+ *             espectral. Añadido el 03/08/2026 y revisado el 04/08/2026,
+ *             cuando cambio el camino de la banda lateral -ver el
+ *             comentario de INTEGRACION DE LA REDUCCION DE RUIDO en
+ *             demod_am.c-: en AM es el diezmado, nr_ss_process() e
+ *             interpolado propios del paso 3b; en USB y LSB es en cambio
+ *             lo que cuesta el paso 2d, que corre la reduccion encima del
+ *             buffer que la cadena de banda lateral ya tiene a 12 kHz, y
+ *             sale mas barato porque no hace falta un par de diezmado e
+ *             interpolado aparte. Siempre 0 en WFM y NFM -la etapa se
+ *             salta entera en esos modos, no es que salga barata- y
+ *             siempre 0 con la reduccion apagada. ES el numero que hay
+ *             que mirar al comprobar si esto cabe en el presupuesto de
+ *             tiempo real de la interrupcion; ver la cabecera de nr_ss.c.
+ *   agc_out:  pasos 4 y 5 -automatico de ganancia, recorte y escritura al
+ *             I2S-.
+ * La suma de las cinco deberia caer cerca del total de
+ * demod_am_get_last_cycles(); que baile unos pocos ciclos es normal,
+ * porque las propias lecturas no son gratis. Se puede consultar desde el
+ * bucle principal, igual que el total. */
 typedef struct {
     uint32_t frontend;
     uint32_t extract;
@@ -784,63 +850,74 @@ typedef struct {
     uint32_t agc_out;
 } demod_am_cycles_breakdown_t;
 
+
 demod_am_cycles_breakdown_t demod_am_get_last_cycles_breakdown(void);
 
-/* Pre-AGC envelope peak (int16 full-scale units, instant-attack /
- * slow-release ballistics) - the UI's S-meter source. Convert to
- * dB/S-units in the main loop, not here. Safe to poll anytime. */
+/* El pico de envolvente ANTES del automatico de ganancia, en unidades de
+ * fondo de escala de entero de 16 bits, con ataque instantaneo y soltada
+ * lenta: de aqui sale el medidor de S de la interfaz. Pasarlo a dB o a
+ * unidades S se hace en el bucle principal, no aqui. Se puede consultar
+ * en cualquier momento. */
 float demod_am_get_signal_peak(void);
-
 /*
- * RF front-end clipping flag - added 07/08/2026, per the project
- * owner, for the RF-level (analog PGA) auto-AGC in main.c
- * (rf_agc_poll()/s_rf_agc_enabled). Set from INSIDE the RX DMA
- * interrupt (both demod_am_process_raw() and demod_wfm_process_raw()
- * scan every raw_interleaved block for samples riding the ADC's
- * railed value - see rf_clip_scan() in demod_am.c), because that's
- * the only place raw, pre-DSP samples ever exist: by the time
- * anything downstream (envelope, AGC, s_env[]) sees a value, a
- * genuinely clipped sample already lost information no software can
- * recover - digital AGC gain math being mathematically correct
- * doesn't help if the INPUT was already flat-topped. This flag is
- * the escape hatch: the ISR can detect it cheaply (a plain scan, same
- * cost class as the existing min/max tracking), but changing the
- * actual PGA gain means a bit-banged I2C transaction
- * (aic3204_set_pga_gain_db()) that must NEVER run inside an ISR (see
- * demod_am_process_raw()'s own "runs in the RX DMA interrupt"
- * warning) - so this just sets a flag and gets out; main.c's
- * rf_agc_poll(), called once per main-loop iteration same as
- * tune_encoder_poll(), is what actually acts on it.
+ * La bandera de recorte en la entrada de radiofrecuencia. Añadida el
+ * 07/08/2026, pedida por el usuario, para el automatico de ganancia de
+ * radiofrecuencia -el del PGA analogico- de main.c, o sea rf_agc_poll() y
+ * s_rf_agc_enabled. Se pone DESDE DENTRO de la interrupcion de DMA de
+ * recepcion: tanto demod_am_process_raw() como demod_wfm_process_raw()
+ * recorren cada bloque de raw_interleaved buscando muestras pegadas al
+ * tope del convertidor -ver rf_clip_scan() en demod_am.c-, porque ese es
+ * el unico sitio donde existen las muestras crudas, antes del proceso de
+ * señal. Para cuando algo de mas adelante -la envolvente, el automatico
+ * de ganancia, s_env[]- ve un valor, una muestra que de verdad se recorto
+ * ya perdio informacion que ningun programa puede devolver: que las
+ * cuentas de ganancia del automatico digital sean matematicamente
+ * correctas no sirve de nada si la ENTRADA ya venia con la cabeza plana.
+ * Esta bandera es la salida de emergencia: la interrupcion lo puede
+ * detectar barato -un recorrido pelado, de la misma clase de coste que el
+ * seguimiento de minimo y maximo que ya hay-, pero cambiar de verdad la
+ * ganancia del PGA significa una transaccion de I2C a pedales
+ * (aic3204_set_pga_gain_db()) que NUNCA debe correr dentro de una
+ * interrupcion -ver el aviso de "corre en la interrupcion de DMA de
+ * recepcion" de demod_am_process_raw()-. Asi que esto solo pone una
+ * bandera y se va; quien actua de verdad es rf_agc_poll() de main.c, al
+ * que se llama una vez por vuelta del bucle principal, igual que a
+ * tune_encoder_poll().
  *
- * Test-and-clear semantics (reads AND clears the flag in one call) -
- * the ISR only ever sets it (never clears), so there's no meaningful
- * race beyond the same "plain volatile shared with an ISR" class
- * every other cross-context field in this file already accepts (e.g.
- * s_last_cycles_*) - a flag set between the read and the clear just
- * means it's caught on the NEXT poll instead, harmless for something
- * this coarse-grained (backoff steps happen on a many-milliseconds
- * cooldown, not sample-accurate).
+ * Leer y borrar a la vez -esta funcion devuelve la bandera Y la borra en
+ * la misma llamada-. La interrupcion solo la pone, nunca la borra, asi
+ * que no hay ninguna carrera de verdad mas alla de la misma clase de
+ * "volatile pelado compartido con una interrupcion" que ya aceptan todos
+ * los demas campos de este fichero que cruzan de contexto -por ejemplo
+ * s_last_cycles_*-: una bandera que se ponga entre la lectura y el
+ * borrado simplemente se recoge en la consulta SIGUIENTE, lo que no hace
+ * daño en algo tan grueso como esto, donde los pasos de bajada de
+ * ganancia van con una espera de muchas milesimas y no al ritmo de la
+ * muestra.
  */
 uint8_t demod_am_get_and_clear_rf_clip_flag(void);
 
-/* LO offset for low-IF tuning: actual LO = selected_freq -
- * DEMOD_IF_OFFSET_HZ (see the LOW-IF TUNING note above). Currently
- * Fs/4 (96000/4 = 24000 - was 48000/4 = 12000 before AM/SSB/NFM moved
- * from 48kHz to 96kHz, and 192000/4 = 48000 before that - see
- * sdr_rx.h's SDR_RX_BLOCK_SAMPLES comment) to match demod_am.c's
- * zero-multiply sign-flip rotation - if this ever changes, the
- * rotation algorithm in demod_am.c has to change with it (it is NOT a
- * generic NCO, it only works at exactly Fs/4).
+/* El desplazamiento del oscilador local para la sintonia por frecuencia
+ * intermedia baja: el oscilador de verdad = frecuencia elegida menos
+ * DEMOD_IF_OFFSET_HZ, ver la nota de SINTONIA POR FRECUENCIA INTERMEDIA
+ * BAJA de mas arriba. Ahora mismo es Fs/4 (96000/4 = 24000; eran
+ * 48000/4 = 12000 antes de que AM, banda lateral y NFM pasaran de 48 a 96
+ * kHz, y 192000/4 = 48000 antes de eso, ver el comentario de
+ * SDR_RX_BLOCK_SAMPLES en sdr_rx.h), para que case con el giro por
+ * cambios de signo y sin multiplicaciones de demod_am.c. Si esto cambia
+ * alguna vez, el algoritmo del giro de demod_am.c tiene que cambiar con
+ * el: NO es un oscilador generico, solo funciona exactamente en Fs/4.
  *
- * *** 01/09/2026: TWO values now, not one - see demod_am_set_active_
- * rate()'s comment below *** - AM/USB/LSB/NFM can run at either 96kHz
- * or 48kHz (main.c's RATE tile), and since this offset MUST always
- * equal the ACTUAL running rate's Fs/4 (the down-mix rotation has no
- * other mode), main.c needs to pick the right one of these two
- * constants based on s_nonwfm_use_48k, not just use
- * DEMOD_IF_OFFSET_HZ unconditionally the way older code did - see
- * main.c's demod_if_offset_hz() helper, which is the ONLY place that
- * should still read either of these two macros directly.
+ * *** 01/09/2026: ahora son DOS valores, no uno; ver el comentario de
+ * demod_am_set_active_rate() mas abajo ***. AM, USB, LSB y NFM pueden
+ * correr a 96 kHz o a 48 kHz -la casilla RATE de main.c- y, como este
+ * desplazamiento tiene que ser SIEMPRE el Fs/4 de la velocidad que este
+ * corriendo de verdad -el giro de la bajada no sabe hacer otra cosa-,
+ * main.c tiene que elegir cual de estas dos constantes toca segun
+ * s_nonwfm_use_48k, y no usar DEMOD_IF_OFFSET_HZ a pelo como hacia el
+ * codigo viejo. Ver la funcion auxiliar demod_if_offset_hz() de main.c,
+ * que es el UNICO sitio que deberia seguir leyendo directamente
+ * cualquiera de estas dos macros.
  */
 #define DEMOD_IF_OFFSET_HZ 24000UL /* Fs/4 @ 96kHz - the default/96kHz-rate value */
 #define DEMOD_IF_OFFSET_HZ_48K 12000UL /* Fs/4 @ 48kHz */
@@ -920,29 +997,32 @@ void demod_am_set_mix_hz(float hz);
 float demod_am_get_mix_hz(void);
 
 /*
- * demod_am_set_active_rate() - added 01/09/2026, per the project
- * owner: AM/USB/LSB/NFM can now run at either 96kHz (default) or
- * 48kHz (main.c's RATE tile - see s_nonwfm_use_48k's declaration
- * comment there for the full "better SNR + CPU headroom for HFDL"
- * motivation). MUST be called (from main.c's apply_demod_mode(),
- * whenever a non-WFM rate is actually applied to the codec) BEFORE
- * the block hook starts feeding real samples at the new rate -
- * mismatching this with what the codec is ACTUALLY running at means
- * every filter in the chain runs its coefficients against samples
- * arriving at the wrong real-world rate, silently shifting every
- * cutoff frequency and time constant by whatever ratio the two rates
- * differ by. This is NOT the same flag as demod_am_set_if_offset_
- * active() above - that one is about WHETHER the down-mix offset is
- * active at all (always yes, except the captured boot tune); this one
- * is about WHICH of two complete coefficient sets (filters, AGC/DC-
- * blocker time constants, SSB decimator) the DSP chain should be
- * using, independent of whether the down-mix itself is active.
+ * demod_am_set_active_rate(), añadida el 01/09/2026 y pedida por el
+ * usuario: AM, USB, LSB y NFM pueden correr ya a 96 kHz -lo normal- o a
+ * 48 kHz -la casilla RATE de main.c; el motivo entero, "mejor relacion
+ * señal a ruido y mas holgura de procesador para el HFDL", esta en el
+ * comentario donde se declara s_nonwfm_use_48k-. HAY QUE llamarla -desde
+ * apply_demod_mode() de main.c, siempre que se aplique de verdad al codec
+ * una velocidad que no sea la del WFM- ANTES de que el gancho de bloque
+ * empiece a soltar muestras de verdad a la velocidad nueva. Que esto no
+ * case con lo que el codec esta corriendo DE VERDAD significa que todos
+ * los filtros de la cadena aplican sus coeficientes a muestras que llegan
+ * a otra velocidad real, y eso corre en silencio todas las frecuencias de
+ * corte y todas las constantes de tiempo en la misma proporcion en que se
+ * diferencien las dos velocidades. Esta NO es la misma bandera que
+ * demod_am_set_if_offset_active() de mas arriba: aquella dice SI la
+ * bajada en frecuencia esta activa -siempre lo esta, salvo en la sintonia
+ * de arranque capturada-; esta dice CUAL de dos juegos completos de
+ * coeficientes -filtros, constantes de tiempo del automatico de ganancia
+ * y del bloqueador de continua, diezmador de banda lateral- tiene que
+ * usar la cadena, independientemente de si la bajada esta activa o no.
  *
- * WFM is COMPLETELY UNAFFECTED either way - it has always run its own
- * separate 192kHz path (demod_wfm_process_raw(), its own WFM_ALPF_
- * and WFM_IFBW_ filters, its own AGC/DC-blocker state) regardless of
- * what this flag says; this only selects between the AM/USB/LSB/NFM
- * coefficient sets used by demod_am_process_raw().
+ * El WFM NO SE ENTERA, pase lo que pase: siempre ha corrido su propio
+ * camino aparte a 192 kHz -demod_wfm_process_raw(), sus propios filtros
+ * WFM_ALPF_ y WFM_IFBW_, su propio estado de automatico de ganancia y de
+ * bloqueador de continua- diga lo que diga esta bandera. Esto solo elige
+ * entre los juegos de coeficientes de AM, USB, LSB y NFM que usa
+ * demod_am_process_raw().
  */
 void demod_am_set_active_rate(uint8_t is_48k);
 uint8_t demod_am_get_active_rate_is_48k(void);
@@ -964,21 +1044,23 @@ uint8_t demod_am_get_active_rate_is_48k(void);
  */
 void demod_am_chf_ancho(uint8_t si);
 
-/* Process one raw RX half: SDR_RX_BLOCK_SAMPLES interleaved L/R (I/Q)
- * frames, demodulate, and push the resulting audio block into the
- * I2S TX stream (gd32_i2s_stream_write_half()). Intended as the
- * sdr_rx block hook - runs in DMA interrupt context. */
+/* Procesa una mitad de recepcion en crudo: SDR_RX_BLOCK_SAMPLES tramas de
+ * izquierda y derecha -o sea I y Q- intercaladas, las demodula y empuja
+ * el bloque de audio que sale al flujo de transmision del I2S
+ * (gd32_i2s_stream_write_half()). Pensada para ser el gancho de bloque de
+ * sdr_rx: corre en contexto de interrupcion de DMA. */
 void demod_am_process_raw(const int16_t *raw_interleaved);
 
 /*
- * WFM's OWN, separate sdr_rx block hook (05/08/2026 - see its own
- * header comment in demod_am.c) - SDR_RX_BLOCK_SAMPLES_WFM (512)
- * interleaved L/R (I/Q) frames, at WFM's native 192kHz rate, entirely
- * independent of demod_am_process_raw()'s 128-sample/48kHz state.
- * main.c registers THIS (via sdr_rx_set_block_hook()) instead of
- * demod_am_process_raw() while switching INTO WFM, and switches back
- * on the way out - see the mode-switch sequence there. Also runs in
- * DMA interrupt context, same as demod_am_process_raw().
+ * El gancho de bloque PROPIO del WFM, aparte, del 05/08/2026: ver su
+ * propio comentario de cabecera en demod_am.c. Son SDR_RX_BLOCK_SAMPLES_WFM
+ * (512) tramas de izquierda y derecha -I y Q- intercaladas, a los 192 kHz
+ * nativos del WFM, y completamente independiente del estado de 128
+ * muestras a 48 kHz de demod_am_process_raw(). main.c registra ESTE -con
+ * sdr_rx_set_block_hook()- en vez de demod_am_process_raw() al entrar EN
+ * el WFM, y lo cambia de vuelta al salir; ver alli la secuencia de cambio
+ * de modo. Corre tambien en contexto de interrupcion de DMA, igual que
+ * demod_am_process_raw().
  */
 void demod_wfm_process_raw(const int16_t *raw_interleaved);
 

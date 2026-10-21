@@ -196,6 +196,52 @@ static const struct { const char *nombre; const char *peor; } k_peor[] = {
      */
     { "Cargar datos",   "cargada · 99999 frec." },
     { "Load data",      "loaded · 99999 freq." },
+    /*
+     * *** Y LOS MOTIVOS DE CUANDO SALE MAL - 21/10/2026. ***
+     *
+     * Aqui estaba apuntado el peor caso del camino BUENO y ninguno de los
+     * del malo, que son los largos: los siete de datos_arranca() median
+     * entre 255 y 385 px en una celda de 184, o sea que salian cortados
+     * LOS SIETE. Lo vio un usuario del repositorio en la pantalla -«BD.bin
+     * esta en el disco p...»- que es como se vio tambien el de "Formatear
+     * disco" dos comentarios mas arriba. Dos veces la misma piedra en la
+     * misma pantalla.
+     *
+     * Van los de datos_arranca() y tambien los de
+     * spi_flash_volcado_porque_txt(), porque esta fila enseña los dos: el
+     * propio si lo hay y el del volcado si no. Ver INFO_XAVIONES.
+     */
+    { "Cargar datos",   "otra copia en curso" },
+    { "Load data",      "another copy running" },
+    { "Cargar datos",   "BD.BIN mide cero" },
+    { "Load data",      "BD.BIN is empty" },
+    { "Cargar datos",   "BD.BIN no cabe arriba" },
+    { "Load data",      "BD.BIN does not fit" },
+    { "Cargar datos",   "no mido el disco" },
+    { "Load data",      "cannot measure disk" },
+    { "Cargar datos",   "disco mayor: formatea" },
+    { "Load data",      "disk too big: format" },
+    { "Cargar datos",   "sin zona alta en el chip" },
+    { "Load data",      "no upper area here" },
+    /* Los del volcado, que es a quien cede la fila cuando no hay motivo
+     * propio - y es el que le tocaba al usuario del issue: habia formateado,
+     * o sea que no habia BD.BIN. */
+    { "Cargar datos",   "no hay zona arriba" },
+    { "Load data",      "no upper area" },
+    { "Cargar datos",   "no encuentro el .BIN" },
+    { "Load data",      "cannot find the .BIN" },
+    { "Cargar datos",   "el .BIN mide cero" },
+    { "Load data",      "the .BIN is empty" },
+    { "Cargar datos",   "el .BIN está troceado" },
+    { "Load data",      "the .BIN is fragmented" },
+    { "Cargar datos",   "el .BIN está a medias" },
+    { "Load data",      "the .BIN is incomplete" },
+    { "Cargar datos",   "origen pisa destino" },
+    { "Load data",      "source overlaps target" },
+    { "Cargar datos",   "destino no permitido" },
+    { "Load data",      "target not allowed" },
+    { "Cargar datos",   "no cabe, hay 9999 kB" },
+    { "Load data",      "no room, 9999 kB" },
     { "Formatear disco", "4 kB · 1788 clusters" },
     { "Formatear disco", "BORRA TODO: confirma" },
     { "Formatear disco", "hecho: lee y graba" },
@@ -210,6 +256,20 @@ static const struct { const char *nombre; const char *peor; } k_peor[] = {
     { "Format disk",     "test file does not match" },
     { "Format disk",     "written, not recognised" },
     { "Format disk",     "reads but cannot write" },
+    /* La fila nueva del 21/10/2026: borrar el chip entero. Ver
+     * s_chip_armado en main.c. El peor caso del progreso es "100%". */
+    { "Borrar el chip",  "tocar: borra TODO" },
+    { "Borrar el chip",  "BORRA TODO: confirma" },
+    { "Borrar el chip",  "borrando · 100%" },
+    { "Borrar el chip",  "hecho: chip en blanco" },
+    { "Borrar el chip",  "espera: hay faena" },
+    { "Borrar el chip",  "no hay chip" },
+    { "Erase whole chip", "tap: erases ALL" },
+    { "Erase whole chip", "ERASES ALL: tap again" },
+    { "Erase whole chip", "erasing · 100%" },
+    { "Erase whole chip", "done: chip is blank" },
+    { "Erase whole chip", "busy: try later" },
+    { "Erase whole chip", "no chip" },
 };
 
 int main(void)

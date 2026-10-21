@@ -107,8 +107,8 @@ int main(void)
      *
      * AHORA SE EXIGE LO CONTRARIO: que el 100% sea 100% de verdad, o sea
      * CCR por encima del ARR, que en modo PWM0 deja la salida activa todo
-     * el periodo. Es lo que hace el proyecto padre y es lo que corre en la
-     * radio de Esteban.
+     * el periodo. Es lo que hace el proyecto padre y es lo que corre en otra
+     * unidad igual.
      */
     backlight_set_percent(100U);
     printf("    el 100%% da CCR %lu con ARR %u\n", (unsigned long)s_ccr, ARR);

@@ -18,6 +18,922 @@ ordered by date, does not spare the detail, and is not published.
 
 ---
 
+## V5.75 · 2026-10-21
+
+### Qué cambia
+
+- **Se puede dejar la flash externa entera en blanco desde la propia radio.**
+  «Formatear disco» rehace el índice y nada más: lo escrito sigue ahí y la
+  zona alta —la base de datos cargada y el mapa— no se toca. La fila nueva
+  **«Borrar el chip»**, en la página oculta de Información al lado de
+  «Cargar datos», borra de verdad de punta a punta y vuelve a formatear
+  después. Dos toques para confirmar, el porcentaje mientras va, y se niega
+  a empezar si hay una captura o un volcado en marcha.
+- **Y se borra sin bloquear la radio.** Un bloque por vuelta del bucle
+  principal, el más grande que quepa, en vez del borrado de chip entero del
+  propio chip, que tarda entre 25 y 50 segundos sin contestar y se lleva por
+  delante la espera de 10 s del driver. Así la radio sigue recibiendo
+  mientras tanto.
+- **El manual lo cuenta, con sus dos fallos y la advertencia de que esto no
+  toca el firmware**, que vive en la flash interna del micro: la radio
+  arranca igual con el chip en blanco.
+
+### What's new
+
+- **The whole external flash can now be wiped from the radio itself.**
+  "Format disk" rebuilds the index and nothing more: what was written is
+  still there and the upper area —the loaded database and the map— is left
+  alone. The new **"Erase whole chip"** row, on Information's hidden page
+  next to "Load data", really does erase end to end and formats afterwards.
+  Two taps to confirm, a percentage while it runs, and it refuses to start
+  if a screenshot or a database copy is in progress.
+- **And it erases without locking the radio up.** One block per pass of the
+  main loop, the largest that fits, instead of the chip's own whole-chip
+  erase, which takes 25 to 50 seconds without answering and outlives the
+  driver's 10 s wait. The radio keeps receiving throughout.
+- **The manual covers it, with its two failure messages and the warning that
+  this does not touch the firmware**, which lives in the micro's internal
+  flash: the radio starts up just the same with a blank chip.
+
+## V5.74 · 2026-10-21
+
+### Qué cambia
+
+- **La fila «Cargar datos» ya cabe en su celda, y uno de sus avisos decía lo
+  contrario de lo que pasaba.** Avisado por un usuario del repositorio, que
+  después de formatear veía «BD.bin esta en el disco p…» y no podía leer
+  más. Dos cosas a la vez: los siete motivos de esa fila medían entre 255 y
+  385 píxeles en una celda de 184 —salían cortados **los siete**— y el que
+  le tocó afirmaba que el fichero estaba en el disco cuando la función que
+  lo mira devuelve cero precisamente cuando **no está**. Él había
+  formateado, que es lo que borra BD.BIN. Ahora los motivos son cortos y
+  medidos, y cuando no hay fichero la fila deja hablar a quien sabe el
+  motivo de verdad: «no encuentro el .BIN».
+- **Y el banco que mide esa pantalla no medía esa fila.** Tenía apuntado como
+  peor caso el texto del camino bueno —el único que cabe— y ninguno de los
+  malos. Ahora están los veintiséis textos que la fila puede enseñar, y al
+  añadirlos salieron dos más que tampoco cabían.
+
+### What's new
+
+- **The "Load data" row now fits in its cell, and one of its messages said
+  the opposite of what had happened.** Reported by a user of the repository
+  who, after formatting, saw "BD.bin esta en el disco p…" and could read no
+  further. Two things at once: that row's seven reasons measured between 255
+  and 385 pixels in a 184-pixel cell —**all seven** were cut off— and the one
+  he got claimed the file was on the disk, when the function that looks for
+  it returns zero precisely when it is **not** there. He had formatted, which
+  is what deletes BD.BIN. The reasons are now short and measured, and when
+  there is no file the row defers to the one that knows the real reason:
+  "cannot find the .BIN".
+- **And the bench that measures that screen was not measuring that row.** Its
+  recorded worst case was the happy-path text —the only one that fits— and
+  none of the failures. All twenty-six texts the row can show are in it now,
+  and adding them turned up two more that did not fit either.
+
+## V5.73 · 2026-10-21
+
+### Qué cambia
+
+- **Nada en la radio; lo que cambia es que los dos umbrales del detector de
+  tonos ya están medidos y no calculados en una servilleta.** La cuenta que
+  había daba un fondo de escala de 26.000 para un parpadeo de negro a blanco
+  a fondo. Medido con una sonda en ese mismo punto, lo que llega son 15.009
+  a 300 Hz y 7.241 a 450: el discriminador se come la mitad, y se come más a
+  450 que a 300, así que no hay un fondo de escala sino uno por tono. Con
+  los números buenos sale algo que conviene saber: la salida de emergencia
+  que cierra una carta cuando el tono de fin se perdió necesita que el tono
+  de arranque de la siguiente llegue al 63 % del vaivén, no al 15 % que
+  decía el código. Se deja igual —bajarlo es lo que parte una carta buena
+  por la mitad con una trama de la propia carta— y queda escrito por qué,
+  con las tres medidas.
+- Y el margen del anillo de renglones eran «tres órdenes de magnitud»: son
+  setenta veces.
+
+### What's new
+
+- **Nothing in the radio; what changes is that the tone detector's two
+  thresholds are now measured instead of worked out on a napkin.** The sum
+  that was there gave a full scale of 26,000 for a full black-to-white
+  flicker. Measured with a probe at that very point, what arrives is 15,009
+  at 300 Hz and 7,241 at 450: the discriminator eats half of it, and more at
+  450 than at 300, so there is no single full scale but one per tone. With
+  the right numbers something worth knowing falls out: the escape hatch that
+  closes a chart when its stop tone was lost needs the next chart's start
+  tone to arrive at 63 % of the swing, not the 15 % the code claimed. It is
+  left as it is —lowering it is what splits a good chart in half on the
+  chart's own halftone— and why is now written down, with all three
+  measurements.
+- And the row ring's margin was "three orders of magnitude": it is seventy
+  times.
+
+## V5.72 · 2026-10-21
+
+### Qué cambia
+
+- **Nada en la radio. Lo que se corrige es una frase del código que decía
+  que algo estaba protegido y no lo estaba.** El detector de los tonos de
+  arranque y de fin promedia medio segundo «para que no lo dispare un
+  golpe». No es eso lo que lo impide: un solo bloque de 20 ms a fondo ya
+  mete en la media cinco veces el umbral, y medido, un golpe de dos décimas
+  entra igual. Lo que de verdad filtra es la otra guarda —que el tono lleve
+  al menos tres veces lo que lleve el otro—, que es la que deja fuera el
+  ruido. Queda escrito lo que cuesta un falso positivo (35 segundos sin
+  pintar nada y después un fichero de ruido que se ve y se borra) y por qué
+  no sale a cuenta apretarlo: exigir que el tono se sostenga retrasaría el
+  reconocimiento, y eso se cobra en renglones de la cabecera de todas las
+  cartas.
+
+### What's new
+
+- **Nothing in the radio. What gets fixed is a line of the code that said
+  something was protected when it was not.** The start- and stop-tone
+  detector averages over half a second "so that a knock does not set it
+  off". That is not what prevents it: a single 20 ms block at full swing
+  already puts five times the threshold into the average, and, measured, a
+  two-tenths-of-a-second knock sets it off just the same. What actually
+  filters is the other guard —the tone's bin must carry at least three
+  times what the other one carries—, which is what keeps noise out. What a
+  false positive costs is now written down (35 seconds painting nothing and
+  then a file of noise you can see and delete), and so is why tightening it
+  is not worth it: requiring a sustained tone would delay recognition, and
+  that is paid for in rows of every chart's header.
+
+## V5.71 · 2026-10-21
+
+### Qué cambia
+
+- **La carta recién recolocada ya no sale con una raya negra en el borde.**
+  Al acabar el giro se enseña la carta para que se vea que salió bien, y
+  para quitar la línea vertical se ponía en la columna cero. Pero cero es
+  una columna como las demás, así que la línea no se quitaba: se pintaba
+  pegada al borde izquierdo. Y justo ahí, donde acabas de pedir que empiece
+  la carta, una raya negra se lee como «el giro ha dejado una costura».
+- **Y el giro del fichero también pasa por el banco de mutaciones.** Se
+  rompieron a propósito quince de sus decisiones: nueve las caza el banco.
+  De las seis que no, cuatro son la misma cosa —el final del giro lo
+  deciden tres condiciones que en un fichero de verdad caen en el mismo
+  bloque, porque al cerrarlo se recorta a lo que ocupa—, y eso no estaba
+  escrito en ningún sitio.
+
+### What's new
+
+- **A freshly re-aligned chart no longer shows a black line at its edge.**
+  When the rotation finishes the chart is shown so you can see it worked,
+  and the vertical line was removed by moving it to column zero. But zero is
+  a column like any other, so the line was not removed: it was painted
+  against the left edge. And right there, where you have just asked the
+  chart to begin, a black line reads as "the rotation left a seam".
+- **And the file rotation now goes through the mutation bench too.** Fifteen
+  of its decisions were deliberately broken: the bench catches nine. Of the
+  six it does not, four are the same thing —the end of the rotation is
+  decided by three conditions that in a real file all fall on the same
+  block, because closing it trims it to what it occupies— and that was
+  written down nowhere.
+
+## V5.70 · 2026-10-21
+
+### Qué cambia
+
+- **Tampoco cambia nada en la radio: cambia lo que el banco de pruebas es
+  capaz de ver.** Se rompieron a propósito quince decisiones del
+  decodificador de fax —umbrales, topes, el tamaño del anillo de
+  renglones— para ver cuántas caza el banco. Cazaba cinco. Entre las diez
+  que no: el umbral que impide que una trama de semitono de la propia carta
+  parta el fichero en dos; el que hace que un tono de fin desvanecido se
+  oiga igual, y sin el cual dos cartas se cosen en un fichero; y la
+  capacidad útil del anillo, que es la que evita el renglón partido por la
+  mitad. Seis se han cerrado con casos nuevos, y la cuenta se queda en el
+  árbol: `make comprueba` vuelve a romperlas en cada pasada y para si alguna
+  deja de estar vigilada.
+
+### What's new
+
+- **Again nothing changes in the radio: what changes is what the test bench
+  can see.** Fifteen decoder decisions —thresholds, caps, the size of the
+  row ring— were deliberately broken to see how many the bench catches. It
+  caught five. Among the ten it did not: the threshold that stops a
+  halftone pattern in the chart itself splitting the file in two; the one
+  that keeps a faded stop tone audible, without which two charts get sewn
+  into one file; and the ring's usable capacity, which is what prevents a
+  row torn down the middle. Six are now closed with new cases, and the count
+  stays in the tree: `make comprueba` breaks them again on every run and
+  stops if any stops being watched.
+
+## V5.69 · 2026-10-21
+
+### Qué cambia
+
+- **Otra vez nada en el comportamiento: los binarios hacen exactamente lo
+  mismo.** Lo que se quita son dos números escritos dos veces. Lo que dura
+  la emisión —cinco segundos de tono de arranque y treinta de señal de
+  fase— lo pone la emisora, no esta radio, y de ahí salen dos cuentas del
+  decodificador que no tienen nada que ver entre sí. Estaban codificadas de
+  dos maneras distintas en dos funciones que nadie lee juntas: el día que
+  haya que admitir otra emisora se corregiría una y la otra se quedaría, y
+  lo que sale de eso es una carta con franja negra o una carta sin cabecera,
+  según cuál se quede. Lo mismo con el ancho del pulso de la señal de fase,
+  que estaba en prosa y a medias en el código.
+- **Y el fuzzer del fax medía con una banda de veintiún renglones.** Exigía
+  entre 30 y 50 renglones donde las cuarenta rondas entregan siempre 38.
+  Ahora se admite uno arriba y uno abajo, y los dos sentidos salen en rojo
+  al tocar el número que decide dónde empieza la carta.
+
+### What's new
+
+- **Again nothing changes in behaviour: the binaries do exactly the same.**
+  What goes away is two numbers written twice. How long the transmission
+  lasts —five seconds of start tone and thirty of phasing signal— is set by
+  the station, not by this radio, and two unrelated decoder calculations come
+  from it. They were encoded two different ways in two functions nobody reads
+  together: the day another station has to be supported, one would be fixed
+  and the other left behind, and what comes out of that is either a chart
+  with a black band or a chart with no header, depending which one stayed.
+  Same for the width of the phasing pulse, which was in prose and half in the
+  code.
+- **And the fax fuzzer measured with a twenty-one-row band.** It required
+  between 30 and 50 rows where all forty rounds deliver exactly 38. One row
+  either way is now allowed, and both directions go red when the number that
+  decides where a chart starts is touched.
+
+## V5.68 · 2026-10-21
+
+### Qué cambia
+
+- **Nada en el comportamiento de la radio: se corrige lo que estaba mal
+  escrito sobre él.** El número que decide dónde empieza la carta —los 35
+  segundos que tarda el fax en dejar la señal de fase y ponerse a pintar— se
+  explicaba como «los 30 de la fase más un margen», y no es eso: la cuenta
+  empieza cuando se reconoce el tono de arranque, así que son los 5 del tono
+  más los 30 de la fase, justos. Bajarlo mete franja negra en la cabecera de
+  la carta; subirlo se come tres renglones de esa misma cabecera, que es
+  donde el DWD pone la hora y el nombre. El banco no lo notaba: su margen era
+  de dieciséis renglones y ahora es de tres, probado en rojo en los dos
+  sentidos.
+- **Y el manual cuenta ya lo que hace el cartel de recolocar cuando no le
+  contestas:** se quita solo a los cinco minutos sin tocar el fichero, y se
+  quita también si abres un menú o la pantalla se duerme. Lo único que no se
+  interrumpe es la reescritura en sí.
+
+### What's new
+
+- **Nothing changes in how the radio behaves: what was written about it is
+  what gets fixed.** The number that decides where a chart starts —the 35
+  seconds after which the fax leaves the phasing signal and starts
+  painting— was explained as "the 30 of the phasing plus some margin", and it
+  is not: the count starts when the start tone is recognised, so it is the 5
+  of the tone plus the 30 of the phasing, exactly. Lowering it puts a black
+  band into the chart's header; raising it eats three rows of that same
+  header, which is where DWD puts the time and the name. The bench could not
+  see it: its margin was sixteen rows and is now three, proved red in both
+  directions.
+- **And the manual now says what the re-align card does when you don't
+  answer it:** it goes away by itself after five minutes without touching the
+  file, and it also goes away if you open a menu or the screen sleeps. The
+  one thing that is not interrupted is the rewrite itself.
+
+## V5.67 · 2026-10-21
+
+### Qué cambia
+
+- **El botón de guardar del fax vuelve a ser un interruptor.** Dos cosas lo
+  callaban y ninguna estaba escrita en ningún sitio como que debiera: con el
+  disco lleno, el botón quedaba muerto hasta salirse del modo y volver a
+  entrar —el aviso de «sin sitio» no lo limpiaba nadie, aunque el código que
+  lo pone dice con todas las letras que lo limpia el botón—; y el freno de
+  veinticinco segundos que se pone al cerrar una carta, que está para que una
+  tanda de cierres automáticos no haga una tanda de ficheros, paraba también
+  al dedo: quitar el botón y volver a ponerlo dejaba veinticinco segundos sin
+  grabar nada, con la chapa diciendo «listo». Ahora tocar el botón borra el
+  aviso, reintenta una vez y suelta el freno. El freno sigue entero para lo
+  suyo.
+- **Y el manual dice ya las cuatro cosas que cierran una carta.** Listaba
+  tres y faltaba la que más importa en onda corta: el tono de arranque de la
+  carta SIGUIENTE. Es lo que impide que, si el tono de fin llega enterrado en
+  un desvanecimiento, dos cartas se cosan dentro del mismo fichero.
+
+### What's new
+
+- **The fax save button is a switch again.** Two things silenced it and
+  neither was supposed to: with a full disk the button was dead until you
+  left the mode and came back —nothing cleared the «no room» notice, even
+  though the code that raises it states in so many words that the button
+  clears it—; and the twenty-five-second brake applied when a chart closes,
+  which exists so that a run of automatic closes cannot produce a run of
+  files, also stopped the user's finger: switching the button off and on left
+  twenty-five seconds recording nothing, with the badge reading «ready».
+  Touching the button now clears the notice, retries once, and releases the
+  brake. The brake is untouched for what it is actually for.
+- **And the manual now lists all four things that close a chart.** It listed
+  three and was missing the one that matters most on shortwave: the start
+  tone of the NEXT chart. That is what stops two charts being sewn into one
+  file when the stop tone arrives buried in a fade.
+
+## V5.66 · 2026-10-21
+
+### Qué cambia
+
+- **Los avisos del cartel de recolocar ya se pueden leer.** «La carta se deja
+  como esta», «No se puede leer la carta», «Ahora no se puede: se esta
+  guardando» y «No se ha podido recolocar» salen al pulsar un botón, y el
+  mismo dedo que los ponía los borraba en la vuelta siguiente del bucle: unos
+  milisegundos. Ahora hace falta un dedo nuevo para quitarlos.
+- **Y la pregunta de recolocar ya no se contesta sola.** El cartel lo arma el
+  tono de fin de la carta, que llega cuando llega; si en ese momento había un
+  dedo apoyado donde salen los botones —arrastrando el espectro, por
+  ejemplo—, la pregunta se respondía con ese dedo. Los botones también piden
+  dedo nuevo. El arrastre de la línea no, que es lo único que necesita todas
+  las vueltas.
+
+### What's new
+
+- **The re-align card's messages can now be read.** "The chart is left as it
+  is", "The chart cannot be read", "Not now: something is being saved" and
+  "Could not re-align" appear when you press a button, and the very finger
+  that raised them erased them on the next pass of the main loop — a few
+  milliseconds. Dismissing a message now requires a fresh touch.
+- **And the re-align question no longer answers itself.** The card is raised
+  by the chart's end tone, which arrives when it arrives; if a finger happened
+  to be resting where the buttons appear — dragging the spectrum, say — that
+  finger answered the question. The buttons now require a fresh touch too.
+  Dragging the line does not, since that is the one thing that needs every
+  pass.
+
+## V5.65 · 2026-10-21
+
+### Qué cambia
+
+- **«La carta se deja como esta» vuelve a salir.** Al recolocar una carta, si
+  se deja la línea vertical en el borde izquierdo y se pulsa OK no hay nada
+  que girar, y la radio tiene que decirlo. Lo decía, pero el aviso estaba
+  escrito debajo de una comprobación igual que ya se volvía unas líneas más
+  arriba, así que no se ejecutaba nunca: el cartel se cerraba en silencio.
+  Ahora se cierra diciendo qué ha pasado, y un guardián nuevo busca esa misma
+  forma —una condición que ya se decidió antes en la misma función— en los
+  403 ficheros del firmware y de los bancos.
+
+### What's new
+
+- **"The chart is left as it is" is shown again.** When re-aligning a chart,
+  leaving the vertical line at the left edge and pressing OK means there is
+  nothing to rotate, and the radio has to say so. It did say so, but the
+  message sat below an identical check that already returned a few lines
+  above, so it never ran: the card just closed in silence. Now it closes
+  saying what happened, and a new guard looks for that same shape — a
+  condition already decided earlier in the same function — across all 403
+  firmware and bench source files.
+
+## V5.64 · 2026-10-21
+
+### Qué cambia
+
+- **El aviso de «no se guarda» ya no se pinta encima del cartel de
+  recolocar.** Los dos ocupan la misma franja de la pantalla: el aviso
+  tapaba veinte de los treinta y ocho píxeles de alto de los botones «Sí» y
+  «No», y al caducar nadie repintaba el cartel, que se quedaba con la mitad
+  de abajo en blanco y los botones medio borrados respondiendo igual.
+  Mientras el cartel se vea, el aviso no se pone: lo que diría ya lo dice la
+  chapa del fax.
+
+### What's new
+
+- **The "not saving" notice no longer paints over the re-align card.** Both
+  occupy the same band of the screen: the notice covered twenty of the
+  thirty-eight pixels of the «Yes» and «No» buttons, and when it expired
+  nothing repainted the card, which was left with its bottom half blank and
+  its buttons half-erased but still responding. While the card is showing,
+  the notice is not raised: what it would say is already on the fax badge.
+
+---
+
+## V5.63 · 2026-10-21
+
+### Qué cambia
+
+- **940 bytes más de RAM libre**, que es un 20% más de margen del que había.
+  El detector de los tonos de arranque y parada guardaba las 240 muestras de
+  su ventana —960 bytes ocupados las veinticuatro horas— para pasárselas
+  enteras al filtro. No hacían falta: ese filtro es recursivo y su estado
+  son dos números. Cuesta lo mismo, reparte mejor el trabajo dentro de la
+  interrupción, y la salida del banco de pruebas es idéntica byte por byte.
+
+### What's new
+
+- **940 more bytes of free RAM**, 20% more headroom than there was. The
+  start- and stop-tone detector stored all 240 samples of its window —960
+  bytes held around the clock— to hand them to the filter whole. They were
+  not needed: that filter is recursive and its state is two numbers. It
+  costs the same, spreads the work better inside the interrupt, and the test
+  bench output is identical byte for byte.
+
+---
+
+## V5.62 · 2026-10-21
+
+### Qué cambia
+
+- **Nada en la radio.** La compilación avisaba en cada `make` de una
+  recursión sin acotar en el cierre del fichero de una carta, y además el
+  cálculo del peor caso de pila contaba ese camino como cero. Está acotada
+  —vuelve enseguida— pero lo que la acota eran dos líneas en dos funciones
+  que no se ven la una a la otra. Ahora está escrito donde está el bucle y
+  hay quien lo vigile.
+
+### What's new
+
+- **Nothing in the radio.** Every build warned about an unbounded recursion
+  in the chart-file close path, and the worst-case stack figure counted that
+  path as zero. It is bounded —it returns at once— but what bounds it was
+  two lines in two functions that cannot see each other. It is now written
+  where the loop is, and something checks it.
+
+---
+
+## V5.61 · 2026-10-21
+
+### Qué cambia
+
+- **Nada en la radio.** El banco de pruebas del fax mandaba una señal de
+  fase de sesenta líneas a las cuatro velocidades, que son treinta segundos
+  a 120 líneas por minuto pero sesenta a 60: a esa velocidad y a 90 no
+  estaba probando el enganche sino el tope de seguridad. Se veía en su
+  propia salida —228 renglones de los 200 emitidos— y nada lo miraba,
+  porque la única comprobación de esa cuenta era por abajo.
+
+### What's new
+
+- **Nothing in the radio.** The fax test bench sent a sixty-line phasing
+  signal at all four speeds, which is thirty seconds at 120 lines per minute
+  but sixty at 60: at that speed and at 90 it was not testing the lock but
+  the safety timeout. It showed in the bench's own output —228 rows out of
+  the 200 sent— and nothing looked, because the only check on that count was
+  a lower bound.
+
+---
+
+## V5.60 · 2026-10-21
+
+### Qué cambia
+
+- **Nada en la radio.** Los tres bancos de pruebas del fax llevaban la lista
+  de velocidades y un par de medidas escritas a mano, copiadas del firmware.
+  El día que una cambiara, los tres habrían seguido probando las de antes y
+  dando verde. Ahora las preguntan.
+
+### What's new
+
+- **Nothing in the radio.** The three fax test benches carried the speed
+  list and a couple of sizes written out by hand, copied from the firmware.
+  The day one of them changed, all three would have carried on testing the
+  old ones and showing green. They now ask for them.
+
+---
+
+## V5.59 · 2026-10-21
+
+### Qué cambia
+
+- **Nada en la radio.** Uno de los bancos del guardado modelaba el firmware
+  de anteayer: ignoraba el estado del decodificador a propósito, y eso dejó
+  de ser cierto cuando el tono de fin empezó a cerrar el fichero. Daba verde
+  comprobando que el botón no puede llenar el disco de ficheros, y no decía
+  nada del camino nuevo — que es justo el que puede repetirse deprisa.
+
+### What's new
+
+- **Nothing in the radio.** One of the recording benches was modelling the
+  firmware of two days ago: it ignored the decoder's state on purpose, and
+  that stopped being true when the stop tone began closing the file. It gave
+  a green light checking that the button cannot flood the disk with files,
+  and said nothing about the new path — which is precisely the one that can
+  repeat quickly.
+
+---
+
+## V5.58 · 2026-10-21
+
+### Qué cambia
+
+- **Nada en la radio.** Un banco de pruebas nuevo que aporrea el
+  decodificador de fax: ruido, tonos, señal de fase e imagen en el orden que
+  salga, con los botones pulsados al azar, y después una carta limpia para
+  comprobar que sigue entrando. Existe porque los cuatro fallos que salieron
+  en las revisiones de los últimos días eran todos de la misma familia
+  —estado que sobrevive a una transición que nadie probó— y ninguno lo
+  podía ver un banco que sólo manda señales bien formadas.
+
+### What's new
+
+- **Nothing in the radio.** A new test bench that hammers the fax decoder:
+  noise, tones, phasing signal and picture in whatever order comes up, with
+  the buttons pressed at random, and then a clean chart to check it still
+  comes through. It exists because the four bugs found in the last few days'
+  reviews were all of the same family —state surviving a transition nobody
+  tested— and none of them could be seen by a bench that only sends
+  well-formed signals.
+
+---
+
+## V5.57 · 2026-10-21
+
+### Qué cambia
+
+- **Nada en la radio.** Los dos bancos de pruebas del fax se corren ahora
+  también con los detectores de tiempo de ejecución del compilador, que
+  miran si por el camino se hace algo que el lenguaje no define. Los dos
+  pasan limpios; lo que faltaba era que alguien lo comprobara, porque el
+  peor fallo que encontró esta revisión era exactamente de esa clase.
+
+### What's new
+
+- **Nothing in the radio.** The two fax test benches now also run under the
+  compiler's runtime checks, which watch for anything the language leaves
+  undefined. Both pass clean; what was missing was anything checking it,
+  because the worst bug this review found was exactly of that kind.
+
+---
+
+## V5.56 · 2026-10-21
+
+### Qué cambia
+
+- **Cuando el recolocado se corta, el cartel dice además por qué.** La
+  radio ya sabía cuál de las tres causas había sido —«el fichero se acaba
+  antes de tiempo», «la cadena del fichero se rompe», «el giro se ha
+  descolocado»— y el manual prometía que las nombra, pero en pantalla sólo
+  salía «Cortado: la carta queda a medias». Ahora la causa va en el renglón
+  de abajo.
+- **Por dentro:** el tamaño del bloque que el recolocado toma prestado
+  estaba escrito en tres sitios y atado en ninguno; ahora lo comprueba el
+  compilador.
+
+### What's new
+
+- **When a re-align is cut short, the card now also says why.** The radio
+  already knew which of the three causes it was —the file ends too soon, the
+  file's chain is broken, the rotation lost its place— and the manual
+  promised it names them, but the screen only said «Cut short: the chart is
+  half done». The cause now goes on the line below.
+- **Under the hood:** the size of the block the re-align borrows was written
+  in three places and tied in none; the compiler now checks it.
+
+---
+
+## V5.55 · 2026-10-21
+
+### Qué cambia
+
+- **Nada que se vea.** Limpieza por dentro del fax: una macro definida dos
+  veces y usada cero, dos funciones públicas que no llamaba nadie —una de
+  ellas, una segunda forma de preguntar algo que ya se podía preguntar— y
+  una tercera que estaba abierta a todo el mundo con un aviso al lado
+  diciendo que sólo era segura mientras nadie la usara. Esa se ha cerrado
+  en vez de seguir avisando.
+
+### What's new
+
+- **Nothing visible.** Housekeeping inside the fax: a macro defined twice
+  and used zero times, two public functions nobody called —one of them a
+  second way to ask something that could already be asked— and a third that
+  was open to everyone with a note beside it saying it was only safe while
+  nobody used it. That one has been closed instead of carrying on warning.
+
+---
+
+## V5.54 · 2026-10-21
+
+### Qué cambia
+
+- **Una orden de modo por USB ya no parte la carta en dos ficheros.**
+  Cualquier programa que ponga el modo por CAT —un WSJT-X o un fldigi lo
+  hacen al arrancar, aunque sea el modo que ya está puesto— reiniciaba el
+  decodificador del fax de cero: la carta que se estaba grabando se cerraba
+  a medias, lo que venía detrás iba a un fichero nuevo, se perdían los 25
+  segundos del cerrojo entre los dos y encima salía el cartel ofreciendo
+  recolocar media carta. También pasaba al cambiar de banda y al elegir
+  WEFAX en la rejilla estando ya en WEFAX.
+- **Y ya no deja el cartel de recolocar invisible pero puesto.** Ese mismo
+  camino borraba la zona entera del panel —cartel y vista previa incluidos—
+  sin que nadie la repintara: la pantalla quedaba limpia y el táctil del
+  panel seguía comido hasta que el cartel caducaba a los cinco minutos.
+
+### What's new
+
+- **A mode command over USB no longer splits a chart into two files.** Any
+  program that sets the mode over CAT —a WSJT-X or a fldigi does it at
+  startup, even to the mode already selected— restarted the fax decoder from
+  scratch: the chart being recorded was closed half done, what followed went
+  into a new file, the 25-second lock was lost between the two, and the
+  re-align card appeared offering to rotate half a chart. It also happened
+  on a band change and on picking WEFAX from the grid while already in
+  WEFAX.
+- **And it no longer leaves the re-align card invisible but active.** That
+  same path wiped the whole panel area —card and preview included— with
+  nothing to repaint it: the screen went clean while the panel's touch input
+  stayed swallowed until the card timed out five minutes later.
+
+---
+
+## V5.53 · 2026-10-21
+
+### Qué cambia
+
+- **Los tres botones de banda del fax ya reciben fax.** FAX 4, FAX 8 y FAX
+  14 sintonizaban 3.855, 7.880 y 13.882,5 kHz, que son las frecuencias que
+  publica el DWD — y lo que publica es el centro de la emisión, no la
+  portadora. En banda lateral alta el dial va 1,9 kHz por debajo; con el
+  dial en la publicada, los tonos de la imagen caen en la banda lateral que
+  la USB suprime y no entra nada. Ahora son 3.853,1 / 7.878,1 / 13.880,6
+  kHz, y el manual da las dos cifras al lado de cada banda.
+- **El manual contaba otra radio en cuatro sitios:** una velocidad de 180
+  líneas por minuto que no existe; «cada fichero son 128 renglones, poco más
+  de un minuto» cuando son 1.536 y doce minutos y medio; «el fax reserva 600
+  líneas» cuando hace un mes que no reserva nada por delante; y que una
+  carta a medias se cierra sola a los diez segundos de silencio, que es del
+  SSTV y no del fax.
+
+### What's new
+
+- **The three fax band buttons now receive fax.** FAX 4, FAX 8 and FAX 14
+  tuned 3,855, 7,880 and 13,882.5 kHz, which are the frequencies the DWD
+  publishes — and what it publishes is the centre of the emission, not the
+  carrier. On upper sideband the dial sits 1.9 kHz below; with the dial on
+  the published figure, the picture tones land in the sideband that USB
+  suppresses and nothing comes through. They are now 3,853.1 / 7,878.1 /
+  13,880.6 kHz, and the manual gives both figures beside each band.
+- **The manual described a different radio in four places:** a 180 lines per
+  minute speed that does not exist; "each file is 128 rows, a little over a
+  minute" when it is 1,536 and twelve and a half minutes; "the fax reserves
+  600 lines" when it has not reserved anything up front for a month; and
+  that a half-done chart closes itself after ten seconds of silence, which
+  is SSTV's behaviour and not the fax's.
+
+---
+
+## V5.52 · 2026-10-21
+
+### Qué cambia
+
+- **Ya no se pierden los primeros segundos de cada carta cuando llegan
+  seguidas.** Entre cerrar un fichero y abrir el siguiente había un cerrojo
+  de un minuto. Se puso cuando lo único que cerraba era el botón; desde que
+  cierra también el tono de fin, ese minuto se comía los primeros 17 a 40
+  segundos de la carta siguiente — justo la franja de arriba, que es donde
+  va la cabecera con la hora y el nombre de la estación. Ahora son 25
+  segundos, que siguen siendo más de lo que tarda ninguna carta legítima en
+  empezar a pintar.
+- **Después de recolocar, la grabación vuelve a los 25 segundos** en vez de
+  hasta un minuto.
+- **Por dentro:** fuera otra constante muerta cuyo comentario describía un
+  mecanismo que ya no existe, y el banco del cerrojo mide ahora el
+  invariante en vez de una copia del número.
+
+### What's new
+
+- **Back-to-back charts no longer lose their first seconds.** There was a
+  one-minute lock between closing one file and opening the next. It was
+  added when only the button closed files; since the stop tone closes them
+  too, that minute ate the first 17 to 40 seconds of the next chart — the
+  top band, which is where the header with the time and station name goes.
+  It is now 25 seconds, still longer than any legitimate chart takes to
+  start painting.
+- **After a re-align, recording resumes in 25 seconds** instead of up to a
+  minute.
+- **Under the hood:** another dead constant whose comment described a
+  mechanism that no longer exists is gone, and the lock's test bench now
+  measures the invariant instead of a copy of the number.
+
+---
+
+## V5.51 · 2026-10-21
+
+### Qué cambia
+
+- **Tocar el cartel de recolocar ya no mueve la línea de corte.** El cartel
+  se dibuja encima de la imagen, así que un toque en el mensaje se colaba
+  como un toque en la carta y la línea saltaba a esa columna — a un sitio
+  que además tapa el propio cartel, así que lo único que se veía cambiar era
+  el número de píxeles de al lado del OK.
+- **Por dentro:** se quita una bandera que el arreglo de la versión anterior
+  dejó muerta, y con ella un `if` que no se ejecutaba nunca y cuyo
+  comentario decía que protegía la primera fila de todas las cartas.
+- **Y el banco del fax prueba ahora tres caminos que no probaba nadie:** el
+  tono de fin que cierra el fichero, la carta siguiente que se engancha
+  sola, y el botón de Sincroniza para cuando se llega tarde a una carta.
+
+### What's new
+
+- **Tapping the re-align card no longer moves the cut line.** The card is
+  drawn on top of the picture, so a tap on its message fell through as a tap
+  on the chart and the line jumped to that column — to a spot hidden by the
+  card itself, so the only visible change was the pixel count next to OK.
+- **Under the hood:** a flag left dead by the previous release is gone, and
+  with it an `if` that never ran whose comment claimed it protected the first
+  row of every chart.
+- **And the fax test bench now covers three paths nobody tested:** the stop
+  tone that closes the file, the next chart locking on by itself, and the
+  Sync button for when you tune in mid-chart.
+
+---
+
+## V5.50 · 2026-10-21
+
+### Qué cambia
+
+- **Se acabó la franja negra encima de todas las cartas.** El decodificador
+  entraba en imagen en cuanto terminaba de engancharse, y lo que quedaba de
+  señal de fase se pintaba como carta: 13 renglones a 60 líneas por minuto,
+  26 a 120 y **86 a 240**, negros y rayados, encima de cada mapa y dentro
+  del fichero guardado. Ahora, hechas las pasadas del enganche, sigue en
+  fase —donde no se guarda nada— hasta que la señal se acaba de verdad. A
+  las cuatro velocidades llegan 59 de cada 60 líneas de imagen y ninguna de
+  la fase.
+- **El botón de Sincroniza ya no puede rebotar solo.** Al forzar la imagen
+  no se limpiaba el detector de tonos, así que si la media del tono de fin
+  venía alta —que es justo lo que pasa cuando el decodificador no engancha,
+  o sea cuando se usa el botón— la radio volvía a «buscando» en 20 ms. El
+  botón parecía no hacer nada.
+- **Cambiar de velocidad a mitad del enganche ya no deja la medida a
+  medias.** El mando reiniciaba el seguidor de fase sin cerrar las
+  interrupciones y publicaba la velocidad nueva antes del reloj viejo: entre
+  una cosa y otra cabía una línea entera, y el tope de seguridad podía saltar
+  justo ahí.
+- **Dejar la línea de recolocar en el borde izquierdo ya no da error.** Es
+  la forma de decir «déjala como está», y contestaba «No se ha podido
+  recolocar» —y antes cerraba la carta que se estuviera grabando para nada—.
+  Ahora dice «La carta se deja como esta» y no toca nada.
+
+### What's new
+
+- **No more black band at the top of every chart.** The decoder switched to
+  image as soon as it finished locking on, so the rest of the phasing signal
+  was painted as chart: 13 rows at 60 lines per minute, 26 at 120 and **86 at
+  240**, black and striped, on top of every map and inside the saved file. It
+  now stays in phasing — where nothing is recorded — until the signal really
+  ends. At all four speeds 59 out of every 60 image lines arrive, and none
+  from the phasing signal.
+- **The Sync button can no longer bounce straight back.** Forcing image did
+  not clear the tone detector, so if the stop-tone average happened to be
+  high — which is exactly the case when the decoder will not lock on, i.e.
+  when you reach for the button — the radio returned to "searching" within
+  20 ms. The button looked dead.
+- **Changing speed mid-lock no longer leaves half a measurement.** The knob
+  reset the phase tracker without masking interrupts, and published the new
+  speed before the new clock: a whole line fitted in between, and the safety
+  timeout could fire right there.
+- **Leaving the re-align line at the left edge is no longer an error.** That
+  is how you say "leave it as it is", and it answered "Could not re-align" —
+  after closing whatever chart was being recorded, for nothing. It now says
+  "The chart is left as it is" and touches nothing.
+
+---
+
+## V5.49 · 2026-10-21
+
+### Qué cambia
+
+- **La carta ya no sale con renglones cosidos.** El anillo de ocho líneas
+  entre el decodificador y el bucle tenía capacidad para siete, no para
+  ocho: con el anillo lleno, lo que se entregaba era el renglón que se
+  estaba escribiendo en ese momento —media línea de ahora y media de hace
+  ocho—. Pasa cuando el bucle se entretiene, que es justo cuando se está
+  grabando en la flash.
+- **Y ya no quedan renglones de basura al pie.** Al llegar el tono de fin
+  quedaban líneas sin recoger, y a partir de ahí se entregaba el buffer
+  vivo: uno a tres renglones de ruido al final de la carta guardada, y a
+  veces al principio de la siguiente.
+- **A 60 líneas por minuto faltaba la franja de arriba de todas las
+  cartas.** El enganche pedía 33 líneas de señal de fase y a esa velocidad
+  solo caben 30 en los 30 segundos que dura; el decodificador se quedaba
+  esperando una segunda pasada imposible, y en ese estado no se guarda
+  nada. Se perdían 36 segundos de carta, que es donde va la cabecera con la
+  hora. Ahora las pasadas se calculan desde la velocidad.
+- **El tono de fin cierra la carta**, que era lo que faltaba: con el botón
+  de guardar puesto, el fichero seguía abierto después del final y se
+  tragaba el silencio y el principio de la carta siguiente.
+- **La primera línea de todas las cartas salía a medias** —el salto del
+  último ajuste de fase parte la línea en curso y esa línea se entregaba
+  igual—, y el ajuste de fase **desperdiciaba una de sus dos pasadas**
+  siempre que el pulso caía en la mitad derecha de la línea.
+- **El botón «Sincroniza» podía no hacer nada**, sin dejar rastro.
+- **Cambiar la velocidad a mitad de la señal de fase** podía sacar la carta
+  con una inclinación disparatada.
+- **El cartel de recolocar ya no aparece cuando la carta solo cambia de
+  fichero** al llegar a su altura máxima, ni con la pantalla dormida o un
+  menú delante. Y si la reescritura se corta por el camino lo dice tal cual:
+  «Cortado: la carta queda a medias».
+- **Un tono de fin perdido ya no cose dos cartas en un fichero.** De
+  «imagen» solo se salía con el tono de parada, y en onda corta el final de
+  una carta es justo donde se desvanece: si ese tono llegaba enterrado, el
+  decodificador se quedaba en imagen para siempre y la carta siguiente se
+  pintaba encima, a la velocidad de la anterior. Ahora un tono de arranque
+  sostenido también cierra.
+- **El renglón ya no se presta, se copia.** El decodificador entregaba un
+  puntero a su anillo y el bucle se iba con él a escribir en la flash, que
+  puede tardar cientos de milisegundos; en ese rato la interrupción podía
+  volver a esa posición y escribir encima. Ahora la copia se hace con las
+  interrupciones cerradas y el problema no puede existir.
+- **Mientras decides si recolocar, la radio sigue grabando.** Si entra la
+  carta siguiente, se guarda. Al aceptar se cierra ese fichero —queda entero
+  y válido— porque la reescritura necesita para ella sola el bloque de
+  trabajo del grabador, así que después de recolocar la grabación tarda
+  hasta un minuto en volver a arrancar.
+- **Y el cartel ya no deja la radio sin táctil.** Si no se puede ver —menú
+  delante, pantalla dormida, o un mando CAT que ha cambiado de modo— deja de
+  comerse los toques en vez de seguir siendo invisible y modal.
+
+### What's new
+
+- **Charts no longer come out with stitched lines.** The eight-line ring
+  between decoder and main loop could only hold seven: with the ring full,
+  what was handed over was the line being written at that moment — half of
+  it from now and half from eight lines ago. It happens when the loop is
+  busy, which is exactly when it is writing to flash.
+- **And no more rubbish lines at the foot.** When the stop tone arrived,
+  lines were left uncollected and from then on the live buffer was handed
+  out: one to three lines of noise at the end of the saved chart, and
+  sometimes at the start of the next one.
+- **At 60 lines per minute the top strip of every chart was missing.** The
+  lock-on needed 33 lines of phasing signal and only 30 fit in the 30
+  seconds it lasts; the decoder waited for a second pass that could never
+  come, and in that state nothing is saved. 36 seconds of chart were lost —
+  where the header with the time goes. The number of passes is now derived
+  from the line rate.
+- **The stop tone now closes the chart**, which was missing: with the save
+  button on, the file stayed open past the end and swallowed the silence
+  and the beginning of the next chart.
+- **The first line of every chart came out half-written** — the jump from
+  the last phasing adjustment splits the line in progress, and that line was
+  handed over anyway — and the phasing adjustment **wasted one of its two
+  passes** whenever the pulse fell in the right-hand half of the line.
+- **The «Sync» button could silently do nothing.**
+- **Changing the line rate mid-phasing** could produce a wildly skewed
+  chart.
+- **The re-align card no longer appears when the chart is merely rolling
+  over** to a new file at maximum height, nor with the screen asleep or a
+  menu in front. And if the rewrite is cut short it says so plainly: «Cut
+  short: the chart is half done».
+- **A missed stop tone no longer stitches two charts into one file.** The
+  only way out of «image» was the stop tone, and on shortwave the end of a
+  chart is exactly where it fades: if that tone arrived buried, the decoder
+  stayed in image for ever and the next chart was painted on top at the
+  previous chart's speed. A sustained start tone now closes it too.
+- **The line is copied, not lent.** The decoder handed out a pointer into
+  its ring and the loop went off to write to flash with it, which can take
+  hundreds of milliseconds; in that time the interrupt could come back round
+  and overwrite it. The copy is now made with interrupts off, so the problem
+  cannot exist.
+- **While you decide whether to re-align, the radio keeps recording.** If
+  the next chart arrives, it is saved. Accepting closes that file — whole
+  and valid — because the rewrite needs the recorder's working block all to
+  itself, so after a re-align recording takes up to a minute to start again.
+- **And the card no longer leaves the radio without a touchscreen.** If it
+  cannot be seen — menu in front, screen asleep, or a CAT command that
+  changed mode — it stops swallowing touches instead of staying invisible
+  and modal.
+
+---
+
+## V5.48 · 2026-10-21
+
+### Qué cambia
+
+- **El centrado de la carta se elige al final, con una línea, y no con un
+  botón mientras entra.** El botón que corría la imagen 21 puntos por toque
+  ha desaparecido. Al acabar una carta —porque llega el tono de fin o porque
+  se deja de guardar— sale un cartel: **¿Recolocar la imagen?**. Diciendo que
+  sí, el mismo cartel se convierte en un **OK** y aparece una **línea negra
+  vertical** sobre la carta, que se mueve con el mando y tocando la pantalla.
+  Donde se deje la línea pasa a ser el borde izquierdo: lo que estaba a su
+  derecha se pega a la izquierda y lo que estaba a su izquierda se va al
+  final. No se pierde ni un punto, y **se reescribe el fichero de la flash**,
+  no solo lo que se ve.
+- **Y por eso el fichero se graba sin centrar.** Con el botón de antes, una
+  carta en la que se tocaba a mitad quedaba grabada con dos centrados dentro:
+  una costura que ninguna recolocación posterior puede deshacer.
+- **La chapa de estado del fax recupera 73 puntos de ancho**, que es el sitio
+  que ocupaba aquel botón.
+
+### What's new
+
+- **The chart's alignment is now chosen at the end, with a line, instead of
+  with a button while it comes in.** The button that shifted the picture by
+  21 pixels per tap is gone. When a chart finishes — the stop tone arrives,
+  or saving is turned off — a card asks: **Re-align the picture?**. Say yes
+  and the same card turns into an **OK** button while a **vertical black
+  line** appears over the chart; it moves with the knob and by touch. Wherever
+  the line is left becomes the new left edge: what was to its right is moved
+  against the left margin and what was to its left wraps round to the end.
+  Not one pixel is lost, and **the file in flash is rewritten**, not just
+  what is on screen.
+- **That is why the file is now written un-centred.** With the old button, a
+  chart you adjusted halfway through was stored with two different alignments
+  inside it — a seam that no later re-alignment can undo.
+- **The fax status chip gets 73 pixels of width back**, the room that button
+  used to take.
+
+---
+
 ## V5.47 · 2026-10-20
 
 ### Qué cambia
@@ -32,6 +948,16 @@ ordered by date, does not spare the detail, and is not published.
   pudo escribir— el contador incluía renglones que no llegaron al fichero: el
   BMP prometía más imagen de la que tiene dentro, que es justo como un visor
   dice que el fichero está dañado.
+- **El cargador de arranque vuelve a caber en sus 32 kB** (`v2.19`). Se había
+  pasado por 136 bytes. Lo que lo sacaba eran seis funciones de la biblioteca
+  del fabricante que el cargador llamaba para encender la luz de la pantalla:
+  cada una lleva dentro un `switch` con los catorce temporizadores o con los
+  cuatro canales, y el enlazador se las trae enteras aunque aquí solo se use
+  **un** canal de **un** temporizador. Ahora esas escrituras están puestas a
+  mano, y **no por deducción**: un banco compila el fichero del fabricante tal
+  cual en el PC y exige que los dos caminos dejen los mismos registros con los
+  mismos valores. **896 bytes recuperados, 760 libres**, y ni un solo texto de
+  pantalla tocado.
 
 ### What's new
 
@@ -45,6 +971,15 @@ ordered by date, does not spare the detail, and is not published.
   be written — the counter included rows that never reached the file, so the
   BMP promised more image than it holds. That is exactly how a viewer decides
   a file is damaged.
+- **The bootloader fits in its 32 kB again** (`v2.19`). It had overflowed by
+  136 bytes. What pushed it out were six vendor-library functions the
+  bootloader called to turn the backlight on: each one carries a `switch` over
+  all fourteen timers or all four channels, and the linker pulls them in whole
+  even though only **one** channel of **one** timer is used here. Those
+  register writes are now done by hand, and **not from guesswork**: a bench
+  compiles the vendor file unmodified on the PC and requires both paths to
+  leave the same registers holding the same values. **896 bytes recovered, 760
+  free**, and not one on-screen string touched.
 
 ---
 

@@ -13,10 +13,10 @@ repositorio se tomó midiendo y no a ojo.
 > grabar este firmware y volver al firmware original en cualquier momento.
 > No secuestramos ni bloqueamos ningún dispositivo.**
 
-`V5.47` · cargador `v2.17` · **dos binarios, uno por chip**:
-`update.bin` 476.928 B CRC `E9084F61` (GD32F450VET6, 512 kB) ·
-`update_470.bin` 476.960 B CRC `52BED227` (GD32F470VGT6, 1024 kB) ·
-**229 comprobaciones en verde, 0 fallos** (`make comprueba`)
+`V5.75` · cargador `v2.19` · **dos binarios, uno por chip**:
+`update.bin` 482.032 B CRC `681D6367` (GD32F450VET6, 512 kB) ·
+`update_470.bin` 482.056 B CRC `8075A367` (GD32F470VGT6, 1024 kB) ·
+**239 comprobaciones en verde, 0 fallos** (`make comprueba`)
 
 🇬🇧 [English below](#deepsdr-101--open-firmware) · 📘
 [Manual de uso (PDF, ES + EN)](DeepSDR_Reload_Manual-ES-EN.pdf)
@@ -458,26 +458,32 @@ comprobar.
 ## Estado
 
 ```
-  VERSION V5.47          CARGADOR v2.17
+  VERSION V5.75          CARGADOR v2.19
   update.bin  +  update_470.bin      <- 450VET6 (512 kB)  /  470VGT6 (1024 kB)
   customboot.bin  +  customboot_470.bin                   BD.BIN
   ZONA ALTA  520.192 de  847.872   libre 327.680  (294.909 aviones,
                                      211.387 emisoras, 5.592 la fuente)
-  FLASH   472.832 de 491.520   libre  18.688   <- UNA region, sin desvan
-  FLASH 470  472.856 de 1.015.808 libre 542.952 <- el mismo codigo, otro .ld
-  CARGADOR 32.632 de  32.768   libre     136   <- DOS sectores, no tres
-  RAM     195.172 de 196.608   libre   1.436   <- .bss + .data + .noinit
-  RAM 470    194.876 de 458.752  libre 263.876  <- 448 kB contiguos
-  TCM      64.400 de  65.536   libre   1.136   <- y eso ES la pila
-  PILA      5.672 de  6.768    margen  1.096 (16%)  <- CON anidamiento
+  FLASH   482.032 de 491.520   libre  9.488   <- UNA region, sin desvan
+  FLASH 470  482.056 de 1.015.808 libre 533.752 <- el mismo codigo, otro .ld
+  CARGADOR 32.008 de  32.768   libre     760   <- DOS sectores, no tres
+  RAM     190.932 de 196.608   libre   5.676   <- .bss + .data + .noinit
+  RAM 470    190.932 de 458.752  libre 267.820  <- 448 kB contiguos
+  TCM      57.320 de  65.536   libre   8.216   <- y eso ES la pila
+  PILA      4.368 de  8.216    margen  3.848 (47%)  <- CON anidamiento
   avisos del compilador  0     comprobaciones  todas en verde
 ```
 
-La RAM va al 99,98 % —treinta y dos bytes libres de 192 kB, los que pone la
-tabla—. Eso no es un descuido: es el techo real del chip, y cada
-modo nuevo de los últimos meses ha tenido que pagar su sitio quitándoselo a
-otro. Los giros 6 y 7 de HFDL, por ejemplo, **no caben** y están documentados
-como tal en vez de prometidos.
+La RAM va al 96,2 % —7.412 bytes libres de 192 kB, los que pone la tabla—, y
+ese margen es más estrecho de lo que parece: el mayor bloque suelto del
+firmware ocupa 60 kB él solo, así que lo que queda no da para un modo nuevo,
+da para un retoque. Cada modo de los últimos meses ha tenido que pagar su
+sitio quitándoselo a otro. Los giros 6 y 7 de HFDL, por ejemplo, **no caben**
+y están documentados como tal en vez de prometidos.
+
+Los números de arriba no están escritos a mano: los saca
+`tools/estado_check.py` de los `.bin` y de los dos mapas del enlazador, y
+`make comprueba` falla si el README y el enlazador dejan de decir lo mismo.
+Hasta el 20/10/2026 sí estaban a mano, y seis de los once renglones mentían.
 
 Lo que falta, lo que no está probado en antena y los fallos conocidos están
 anotados en el cuaderno de taller, que no se publica.
@@ -538,10 +544,10 @@ in this repository was made by measuring rather than by eye.
 > It is also entirely reversible: anyone can flash this firmware and go back
 > to the original one at any time. We do not hold or lock any device.**
 
-`V5.47` · bootloader `v2.17` · **two builds, one per chip**:
-`update.bin` 476,928 B CRC `E9084F61` (GD32F450VET6, 512 kB) ·
-`update_470.bin` 476,960 B CRC `52BED227` (GD32F470VGT6, 1024 kB) ·
-**229 checks green, 0 failures** (`make comprueba`)
+`V5.75` · bootloader `v2.19` · **two builds, one per chip**:
+`update.bin` 482,032 B CRC `681D6367` (GD32F450VET6, 512 kB) ·
+`update_470.bin` 482,056 B CRC `8075A367` (GD32F470VGT6, 1024 kB) ·
+**239 checks green, 0 failures** (`make comprueba`)
 
 📘 [User manual (PDF, ES + EN)](DeepSDR_Reload_Manual-ES-EN.pdf)
 

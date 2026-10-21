@@ -57,7 +57,7 @@ enum { BUSCA = 0, FASE, IMAGEN };
 #define PASO_MS      500U
 
 typedef struct {
-    uint8_t  hay, fallo, hubo, disco_lleno, en_modo;
+    uint8_t  hay, fallo, hubo, disco_lleno, en_modo, era_imagen;
     char     dueno;                /* 'W' la carta de fax, 'S' el SSTV */
     uint32_t ms, ult;
     uint16_t enfichero, escritos, ficheros, intentos;
@@ -104,8 +104,8 @@ static void cierra_si_es(poll_t *p, char dueno)
 static void poll(poll_t *p, uint8_t estado, uint8_t lineas, uint8_t guarda)
 {
     uint8_t i;
+    uint8_t ahora = (uint8_t)(estado == IMAGEN);
 
-    (void)estado;          /* a proposito: ya no pinta nada */
     p->ms += PASO_MS;
 
     if (!p->en_modo) { cierra_si_es(p, 'W'); return; }
@@ -125,6 +125,30 @@ static void poll(poll_t *p, uint8_t estado, uint8_t lineas, uint8_t guarda)
     } else {
         cierra_si_es(p, 'W');
     }
+
+    /*
+     * *** Y EL TONO DE FIN, QUE EL MODELO NO TENIA - 21/10/2026. ***
+     *
+     * Aqui ponia `(void)estado;  / * a proposito: ya no pinta nada * /`, y
+     * era verdad el 20/10: con "el boton manda", el estado del
+     * decodificador no decidia nada.
+     *
+     * El 21/10 dejo de serlo. fax_poll() cierra el fichero en la TRANSICION
+     * de imagen a no-imagen, que es lo que provoca el tono de fin de la
+     * emisora. O sea que desde entonces hay un cierre AUTOMATICO, y este
+     * modelo no lo tenia: comprobaba que el boton no puede hacer una riada
+     * de ficheros y no decia nada del tono - que es justo el que SI puede
+     * repetirse deprisa, y para el que existe el cerrojo.
+     *
+     * Un banco que modela el fax_poll() de anteayer mide una ficcion. Es lo
+     * mismo que le paso al tope de ficheros de este fichero, que era una
+     * copia a mano del valor del cerrojo.
+     *
+     * Va en el mismo sitio que en el firmware: despues de abrir o cerrar
+     * por el boton y antes de meter renglones.
+     */
+    if (p->era_imagen && !ahora) { cierra_si_es(p, 'W'); }
+    p->era_imagen = ahora;
 
     for (i = 0U; i < lineas; i++) {
         if (!p->hay) { break; }
@@ -166,7 +190,22 @@ static void poll_vecino(poll_t *p) { cierra_si_es(p, 'S'); }
  * si lo hay. Se usa para medir que el cerrojo lo aguanta. */
 static void poll_vecino_malo(poll_t *p) { cierra(p); }
 
-static void toca_boton(poll_t *p) { p->fallo = 0U; }
+/*
+ * EL DEDO SOBRE EL BOTON DE GUARDAR.
+ *
+ * Limpia las DOS cosas que callaban al interruptor, igual que el firmware:
+ *
+ *   - el aviso de que no hay sitio, que es lo que wfx_guarda.h dice con
+ *     todas las letras que limpia el boton. Esto ya estaba aqui... y el
+ *     firmware no lo hacia: el modelo llevaba desde el 20/10 probando una
+ *     linea que no existia, y en verde. Se arreglo el 21/10/2026, en el
+ *     firmware, que es donde estaba el fallo;
+ *   - y el cerrojo de los 25 segundos, que esta para que una riada de
+ *     cierres automaticos no haga una riada de ficheros. Un dedo no es una
+ *     riada: con el boton mandando, para tener dos ficheros hay que
+ *     tocarlo dos veces.
+ */
+static void toca_boton(poll_t *p) { p->fallo = 0U; p->hubo = 0U; }
 
 int main(void)
 {
@@ -190,20 +229,43 @@ int main(void)
     }
 
     /* ---------------------------------------------------------------
-     * 2. EL DECODIFICADOR PARPADEANDO: NO TIENE QUE CAMBIAR NADA.
+     * 2. DIEZ MINUTOS RECIBIENDO: UN FICHERO.
      * ---------------------------------------------------------------
-     * Es el caso que destrozo el disco del usuario tres veces. Diez
-     * minutos, el estado saltando entre imagen y fase cada dos por tres.
+     * *** ESTE CASO DECIA OTRA COSA HASTA EL 21/10/2026, Y LA DECIA DE UN
+     * FIRMWARE QUE YA NO EXISTE. ***
+     *
+     * Se llamaba "el decodificador parpadeando" y mandaba el estado
+     * saltando de imagen a fase cada siete vueltas, comprobando que eso no
+     * partia el fichero. Era el caso que destrozo el disco del usuario tres
+     * veces, y la regla que lo arreglo -el 20/10- fue "el boton manda, el
+     * estado del decodificador no decide nada".
+     *
+     * El 21/10 esa regla dejo de ser absoluta, a peticion: "que cierre ya
+     * sea porque el usuario le ha dado al boton o que le ha llegado la
+     * señal de fin desde la propia carta". Desde entonces fax_poll() cierra
+     * en la transicion de imagen a no-imagen.
+     *
+     * Y el modelo de este banco ignoraba `estado` -con un `(void)estado` y
+     * un comentario diciendo que era a proposito- asi que siguio dando
+     * verde. Un banco que modela el fax_poll() de anteayer mide una
+     * ficcion.
+     *
+     * LO QUE HAY QUE COMPROBAR SON DOS COSAS DISTINTAS, Y VAN SEPARADAS:
+     *
+     *   2. recibiendo de verdad, UN fichero. Hoy WEFAX_IMAGEN es PEGAJOSO:
+     *      de ahi solo se sale con un tono sostenido -ver apt_mira()-, asi
+     *      que el estado que manda este caso es el que de verdad puede
+     *      salir del decodificador de hoy. El "parpadeo" de antes ya no es
+     *      una entrada posible.
+     *
+     *   2b. y aunque parpadeara, el cerrojo lo capa. Ahi abajo.
      * --------------------------------------------------------------- */
-    printf("\n  diez minutos con el decodificador parpadeando\n");
+    printf("\n  diez minutos recibiendo una carta\n");
     {
         poll_t p; uint16_t k;
 
         memset(&p, 0, sizeof p); p.en_modo = 1U;
-        for (k = 0U; k < 1200U; k++) {
-            uint8_t est = ((k % 7U) == 6U) ? FASE : IMAGEN;
-            poll(&p, est, 1U, 1U);
-        }
+        for (k = 0U; k < 1200U; k++) { poll(&p, IMAGEN, 1U, 1U); }
         poll(&p, BUSCA, 0U, 0U);
 
         snprintf(t, sizeof t, "%u fichero(s), %u renglones de %u por fichero",
@@ -216,6 +278,39 @@ int main(void)
         snprintf(t, sizeof t, "%u reservas", p.intentos);
         di("y solo se reserva sitio al abrir cada uno",
            p.intentos == p.ficheros, t);
+    }
+
+    /* ---------------------------------------------------------------
+     * 2b. Y SI EL DECODIFICADOR PARPADEARA, EL CERROJO LO CAPA.
+     * ---------------------------------------------------------------
+     * No es un caso imposible por mucho que WEFAX_IMAGEN sea pegajoso: el
+     * umbral del tono de fin DENTRO de imagen son 200, y el comentario de
+     * apt_mira() dice con todas las letras que ese numero lo alcanza "una
+     * trama de semitono de una carta que dure medio segundo". Lo que lo
+     * impide en la practica es la guarda de 3 a 1 contra el otro tono; si
+     * alguna carta la pasara, esto es lo que saldria.
+     *
+     * Y lo que tiene que salir no es UN fichero -el tono de fin cierra, y
+     * eso es lo pedido- sino COMO MUCHO uno por cerrojo. Que es justo para
+     * lo que esta el cerrojo, y lo que la pasada 8 dejo sin comprobar al
+     * bajarlo de sesenta segundos a veinticinco.
+     * --------------------------------------------------------------- */
+    printf("\n  y si el decodificador parpadeara\n");
+    {
+        poll_t p; uint16_t k;
+        unsigned tope = (unsigned)(600000UL / CERROJO_MS) + 1U;
+
+        memset(&p, 0, sizeof p); p.en_modo = 1U;
+        for (k = 0U; k < 1200U; k++) {
+            uint8_t est = ((k % 7U) == 6U) ? FASE : IMAGEN;
+            poll(&p, est, 1U, 1U);
+        }
+        poll(&p, BUSCA, 0U, 0U);
+
+        snprintf(t, sizeof t, "%u ficheros en diez minutos, el tope son %u",
+                 p.ficheros, tope);
+        di("el cerrojo lo capa igual que al boton", p.ficheros <= tope, t);
+        di("y no son los 1200 de una riada", p.ficheros < 100U, t);
     }
 
     /* ---------------------------------------------------------------
@@ -283,23 +378,68 @@ int main(void)
     }
 
     /* ---------------------------------------------------------------
-     * 7. EL CERROJO: NUNCA MAS DE UN FICHERO POR MINUTO.
+     * 6b. Y QUITAR Y VOLVER A PONER EL BOTON ABRE YA, NO EN 25 SEGUNDOS.
+     * ---------------------------------------------------------------
+     * El boton es un interruptor y asi esta escrito en wfx_guarda.h y en el
+     * manual. No lo era: el cerrojo que para las riadas de cierres
+     * automaticos paraba tambien al dedo, asi que quitar el boton y volver
+     * a ponerlo -que es lo que hace cualquiera para empezar un fichero
+     * nuevo- dejaba veinticinco segundos sin grabar nada, con la chapa
+     * diciendo "listo".
+     *
+     * El cerrojo sigue entero para lo suyo: el caso 7, aqui abajo, lo mide
+     * sin tocar el boton ni una vez.
+     * --------------------------------------------------------------- */
+    printf("\n  quitar el boton y volver a ponerlo\n");
+    {
+        poll_t p; uint16_t k;
+
+        memset(&p, 0, sizeof p); p.en_modo = 1U;
+        for (k = 0U; k < 20U; k++) { poll(&p, IMAGEN, 1U, 1U); }
+        toca_boton(&p); poll(&p, IMAGEN, 1U, 0U);   /* lo quita: cierra */
+        toca_boton(&p); poll(&p, IMAGEN, 1U, 1U);   /* y lo pone otra vez */
+
+        snprintf(t, sizeof t, "%u fichero(s), y el segundo %s",
+                 p.ficheros + (p.hay ? 1U : 0U),
+                 p.hay ? "esta abierto" : "NO se ha abierto");
+        di("el segundo fichero se abre en la misma vuelta",
+           p.hay == 1U && p.ficheros == 1U, t);
+    }
+
+    /* ---------------------------------------------------------------
+     * 7. EL CERROJO: NUNCA MAS DE UN FICHERO POR CERROJO.
      * ---------------------------------------------------------------
      * No protege de nada que se sepa hoy. Esta porque el mismo sintoma
      * volvio tres veces por tres causas distintas, y un tope que no depende
      * de haber entendido la causa es lo unico que cubre la cuarta.
+     *
+     * *** EL TOPE SE SACA DE WFX_CERROJO_MS, NO SE ESCRIBE A MANO -
+     * 21/10/2026. ***
+     *
+     * Ponia `<= 11U`, que era "once en diez minutos" con el cerrojo en
+     * sesenta segundos. Es el mismo numero dicho dos veces, y el dia que el
+     * cerrojo cambio -hoy, de 60 s a 25- el banco se puso rojo sin que nada
+     * estuviera mal: lo que medía no era el invariante sino una copia del
+     * valor. Un banco que hay que editar cada vez que cambia una constante
+     * no vigila la constante, la persigue.
+     *
+     * Lo que se mide es el INVARIANTE: en una ventana de diez minutos no
+     * puede haber mas ficheros que ventanas de cerrojo, mas uno -el primero
+     * no espera-.
      * --------------------------------------------------------------- */
     printf("\n  el cerrojo, con el boton dando saltos\n");
     {
         poll_t p; uint16_t k;
+        unsigned tope = (unsigned)(600000UL / CERROJO_MS) + 1U;
 
         memset(&p, 0, sizeof p); p.en_modo = 1U;
         /* Diez minutos tocando el boton cada vuelta, que es lo peor que
          * puede hacer un usuario -o un fallo- con esto. */
         for (k = 0U; k < 1200U; k++) { poll(&p, IMAGEN, 1U, (uint8_t)(k & 1U)); }
 
-        snprintf(t, sizeof t, "%u ficheros en diez minutos", p.ficheros);
-        di("como mucho un fichero por minuto", p.ficheros <= 11U, t);
+        snprintf(t, sizeof t, "%u ficheros en diez minutos, el tope son %u",
+                 p.ficheros, tope);
+        di("como mucho un fichero por cerrojo", p.ficheros <= tope, t);
     }
 
     /* ---------------------------------------------------------------
@@ -358,21 +498,23 @@ int main(void)
      *
      * Esto pone el peor vecino imaginable: uno que cierra la carta en
      * CADA vuelta del bucle, sin mirar de quien es. Antes eso daba un
-     * fichero por vuelta. Ahora el cerrojo lo capa a uno por minuto.
+     * fichero por vuelta. Ahora el cerrojo lo capa a uno por cerrojo.
      * --------------------------------------------------------------- */
     printf("\n  y un cerrador desconocido, en cada vuelta\n");
     {
         poll_t p; uint16_t k;
+        unsigned tope = (unsigned)(600000UL / CERROJO_MS) + 1U;
 
         memset(&p, 0, sizeof p); p.en_modo = 1U;
         for (k = 0U; k < 1200U; k++) {
             poll(&p, IMAGEN, 2U, 1U);
             poll_vecino_malo(&p);   /* cierra sea de quien sea */
         }
-        snprintf(t, sizeof t, "%u ficheros en diez minutos", (unsigned)p.ficheros);
-        /* Diez minutos, un minuto de cerrojo: once como mucho -el primero
-         * no espera-. Sin cerrojo armado por el cierre serian 1200. */
-        di("ni asi pasa de un fichero por minuto", p.ficheros <= 11U, t);
+        snprintf(t, sizeof t, "%u ficheros en diez minutos, el tope son %u",
+                 (unsigned)p.ficheros, tope);
+        /* El tope sale del cerrojo, por lo mismo que arriba. Sin cerrojo
+         * armado por el cierre serian 1200. */
+        di("ni asi pasa de un fichero por cerrojo", p.ficheros <= tope, t);
         di("y no son los 1200 de una riada", p.ficheros < 100U, t);
     }
 

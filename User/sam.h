@@ -203,11 +203,32 @@ void sam_reset(sam_t *s);
  * ahi, y ademas sam_enganchado() dice que si. O sea que la radio no solo
  * suena mal, sino que afirma estar enganchada a una portadora que no es.
  *
- * Con 100 Hz el lazo no puede llegar a donde esta la intrusa. Lo que hace
- * entonces es quedarse contra el tope y decir QUE NO ESTA ENGANCHADO, que
- * es la verdad: con una intrusa 20 dB mas fuerte dentro del filtro no hay
- * demodulacion que salve eso -lo que salva es SAM-U/SAM-L o estrechar el
- * filtro-, pero una cosa es no poder y otra mentir.
+ * Con el margen estrecho el lazo no puede llegar a donde esta la intrusa.
+ * Lo que hace entonces es quedarse contra el tope y decir QUE NO ESTA
+ * ENGANCHADO, que es la verdad: con una intrusa 20 dB mas fuerte dentro del
+ * filtro no hay demodulacion que salve eso, pero una cosa es no poder y
+ * otra mentir.
+ *
+ * *** Y LO QUE LO SALVA ES ESTRECHAR EL FILTRO. SAM-U/SAM-L NO - 21/10/2026. ***
+ *
+ * Aqui ponia "lo que salva es SAM-U/SAM-L o estrechar el filtro", y la
+ * primera mitad es falsa. El porque esta en el orden de la cadena:
+ * sam_banda_lateral() llama primero a sam_bloque_cuad() -o sea al LAZO- y
+ * despues a fases_combina(), que es quien quita la banda que no se quiere.
+ * La banda se elige DETRAS del lazo, asi que el lazo ve las dos y ve la
+ * portadora intrusa este donde este.
+ *
+ * Medido, no deducido: sim/sam_captura.c, caso 2b. Con la intrusa 500 y
+ * 1.000 Hz POR DEBAJO -que es justo donde SAM-U deberia librar si librara
+ * de algo- las tres bandas dan el mismo numero hasta la decima, con los dos
+ * margenes. Con el ancho, SAM-U se va a una intrusa que esta en la banda
+ * que el usuario ha pedido NO oir.
+ *
+ * Elegir banda limpia el AUDIO, no el enganche. Lo otro -meter la seleccion
+ * de banda delante del lazo, que es lo que haria a SAM-U inmune a una
+ * intrusa del lado contrario- es un cambio en la cadena de demodulacion y
+ * no se hace de paso: queda escrito aqui y medido en el banco, que es lo
+ * que hace falta para poder decidirlo.
  *
  * Y ES UN AJUSTE POR UNA RAZON MEDIDA: lo que hay que cubrir con el margen
  * no es un capricho, es el ERROR DE SINTONIA, y ese error es proporcional a

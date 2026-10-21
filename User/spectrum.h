@@ -5,61 +5,65 @@
 #include "gfx2.h"   /* gfx2_surf_t: ver spectrum_pinta_en() */
 
 /*
- * Spectrum trace rendering + shared dB->RGB565 colormap (the same
- * palette colors both the live spectrum and the waterfall rows, so
- * the scale reads consistently between them).
+ * El dibujado de la traza del espectro y el mapa de color dB -> RGB565,
+ * que se comparte: la misma paleta pinta el espectro en vivo y las filas
+ * de la cascada, para que la escala se lea igual en los dos sitios.
  *
- * PERFORMANCE MODEL (this is the hot path of the whole UI): the
- * original implementation called a float colormap function - with
- * divisions and branches - once per LIT PIXEL, up to ~80k calls per
- * frame, which dominated the frame time by an order of magnitude
- * over the actual EXMC pixel writes. This version moves ALL float
- * math out of the per-pixel loop:
+ * COMO ESTA PENSADO EL COSTE, que esto es el camino caliente de toda la
+ * interfaz. La primera version llamaba a una funcion de color en coma
+ * flotante -con divisiones y bifurcaciones- una vez POR PIXEL ENCENDIDO,
+ * hasta unas 80.000 llamadas por cuadro, y eso se comia el tiempo de
+ * cuadro un orden de magnitud por encima de lo que costaba escribir los
+ * pixeles por el EXMC. Esta version saca TODA la coma flotante del bucle
+ * de pixeles:
  *
- *   - The palette is a 256-entry RGB565 lookup table built once by
- *     spectrum_init().
- *   - Per frame, dB values are folded to one value per screen COLUMN
- *     (averaging every FFT bin that lands in the column - cheap
- *     anti-aliasing, kills the nearest-neighbor shimmer), smoothed,
- *     and quantized to integer bar heights.
- *   - Per frame, one color per ROW is precomputed for the vertical
- *     gradient fill.
- *   - The per-pixel inner loop is then just an integer compare and a
- *     16-bit store into a row stripe that gfx_blit()s once per row.
+ *   - La paleta es una tabla de 256 entradas en RGB565 que monta una
+ *     sola vez spectrum_init().
+ *   - Una vez por cuadro, los dB se pliegan a un valor por COLUMNA de
+ *     pantalla -promediando todos los bins de la FFT que caen en esa
+ *     columna, que es antialias barato y mata el centelleo del vecino
+ *     mas proximo-, se suavizan y se cuantizan a alturas enteras.
+ *   - Una vez por cuadro se precalcula un color por FILA para el
+ *     degradado vertical.
+ *   - Y el bucle de dentro se queda en una comparacion entera y una
+ *     escritura de 16 bits en una tira de fila que se manda con
+ *     gfx_blit() una vez por fila.
  *
- * VISUALS:
- *   - Vertical gradient fill (each bar colored by height through the
- *     palette, classic "heat" look).
- *   - Asymmetric exponential smoothing per column: fast attack, slow
- *     decay - signals pop instantly, the floor calms down.
- *   - Optional decaying peak-hold markers.
- *   - A FIXED reference grid, dim under the trace: horizontal lines at
- *     even pixel fractions of the panel height, vertical lines at the
- *     panel's quarter/half/three-quarter columns (matching
- *     spec_span_labels_draw()'s own tick positions, so the grid lines
- *     up with the frequency labels underneath it). Pixel-fixed, NOT
- *     tied to the current dB scale or frequency span - see
- *     SPECTRUM_GRID_ROWS/COLS's own comment for why that distinction
- *     matters.
- *   - 1px bright trace on top of each bar.
+ * LO QUE SE VE:
+ *   - Relleno en degradado vertical: cada barra coloreada por su altura
+ *     a traves de la paleta, el aspecto clasico de mapa de calor.
+ *   - Suavizado exponencial asimetrico por columna: ataque rapido,
+ *     caida lenta. Las señales saltan al instante y el suelo se calma.
+ *   - Marcas de pico que se van apagando, opcionales.
+ *   - Una rejilla de referencia FIJA, tenue por debajo de la traza:
+ *     lineas horizontales en fracciones iguales de la altura del panel y
+ *     verticales en las columnas del cuarto, la mitad y los tres cuartos
+ *     -las mismas posiciones que las marcas de spec_span_labels_draw(),
+ *     asi que la rejilla cuadra con los rotulos de frecuencia de debajo-.
+ *     Fija en PIXELES, NO atada a la escala de dB ni al tramo de
+ *     frecuencia que haya puesto; por que esa distincion importa esta en
+ *     el comentario de SPECTRUM_GRID_ROWS/COLS.
+ *   - Un pixel de traza brillante encima de cada barra.
  */
 
 /*
- * Reference grid density - set either to 0 to disable that axis.
+ * Cuantas lineas lleva la rejilla de referencia. Poniendo cualquiera de
+ * los dos a 0 se quita ese eje.
  *
- * *** 08/09/2026 - changed from a dB-value grid to a fixed-PIXEL grid
- * ***, per the project owner: horizontal lines used to be drawn every
- * SPECTRUM_GRID_DB dB (mapped through the CURRENT db_min/db_max), so
- * with SAGC (spectrum auto-gain, see main.c's s_spec_agc_enabled)
- * continuously nudging db_min/db_max frame to frame, every gridline's
- * PIXEL position drifted up and down right along with it - constant,
- * distracting jitter on lines that are supposed to be a stable
- * reference. Evenly-spaced pixel rows/columns, computed straight from
- * the panel's own width/height, can't drift with anything that
- * changes per frame (the dB scale, the frequency span, AGC, zoom) -
- * they're just static reference lines dividing the panel into equal
- * bands, same visual role a sheet of graph paper plays, not a
- * calibrated readout of any particular dB or Hz value.
+ * *** 08/09/2026: se paso de una rejilla en dB a una rejilla fija en
+ * PIXELES ***, pedido por el usuario. Las lineas horizontales se pintaban
+ * cada SPECTRUM_GRID_DB dB, llevados a pantalla con el db_min/db_max DE
+ * ESE MOMENTO. Con el automatico del espectro -ver s_spec_agc_enabled en
+ * main.c- moviendo db_min y db_max cuadro a cuadro, la posicion EN
+ * PIXELES de cada linea subia y bajaba con ellos: un temblor constante y
+ * molesto en unas lineas que estan ahi justamente para ser una referencia
+ * quieta. Unas filas y columnas repartidas por igual, calculadas del
+ * ancho y el alto del propio panel, no pueden moverse con nada que cambie
+ * por cuadro -ni la escala de dB, ni el tramo de frecuencia, ni el
+ * automatico, ni el zoom-: son lineas de referencia quietas que parten el
+ * panel en bandas iguales, el mismo papel que hace una hoja de papel
+ * milimetrado, y no la lectura calibrada de ningun dB ni de ningun
+ * hercio en concreto.
  */
 #define SPECTRUM_GRID_ROWS 4 /* horizontal lines - N lines divide the panel into N+1 equal vertical bands */
 #define SPECTRUM_GRID_COLS 3 /* vertical lines - matches spec_span_labels_draw()'s quarter/half/three-quarter tick columns */
@@ -74,15 +78,17 @@
 #define SPECTRUM_PEAK_HOLD  0
 #define SPECTRUM_PEAK_DECAY 0.4f
 
-/* Vertical marker at the horizontal center (the VFO, when fed the
- * fftshifted I/Q spectrum). Drawn UNDER signals, over the grid, so it
- * never obscures a real trace. 0 disables.
+/* La marca vertical del centro: el VFO, cuando lo que entra es el
+ * espectro de I/Q ya desplazado. Se pinta POR DEBAJO de las señales y por
+ * encima de la rejilla, asi que nunca tapa una traza de verdad. Con 0 se
+ * quita.
  *
- * When low-IF tuning is active (see demod_am.h's LOW-IF TUNING note),
- * the demodulated signal doesn't sit on the true LO/center bin
- * anymore - it's DEMOD_IF_OFFSET_HZ away from it. spectrum_draw()'s
- * center_mark_offset_px parameter shifts this line to track the
- * actual demod point instead of always drawing it dead-center. */
+ * Cuando esta puesta la sintonia por frecuencia intermedia baja -ver la
+ * nota de LOW-IF TUNING en demod_am.h-, la señal que se demodula ya no
+ * esta en el bin del oscilador local: esta DEMOD_IF_OFFSET_HZ mas alla.
+ * El parametro center_mark_offset_px de spectrum_draw() corre esta linea
+ * para que siga al punto de demodulacion de verdad en vez de quedarse
+ * siempre clavada en el centro. */
 #define SPECTRUM_CENTER_MARK 1
 
 /* Build the palette LUT. Call once at startup, before the first
@@ -115,23 +121,23 @@ void spectrum_set_style(spectrum_style_t style);
 spectrum_style_t spectrum_get_style(void);
 
 /*
- * HEATMAP-only trace treatment - added 08/09/2026, per the project
- * owner, correcting this same feature's first pass: connecting the
- * bar-top trace across steep edges (see spectrum_draw()'s Pass 1.6)
- * initially kept using the fixed bright SPEC_COLOR_TRACE (white) for
- * the connector, which reads as a stark white contour hugging the
- * whole spectrum's silhouette - looks wrong, especially against
- * palettes where white doesn't already appear near the top of the
- * gradient. Default (0/OFF) now colors the trace - AND the connecting
- * bridge - with the SAME per-row palette color the bar fill already
- * uses at that height, so the top edge just reads as a clean,
- * connected, correctly-colored bar chart with no separate highlight
- * element at all. Set to 1/ON for the old explicit bright-white
- * contour instead, for anyone who prefers that visible highlight.
- * Only affects HEATMAP - LINE and OUTLINE keep their own fixed
- * SPEC_LINE_TRACE color unconditionally, since for THOSE two styles
- * the trace/contour line is the entire visual (OUTLINE draws nothing
- * else at all), not an optional highlight on top of a fill.
+ * Como se trata la traza, y SOLO en el modo de mapa de calor. Anadido el
+ * 08/09/2026, pedido por el usuario, corrigiendo la primera version de
+ * esta misma funcion: al unir la traza de arriba de las barras a traves
+ * de un escalon -ver la pasada 1.6 de spectrum_draw()- se seguia usando
+ * para el puente el SPEC_COLOR_TRACE fijo y brillante, o sea blanco, y
+ * eso se lee como un contorno blanco duro pegado a la silueta entera del
+ * espectro. Queda mal, sobre todo con paletas donde el blanco no aparece
+ * ya cerca de lo alto del degradado. Por defecto -0, apagado- la traza Y
+ * el puente que une se pintan ahora con el MISMO color de fila de la
+ * paleta que el relleno de la barra ya usa a esa altura, con lo que el
+ * borde de arriba se lee como un grafico de barras limpio, unido y del
+ * color que le toca, sin ningun realce aparte. Poniendolo a 1 se vuelve
+ * al contorno blanco explicito de antes, para quien prefiera ese realce.
+ * Solo afecta al mapa de calor: LINE y OUTLINE se quedan con su
+ * SPEC_LINE_TRACE fijo pase lo que pase, porque en ESOS dos estilos la
+ * linea de traza o de contorno es todo lo que se ve -OUTLINE no pinta
+ * nada mas- y no un realce opcional encima de un relleno.
  */
 void spectrum_set_heatmap_trace_white(uint8_t white);
 uint8_t spectrum_get_heatmap_trace_white(void);
@@ -174,22 +180,25 @@ void    spectrum_set_bridge(uint8_t on);
 uint8_t spectrum_get_bridge(void);
 
 /*
- * Color palette for the shared dB->RGB565 colormap (spectrum_colormap()
- * below) - added 08/09/2026, per the project owner, who wanted a tile
- * to switch palettes and reach other color combinations.
- * Unlike spectrum_style_t (which only affects the SPECTRUM panel's
- * own fill/outline look), this affects BOTH the spectrum's HEATMAP
- * style AND the waterfall, since both read colors through the same
- * LUT (see this header's own PERFORMANCE MODEL note above) - a
- * palette change is visible in both places at once, and in neither
- * when spectrum_style_t is LINE/OUTLINE (no gradient fill to color)
- * though the waterfall below it still shows the new palette either
- * way.
+ * La paleta del mapa de color dB -> RGB565 que se comparte, el de
+ * spectrum_colormap() de mas abajo. Anadida el 08/09/2026, pedida por el
+ * usuario, que queria una casilla para cambiar de paleta y llegar a otras
+ * combinaciones de color.
  *
- * CLASSIC is SDR++'s own actual "Classic" gradient now (see below) -
- * kept first/default so the DEFAULT visual barely changes for anyone
- * not using the new tile (SDR++'s Classic and this project's old
- * invented default are both dark-to-hot gradients).
+ * Al contrario que spectrum_style_t, que solo cambia el aspecto del
+ * relleno o el contorno del panel del ESPECTRO, esto afecta a los DOS
+ * sitios: al estilo de mapa de calor del espectro Y a la cascada, porque
+ * los dos sacan el color de la misma tabla -ver la nota de COMO ESTA
+ * PENSADO EL COSTE, mas arriba-. Un cambio de paleta se ve en los dos a
+ * la vez, y en ninguno de los dos cuando spectrum_style_t es LINE u
+ * OUTLINE -no hay degradado que colorear-, aunque la cascada de debajo
+ * sigue enseñando la paleta nueva de todas formas.
+ *
+ * CLASSIC es ahora el degradado "Classic" de verdad de SDR++, ver abajo.
+ * Se deja la primera y por defecto para que lo que ve quien no toque la
+ * casilla nueva cambie lo menos posible: el Classic de SDR++ y el que
+ * este proyecto se invento antes son los dos degradados de oscuro a
+ * caliente.
  */
 typedef enum {
     SPECTRUM_PALETTE_CLASSIC       = 0,  /* dark navy -> blues -> white -> yellow -> orange -> red -> dark red (SDR++'s own "Classic", exact) */
@@ -211,18 +220,18 @@ typedef enum {
 } spectrum_palette_t;
 
 /*
- * *** 08/09/2026 UPDATE *** - CLASSIC/VIRIDIS/TURBO/INFERNO/MAGMA/
- * PLASMA/GQRX/ELECTRIC/CLASSIC_GREEN were all approximated from
- * memory or general knowledge in this palette feature's first pass;
- * the project owner then uploaded the ACTUAL JSON files from SDR++'s
- * own root/res/colormaps/ (AlexandreRouma/SDRPlusPlus), so every one
- * of those nine now uses the REAL stop colors from those files
- * (GQRX/INFERNO/MAGMA/PLASMA/TURBO/VIRIDIS happen to already ship as
- * full 256-entry maps, so those five plus GQRX are copied in
- * directly, one LUT entry per source entry, no interpolation at all -
- * see spectrum.c's k_lut_* tables). SMOKE/TEMPER_COLORS/VIVID/WEBSDR
- * are new additions from that same upload (also exact). FIRE remains
- * this project's own invention - it isn't in SDR++'s set.
+ * *** AL DIA, 08/09/2026 ***. CLASSIC, VIRIDIS, TURBO, INFERNO, MAGMA,
+ * PLASMA, GQRX, ELECTRIC y CLASSIC_GREEN estaban todas aproximadas de
+ * memoria o por conocimiento general en la primera version de esta
+ * funcion. Despues el usuario subio los ficheros JSON DE VERDAD de
+ * root/res/colormaps/ de SDR++ (AlexandreRouma/SDRPlusPlus), asi que esas
+ * nueve usan ya los colores de parada REALES de esos ficheros. Seis de
+ * ellas -GQRX, INFERNO, MAGMA, PLASMA, TURBO y VIRIDIS- vienen de origen
+ * como mapas completos de 256 entradas, asi que esas se copian tal cual,
+ * una entrada de tabla por cada entrada del fichero, sin interpolar nada:
+ * ver las tablas k_lut_* de spectrum.c. SMOKE, TEMPER_COLORS, VIVID y
+ * WEBSDR son nuevas, de esa misma subida, y tambien exactas. FIRE sigue
+ * siendo invencion de este proyecto: no esta en el juego de SDR++.
  */
 /*
  * La lista de paletas, recorrible - 22/09/2026.
@@ -249,23 +258,25 @@ void spectrum_set_palette(spectrum_palette_t palette);
 spectrum_palette_t spectrum_get_palette(void);
 
 /*
- * Spatial line smoothing - added 01/08/2026, exposed live through the
- * repurposed NB tile/button/badge in main.c (see s_spec_smooth_passes'
- * comment there; the old NB noise-blanker flag never drove any real
- * DSP, so its UI slot was free). Runs a 3-tap (1,2,1)/4 box filter
- * across neighboring columns' bar heights, `passes` times, AFTER
- * quantization to pixels - it only softens the on-screen trace/fill
- * edge, it never touches the per-column EMA/peak-hold state that
- * spectrum_draw() keeps between frames (see its Pass 1 vs Pass 1.5
- * comments), so it can't accumulate or drift frame to frame the way
- * smoothing the EMA itself would.
+ * El suavizado de la linea en el espacio. Anadido el 01/08/2026 y
+ * manejable en vivo desde la casilla, el boton y la chapa del NB de
+ * main.c, reaprovechados -ver el comentario de s_spec_smooth_passes alli:
+ * el viejo interruptor del supresor de impulsos no movia ningun proceso de
+ * señal de verdad, asi que su sitio en la interfaz estaba libre-. Pasa un
+ * filtro de tres puntas (1,2,1)/4 sobre las alturas de las columnas
+ * vecinas, `passes` veces, DESPUES de cuantizar a pixeles: solo suaviza el
+ * borde de la traza y del relleno en pantalla y no toca nunca el estado
+ * por columna -la media exponencial y la retencion de pico- que
+ * spectrum_draw() se guarda entre cuadros (ver sus comentarios de la
+ * pasada 1 y la 1.5). Por eso no puede acumularse ni irse cuadro a cuadro,
+ * como si pasaria suavizando la propia media.
  *
- * 0 disables it (bin-sharp edge, the original look). Each additional
- * pass costs one more ~w-iteration integer loop per frame (negligible
- * next to the w*h pixel loop) and rounds the trace a bit further;
- * 2-3 passes is the range the project owner found gives a visibly
- * smoother line without flattening real peaks. Clamped internally to
- * [0, SPECTRUM_LINE_SMOOTH_MAX].
+ * Con 0 se quita -borde afilado por bin, el aspecto original-. Cada pasada
+ * de mas cuesta un bucle entero mas de unas `w` vueltas por cuadro
+ * -despreciable al lado del bucle de w*h pixeles- y redondea un poco mas
+ * la traza. Entre 2 y 3 pasadas es el margen donde el usuario encontro una
+ * linea visiblemente mas suave sin aplastar los picos de verdad. Por
+ * dentro se recorta a [0, SPECTRUM_LINE_SMOOTH_MAX].
  */
 #define SPECTRUM_LINE_SMOOTH_MAX 5
 void spectrum_set_line_smooth(uint8_t passes);
@@ -290,33 +301,36 @@ uint8_t spectrum_colormap_index(float db, float db_min, float db_max);
 const uint16_t *spectrum_colormap_lut(void);
 
 /*
- * Draws `n_bins` dB values into the rectangle (x,y,w,h). Columns
- * average their bins; smoothing/peak state is kept internally per
- * column (it self-resets if w changes). db_min/max fix the vertical
- * scale and the palette range.
+ * Pinta `n_bins` valores en dB dentro del rectangulo (x,y,w,h). Cada
+ * columna promedia los bins que le tocan; el estado de suavizado y de
+ * pico se guarda por dentro, una entrada por columna, y se reinicia solo
+ * si cambia `w`. db_min y db_max fijan la escala vertical y el tramo de
+ * la paleta.
  *
- * center_mark_offset_px shifts the SPECTRUM_CENTER_MARK line from the
- * true horizontal center by this many pixels (positive = right, i.e.
- * higher frequency) - pass 0 to mark the true center (the LO) as
- * before. Clamped internally to stay inside the plot area.
+ * center_mark_offset_px corre la linea de SPECTRUM_CENTER_MARK estos
+ * pixeles desde el centro de verdad -positivo a la derecha, o sea hacia
+ * frecuencias mas altas-. Con 0 se marca el centro real, el oscilador
+ * local, como antes. Por dentro se recorta para no salirse del area de
+ * dibujo.
  *
- * band_active/band_lo_offset_px/band_hi_offset_px - added 03/08/2026,
- * per the project owner: an optional tinted background region behind
- * the trace showing WHICH slice of the panadapter is actually being
- * demodulated right now (AM/USB/LSB's audio bandwidth, mapped back
- * onto the frequency axis) - so it's visually obvious what you're
- * listening to, not just where the LO/demod point sits. band_active=0
- * skips it entirely (draw exactly as before - used for NFM/WFM, which
- * don't have a caller-selectable audio bandwidth the way AM/SSB do).
- * When active, band_lo_offset_px/band_hi_offset_px are pixel offsets
- * from the panel's horizontal center, SAME origin and sign convention
- * as center_mark_offset_px (so the caller can build them directly on
- * top of that same value - see main.c's call site) - lo/hi order
- * doesn't matter, both get clamped and sorted internally. The tint
- * only ever replaces BACKGROUND pixels (gridline or plain fill,
- * whichever would've shown) - it never covers the trace, the bar
- * fill, the peak marker, or the center mark, all of which keep
- * drawing on top of it exactly as they would without it.
+ * band_active, band_lo_offset_px y band_hi_offset_px: anadidos el
+ * 03/08/2026, pedidos por el usuario. Son una zona de fondo teñida,
+ * opcional, detras de la traza, que enseña QUE trozo del panadaptador se
+ * esta demodulando ahora mismo -el ancho de audio de AM/USB/LSB, llevado
+ * de vuelta al eje de frecuencia-, para que se vea de un golpe que es lo
+ * que se esta oyendo y no solo donde esta el punto de demodulacion. Con
+ * band_active a 0 no se pinta nada de eso y queda exactamente como antes;
+ * asi se usa en NFM y WFM, que no tienen un ancho de audio que elija quien
+ * llama, como si lo tienen AM y las bandas laterales. Cuando esta activa,
+ * band_lo_offset_px y band_hi_offset_px son desplazamientos en pixeles
+ * desde el centro horizontal del panel, CON EL MISMO origen y el mismo
+ * convenio de signo que center_mark_offset_px -asi quien llama puede
+ * construirlos directamente encima de ese mismo valor, ver el sitio donde
+ * se llama en main.c-. El orden entre el bajo y el alto da igual: por
+ * dentro se recortan y se ordenan. El tinte solo sustituye pixeles de
+ * FONDO -raya de rejilla o relleno liso, lo que tocara-: no tapa nunca la
+ * traza, ni el relleno de las barras, ni la marca de pico, ni la del
+ * centro, que se siguen pintando encima igual que sin el.
  */
 /*
  * ======================================================================

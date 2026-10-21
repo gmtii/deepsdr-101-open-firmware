@@ -3832,10 +3832,17 @@ const char *spi_flash_volcado_porque_txt(void)
     case SPI_VOL_SOLAPA:    return tr("origen pisa destino", "source overlaps target");
     case SPI_VOL_DESTINO:   return tr("destino no permitido", "target not allowed");
     case SPI_VOL_NO_CABE: {
-        /* Con el numero: "no cabe, hay sitio para 319 kB". Sin el, el
-         * aviso manda a probar otra vez con el mismo fichero. */
+        /* Con el numero: "no cabe, hay 319 kB". Sin el, el aviso manda a
+         * probar otra vez con el mismo fichero.
+         *
+         * *** Y CORTO, PORQUE LA CELDA MIDE 184 px - 21/10/2026. ***
+         *
+         * Ponia "no cabe, hay sitio para 9999 kB" y eso son 241 px: salia
+         * cortado en la fila "Cargar datos". Lo encontro sim/infotest.c el
+         * dia que se le anadieron los motivos de esa fila, que hasta
+         * entonces solo median el texto del camino bueno. */
         static char t[40];
-        const char *a = tr("no cabe, hay sitio para ", "does not fit, room for ");
+        const char *a = tr("no cabe, hay ", "no room, ");
         uint32_t v = s_vol_sitio_kb;
         uint8_t  i = 0U, d[8], n = 0U;
 
@@ -5323,3 +5330,97 @@ uint8_t spi_flash_recorta_cadena(const char name8[8], const char ext3[3],
     return r;
 }
 
+
+/*
+ * --- LOS BLOQUES DE UN FICHERO, EN ORDEN - 20/10/2026 ----------------
+ *
+ * Ver la cabecera en spi_flash.h. Lo unico que merece comentario aqui es
+ * por que cada paso lee la FAT DEL CHIP en vez de leerla entera una vez a
+ * s_fat[]: porque s_fat[] es el borrador comun, y este recorrido esta
+ * abierto mientras alguien escribe bloques entre paso y paso. Tener el
+ * borrador cogido catorce segundos dejaria sin FAT a todo lo demas -el
+ * disco USB, el guardado de CONFIG.CSV- durante todo ese rato.
+ *
+ * Y LA COMPROBACION QUE NO ES PARANOIA: dentro de un bloque de 4 kB, los
+ * CLUSTERS_PER_BLOCK clusters tienen que ir seguidos. Los reserva asi el
+ * propio asignador, que trabaja por bloques enteros. Si alguna vez no lo
+ * estan, la FAT esta corrupta o la escribio otro, y seguir adelante seria
+ * escribir 4 kB encima de los datos de otro fichero: justo la familia de
+ * averia que se llevo por delante un CONFIG.CSV. Asi que se para.
+ */
+uint8_t spi_flash_bloques_abre(const char name8[8], const char ext3[3],
+                               spi_bloques_t *it)
+{
+    uint32_t bytes = 0UL;
+    uint16_t c0 = 0U;
+
+    if (!it) { return 0U; }
+    it->cl = 0UL; it->quedan = 0UL; it->vale = 0U;
+
+    if (!fichero_busca_cadena(name8, ext3, &bytes, &c0)) { return 0U; }
+    if (bytes == 0UL || (bytes % FLASH_SECTOR_SIZE) != 0UL) { return 0U; }
+    if (c0 < 2U || (uint32_t)c0 >= (2UL + DATA_CLUSTER_COUNT)) { return 0U; }
+    if (CLUSTERS_PER_BLOCK == 0UL) { return 0U; }
+
+    it->cl     = (uint32_t)c0;
+    it->quedan = bytes / FLASH_SECTOR_SIZE;
+    it->vale   = 1U;
+    return 1U;
+}
+
+uint8_t spi_flash_bloques_sig(spi_bloques_t *it, uint32_t *addr)
+{
+    uint32_t i, c, dir;
+
+    if (!it || !it->vale || it->quedan == 0UL) { return 0U; }
+
+    c = it->cl;
+    if (c < 2U || c >= (2UL + DATA_CLUSTER_COUNT)) { it->vale = 0U; return 0U; }
+
+    /*
+     * La direccion se calcula ahora y se entrega AL FINAL - 21/10/2026.
+     *
+     * Antes se escribia en *addr aqui arriba y las ramas de abajo podian
+     * devolver 0 despues, dejando al que llama con una direccion puesta y
+     * un "no". Hoy ningun llamante la usa tras un cero, pero eso es suerte:
+     * la regla de este fichero es que un cero no toca nada de lo que le
+     * den, igual que fichero_busca_cadena().
+     */
+    dir = SECTOR_DE_CLUSTER(c) * ROOT_DIR_SECTOR_BYTES;
+
+    /* Avanzar los CLUSTERS_PER_BLOCK que forman este bloque, exigiendo que
+     * vayan seguidos. El salto de verdad -el que cambia de tramo- cae en
+     * el ultimo, y ese si puede ir a donde sea. */
+    for (i = 0UL; i < CLUSTERS_PER_BLOCK; i++) {
+        uint16_t sig = fat12_del_chip((uint16_t)c);
+
+        if (sig >= 0x0FF8U) {               /* fin de cadena */
+            if ((i + 1UL) < CLUSTERS_PER_BLOCK) { it->vale = 0U; return 0U; }
+            it->quedan--;
+            if (it->quedan != 0UL) { it->vale = 0U; return 0U; }
+            it->cl = 0UL;
+            if (addr) { *addr = dir; }
+            return 1U;
+        }
+        if (sig < 2U || (uint32_t)sig >= (2UL + DATA_CLUSTER_COUNT)) {
+            it->vale = 0U; return 0U;
+        }
+        if ((i + 1UL) < CLUSTERS_PER_BLOCK && (uint32_t)sig != (c + 1UL)) {
+            it->vale = 0U; return 0U;       /* bloque partido: no es nuestro */
+        }
+        c = (uint32_t)sig;
+    }
+
+    it->cl = c;
+    it->quedan--;
+    if (addr) { *addr = dir; }
+    return 1U;
+}
+
+uint32_t spi_flash_bloques_n(const char name8[8], const char ext3[3])
+{
+    uint32_t bytes = 0UL;
+
+    if (!spi_flash_fichero_tam(name8, ext3, &bytes)) { return 0UL; }
+    return bytes / FLASH_SECTOR_SIZE;
+}

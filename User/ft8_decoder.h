@@ -8,9 +8,10 @@
 /*
  * Orchestrates a real decode pass over a captured slot: calls
  * ft8_lib's ftx_find_candidates()/ftx_decode_candidate()/
- * ftx_message_decode() directly (the pieces the host WAV test
- * (test/host/ft8_host_test.c) already exercised against real off-air
- * recordings), and queues the results as ready-to-display text lines.
+ * ftx_message_decode() directly (the pieces the host WAV test already
+ * exercised against real off-air recordings - hoy eso vive en
+ * deepsdr-ui/sim, ver out/qthcoord, que enlaza ESTE fichero), and queues
+ * the results as ready-to-display text lines.
  *
  * Deliberately NOT slot-timing aware (same scope limit as
  * ft8_waterfall_adapter.h/ft8_decimator.h) - call
@@ -129,7 +130,9 @@ bool ft8_decoder_grid_coord_txt(const char *grid, int len,
  * callsigns may decode less completely than a full WSJT-X-style
  * multi-pass would give you, but ordinary messages - the large
  * majority in practice - decode in full without it, same tradeoff
- * already accepted in test/host/ft8_host_test.c's own hash stub). */
+ * already accepted in the host WAV test's own hash stub - ese banco ya no
+ * esta en test/host/, que desaparecio: el camino lo ejercita hoy
+ * deepsdr-ui/sim, ver out/qthcoord). */
 void ft8_decoder_process_slot(void);
 
 /*

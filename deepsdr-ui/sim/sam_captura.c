@@ -97,11 +97,20 @@ static void bloque_mueve(int16_t *raw, double off, double vaiven, double v_hz)
     }
 }
 
+/*
+ * LA BANDA, QUE HASTA HOY ERA SIEMPRE "AMBAS" - 21/10/2026.
+ *
+ * Todos los casos de este banco corrian con las dos bandas laterales, y
+ * mientras tanto el propio banco imprimia que "lo que salva es SAM-U/SAM-L".
+ * O sea que afirmaba por escrito algo que no probaba. Ver el caso 2b.
+ */
+static sam_banda_t g_banda = SAM_BANDA_AMBAS;
+
 static void arranca(uint16_t margen_hz)
 {
     demod_am_init();
     demod_am_set_mode(DEMOD_MODE_SAM);
-    demod_am_set_sam_banda(SAM_BANDA_AMBAS);
+    demod_am_set_sam_banda(g_banda);
     demod_am_sam_margen_set(margen_hz);
     cons_captura_tramas((uint32_t)NBLK);
     g_fs = (double)demod_am_get_active_fs_hz();
@@ -216,10 +225,79 @@ int main(void)
     }
     printf("\n     Se queda contra el tope y dice QUE NO ESTA ENGANCHADO, que\n"
            "     es la verdad: con una intrusa 20 dB mas fuerte dentro del\n"
-           "     filtro no hay demodulacion que salve eso -lo que salva es\n"
-           "     SAM-U/SAM-L o estrechar el filtro-. Una cosa es no poder y\n"
-           "     otra mentir.\n\n");
-    di("con 100 Hz el lazo no llega a la intrusa", se_quedan == 4);
+           "     filtro no hay demodulacion que salve eso. Lo que lo salva es\n"
+           "     ESTRECHAR EL FILTRO, y nada mas: SAM-U y SAM-L no, y eso lo\n"
+           "     mide el caso 2b de aqui abajo. Una cosa es no poder y otra\n"
+           "     mentir.\n\n");
+    /* El rotulo sale del propio numero: ponia "100 Hz" de cuando ese era
+     * el margen por omision, y el banco seguia llamandolo asi con 250. */
+    {
+        char t[72];
+        snprintf(t, sizeof t, "con %u Hz el lazo no llega a la intrusa",
+                 (unsigned)SAM_MARGEN_DEF_HZ);
+        di(t, se_quedan == 4);
+    }
+
+    /* ----------------------------------------------------------------
+     * 2b) SAM-U NO SALVA EL ENGANCHE. SOLO EL AUDIO.
+     * ----------------------------------------------------------------
+     *
+     * sam.h y el propio texto de aqui arriba decian, desde el 12/10, que
+     * contra una intrusa cercana "lo que salva es SAM-U/SAM-L o estrechar
+     * el filtro". La segunda mitad es verdad. La primera no, y nadie la
+     * habia medido.
+     *
+     * El porque esta en la cadena: sam_banda_lateral() llama primero a
+     * sam_bloque_cuad() -el PLL- y DESPUES a fases_combina(), que es quien
+     * quita la banda que no se quiere. O sea que la banda se elige detras
+     * del lazo: el lazo ve las dos, y ve la portadora intrusa este donde
+     * este. Elegir banda limpia el AUDIO y no toca el enganche.
+     *
+     * Aqui se mide con la intrusa SIEMPRE POR DEBAJO, que es el caso en que
+     * SAM-U deberia librar si librara de algo, y con los dos margenes. Lo
+     * que se exige es que las tres bandas den LO MISMO: el dia que dejen de
+     * darlo, o alguien ha metido el filtro delante del lazo -y entonces hay
+     * que venir aqui a celebrarlo y cambiar esta prueba- o se ha roto algo.
+     * ---------------------------------------------------------------- */
+    printf("\n  2b) SAM-U NO SALVA EL ENGANCHE, SOLO EL AUDIO\n\n");
+    {
+        static const double k_abajo[] = { -500.0, -1000.0 };
+        static const uint16_t k_mg[] = { (uint16_t)SAM_MARGEN_DEF_HZ, 4000U };
+        static const sam_banda_t k_b[3] = { SAM_BANDA_AMBAS, SAM_BANDA_USB,
+                                            SAM_BANDA_LSB };
+        static const char *k_bn[3] = { "AMBAS", "SAM-U", "SAM-L" };
+        unsigned m, j;
+        int iguales = 1;
+
+        printf("     margen  banda    intrusa -500 Hz      intrusa -1000 Hz\n");
+        for (m = 0U; m < 2U; m++) {
+            float ref[2]; int refe[2];
+            for (j = 0U; j < 3U; j++) {
+                float h[2]; int e[2];
+                g_banda = k_b[j];
+                for (i = 0; i < 2U; i++) {
+                    secuencia(k_mg[m], k_abajo[i], &h[i], &e[i]);
+                }
+                printf("     %4u Hz %-6s  %+8.1f Hz %-10s %+8.1f Hz %s\n",
+                       (unsigned)k_mg[m], k_bn[j],
+                       (double)h[0], e[0] ? "ENGANCHADO" : "suelto",
+                       (double)h[1], e[1] ? "ENGANCHADO" : "suelto");
+                if (j == 0U) { ref[0]=h[0]; ref[1]=h[1]; refe[0]=e[0]; refe[1]=e[1]; }
+                else {
+                    for (i = 0; i < 2U; i++) {
+                        if (fabs((double)(h[i] - ref[i])) > 1.0
+                            || e[i] != refe[i]) { iguales = 0; }
+                    }
+                }
+            }
+        }
+        g_banda = SAM_BANDA_AMBAS;
+        printf("\n     Las tres filas de cada margen son la MISMA. Elegir banda\n"
+               "     se hace detras del lazo -fases_combina() va despues de\n"
+               "     sam_bloque_cuad()- asi que el lazo ve la intrusa igual.\n"
+               "     SAM-U limpia lo que se oye, no lo que se engancha.\n\n");
+        di("elegir banda lateral no cambia donde se queda el lazo", iguales);
+    }
 
     /* ---------------------------------------------------------------- */
     printf("\n  3) QUE SIGA ENGANCHANDO LO QUE TIENE QUE ENGANCHAR\n\n");
@@ -232,7 +310,13 @@ int main(void)
                    k_df[i], e ? "engancha" : "NO engancha", (double)hz);
             if (!e || fabs((double)hz - k_df[i]) > 10.0) { todos = 0; }
         }
-        di("con 100 Hz engancha y mide bien dentro de su margen", todos);
+        {
+            char t[72];
+            snprintf(t, sizeof t,
+                     "con %u Hz engancha y mide bien dentro de su margen",
+                     (unsigned)SAM_MARGEN_DEF_HZ);
+            di(t, todos);
+        }
     }
 
     /* ---------------------------------------------------------------- */
@@ -242,7 +326,8 @@ int main(void)
         float hz100 = hz;
         int e4k  = engancha_en(4000U, 300.0, &hz);
         printf("     portadora a +300 Hz (una radio sin calibrar a 30 MHz):\n");
-        printf("       con  100 Hz: %s, lee %+7.1f Hz\n",
+        printf("       con %4u Hz: %s, lee %+7.1f Hz\n",
+               (unsigned)SAM_MARGEN_DEF_HZ,
                e100 ? "engancha" : "NO engancha", (double)hz100);
         printf("       con 4000 Hz: %s, lee %+7.1f Hz\n",
                e4k ? "engancha" : "NO engancha", (double)hz);

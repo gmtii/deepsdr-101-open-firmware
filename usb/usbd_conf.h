@@ -43,8 +43,6 @@ OF SUCH DAMAGE.
 /*
  * EL NUMERO DE INTERFAZ MAS ALTO QUE EL NUCLEO ATIENDE - 09/10/2026.
  *
- * Pedido por el usuario.
- *
  * Valia 1, que es lo que necesita el disco del cargador: una sola interfaz.
  * Y el puerto serie solo, con dos (la 0 y la 1), tambien pasaba: la
  * comprobacion es "<=", asi que 0 y 1 colaban.

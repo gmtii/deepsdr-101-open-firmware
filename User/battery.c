@@ -42,12 +42,14 @@ void battery_init(void)
 {
     rcu_periph_clock_enable(RCU_ADC0);
 
-    /* PCLK2 (APB2) = 100MHz on this board's clock tree (AHB/2 off a
-     * 200MHz core - see system_gd32f4xx.c's system_clock_200m_25m_hxtal(),
-     * the function actually selected by this project's __SYSTEM_CLOCK_*
-     * define). DIV4 = 25MHz, under the GD32F450 datasheet's 30MHz ADC
-     * clock ceiling. Not latency-critical (a battery gauge polled from
-     * the main loop), so there's no reason to push closer to the limit. */
+    /* PCLK2 (APB2) son 100 MHz en el arbol de relojes de esta placa:
+     * AHB/2 colgando de un nucleo a 200 MHz; ver
+     * system_clock_200m_25m_hxtal() en system_gd32f4xx.c, que es la
+     * funcion que de verdad elige el __SYSTEM_CLOCK_* de este proyecto.
+     * DIV4 deja el ADC a 25 MHz, por debajo del techo de 30 MHz que pone
+     * la hoja de datos del GD32F450. Esto no corre prisa -es un medidor de
+     * bateria que se mira desde el bucle principal-, asi que no hay razon
+     * para acercarse mas al limite. */
     adc_clock_config(ADC_ADCCK_PCLK2_DIV4);
 
     adc_resolution_config(ADC0, ADC_RESOLUTION_12B);
@@ -208,11 +210,12 @@ uint16_t battery_get_millivolts(void)
     {
         uint32_t vueltas = BATTERY_EOC_VUELTAS;
         while (SET != adc_flag_get(ADC0, ADC_FLAG_EOC)) {
-            /* Blocking - one conversion at 480 sample cycles + 12
-             * successive-approximation cycles is well under a millisecond
-             * even at this ADC clock, and battery_get_millivolts() is only
-             * ever called from the main loop (see battery.h), never the
-             * demod ISR - spinning here is fine. */
+            /* Se espera aqui parado: una conversion son 480 ciclos de
+             * muestreo mas 12 de aproximaciones sucesivas, muy por debajo
+             * de una milesima incluso a este reloj de ADC, y a
+             * battery_get_millivolts() solo se le llama desde el bucle
+             * principal -ver battery.h-, nunca desde la interrupcion de
+             * demodulacion. Dar vueltas aqui no molesta a nadie. */
             /* ...pero con plazo. Ver BATTERY_EOC_VUELTAS. */
             if (--vueltas == 0U) { return 0U; }
         }

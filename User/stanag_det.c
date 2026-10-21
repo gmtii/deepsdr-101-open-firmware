@@ -447,14 +447,36 @@ static void fft(float *z, uint8_t inv)
      * Dandole la vuelta a los dos bucles, el giro se calcula una vez por
      * columna y se reparte entre todas las mariposas que lo usan. Los giros
      * calculados pasan a ser 1 + 2 + 4 + ... + 1024 = 2.047: CINCO VECES Y
-     * MEDIA menos. Las mariposas son las mismas, en el mismo orden dentro
-     * de cada una, asi que el resultado es el mismo bit a bit - y lo
-     * comprueban identtest, identgrab y stanagdet, que no se mueven ni un
-     * acierto.
+     * MEDIA menos. Esa parte si es exacta: las mariposas son las mismas, en
+     * el mismo orden dentro de cada una, y entre mariposas de la misma
+     * etapa no hay dependencia.
      *
-     * Y LA PRIMERA ETAPA NO LLEVA GIRO: con paso 2 solo hay k = 0, o sea
-     * w = 1. Se saca aparte y se queda en una suma y una resta, sin las
-     * cuatro multiplicaciones. Son 1.024 mariposas de las 11.264.
+     * Y LA PRIMERA ETAPA SE SACA APARTE: con paso 2 solo hay k = 0, o sea
+     * w = 1, y se queda en una suma y una resta sin las cuatro
+     * multiplicaciones. Son 1.024 mariposas de las 11.264.
+     *
+     * ESTO ULTIMO NO ES GRATIS, Y AQUI DECIA QUE SI - corregido el
+     * 21/10/2026. La version anterior de este comentario afirmaba que el
+     * resultado era "el mismo bit a bit" y ponia de prueba que identtest,
+     * identgrab y stanagdet no se movian ni un acierto. Las dos mitades no
+     * encajan: que tres bancos de decodificacion no pierdan un acierto dice
+     * que el cambio no rompe nada util, NO que el resultado sea identico.
+     * Un acierto de STANAG aguanta muchos bits de diferencia sin moverse.
+     *
+     * Medido con sim/stanag_fft.c, que lleva dentro las mariposas viejas:
+     * NO es el mismo bit a bit. El motivo es que aqui el giro cero no es
+     * 1+0i como en la del espectro. El coseno si vale 1 exacto, pero el
+     * seno sale de la MISMA tabla con el truco sen(x) = cos(x - pi/2), o
+     * sea s_cos[NFFT/4] = cosf(pi/2), y cosf(pi/2) en coma flotante vale
+     * -4,371139e-08, no cero. La etapa vieja multiplicaba por ese giro; la
+     * nueva se lo salta.
+     *
+     * Cuanto cambia: la peor diferencia relativa de doce casos -directa e
+     * inversa, ceros, continua, impulso, tono, ruido y medio relleno- es
+     * 1,5e-07, o sea el ultimo bit de un float. Despreciable para lo que
+     * se hace con esto, que es buscar picos en una autocorrelacion. Pero es
+     * distinto de cero, y el banco lo vigila con un tope de 1e-5 para que
+     * se entere alguien si algun dia crece.
      *
      * El salto entre elementos crece con la etapa, pero en esta radio la
      * RAM no tiene cache: una lectura separada cuesta lo mismo que una

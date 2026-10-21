@@ -183,8 +183,8 @@ void backlight_set_percent(uint8_t percent)
      * la teoria que acababa de descartar. Las dos cosas en el mismo cambio.
      *
      * POR QUE QUITARLO NO ES CAMBIAR UNA SUPOSICION POR OTRA. Porque el
-     * experimento ya esta hecho y no lo hice yo: el firmware de Esteban
-     * lleva CCR=4992 y corre en ESTA radio, y lo que el usuario ve es que
+     * experimento ya esta hecho y no lo hice yo: el firmware de otra unidad
+     * igual lleva CCR=4992 y corre en ESTA radio, y lo que el usuario ve es que
      * brilla MAS -no que se quede negra-. Con la polaridad correcta,
      * permanentemente activo quiere decir pin permanentemente BAJO, que en
      * este panel es la luz al maximo.

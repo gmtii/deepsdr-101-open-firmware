@@ -191,8 +191,9 @@ static float haversine_km(float lat1, float lon1, float lat2, float lon2)
     return earth_radius_km * c;
 }
 
-/* Same "always miss/no-op" hash interface as test/host/ft8_host_test.c
- * - see ft8_decoder_process_slot()'s header comment on why. */
+/* El mismo tapon de "nunca acierta" que llevaba el banco de WAV del
+ * ordenador - ver la cabecera de ft8_decoder_process_slot() para el por
+ * que. (Citaba test/host/ft8_host_test.c, que ya no existe.) */
 static bool hash_lookup_stub(ftx_callsign_hash_type_t hash_type, uint32_t hash, char *callsign)
 {
     (void)hash_type;

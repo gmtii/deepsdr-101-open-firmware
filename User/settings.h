@@ -236,10 +236,14 @@ typedef enum {
      * siempre.
      */
     SET_X_IQ_INV,       /* 0 = cuadratura normal, 1 = I/Q invertida */
-    /* Puntos que se corre el renglon de fax al entregarlo, para cuadrar el
-     * margen cuando el pulso de fase de la emisora no cae donde este
-     * decodificador supone. Ver wefax_set_centro(). */
-    SET_X_WFX_CENTRO,
+    /* Aqui vivio "wefax_centro", los puntos que se corria el renglon de fax
+     * al entregarlo. Se fue el 20/10/2026 con el boton que lo movia: el
+     * centrado se elige ahora al acabar la carta, con una linea vertical
+     * sobre la imagen entera, y no es un ajuste que sobreviva al apagado
+     * sino una decision por carta. Ver User/wfx_recoloca.h.
+     *
+     * Un CONFIG.CSV viejo trae la clave; no pasa nada, las que no estan en
+     * k_extra_claves[] se ignoran al leer. */
     SET_X_N
 } settings_extra_id_t;
 

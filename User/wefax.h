@@ -11,6 +11,14 @@
  * 3,855 / 7,880 / 13,8825 MHz; entre esas tres frecuencias hay carta a casi
  * cualquier hora del dia desde España.
  *
+ * OJO CON ESOS TRES NUMEROS: son el CENTRO de la emision, que es lo que
+ * publican los horarios. El dial en banda lateral alta va 1,9 kHz por
+ * debajo -3.853,1 / 7.878,1 / 13.880,6 kHz-, porque lo que este
+ * decodificador busca son tonos de 1.500 a 2.300 Hz de audio y esos salen
+ * de restarle al RF la PORTADORA. Sintonizar la publicada deja los tonos en
+ * la banda lateral que la USB suprime y no entra nada. Las tres filas de
+ * k_band_presets[] llevaron el numero publicado durante un mes.
+ *
  * LO QUE ES, EN UNA LINEA: un tono de audio cuya FRECUENCIA es el brillo.
  * 1500 Hz es negro, 2300 Hz es blanco, y lo que hay en medio son los grises.
  * El transmisor recorre la imagen linea a linea, normalmente 120 lineas por
@@ -42,9 +50,10 @@
  * a la siguiente)-. Con 20 lineas de fase la velocidad sale con precision de
  * sobra para las 1200 que vienen detras.
  *
- * Y si te enganchas a mitad de carta, cuando la fase ya paso, esta el ajuste
- * a mano: el mismo mando que sintoniza, corrigiendo la inclinacion en vivo.
- * Es lo que hacen casi todos los equipos del mercado, y funciona.
+ * Y si te enganchas a mitad de carta, cuando la fase ya paso, esta el boton
+ * "Sincroniza": dice "la linea empieza aqui" y se pone a pintar sin esperar
+ * a nada. El centrado fino no se hace en vivo sino AL ACABAR, con una linea
+ * vertical sobre la carta entera; el porque, en User/wfx_recoloca.h.
  */
 
 /* El ancho de la imagen en puntos. Es el mismo que el de la cascada para que
@@ -88,11 +97,15 @@ uint8_t wefax_activo(void);
 void wefax_process(const float *audio, uint32_t n);
 
 /*
- * Si hay una linea terminada, devuelve un puntero a sus WEFAX_ANCHO bytes de
- * gris (0 = negro, 255 = blanco) y la da por consumida. Si no, devuelve 0.
- * Se llama desde el bucle principal.
+ * Si hay una linea terminada, COPIA sus WEFAX_ANCHO bytes de gris (0 =
+ * negro, 255 = blanco) en `dst` y la da por consumida; devuelve 1. Si no
+ * hay ninguna devuelve 0 y no toca `dst`. Se llama desde el bucle principal.
+ *
+ * Copia y no presta el puntero a proposito: quien recoge se va a escribir a
+ * la flash con la linea en la mano, y eso puede tardar cientos de
+ * milisegundos. Ver el comentario de la funcion en el .c.
  */
-const uint8_t *wefax_linea(void);
+uint8_t wefax_linea_en(uint8_t *dst);
 
 void wefax_info(wefax_info_t *out);
 
@@ -100,28 +113,38 @@ void wefax_info(wefax_info_t *out);
  * no significa nada con otra velocidad. */
 void     wefax_set_lpm(uint16_t lpm);
 uint16_t wefax_get_lpm(void);
-uint16_t wefax_lpm_opcion(uint8_t i);   /* la lista, para la interfaz */
 
-/* El mismo ajuste por indice (0..WEFAX_LPM_N-1, creciente). Es lo que
- * recorre el mando y lo que se guarda en CONFIG.CSV; ver wefax.c. */
-/* --- EL CENTRADO ---------------------------------------------------
- *
- * Corre el renglon ya terminado tantos puntos como se le diga, dando la
- * vuelta por el otro lado: positivo hacia la derecha. Sirve para cuadrar
- * el margen cuando el pulso de fase de la emisora no cae donde este
- * decodificador supone. NO toca el enganche: ver su comentario en el .c.
+/*
+ * El centrado en vivo se quito el 20/10/2026: ahora se elige al acabar la
+ * carta, con una linea vertical sobre la imagen entera. Ver
+ * User/wfx_recoloca.h, que explica por que no puede ser en vivo.
  */
-void     wefax_set_centro(int16_t px);
-int16_t  wefax_centro(void);
 
-
+/* La velocidad por indice (0..WEFAX_LPM_N-1, creciente). Es lo que recorre
+ * el mando y lo que se guarda en CONFIG.CSV; ver wefax.c. */
 uint8_t  wefax_get_lpm_idx(void);
 void     wefax_set_lpm_idx(uint8_t i);
 
-/* Correccion de inclinacion a mano, en partes por millon sobre la velocidad
- * nominal. Positiva = ir mas deprisa. */
-void  wefax_set_ppm(float ppm);
-float wefax_get_ppm(void);
+/*
+ * LA CORRECCION DE INCLINACION YA NO SE ASOMA AQUI - 21/10/2026.
+ *
+ * Estaban wefax_set_ppm() y wefax_get_ppm(), publicas las dos, y no las
+ * llamaba nadie: ni el firmware, ni el banco. La de leer sobraba desde que
+ * wefax_info() devuelve el mismo numero -dos formas de preguntar lo mismo
+ * se separan solas, que es lo que explica el comentario de
+ * wefax_get_lpm_idx() en wefax.c-, y la de escribir era peor que sobrar:
+ * hace lee-modifica-escribe sobre s_ppm SIN cerrojo, y era segura solo
+ * porque nadie la llamaba desde el bucle principal. Una funcion que solo es
+ * segura mientras nadie la use no se documenta: se cierra.
+ *
+ * Ahora es `ppm_fija()`, estatica, dentro de wefax.c. El dia que haga falta
+ * un mando de inclinacion a mano, lo que hay que escribir no es esta
+ * declaracion otra vez sino la version con cerrojo - y tools/cerrojo_check.py
+ * lo dira.
+ *
+ * Lo que se lee de fuera: wefax_info().ppm, y wefax_fase_dbg() para el
+ * deslizamiento medido.
+ */
 
 /* "La linea empieza AQUI": pone el contador de linea a cero en este instante.
  * Es el ajuste grueso cuando te enganchas a mitad de carta. */
@@ -143,5 +166,21 @@ float   wefax_hz_de_gris(uint8_t gris);
 /* Lo que mide el seguimiento de la señal de fase: el desplazamiento del
  * pulso por linea, en puntos. Es de donde sale la correccion. */
 void wefax_fase_dbg(float *desliz_px_linea, float *pos_pulso);
+
+/*
+ * LA LISTA DE VELOCIDADES, PARA QUE EL BANCO NO LA COPIE - 21/10/2026.
+ *
+ * Esta funcion existia, no la llamaba nadie y la quite en la pasada 11 de
+ * la revision por eso mismo. Tenia razon aquel dia y la tengo hoy al
+ * devolverla: lo que descubrio la pasada 16 es que TRES bancos llevaban la
+ * lista `{ 60, 90, 120, 240 }` escrita a mano. O sea que el accesor no
+ * sobraba, le faltaban los llamantes - y el dia que se cambie una velocidad
+ * esos tres seguirian probando las de antes y dando verde.
+ *
+ * El firmware sigue sin llamarla: la interfaz recorre las velocidades con
+ * wefax_set_lpm_idx() y wefax_get_lpm(), que es lo suyo porque ademas las
+ * pone. Esto es para quien quiere LEER la lista sin tocar nada.
+ */
+uint16_t wefax_lpm_opcion(uint8_t i);
 
 #endif /* WEFAX_H */

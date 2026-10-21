@@ -172,8 +172,6 @@ extern uint32_t SystemCoreClock;
 /*
  * Anadido 11/10/2026 para poder compilar aqui el User/touch.c de verdad.
  *
- * Pedido por el usuario.
- *
  * El arrastre no se podia medir sin el tactil de VERDAD: el filtro de
  * confirmacion que decide si una lectura vale vive en touch.c, y un banco
  * que se lo reimplemente mide su propia copia. Como el XPT2046 se habla a

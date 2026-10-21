@@ -420,7 +420,7 @@ int main(int argc, char **argv)
 
     printf("\n  y con minusculas, numeros y signos\n");
     {
-        const char *t = "Hola Oscar, esto es psk31 a 31,25 baudios. 73!";
+        const char *t = "Hola Pedro, esto es psk31 a 31,25 baudios. 73!";
 
         exige(prueba(t, 0.0, 8.0, 3, 0, sal, sizeof sal),
               "el alfabeto entero pasa entero");

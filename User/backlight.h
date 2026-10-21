@@ -4,41 +4,42 @@
 #include <stdint.h>
 
 /*
- * LCD backlight brightness via hardware PWM on PA3 - 31/07/2026, per
- * the project owner's request. Before this, the backlight had no
- * firmware control at all; whatever comes up from the bootloader/
- * hardware default is what you got.
+ * EL BRILLO DE LA PANTALLA, POR PWM EN PA3 - 31/07/2026, pedido por el
+ * usuario. Antes de esto el firmware no tocaba la luz de fondo: te
+ * quedabas con lo que dejara puesto el cargador o el arranque.
  *
- * PIN/TIMER: PA3 = TIMER1_CH3, alternate function AF1. NOT
- * empirically confirmed on THIS board (unlike PC6/TIMER2_CH0's MCLK,
- * which was scope-verified - see gd32_i2s.c's comment above
- * gd32_i2s_mclk_timer_start()) - it follows the same GD32F4xx<->
- * STM32F4 pin-compatible mapping this project already relies on
- * there (GD32 TIMERn = STM32 TIMn+1, same peripheral memory-map
- * offsets, same AF numbers - TIMER1's base offset is literally 0
- * within the APB1 timer block, exactly where STM32 TIM2 sits), where
- * PA3/AF1 is TIM2_CH4 (= GD32 TIMER1_CH3). VERIFY before trusting
- * this blind: watch the backlight actually respond to
- * backlight_set_percent(), or better, a scope on PA3.
+ * PATILLA Y TEMPORIZADOR: PA3 = TIMER1_CH3, funcion alternativa AF1. NO
+ * esta comprobado a mano en ESTA placa, al contrario que el MCLK de
+ * PC6/TIMER2_CH0, que si se vio con el osciloscopio -ver el comentario de
+ * gd32_i2s_mclk_timer_start() en gd32_i2s.c-. Sale de la misma
+ * equivalencia GD32F4xx <-> STM32F4 en la que este proyecto ya se apoya
+ * alli: TIMERn del GD32 = TIMn+1 del STM32, los mismos desplazamientos en
+ * el mapa de periféricos y los mismos numeros de AF -el desplazamiento
+ * base de TIMER1 es literalmente 0 dentro del bloque de temporizadores de
+ * APB1, justo donde esta el TIM2 del STM32-, y alli PA3/AF1 es TIM2_CH4,
+ * o sea TIMER1_CH3. COMPRUEBALO antes de fiarte a ciegas: mira que la luz
+ * responda de verdad a backlight_set_percent(), o mejor, pon el
+ * osciloscopio en PA3.
  *
- * POLARITY: CONFIRMED ACTIVE-LOW on hardware, 31/07/2026 (this board's
- * backlight driver turns the LEDs ON when the pin is LOW) - configured
- * with TIMER_OC_POLARITY_LOW in backlight_init() (backlight.c) to
- * match, so backlight_set_percent()'s "0=darkest, 100=brightest"
- * contract holds as documented below. Before this was confirmed, the
- * driver was wired active-high by (wrong) default assumption, which
- * inverted the whole scale - if you ever swap to different backlight
- * hardware and brightness comes out backwards again, that single
- * ocpolarity line is the fix, nothing else in this file needs to
- * change.
+ * POLARIDAD: CONFIRMADA ACTIVA A NIVEL BAJO sobre la placa, el
+ * 31/07/2026. El excitador de la luz de esta placa enciende los LED
+ * cuando la patilla esta BAJA, asi que backlight_init() en backlight.c lo
+ * configura con TIMER_OC_POLARITY_LOW y el contrato de
+ * backlight_set_percent() -0 lo mas oscuro, 100 lo mas claro- se cumple
+ * tal y como se documenta aqui abajo. Antes de comprobarlo, el excitador
+ * estaba puesto activo a nivel alto por suposicion, que era la
+ * equivocada, y eso daba la vuelta a la escala entera. Si algun dia se
+ * cambia el hardware de la luz y el brillo vuelve a salir del reves, esa
+ * unica linea de la polaridad es el arreglo; no hay que tocar nada mas de
+ * este fichero.
  *
- * PWM FREQUENCY: 20kHz - comfortably above the ~200Hz flicker-
- * perception threshold for LCD/LED backlights (no visible flicker,
- * not even out of the corner of the eye) and high enough to stay
- * inaudible if any switching noise ever coupled into nearby analog
- * audio circuitry - not asserting this board has that problem, just
- * why 20kHz was picked over a lower, arithmetically "rounder"
- * frequency.
+ * FRECUENCIA DEL PWM: 20 kHz. Queda bien por encima del umbral de unos
+ * 200 Hz a partir del cual se percibe el parpadeo en luces de LCD y LED
+ * -no parpadea, ni mirando de reojo- y lo bastante alta para no oirse si
+ * algun dia el ruido de conmutacion se colara en la parte analogica del
+ * audio. No se esta diciendo que esta placa tenga ese problema; se esta
+ * diciendo por que se eligieron 20 kHz y no una frecuencia mas baja y
+ * aritmeticamente mas redonda.
  */
 void backlight_init(void);
 

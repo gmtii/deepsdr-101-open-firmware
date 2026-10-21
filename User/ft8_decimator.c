@@ -6,9 +6,10 @@
 #if defined(__arm__)
 #include "gd32f4xx.h" /* __disable_irq()/__enable_irq() - see ft8_decimator_reset()'s critical section */
 #else
-/* Host test harness stubs - test/host/ft8_host_test.c is single-
- * threaded (no real ISR to race against), so these are genuine no-ops
- * there, not a simulation of the real critical section. */
+/* Los tapones para el simulador: alli todo corre en un hilo y no hay
+ * interrupcion contra la que competir, asi que esto NO simula la seccion
+ * critica, simplemente no hace falta. (Antes esta nota citaba un
+ * test/host/ que ya no existe; los bancos viven en deepsdr-ui/sim.) */
 #define __disable_irq() ((void)0)
 #define __enable_irq()  ((void)0)
 #endif
