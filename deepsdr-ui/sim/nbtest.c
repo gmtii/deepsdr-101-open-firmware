@@ -234,6 +234,84 @@ int main(void)
      * blanker "no hace nada" sintonizando una emisora local potente. */
     fallos += escenario("SEÑAL FUERTE - el blanker se vuelve conservador", 2000.0, 0);
 
+    /*
+     * Y EL BLOQUE LARGO - 23/10/2026.
+     *
+     * Con la radiofrecuencia a 192 kHz el bloque son 512 muestras y el
+     * quitapulsos va delante del diezmador, asi que las ve todas. El tope
+     * NB_MAX_BLOQUE era 256 y pasarse NO revienta: nb_process() devuelve
+     * 0 y no toca el bloque, o sea que se apagaba SOLO y en silencio.
+     *
+     * Esto lo mide de la unica forma que vale: metiendole un bloque del
+     * tamaño de verdad y exigiendo que BORRE algo. Un banco que solo
+     * probara 256 habria seguido verde con el quitapulsos muerto a
+     * 192 kHz.
+     */
+    {
+        /*
+         * QUINIENTAS DOCE ESCRITAS A MANO, Y NO NB_MAX_BLOQUE.
+         *
+         * El primer intento de esta prueba usaba NB_MAX_BLOQUE como
+         * tamaño del bloque, y por eso PASABA TAMBIEN CON EL TOPE EN 256:
+         * se medía a si misma. Un banco que pasa con y sin el arreglo no
+         * mide el arreglo. El numero que importa es el que entrega el DMA
+         * a 192 kHz -512, SDR_RX_BLOCK_SAMPLES_WFM-, asi que es ese el
+         * que va aqui aunque manana alguien suba el tope a mil.
+         */
+        #define N_LARGO 512U
+        static float i[N_LARGO], q[N_LARGO];
+        unsigned k;
+        uint32_t borradas;
+
+        printf("\n== EL BLOQUE LARGO (512), que es el de 192 kHz ==\n");
+
+        nb_reset();
+        nb_set_nivel(3U);
+        /* Ruido flojo y tres pulsos gordos, bien separados. */
+        s_rnd = 999UL;
+        for (k = 0; k < N_LARGO; k++) {
+            i[k] = (float)(50.0 * gauss());
+            q[k] = (float)(50.0 * gauss());
+        }
+        for (k = 0; k < 3U; k++) {
+            unsigned p = 80U + k * 150U;
+
+            i[p] = 6000.0f; q[p] = 6000.0f;
+            i[p + 1U] = 6000.0f; q[p + 1U] = 6000.0f;
+        }
+        /* Unas cuantas pasadas para que el suelo se asiente. */
+        borradas = 0U;
+        for (k = 0; k < 20U; k++) {
+            static float ii[N_LARGO], qq[N_LARGO];
+
+            memcpy(ii, i, sizeof ii);
+            memcpy(qq, q, sizeof qq);
+            borradas = nb_process(ii, qq, N_LARGO);
+        }
+        printf("   %u muestras de golpe -> borra %u\n", N_LARGO, (unsigned)borradas);
+        if (borradas == 0U) {
+            printf("   *** MAL: con el bloque de 512 no borra NADA ***\n");
+            fallos++;
+        } else {
+            printf("   el bloque de 512 pasa por el quitapulsos       ok\n");
+        }
+
+        /* Y que el tope siga siendo un tope: uno mas, y se va por la
+         * puerta. Es lo correcto, pero tiene que estar dicho. */
+        {
+            static float ii[N_LARGO], qq[N_LARGO];
+
+            memcpy(ii, i, sizeof ii);
+            memcpy(qq, q, sizeof qq);
+            if (nb_process(ii, qq, NB_MAX_BLOQUE + 1U) != 0U) {
+                printf("   *** MAL: acepta mas de NB_MAX_BLOQUE ***\n");
+                fallos++;
+            } else {
+                printf("   y de NB_MAX_BLOQUE no se pasa                 ok\n");
+            }
+        }
+    }
+
     printf("\n%s (%d fallos)\n", fallos ? "HAY FALLOS" : "TODO CORRECTO", fallos);
     return fallos ? 1 : 0;
 }

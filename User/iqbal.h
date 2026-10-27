@@ -21,7 +21,9 @@
  *   - El mezclador y el codec. Dos ramas analogicas distintas, dos
  *     ganancias distintas y un retardo entre ellas.
  *
- * Un grado de error de fase, o medio dB de ganancia, deja el espejo a unos
+ * Un grado de error de fase deja el espejo a 41 dB; MEDIO DECIBELIO de
+ * ganancia lo deja a 31, no a 40 -aqui los daba por equivalentes y no lo
+ * son; para 40 harian falta 0,17 dB. Corregido el 27/10/2026-. O sea unos
  * 40 dB; tres grados lo dejan a 30. Eso es una señal perfectamente visible
  * en la pantalla, que es lo que se ve en el video.
  *
@@ -85,9 +87,10 @@ void  iqbal_aplica(int16_t *i, int16_t *q, uint32_t n);
  * acabaria enseñando una señal distinta de la que se oye - que es
  * exactamente el tipo de fallo que luego nadie encuentra.
  *
- * Mide UNO DE CADA OCHO bloques y corrige todos. El promedio ya tarda un
- * segundo largo, asi que medir ocho veces mas despacio no cambia nada de lo
- * que hace, y quita tres multiplicaciones por muestra de dentro de la
+ * Mide UNO DE CADA OCHO bloques y corrige todos. Eso multiplica por ocho la
+ * constante de tiempo -son 10,9 segundos a 96 kHz, no "un segundo largo"
+ * como ponia aqui; corregido el 27/10/2026-, lo cual no cambia nada de lo
+ * que hace mientras la radio se queda en una banda, y quita tres multiplicaciones por muestra de dentro de la
  * interrupcion.
  */
 void  iqbal_bloque(int16_t *crudo, uint32_t n);
@@ -199,6 +202,11 @@ float iqbal_gan_db(void);       /* g en dB */
  * esto hace falta: por encima de 45-50 dB el espejo no se ve en pantalla. */
 float iqbal_rechazo_db(void);
 uint32_t iqbal_bloques(void);   /* bloques medidos desde el arranque */
+/* Y los que la guarda de la pareja simetrica ha dejado fuera. Ver
+ * IQB_PAR_MAX en iqbal.c: en una banda llena -40 metros- esto sube y el
+ * estimador se queda con lo ultimo bueno en vez de inventarse un
+ * desequilibrio que no existe. */
+uint32_t iqbal_pares(void);
 
 /*
  * ===========================================================================
@@ -266,7 +274,9 @@ uint32_t iqbal_bloques(void);   /* bloques medidos desde el arranque */
  *   - SOLO LOS PICOS, no todo lo que pase un umbral. Las faldas de la
  *     ventana a los lados de una portadora pasan el umbral de sobra y la
  *     medida que dan es basura.
- *   - SOLO SI ENFRENTE NO HAY NADA. Si el bin espejo esta a menos de 6 dB
+ *   - SOLO SI ENFRENTE NO HAY NADA. Si el bin espejo esta a menos de 17 dB
+ *     -IQB_ESPEJO_BAJO vale 0,02; aqui ponia 6, que era el umbral de antes
+ *     del 24/10. Corregido el 27/10/2026-
  *     del pico, eso no es una imagen: son dos emisoras, y medirlo contamina
  *     el ajuste.
  *
@@ -299,7 +309,8 @@ void iqbal_calibra(const float *re, const float *im, uint32_t n);
  * Resuelve el FIR con lo que haya en las ranuras y lo SUMA a lo que ya hay.
  * Devuelve 1 si ha cambiado algo.
  *
- * NO se llama desde la interrupcion: lleva un sistema de cinco incognitas y
+ * NO se llama desde la interrupcion: lleva un sistema de CUATRO incognitas
+ * -IQB_FIR_TOMAS; aqui ponia cinco, que son las RANURAS minimas- y
  * se resuelve en el bucle de pantalla, una vez cada varios segundos. Si no
  * hay ranuras suficientes -hacen falta IQB_RANURAS_MIN con medidas- no toca
  * nada y devuelve 0, que es lo correcto: sin portadoras no hay con que medir,
@@ -315,6 +326,35 @@ uint8_t iqbal_fir_hay(void);
  * desequilibrio depende de la frecuencia del LO, asi que lo medido en 15 MHz
  * no vale en 145. */
 void iqbal_fir_olvida(void);
+
+/*
+ * Y TIRA TAMBIEN EL CORRECTOR PLANO - 27/10/2026.
+ *
+ * Para cuando lo que cambia no es la frecuencia sino la RELACION I/Q del
+ * frontal: invertir el sentido de la cuadratura, rehacer la maniobra de
+ * 90 grados de la banda baja, mover el punto de trabajo del VCO. En esos
+ * tres casos lo aprendido no es que se quede viejo: queda ACTIVAMENTE
+ * equivocado -invertir el sentido es conjugar la señal, y entonces el
+ * theta aprendido corrige justo al reves-.
+ *
+ * Y son precisamente los tres toques que existen PARA MEDIR, asi que
+ * dejar el corrector contaminando la medida es lo peor que se puede
+ * hacer ahi.
+ *
+ * Esto deja al corrector sin nada que aplicar: vuelve a aprender desde
+ * cero, que a 96 kHz son 10,9 segundos de constante de tiempo.
+ */
+void iqbal_plano_olvida(void);
+
+/*
+ * APRENDER Y CORREGIR SON DOS COSAS. Esto apaga SOLO el aprendizaje: lo ya
+ * medido se sigue aplicando. Hace falta en FM ancha, donde la portadora
+ * vive en continua y el estimador no puede funcionar - se inventa un
+ * espejo que no existe y despues se lo lleva a onda corta. El razonamiento
+ * entero, con las medidas, esta delante de iqbal_aprende() en iqbal.c.
+ */
+void iqbal_aprende(uint8_t si);
+uint8_t iqbal_get_aprende(void);
 
 /* Cuantas ranuras tienen medida ahora mismo, para la pagina de Informacion:
  * es lo que dice si la calibracion esta hecha o le falta banda por recorrer. */

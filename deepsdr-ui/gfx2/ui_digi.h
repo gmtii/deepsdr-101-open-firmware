@@ -386,6 +386,12 @@ int16_t ui_digi_barra_w_dbg(const ui_digi_state_t *st);
  * banco es que `barra_x + esto` no se sale de la pantalla - ver el
  * comentario de barra_ventana_w() en ui_digi.c. */
 int16_t ui_digi_barra_ventana_w_dbg(const ui_digi_state_t *st);
+
+/* Los pixeles que le quedan a `barra_txt` despues de descontar el punto y
+ * `barra_txt_dcha`. Es la MISMA resta con la que se pinta, no una copia:
+ * ver su comentario en ui_digi.c. Para el banco, que mide si la chapa de
+ * diagnostico de FT8 cabe o se recorta. */
+int16_t ui_digi_barra_hueco_dbg(const ui_digi_state_t *st);
 int16_t ui_digi_chip_x_dbg(const ui_digi_state_t *st);
 int16_t ui_digi_chip_w_dbg(const ui_digi_state_t *st);
 uint8_t ui_digi_chip_hit(const ui_digi_state_t *st, uint16_t x, uint16_t y);

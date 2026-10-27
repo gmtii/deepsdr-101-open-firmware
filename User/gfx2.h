@@ -304,6 +304,15 @@ void gfx2_render_screen(void (*draw)(gfx2_surf_t *s, void *ctx), void *ctx);
 /* Registra una funcion que se llama tras volcar cada banda. Pensada para
  * muestrear la entrada durante un repintado largo. 0 la desactiva. */
 void gfx2_set_pump(void (*fn)(void));
+
+/*
+ * Quien quiera enterarse de lo que este fichero empuja al panel. Recibe el
+ * rectangulo (x0, y0, x1, y1) de cada volcado, justo antes de hacerlo. Lo
+ * usa el espectro para saber si alguien ha pintado encima de su panel y no
+ * saltarse bandas creyendo que nadie ha tocado. Por puntero, y por que, en
+ * gfx2.c. 24/10/2026.
+ */
+void gfx2_set_chivato(void (*fn)(uint16_t, uint16_t, uint16_t, uint16_t));
 /* Llama al gancho, para quien pinta por bandas sin pasar por
  * gfx2_render(). Ver su comentario en gfx2.c. */
 void gfx2_pump(void);

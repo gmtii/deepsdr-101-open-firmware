@@ -34,7 +34,7 @@
 /* Must be called once at startup (precomputes the twiddle/Hann/
  * bit-reversal tables) - alongside fft_init(), not instead of it. */
 /*
- * LAS CUATRO TABLAS, EN FLASH. Las genera tools/gen_ft8_tablas.py en
+ * LAS TABLAS, EN FLASH. Las genera tools/gen_ft8_tablas.py en
  * User/ft8_tablas.c; antes se construian en RAM en cada entrada a FT8 y
  * costaban 10.240 bytes de la memoria compartida con la cascada. Ver el
  * comentario del generador para por que eso importaba tanto.
@@ -42,7 +42,40 @@
 extern const float    k_ft8_twiddle_cos[FT8_FFT_SIZE / 2U];
 extern const float    k_ft8_twiddle_sin[FT8_FFT_SIZE / 2U];
 extern const float    k_ft8_hann[FT8_FFT_SIZE];
-extern const uint16_t k_ft8_bitrev[FT8_FFT_SIZE];
+
+/*
+ * Y LA CUARTA SE CALCULA - 26/10/2026, haciendo hueco en la flash interna.
+ *
+ * k_ft8_bitrev[] eran 1.024 enteros de 16 bits -2.048 bytes- y lo que
+ * guardaban era EXACTAMENTE invertir diez bits: se comprobo valor a valor,
+ * 0 diferencias en los 1.024. En un Cortex-M4 eso es la instruccion `rbit`,
+ * un ciclo, o sea menos de lo que cuesta leer la tabla.
+ *
+ * Es la unica de las cuatro que se podia quitar sin cambiar un bit del
+ * resultado. Las otras tres son de coma flotante y salen de una
+ * aproximacion, asi que deducir una de otra SI cambia valores: medido, la
+ * ventana de Hann no es simetrica bit a bit -349 de 512 pares difieren- y
+ * el seno no sale del coseno -152 de 512-.
+ *
+ * Se usa una sola vez por transformada, en el bucle que reordena las
+ * muestras de entrada.
+ */
+static inline uint16_t ft8_bitrev10(uint32_t n)
+{
+#if defined(__ARM_ARCH_7EM__) || defined(__ARM_ARCH_7M__)
+    uint32_t r;
+    __asm__ ("rbit %0, %1" : "=r" (r) : "r" (n));
+    return (uint16_t)(r >> 22);      /* de 32 bits a los 10 de abajo */
+#else
+    uint32_t r = 0U, b;              /* el simulador, que no es un Cortex */
+
+    for (b = 0U; b < 10U; b++) {
+        r = (r << 1U) | (n & 1U);
+        n >>= 1U;
+    }
+    return (uint16_t)r;
+#endif
+}
 
 void ft8_fft1024_init(void);
 

@@ -14,14 +14,18 @@
  * WHY 3200Hz, AND WHY THIS NEEDED A REAL RESAMPLER (09/2026, per the
  * project owner green-lighting a wider search window beyond
  * 400Hz): 12000 has no integer decimation factor landing on a fs that
- * gives a power-of-two nfft together with FREQ_OSR=2 preserved (see
- * ft8_waterfall_adapter.h's memory-budget history for why FREQ_OSR=2
- * specifically must be kept - A/B tested, it costs real decode
- * sensitivity to drop it, unlike TIME_OSR). 3200Hz DOES: nfft =
- * (3200*0.16)*2 = 1024, a clean power of two (see ft8_fft1024.h) -
- * doubling the window from 400Hz to 1600Hz for a mag[] cost of ~46.5KB
- * (vs ~23.2KB for the ORIGINAL 400Hz/(2,2)-oversampled design - see
- * that header's own numbers).
+ * gives a power-of-two nfft together with a two-symbol analysis window
+ * (see ft8_waterfall_adapter.h). 3200Hz DOES: nfft = (3200*0.16)*2 =
+ * 1024, a clean power of two (see ft8_fft1024.h) - cuadruplicando la
+ * ventana de 400 a 1.600 Hz.
+ *
+ * *** DOS CIFRAS DE AQUI ERAN FALSAS Y SE CORRIGEN EL 23/10/2026: decia
+ * "doubling" donde es cuadruplicar (400 -> 1.600 son cuatro veces), y
+ * decia que FREQ_OSR=2 "specifically must be kept"... cuando ese mismo
+ * dia, dos ficheros mas alla, FREQ_OSR se bajo a 1 para poder ensanchar
+ * la ventana. Quien leyera esto se creeria que el ancho de hoy sale de
+ * una configuracion que no es la que hay. El 2 que de verdad manda aqui
+ * es la ventana de analisis de DOS simbolos, no FREQ_OSR. ***
  *
  * 12000/3200 = 15/4 in lowest terms - NOT an integer ratio, so a
  * simple decimate-only filter (like the old 800Hz design used) can't

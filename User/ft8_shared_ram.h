@@ -115,6 +115,7 @@ typedef union
      */
     uint8_t hfdl_buf[HFDL_RAM_TOTAL];
 
+
     struct
     {
         uint8_t mag[FT8_ADAPTER_MAX_BLOCKS * FT8_ADAPTER_TIME_OSR * FT8_ADAPTER_FREQ_OSR * FT8_ADAPTER_NUM_BINS];
@@ -164,7 +165,9 @@ typedef union
          * *** AQUI ESTABAN LAS CUATRO TABLAS, Y EL SELLO - 10/10/2026. ***
          *
          * fft_twiddle_cos, fft_twiddle_sin, fft_hann y fft_bitrev sumaban
-         * 10.240 bytes, y ft8_fft1024_init() las RECONSTRUIA en cada entrada
+         * 10.240 bytes -y el ultimo ya ni existe: lo calcula `rbit` en un
+         * ciclo, ver ft8_bitrev10()-, y ft8_fft1024_init() las RECONSTRUIA
+         * en cada entrada
          * a FT8 porque cada salida las borraba. Son funcion pura de
          * FT8_FFT_SIZE, o sea unos numeros que no cambian nunca ocupando la
          * memoria mas disputada de la radio.
@@ -215,9 +218,9 @@ typedef union
         float   ldpc_tov[174][3];    /* FTX_LDPC_N x 3  - ldpc.c  */
         float   ldpc_toc[83][7];     /* FTX_LDPC_M x 7  - ldpc.c  */
         int16_t deci_out[2][FT8_ADAPTER_SUBBLOCK_SIZE];  /* ft8_decimator.c */
-        uint8_t cola[1760];          /* s_queue       - ft8_decoder.c */
+        uint8_t cola[3520];          /* s_queue       - ft8_decoder.c (40 x 88) */
         uint8_t cands[1120];         /* candidate_list- ft8_decoder.c */
-        char    lineas[16][88];      /* s_lin         - ft8_modo.c */
+        char    lineas[48][88];      /* s_lin         - ft8_modo.c */
     } ft8;
 } ft8_shared_ram_t;
 

@@ -103,6 +103,18 @@ uint8_t ui_top_clock_hit(uint16_t x, uint16_t y)
                      && (int16_t)x <  (int16_t)(s_clock_x2 + 10));
 }
 
+uint8_t ui_top_mem_hit(uint16_t x, uint16_t y)
+{
+    /* Sin margen de mas: por la derecha, a cuatro pixeles, empieza lo que
+     * el reloj considera suyo (ui_top_clock_hit), y por abajo el renglon
+     * del PPM. Lo que se dibuja y lo que se toca son el MISMO rectangulo,
+     * que es la unica forma de que no se separen. */
+    return (uint8_t)((int16_t)x >= UI_TOP_MEM_X
+                     && (int16_t)x <  (int16_t)(UI_TOP_MEM_X + UI_TOP_MEM_W)
+                     && (int16_t)y >= UI_TOP_MEM_Y
+                     && (int16_t)y <  (int16_t)(UI_TOP_MEM_Y + UI_TOP_MEM_H));
+}
+
 ui_top_hit_t ui_top_hit(uint16_t x, uint16_t y)
 {
     uint8_t i;
@@ -258,6 +270,49 @@ static void draw_header(gfx2_surf_t *s, void *ctx)
     if (st->sam_ppm) {
         gfx2_text_in(s, UI_TOP_SAM_X, UI_TOP_SAM_Y, UI_TOP_SAM_W,
                      st->sam_ppm, &font_ui_14, dim, GFX2_ALIGN_R);
+    }
+
+    /*
+     * --- el boton del banco de memorias ---
+     *
+     * En el MISMO renglon que las pastillas de modo y de banda de aqui
+     * arriba, que es donde el usuario lo pidio. Donde cabe y por que el
+     * PPM del SAM tuvo que bajar un renglon para dejarle sitio esta en
+     * UI_TOP_MEM_X (ui_top.h), con las cajas de tinta medidas.
+     *
+     * Se pinta como una chapa, igual que las de la franja de estado, para
+     * que se lea como lo que es: algo que se toca. Y se dibuja SIEMPRE, en
+     * todos los modos: un boton que aparece y desaparece es un boton que
+     * se busca.
+     */
+    {
+        /* Con el color de acento y no el del fondo: en esta cabecera lo
+         * que se toca va en ambar -la pastilla del mando de abajo, la
+         * chapa del modo- y lo que solo se lee va en gris. Un boton del
+         * color de lo que no se toca es un boton que nadie toca. */
+        /* Los mismos numeros que la pastilla del modo de aqui arriba -alto
+         * 32, radio 6, relleno al 42 y borde al 170 del acento-: es un
+         * boton de esa misma fila y tiene que leerse igual. */
+        /* Con el barrido andando pone el NUMERO de la memoria que esta
+         * escuchando, y va RELLENO en vez de solo tenido: es la misma
+         * diferencia que separa un chip encendido de uno apagado en la
+         * franja de abajo, asi que "esto esta pasando ahora" se lee igual
+         * en los dos sitios. */
+        const char *barre = st->mem_scan;
+
+        gfx2_rrect(s, UI_TOP_MEM_X, UI_TOP_MEM_Y, UI_TOP_MEM_W, UI_TOP_MEM_H,
+                   6, gfx2_rgba(PAL_ACCENT, barre ? 220U : 42U));
+        gfx2_rrect_outline(s, UI_TOP_MEM_X, UI_TOP_MEM_Y, UI_TOP_MEM_W,
+                           UI_TOP_MEM_H, 6, 1, gfx2_rgba(PAL_ACCENT, 170));
+        /* La MISMA fuente y el mismo desplazamiento que las pastillas de
+         * modo y de banda de aqui arriba -font_ui_18b y seis pixeles por
+         * debajo del borde-, que es lo que hace que los tres se lean como
+         * una fila y no como tres cosas sueltas. Estaba en font_ui_14b y
+         * se notaba: 46 px contra 35 para el mismo "MEM". */
+        gfx2_text_in(s, UI_TOP_MEM_X, (int16_t)(UI_TOP_MEM_Y + 6),
+                     UI_TOP_MEM_W, barre ? barre : "MEM", &font_ui_18b,
+                     barre ? gfx2_rgb(PAL_SURF_0) : gfx2_rgb(PAL_ACCENT),
+                     GFX2_ALIGN_C);
     }
 
     /* --- reloj arriba a la derecha --- */
@@ -768,9 +823,32 @@ static void draw_status(gfx2_surf_t *s, void *ctx)
             gfx2_rrect(s, kx, (int16_t)(Y + 8), kw, 24, 12, gfx2_rgba(PAL_CRIT, 48));
             gfx2_rrect_outline(s, kx, (int16_t)(Y + 8), kw, 24, 12, 1,
                                gfx2_rgba(PAL_CRIT, 200));
-            gfx2_text(s, (int16_t)(kx + 12), (int16_t)(Y + 12),
-                      tr("SOBRECARGA", "OVERLOAD"), &font_ui_14b,
-                      gfx2_rgb(PAL_CRIT));
+            /*
+             * Y CENTRADO EN LA PASTILLA - 24/10/2026, avisado por el
+             * usuario con una foto.
+             *
+             * Iba pegado a la izquierda, a los mismos 12 pixeles que el
+             * texto del mando. Pero el ancho de la pastilla -kw- se calcula
+             * para el contenido del MANDO ("Sintonia 500 Hz" y compania),
+             * que es mas largo que esta palabra: el aviso se quedaba a la
+             * izquierda con un hueco a la derecha, y encima el hueco cambia
+             * de tamano segun lo que ponga el mando en ese momento.
+             *
+             * Se centra con lo que mide el texto de verdad, no con una
+             * constante: "SOBRECARGA" y "OVERLOAD" no miden lo mismo. Y con
+             * tope por la izquierda, porque si algun dia la pastilla sale
+             * mas estrecha que la palabra, lo que NO puede hacer es empezar
+             * fuera de ella.
+             */
+            {
+                const char *av = tr("SOBRECARGA", "OVERLOAD");
+                int16_t aw = (int16_t)gfx2_text_w(av, &font_ui_14b);
+                int16_t ax = (int16_t)(kx + ((kw - aw) / 2));
+
+                if (ax < (int16_t)(kx + 4)) { ax = (int16_t)(kx + 4); }
+                gfx2_text(s, ax, (int16_t)(Y + 12), av, &font_ui_14b,
+                          gfx2_rgb(PAL_CRIT));
+            }
         } else {
             gfx2_rrect(s, kx, (int16_t)(Y + 8), kw, 24, 12, gfx2_rgba(PAL_ACCENT, 38));
             gfx2_rrect_outline(s, kx, (int16_t)(Y + 8), kw, 24, 12, 1,
@@ -1032,6 +1110,8 @@ void ui_top_pinta_en(gfx2_surf_t *s, const ui_top_state_t *st)
     draw_status(s, (void *)st);
 }
 
+static void nco_apunta(const ui_top_state_t *st);
+
 void ui_top_draw(const ui_top_state_t *st)
 {
     gfx2_render(0, 0, GFX2_W, UI_TOP_H, draw_header, (void *)st);
@@ -1039,11 +1119,73 @@ void ui_top_draw(const ui_top_state_t *st)
      * recortarse al hueco. Ver draw_header(). */
     ui_top_draw_rds(st);
     gfx2_render(0, UI_STATUS_Y, GFX2_W, UI_STATUS_H, draw_status, (void *)st);
+    /* Esto tambien es la franja entera: apunta la chapa del NCO igual que
+     * ui_top_draw_status(). Ver s_nco_pintado. */
+    nco_apunta(st);
+}
+
+/*
+ * ======================================================================
+ * LO QUE LA CHAPA DEL NCO TIENE PINTADO AHORA MISMO - 25/10/2026.
+ * ======================================================================
+ *
+ * Reportado por un usuario: falta que el valor del NCO salga solo nada mas
+ * sintonizar.
+ *
+ * Y faltaba, por un motivo que no se ve leyendo main.c: el numero se
+ * recalcula en cada cuadro, pero quien lo pinta es esta franja, y el clic
+ * del mando no la repinta -freq_display_draw() se quedo a proposito en el
+ * hueco de la lectura el 05/10/2026, para no gastar los 32.000 accesos de
+ * la franja en cada clic-. Con el oscilador aparcado la sintonia se mueve y
+ * el oscilador NO: el desplazamiento cambia en cada clic y es justo
+ * entonces cuando hay algo nuevo que decir. La chapa se quedaba con el
+ * numero del arranque.
+ *
+ * EL APUNTE VIVE AQUI Y NO EN main.c, y ese es el detalle que importa. La
+ * primera version guardaba el texto alli y lo actualizaba en los cinco
+ * sitios que repintan la franja... de los TRECE que hay. Los cinco de
+ * "canal siguiente" -FT8, JTTY, AIS, WSPR, HFDL- mueven la sintonia y
+ * repintan con ui_top_draw() sin pasar por ninguno de los cinco, asi que la
+ * memoria se quedaba desfasada y la chapa podia volver a mentir.
+ *
+ * Puesto donde se pinta, no hay lista que mantener: cualquier camino que
+ * repinte la franja lo apunta por el mero hecho de repintarla. Es la misma
+ * leccion que este fichero lleva contada cinco veces.
+ *
+ * Y NO se apunta en ui_top_draw_smeter(), que dibuja lo mismo con la
+ * ventana recortada a la parte de la izquierda: los chips caen fuera y
+ * gfx2 los tira, asi que apuntar alli seria decir que esta pintado algo que
+ * no se ha pintado.
+ */
+static char s_nco_pintado[12] = { '\1', '\0' };   /* imposible: fuerza el primero */
+
+static void nco_apunta(const ui_top_state_t *st)
+{
+    const char *t = (st->nco_on && st->nco_off) ? st->nco_off : "";
+    uint8_t     k = 0U;
+
+    while (t[k] != '\0' && k < (uint8_t)(sizeof s_nco_pintado - 1U)) {
+        s_nco_pintado[k] = t[k];
+        k++;
+    }
+    s_nco_pintado[k] = '\0';
+}
+
+uint8_t ui_top_nco_al_dia(const ui_top_state_t *st)
+{
+    const char *t = (st->nco_on && st->nco_off) ? st->nco_off : "";
+    uint8_t     k = 0U;
+
+    while (t[k] != '\0' && s_nco_pintado[k] != '\0' && t[k] == s_nco_pintado[k]) {
+        k++;
+    }
+    return (uint8_t)(t[k] == '\0' && s_nco_pintado[k] == '\0');
 }
 
 void ui_top_draw_status(const ui_top_state_t *st)
 {
     gfx2_render(0, UI_STATUS_Y, GFX2_W, UI_STATUS_H, draw_status, (void *)st);
+    nco_apunta(st);
 }
 
 /*
@@ -1154,6 +1296,20 @@ void ui_top_draw_smeter(const ui_top_state_t *st)
  * mover el numero no pueda dejar la ventana apuntando a donde ya no esta.
  * El 05/10/2026 se movio -ver UI_TOP_SAM_X- y esta ventana se vino sola.
  */
+/*
+ * SOLO EL BOTON DEL BANCO. 26/10/2026.
+ *
+ * El rotulo cambia al arrancar y al parar el barrido -dos veces por
+ * barrido, no una por salto-, y repintar la cabecera entera por eso serian
+ * 89.771 accesos al bus de la pantalla cuando hacen falta los del boton.
+ * La ventana es la del boton y ni un pixel mas: ver UI_TOP_MEM_X.
+ */
+void ui_top_draw_mem(const ui_top_state_t *st)
+{
+    gfx2_render(UI_TOP_MEM_X, UI_TOP_MEM_Y, UI_TOP_MEM_W, UI_TOP_MEM_H,
+                draw_header, (void *)st);
+}
+
 void ui_top_draw_sam(const ui_top_state_t *st)
 {
     gfx2_render(UI_TOP_SAM_RX, UI_TOP_SAM_RY, UI_TOP_SAM_RW, UI_TOP_SAM_RH,
@@ -1255,7 +1411,28 @@ void ui_top_draw_freq(const ui_top_state_t *st)
 }
 
 /* Para el banco: ver ui_top_chip_w_dbg(). El enlazador la tira. */
-int16_t ui_top_movil_w_dbg(void)  { return (int16_t)ST_MOVIL_W; }
+/*
+ * LA VENTANA DE VERDAD, NO UNA CONSTANTE QUE YA NO DIBUJA NADA -
+ * 26/10/2026, decimotercera vuelta de la revision a fondo.
+ *
+ * Esto devolvia ST_MOVIL_W (418 px), y ST_MOVIL_W dejo de usarlo ningun
+ * dibujo el 20/10, cuando ui_top_draw_smeter() paso a pedir una ventana de
+ * knob_x() px. Su unico consumidor era esta funcion de depuracion... y el
+ * banco sim/top_franjas.c, que comparaba contra ella y por tanto daba 134
+ * px de margen FANTASMA donde el margen real es NEGATIVO.
+ *
+ * Por eso el banco pasaba en verde mientras el aviso de SOBRECARGA no se
+ * pintaba: la pastilla del mando se queda fuera de la ventana de verdad.
+ * Un banco que mide contra una constante muerta no vigila nada.
+ */
+int16_t ui_top_movil_w_dbg(void)
+{
+    ui_top_state_t st;
+
+    /* knob_x() solo depende de la geometria fija: ver su "(void)st;". */
+    memset(&st, 0, sizeof st);
+    return knob_x(&st);
+}
 int16_t ui_top_read_x_dbg(void)   { return (int16_t)ST_READ_X; }
 int16_t ui_top_knob_x_dbg(uint8_t con_dbm)
 {

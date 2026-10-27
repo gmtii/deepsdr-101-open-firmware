@@ -1,0 +1,314 @@
+;          5-Aug-2026 BROADCAS.TXT REFERENCE TABLE
+;-- --------------------------------------------------
+;CO BROADCASTER
+;DE
+;-- --------------------------------------------------
+ABC ABC-Radio Australia
+ADM Abu Dhabi Media Company
+AGC Agência Goaiana de Comunicação (Brazil)
+AGM United States Agency for Global Media (USAGM)
+AIJ Two If By Sea Broadcasting Corporation
+AIR All India Radio
+ALI Radio Alislah
+ALR Radio Tirana, Albania
+AMP Radiodifusion America (Asuncion, Paraguay)
+AMZ Radio Nacional da Amazonia (Brazil)
+ANT ANTI, Milano
+APA Radio Aparecida (Brazil)
+ARA Rádio Araguaia Ltda. (Brazil)
+ARD Arbeitsgemeinschaft der Rundfunkanst. Deutschlands
+ARM Radio of Armenia
+ARS Broadcasting Serv. of the Kingdom of Saudi Arabia
+AWR Adventist World Radio
+BAB Babcock Communications
+BAN Rádio e Televisão bandeirantes Ltda. (Brazil)
+BBC BBC Worldservice
+BBS Bhutan Broadcasting Service
+BCE Broadcasting Center Europe S.A.
+BCQ Allan H. Weiner
+BIX BitExpress (Germany)
+BOH Grace Missionary Baptist Church, Inc.
+BRB Broadcast Belgium 
+BRC Bahrain Radio & Television Corporation
+BTC Belarusian Tele-radio Company (Belarus)
+BWW Leap of Faith, Inc.
+C29 Channel 292 (Germany)
+CAF Channel Africa
+CBB Caribbean Beacon
+CFI Rádio Cultura de Foz do Iguaçu Ltda.(Brazil)
+CHW Christliche Wissenschaft
+CLU Sistema Clube de Comunicação (Brazil)
+CNR China National Radio
+CRI China Radio International
+CSP Christian Science Shortwave Broadcasts
+CVC CVC
+CVO Christian Voice
+DEN Studio Denakker
+DIB Maldives Radio & Television
+DIS disco.miami
+DJR Djibouti Radio
+DRM Digital Radio Mondial
+DTK Media Broadcast GmbH (former:Deutsche Telekom)
+DVB Dem. Voice of Burma
+DWD Deutscher Wetterdienst
+DWL Deutsche Welle
+E24 Europa 24 (Germany)
+EBC Emirates Broadcasting Corporation
+EEE DPA Mac LLC
+EMI Emirates Media
+EMR European Music Radio
+EMX Radio Educacion (Mexico)
+ENC Encompass Digital Media Services
+ERA Voice of Greece
+ERT Hellenic Broadcasting Corp. S.A. - Voice of Greece
+ERU Egypt Radio & TV Union
+EUR Radio Europe Netherlands
+EWN Eternal Word Television Network, Inc.
+FBS Far East Broadcasting Company, Inc.
+FCL Fundação Cásper Líbero (Brazil)
+FEB FEBA Radio
+FEC Far East Broadcasting Company
+FGM Fang Guang Ming Radio
+FLM Fiangonana Loterana Malagasy (Malagasy Lutheran Church - Radio Feon'ny Filazantsara)
+FMP Fundação Metropolitana Paulista (Brazil)
+FPA Fundação Padre Anchieta (Brazil)
+FPU Free Press Unlimited (Amsterdam)
+GAU Rádio Gaúcha Ltda. (Brazil)
+GEM Governo do Estado do Maranhão (Brazil)
+GJA George Jacobs & Associates, Inc.
+GLO Rádio Globo Ltda. (Brazil)
+GNW Good News World Radio
+GRJ Sociedade Rádio Guarujá Ltda. (Brazil)
+GSP Rádio Globo de São Paulo Ltda. (Brazil)
+GTG Blue Ridge Communications, Inc.
+GRP Radio Guaruja Paulista (Brazil)
+GUA SA Rádio Guarani (Brazil)
+GUI Rádio Guaíba Ltda (Brazil)
+GUN Gunaz Radio, (Belgium)
+H.A LeSea Broadcasting Corporation
+HBN Republic of Palau
+HCA HCJB Australia
+HCJ Voice of the Andes
+HIC Croatian Information Center (Hrvatski Inf. Centar)
+HLR Hamburger Lokalradio e.V.
+HNG BMGE trial
+HOR Radio Horizon
+HRA World Harvest Radio
+HRI LeSea Broadcasting Corporation
+HRT Hrvatska Radio - Televizija (Croatian Radio-TV)
+HSW LeSea Broadcasting Corporation
+HVR H. Visser
+IBB International Broadcasting Bureau
+IBR IBRA Radio
+IBT Iraqi Broadcasting Radio & Television Establ.
+ICN Broccoli Trash Metal & Grunge, Netherlands
+IMF International Fellowship of Churches, Inc.
+IMN Iraqi Media Network
+INB World International Broadcasters, Inc.
+INC Rádio Inconfidência Ltda. (Brazil)
+INT Radio of Mediterranean
+IPE Turms Tech LLC
+IRB Islamic Republic of Iran Broadcasting
+ISL Iceland Radio
+ITA Rádio Itatiaia Ltda. (Brazil)
+JCI Japan Center for Intercultural Communications
+JCR World Wide Gospel Radio, Inc.
+JES Our Lady's Youth Center
+JHR Hill Radio International
+JIC Japan International Communications
+JIE Word Broadcasting Network, Inc.
+JP2 Fundação João Paulo II (Brazil)
+JPN Fundação José de Paiva Netto (Brazil)
+JRC Joode Radiocommunications Consultancy (The Netherlands)
+JRT Jordan Radio & Television
+KAZ Radio of Kazakhstan
+KBC Kenya Broadcasting Corporation
+KBS Korean Broadcasting System
+KCB Korean Central Broadcasting Station
+KOL Kol Israel
+KRI Koode Radio International
+KTB Kazakhstan Television & Broadcasting Corporation
+LBN Lebanon Radio
+LHL L'Heure Lutherienne
+LNC Libyan National Broadcast Channel
+LNR Lao National Radio & Television
+LRC Latvia State Radio and Television Centre
+LRT Lithuanian National Radio and TV
+MAR Rádio Marumby Ltda. (Brazil)
+MBC Mauritius Broadcasting Corporation
+MBR Media Broadcast GmbH
+MCR MediaCorp Radio (SNG)
+MEZ Voice of Mezopotamya
+MIK Mike Radio
+MIL Radio Mil Mexico
+MIR Radio Miraya (South Sudan)
+MGB Malagasy Glabal Business S.A.
+MLK Assemblies of Yahweh
+MLT Voice of the Mediterranean-Malta
+MND MND Radio
+MNO Merlin Network One
+MOL Radio of Moldavia
+MRA Mezopotamian Radio & Television
+MRC Radiodiffusion-Television Marocaine
+MRT Mongol Radio & Television
+MTN Mauritiania Radio
+MTR Mali Television et Radio
+MVB Baltic Radio (Germany)
+MWV World Christian Broadcasting (USA)
+NBA National Broadcaster of Bangladesh
+NBP National Broadcasting Corp. of Papua New Guinea
+NDP Rádio Novas de Paz Ltda.(Brazil)
+NBT NBS of Thailand
+NEW For new organization
+NHK Nippon Hoso Kyokai
+NLS World Christian Broadcasting Corporation
+NRC National Radio Company of Ukraine
+NSB Nihon Short-wave Broadc. Co.
+OMR SunDance
+ONT Office National de la Telediffusion-Tunisia
+ORF Oesterreichischer Rundfunk
+PBC Pakistan Broadcasting Corporation
+PBH Parable Broadcasting Company, LLC
+PBS Philippines Broadcasting Service 
+PIE Radio Piepzender
+PLA Plummer Applications
+PNW Press Now
+PRW Polish Radio Warsaw
+QBS Qatar Broadcasting Service
+QHR Que Huong Radio
+RA- Radio Algiers International
+RAC Radio Casanova International
+RAE Radiodifusion Argentina al Exterior
+RAI Radio Televisione Italiana
+RBL Radio Byelirussia
+RBP Radio Budapest
+RBU Radio Bulgaria
+RCI Radio Canada International
+RCS Radio Corporation of Singapore
+RDK Radio Danmark
+RDB Radiobrás Empresa Brasileira de Comunicação Ltda (Brazil)
+RDI Radio Delta International
+RDP Radiodifusao Portuguesa, SA
+RDR HFCC, Intl. Radio for Disaster Relief project
+REC Rádio e Televisão Record Ltda.(Brazil)
+REE Radio Exterior de Espana
+RET Radio Ethiopia
+RFI Radio France Internationale
+RFP Radio For Peace International
+RFU Radio Free Ukraine
+RFV Radio Free Vietnam
+RHC Radio Habana Cuba (Cuba)
+RHI Radio Huriyo Zthiopien
+RKG Radio of Kirghizia
+RKP Radio Klein Paris International (Germany)
+RKW Ministry of Information - State of Kuwait
+RLA Radio-Lead Africa
+RLB Radio Liberty
+RME Radio Merkurs (Latvia)
+RMI Radio Miami International
+RMP Radio Mariya
+RMT Radio Marti
+RMX Radio Mexico International (Mexico)
+RNA Radio Nacional de Angola
+RNB Radio Nacional do Brasil
+RNE Radio Nepal
+RNG Radio Nicaragua
+RNI Radio Norway International
+RNL Radio Nile
+RNO WRNO Worldwide, Inc.
+RNP Rádio Nacional do Brasil
+RNV Radio Nacional de Venezuela
+RNW Radio Nederland Wereldomroep
+RNZ Radio New Zealand
+ROC Fundação Nossa Senhor do Rocio (Brazil)
+RON Radio Onda ASBL
+RPI Radio for Peace International (Costa Rica)
+RPR Radio Prague
+RRI Radio Republic of Indonesia
+RRM Rádio Rio Mar Ltda.(Brazil)
+RRO Radio Romania International
+RRS Radio Russia
+RRT Fundação Sistema RTM de Rádio e Televisão (Brazil)
+RSH Radio 700
+RSI Radio Singapore International
+RSO Radio Sultanate of Oman
+RSW Radio Sweden International
+RTA Radio Television of Afghanistan
+RTB Radio Television Belgium French
+RTD Radio & Television of Dubai
+RTE Radio Telefis Eireann
+RTK Radio of Turkmenistan
+RTM Radio Television Malaysia
+RTT Tunesian Radio & TV
+RUI Radio Ukraine International
+RUM Rádio Universitária Metropolitana (Brazil)
+RVA Radio Veritas Asia
+RVP Radio Voice of the People
+SAB South African Broadcasting Corporation
+SBC Sudan National Broadcasting Corporation
+SDA Adventist Broadcasting Service, Inc.
+SEN Rádio Senado (Brazil)
+SHB Herald Broadcasting Syndicate, Inc.
+SIB Solomon Islands Broadcasting
+SKK Senter for Kristen Kringkasting
+SLB Sri Lanka Broadcasting Corporation
+SMD SM Radio Dessau (Germany)
+SOR Somalia Radio
+SPW SPW Radio Warsaw - Transatlantic Radio Station Cultural Park Association (Poland)
+SRI Swiss Radio International
+SRL South African Radio League
+SRO Radio Slovakia
+ST2 SE-TA 2 (Germany)
+SUN Sunrise Radio
+SWR Shortwave Radio Services (Germany)
+SWS Radio SWS (Germany)
+SYR Syria Radio & Television Corporation
+TBN Trinity Christian Center of Santa Ana
+TDA Telediffusion d'Algerie
+TDF TDF (France)
+TDJ Radio of Tadjikistan
+TDP TDP Radio
+TJC Grace Baptist Church
+TMI Transformation Media International, LP
+TOE Radio208
+TOM The Overcomer Ministry
+TRT Turkish Radio-TV Corp
+TUP Rádio Tupi Ltda. (Brazil)
+TWR Trans World Radio
+TWW Leap of Faith, Inc.
+UCB United Christian Broadcasting Ltd. (England)
+UMC The United Methodist Church (USA)
+UNL Universelles Leben
+UNR United Nations Radio
+UZB Radio of Uzbekistan
+VAT Vatican Radio
+VBT Vanuatu Broadcasting and Television Corporation
+VCA Voice of Canada
+VIL Voice International Limited
+VIO Radio OZ-Viola
+VOA Voice of America
+VOC Voz Christiana (Chile)
+VOD Voice of Deleverance
+VOH Voice of Hope
+VOM Voice of Myanmar
+VOO Voice of Orthodoxy
+VOP Voice of Palestine
+VOR Voice of Russia
+VOT Voice of Tibet
+VOV Voice of Vietnam
+VRT Vlaamse Radio en Televisie
+VTC VT Communications
+WAR LeSea Broadcasting Corporation
+WBS Charles C. Josey
+WCR WNQM, Inc.
+WIB World International Broadcasters
+WHR World Harvest Radio
+WMR World Music Radio
+WRB Blue Ridge Communications, Inc.
+WRN World Radio Network
+YER Yemen Radio & Television
+YFR Family Stations, Inc.
+YLE Oy Yleisradio
+YRT Yugoslav Radio-Television
+ZNB Zambia National Broadcasting Corporation
+ZRC Zilionis Radio TV Consulting, Lithuania

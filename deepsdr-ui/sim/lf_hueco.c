@@ -98,8 +98,19 @@ static unsigned long recorre(int nco, int bajando, unsigned long *peor_f,
         off = (long)f - (long)lo;
         if (f < SUELO) { continue; }
         {
+            /*
+             * EN VALOR ABSOLUTO DESDE EL 24/10/2026, igual que en
+             * ncotest.c y por lo mismo: nco_lo_aparcado() ya admite
+             * distancias negativas -el oscilador por ENCIMA de lo que se
+             * escucha- porque sin ellas el NCO solo cubria la mitad
+             * derecha de la pantalla. Lo que este banco busca sigue
+             * siendo lo mismo: una emisora que se quede FUERA de la
+             * ventana. Lo que cambia es que la ventana tiene dos lados.
+             */
             long tol = (long)escalon_de(lo);
-            if (off <= (long)OFF_MAX + tol && off >= (long)OFF_MIN - tol) {
+            long a   = (off < 0) ? -off : off;
+
+            if (a <= (long)OFF_MAX + tol && a >= (long)OFF_MIN - tol) {
                 continue;
             }
         }

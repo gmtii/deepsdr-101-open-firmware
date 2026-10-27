@@ -25,6 +25,8 @@
  *
  * Las cuatro tablas se fueron a FLASH -User/ft8_tablas.c, generado por
  * tools/gen_ft8_tablas.py- y con ellas se fue el sello que las avalaba.
+ * Desde el 26/10/2026 son tres: la del orden de bits la calcula
+ * ft8_bitrev10() con una instruccion, y aqui se comprueba igual.
  * Nadie puede borrarlas, asi que "¿estan construidas?" dejo de ser una
  * pregunta. Lo que se hizo con los 10.240 bytes que dejaron libres DENTRO
  * de la union esta contado en ft8_shared_ram.h.
@@ -92,7 +94,7 @@ static int es_permutacion(int *fuera, int *repes)
     *fuera = 0; *repes = 0;
 
     for (n = 0U; n < (uint32_t)FT8_FFT_SIZE; n++) {
-        uint16_t v = k_ft8_bitrev[n];
+        uint16_t v = ft8_bitrev10(n);
         if (v >= (uint16_t)FT8_FFT_SIZE) { (*fuera)++; continue; }
         if (visto[v]) { (*repes)++; }
         visto[v] = 1U;
@@ -125,8 +127,16 @@ int main(void)
                 2.0f * 3.14159265358979f * (float)n / (float)(FT8_FFT_SIZE - 1U));
             uint32_t v = n, r = 0U, b;
             if (memcmp(&h, &k_ft8_hann[n], sizeof h) != 0) { mal++; }
+            /*
+             * Y LA CUARTA TABLA YA NO EXISTE - 26/10/2026. La calcula
+             * ft8_bitrev10() con `rbit`, un ciclo, y eran 2.048 bytes de
+             * flash interna. Se sigue comprobando contra la MISMA cuenta
+             * de antes, que es lo que importa: el decodificador tiene que
+             * ver los mismos indices, vengan de una tabla o de una
+             * instruccion.
+             */
             for (b = 0U; b < 10U; b++) { r = (r << 1U) | (v & 1U); v >>= 1U; }
-            if (k_ft8_bitrev[n] != (uint16_t)r) { mal++; }
+            if (ft8_bitrev10(n) != (uint16_t)r) { mal++; }
         }
         printf("    %u valores comprobados, %u diferencias\n",
                (unsigned)(FT8_FFT_SIZE * 3U), mal);
@@ -152,7 +162,36 @@ int main(void)
 
         printf("    cascada %u   ft8 %u   hfdl %u   union %u\n",
                cascada, ft8, hfdl, (unsigned)sizeof u);
-        pasa("el miembro de FT8 cabe dentro del de la cascada", ft8 <= cascada);
+        /*
+         * ==============================================================
+         * Y ESTA DEJO DE SER LA PREGUNTA EL 23/10/2026
+         * ==============================================================
+         *
+         * Aqui se exigia `ft8 <= cascada`: que el bloque de FT8 cupiera
+         * dentro del de la cascada. Esa regla se retiro hace tiempo y en
+         * DOS sitios que lo dicen con todas las letras -ver waterfall_init()
+         * ("la union entera, no solo el miembro de la cascada") y el
+         * comentario del sello en ft8_shared_ram.h ("la garantia ya no
+         * depende de una coincidencia de tamanos, y por eso el aserto
+         * sobra")-. Lo que la sostenia era que waterfall_init() solo
+         * borraba el miembro de la cascada; desde que borra la union
+         * entera, un miembro de FT8 mas grande no deja nada sin borrar.
+         *
+         * O sea que este banco se quedo vigilando una regla que el codigo
+         * habia jubilado, y salto en rojo el dia que FT8 crecio por una
+         * razon buena. Una guarda que dice que no a algo que ya esta
+         * permitido no protege: estorba, y la forma de callarla seria
+         * deshacer el cambio bueno.
+         *
+         * LA PREGUNTA DE VERDAD es que FT8 quepa en LA UNION, que es la
+         * memoria que de verdad tiene. Eso es lo que se mira ahora, y se
+         * imprime cuanto sobra para que quien vaya a pedir mas sepa de
+         * donde lo saca.
+         */
+        pasa("el miembro de FT8 cabe en la union", ft8 <= (unsigned)sizeof u);
+        printf("    a FT8 le sobran %u bytes dentro de la union\n",
+               (unsigned)sizeof u - ft8);
+        (void)cascada;
 
         /*
          * ==============================================================

@@ -61,7 +61,7 @@ int main(int argc, char **argv)
     const char *ruta = (argc > 1) ? argv[1] : "datos/EMISORAS.BIN";
     static const uint32_t k_centro[] = { 7473000UL, 9600000UL, 13525000UL,
                                          15200000UL, 6100000UL, 11800000UL };
-    static const uint32_t k_span[]   = { 96000UL, 48000UL, 24000UL, 12000UL, 6000UL };
+    static const uint32_t k_span[]   = { 192000UL, 96000UL, 48000UL, 24000UL, 12000UL, 6000UL };
     emisoras_rango_r_t r[16];
     uint16_t hubo;
     unsigned si, ci;
@@ -145,6 +145,118 @@ int main(int argc, char **argv)
         di(malos == 0, "ninguna emisora inventada", "");
     }
 
+    /* ---------------------------------------------------------------- */
+    printf("\n  2-bis. EL TOPE DE CANDIDATAS Y DE QUE LADO SE QUEDA\n\n");
+    {
+        /*
+         * POR QUE ESTA PRUEBA - 24/10/2026.
+         *
+         * Si en la ventana hay mas emisoras que sitio, esta funcion se
+         * queda con las `max` PRIMERAS en frecuencia. Lo dice su cabecera
+         * y es una decision razonable... mientras el que llama tenga
+         * sitio de sobra.
+         *
+         * El que llama es bd_rotulos_refresca(), con SPEC_ROT_CAND = 28.
+         * A 96 kHz eso basta casi siempre. A 192 kHz la ventana mide el
+         * doble, caben el doble de emisoras, y quedarse con las 28 de
+         * menos frecuencia es quedarse con LA MITAD IZQUIERDA de la
+         * pantalla: la derecha se queda sin un solo nombre.
+         *
+         * Esto lo mide: con el tope puesto, donde cae la ultima que
+         * sobrevive. Si cae muy a la izquierda del centro, hay media
+         * pantalla muda.
+         */
+        /*
+         * SE BARRE LA BASE ENTERA Y LAS VEINTICUATRO HORAS, no cuatro
+         * ventanas sueltas: lo que se busca es EL PEOR caso, y el peor
+         * caso de una base de horarios depende de la hora tanto como de
+         * la frecuencia. Con cuatro puntos a mediodia salia que no pasa
+         * nunca, y eso no era una medida: era una muestra.
+         */
+        uint32_t hz;
+        uint16_t min;
+        unsigned peor_hubo = 0U, peor_hz = 0U, peor_min = 0U;
+        unsigned mudas = 0U, peor_muda_hubo = 0U;
+        double   peor_pct = 100.0;
+
+        for (min = 0U; min < 1440U; min += 30U) {
+            for (hz = 2300000UL; hz <= 30000000UL; hz += 48000UL) {
+                uint32_t span = 192000UL;
+                uint32_t lo = (hz > span / 2U) ? (hz - span / 2U) : 0UL;
+                uint32_t hi = hz + span / 2U;
+                emisoras_rango_r_t rr[28];
+                uint8_t n2;
+                double pct;
+
+                n2 = emisoras_rango_repartido(lo, hi, min,
+                                              EMISORAS_DIA_CUALQUIERA,
+                                              rr, 28U, &hubo);
+                if (hubo > peor_hubo) {
+                    peor_hubo = hubo; peor_hz = hz; peor_min = min;
+                }
+                if (hubo <= 28U) { continue; }
+
+                /*
+                 * LO QUE SE EXIGE NO ES "QUE NO SE PIERDA NINGUNA": con
+                 * treinta y nueve en antena y sitio para veintiocho hay
+                 * que tirar once, y da igual cuales. Lo que importa es
+                 * que las que se quedan esten REPARTIDAS por la ventana,
+                 * porque lo que se pinta es una pantalla.
+                 *
+                 * Asi que se mira EL TERCIO DERECHO: si ahi hay emisoras
+                 * en antena, tiene que quedar al menos una. Que es
+                 * exactamente lo que fallaba.
+                 */
+                {
+                    uint32_t t0 = lo + (span / 3U) * 2U;
+                    emisoras_rango_r_t rt[8];
+                    uint16_t ht = 0U;
+                    uint8_t i2, en_tercio = 0U;
+
+                    (void)emisoras_rango(t0, hi, min, EMISORAS_DIA_CUALQUIERA,
+                                         rt, (uint8_t)(sizeof rt / sizeof rt[0]),
+                                         &ht);
+                    if (ht == 0U) { continue; }   /* no hay nada: no hay queja */
+
+                    for (i2 = 0U; i2 < n2; i2++) {
+                        if (rr[i2].hz >= t0) { en_tercio++; }
+                    }
+                    if (en_tercio == 0U) {
+                        double pct = (n2 == 0U) ? 0.0
+                            : 100.0 * (double)(rr[n2 - 1U].hz - lo) / (double)span;
+
+                        mudas++;
+                        if (pct < peor_pct) {
+                            peor_pct = pct; peor_muda_hubo = hubo;
+                        }
+                    }
+                }
+            }
+        }
+        printf("     barridas las 24 h cada 30 min, de 2,3 a 30 MHz cada 48 kHz\n");
+        printf("     la ventana de 192 kHz mas llena: %u emisoras en antena\n",
+               peor_hubo);
+        printf("       (a %.3f MHz, a las %02u:%02u UTC)   el tope son 28\n",
+               peor_hz / 1e6, peor_min / 60U, peor_min % 60U);
+        if (mudas != 0U) {
+            printf("     ventanas con emisoras en el tercio derecho y ningun nombre ahi: %u\n",
+                   mudas);
+            printf("       la peor: la ultima candidata al %.0f %%, con %u en antena\n",
+                   peor_pct, peor_muda_hubo);
+        }
+        /*
+         * LO QUE SE EXIGE: que NINGUNA ventana deje la mitad derecha sin
+         * candidatas. Con el tope aplicado de una sola vez sobre la
+         * ventana entera, a 192 kHz esto se pone rojo.
+         */
+        {
+            char d[64];
+            snprintf(d, sizeof d, "%u ventanas con la derecha muda", mudas);
+            di(mudas == 0U,
+               "si hay emisoras en el tercio derecho, al menos una sale", d);
+        }
+    }
+
     printf("\n  3. LAS PUERTAS\n");
     {
         uint8_t n;
@@ -189,7 +301,21 @@ int main(int argc, char **argv)
      * de 256-. No se hace hoy: son 32 lecturas de las 160 y complica el
      * recorrido. Queda escrito por si algun dia el bus aprieta.
      */
-    di(peor_lect <= 200, "la peor ventana no pasa de 200 lecturas",
+    /*
+     * EL LISTON SUBE A 400, Y SE DICE POR QUE - 24/10/2026.
+     *
+     * Eran 200 y la peor ventana medía 160, con el barrido llegando hasta
+     * 96 kHz. Desde hoy el barrido incluye 192 kHz, que es una tasa que
+     * la radio ofrece de verdad, y una ventana del doble de ancho cuesta
+     * el doble de recorrido por la tabla: 330. No es que alguien haya
+     * vuelto a recorrer la tabla entera -eso seguiria costando 2.816- es
+     * que la ventana mide el doble.
+     *
+     * Lo que esto sigue vigilando es lo de siempre: que el coste sea
+     * PROPORCIONAL a la ventana y no a la base. 330 para 192 kHz y 160
+     * para 96 es exactamente eso.
+     */
+    di(peor_lect <= 400, "la peor ventana no pasa de 400 lecturas",
        "alguien ha vuelto a recorrer la tabla entera");
     printf("        peor medido: %ld lecturas (a la antigua eran %ld)\n",
            peor_lect, peor_viejo);

@@ -19,6 +19,17 @@
  *
  *   3) QUE EL ORDEN ES DEL MAS VIEJO AL MAS NUEVO, que es como pinta el
  *      panel, y que si pasan mas de los que caben se quedan LOS NUEVOS.
+ *
+ *   4) EL SCROLL - 23/10/2026. Lo que pidio el usuario tiene dos mitades
+ *      y la segunda es la que se rompe sola: pegado al final la ventana
+ *      sigue a lo nuevo, pero SUBIDA tiene que quedarse sobre los mismos
+ *      mensajes mientras entran otros por abajo. Eso no sale gratis: si
+ *      `subidos` no crece con la lista, cada mensaje nuevo te desplaza lo
+ *      que estabas leyendo un renglon. Aqui se mide contando los que
+ *      pasan antes y despues, que es lo que hace main.c.
+ *
+ *      Y el recorte: subir mas de lo que hay tiene que dejar la ventana
+ *      en el renglon mas viejo, no en blanco por encima del principio.
  */
 #include "ft8_lista.h"
 #include <stdio.h>
@@ -61,6 +72,7 @@ int main(void)
 {
     uint8_t idx[LARGO];
     uint8_t n;
+    uint8_t sub = 0U;   /* el scroll: 0 es pegado a lo nuevo */
 
     printf("\n== EL FILTRO DE CQ DE LA LISTA DE FT8 ==\n");
 
@@ -105,7 +117,7 @@ int main(void)
             snprintf(m, sizeof m, "EA%uAA EB%uBB -0%u", i, i, i % 10);
             mete(m);
         }
-        n = ft8_lista_escoge(linea, g_n, 0U, 15U, idx);
+        n = ft8_lista_escoge(linea, g_n, 0U, 15U, &sub, idx);
         printf("     16 guardados, 15 renglones -> %u, del %u al %u\n",
                (unsigned)n, (unsigned)idx[0], (unsigned)idx[n - 1U]);
         exige(n == 15U, "salen quince");
@@ -137,7 +149,7 @@ int main(void)
             snprintf(m, sizeof m, "DL%uXX F%uYY R-12", i, i);
             mete(m);
         }
-        n = ft8_lista_escoge(linea, g_n, 1U, 15U, idx);
+        n = ft8_lista_escoge(linea, g_n, 1U, 15U, &sub, idx);
         printf("     16 guardados, 3 CQ y las tres entre las mas viejas -> %u\n",
                (unsigned)n);
         exige(n == 3U, "salen las tres, no las que hubiera en los quince de arriba");
@@ -163,7 +175,7 @@ int main(void)
             snprintf(m, sizeof m, "CQ EA%uAA IN8%u", i, i % 10);
             mete(m);
         }
-        n = ft8_lista_escoge(linea, g_n, 1U, 5U, idx);
+        n = ft8_lista_escoge(linea, g_n, 1U, 5U, &sub, idx);
         printf("     16 CQ en 5 renglones -> %u, del %u al %u\n",
                (unsigned)n, (unsigned)idx[0], (unsigned)idx[n - 1U]);
         exige(n == 5U, "salen cinco");
@@ -175,13 +187,160 @@ int main(void)
     printf("\n  5) los casos tontos\n\n");
     {
         vacia();
-        exige(ft8_lista_escoge(linea, 0U, 0U, 15U, idx) == 0U,
+        exige(ft8_lista_escoge(linea, 0U, 0U, 15U, &sub, idx) == 0U,
               "lista vacia: cero renglones");
         mete("DL1XX F1YY R-12");
-        exige(ft8_lista_escoge(linea, g_n, 1U, 15U, idx) == 0U,
+        exige(ft8_lista_escoge(linea, g_n, 1U, 15U, &sub, idx) == 0U,
               "ninguna CQ con el filtro puesto: cero, y no la ultima por si acaso");
-        exige(ft8_lista_escoge(0, 4U, 0U, 15U, idx) == 0U, "sin lista, cero");
-        exige(ft8_lista_escoge(linea, g_n, 0U, 0U, idx) == 0U, "sin renglones, cero");
+        exige(ft8_lista_escoge(0, 4U, 0U, 15U, &sub, idx) == 0U, "sin lista, cero");
+        exige(ft8_lista_escoge(linea, g_n, 0U, 0U, &sub, idx) == 0U, "sin renglones, cero");
+    }
+
+    /* ---------------------------------------------------------------- */
+    printf("\n  6) el scroll: subir enseña lo viejo, y se recorta\n\n");
+    {
+        unsigned i;
+
+        vacia();
+        for (i = 0; i < 16; i++) {
+            char m[32];
+            snprintf(m, sizeof m, "EA%uAA EB%uBB -0%u", i, i, i % 10);
+            mete(m);
+        }
+
+        /* Pegado al final: el mas viejo (indice 15) NO cabe. */
+        sub = 0U;
+        n = ft8_lista_escoge(linea, g_n, 0U, 15U, &sub, idx);
+        exige(n == 15U && idx[0] == 14U, "pegado al final, el mas viejo se queda fuera");
+
+        /* Un renglon arriba: entra el mas viejo y se cae el mas nuevo. */
+        sub = 1U;
+        n = ft8_lista_escoge(linea, g_n, 0U, 15U, &sub, idx);
+        printf("     subido 1 -> del %u al %u\n", (unsigned)idx[0], (unsigned)idx[n - 1U]);
+        exige(n == 15U && idx[0] == 15U, "subido uno, entra el mas viejo");
+        exige(idx[n - 1U] == 1U, "y se cae el mas nuevo");
+        exige(sub == 1U, "y uno era subible, asi que no se recorta");
+
+        /* Mas de lo que hay: se queda en el tope, no en blanco. */
+        sub = 200U;
+        n = ft8_lista_escoge(linea, g_n, 0U, 15U, &sub, idx);
+        exige(sub == 1U, "subir doscientos con uno por encima se recorta a uno");
+        exige(n == 15U && idx[0] == 15U, "y la ventana queda en el mas viejo");
+
+        /* Lista mas corta que el panel: no hay nada por encima. */
+        vacia();
+        mete("EA1AA EB1BB -01");
+        sub = 5U;
+        n = ft8_lista_escoge(linea, g_n, 0U, 15U, &sub, idx);
+        exige(n == 1U && sub == 0U, "con un solo renglon no hay donde subir");
+    }
+
+    /* ---------------------------------------------------------------- */
+    printf("\n  7) SUBIDA, LA VENTANA SE QUEDA SOBRE LOS MISMOS MENSAJES\n\n");
+    {
+        unsigned i;
+        uint8_t visto[LARGO], an;
+        char guardado[96];
+
+        /*
+         * ESTE ES EL CASO QUE ROMPIO EL PRIMER INTENTO, y por eso esta
+         * medido con el TEXTO del renglon y no con su indice: el indice
+         * sigue valiendo 12 antes y despues, pero el mensaje que hay
+         * dentro no es el mismo. Comparar indices daba verde con la
+         * ventana resbalando.
+         *
+         * La lista va LLENA a proposito: es entonces cuando entran
+         * mensajes sin que cambie el numero de renglones, y cuando contar
+         * renglones no sirve de nada.
+         */
+        vacia();
+        for (i = 0; i < LARGO; i++) {
+            char m[32];
+            snprintf(m, sizeof m, "EA%uAA EB%uBB -0%u", i, i, i % 10);
+            mete(m);
+        }
+        sub = 3U;
+        an = ft8_lista_escoge(linea, g_n, 0U, 10U, &sub, visto);
+        exige(an == 10U, "diez renglones a la vista, subido tres");
+        snprintf(guardado, sizeof guardado, "%s", linea(visto[0]));
+        printf("     arriba del todo: %.24s...\n", guardado + 22);
+
+        /* Entran DOS. La lista estaba llena: no cambia cuantos hay. */
+        mete("NUEVO1 AA -01");
+        mete("NUEVO2 BB -02");
+        exige(ft8_lista_cuantos(linea, g_n, 0U) == (uint8_t)LARGO,
+              "con la lista llena, contar renglones no detecta nada");
+
+        /* Lo que SI detecta: dos mensajes nuevos, los dos se enseñan. */
+        sub = (uint8_t)(sub + ft8_lista_nuevos(linea, 2U, 0U));
+        n = ft8_lista_escoge(linea, g_n, 0U, 10U, &sub, visto);
+        printf("     y ahora:         %.24s...\n", linea(visto[0]) + 22);
+        exige(n == 10U, "siguen diez a la vista");
+        exige(sub == 5U, "el dedo sube dos, que son los que han entrado");
+        exige(strcmp(linea(visto[0]), guardado) == 0,
+              "y arriba del todo esta EL MISMO MENSAJE que antes");
+
+        /* ---------------------------------------------------------- */
+        /* Y con el filtro de CQ puesto solo empujan los que se enseñan. */
+        vacia();
+        for (i = 0; i < 8; i++) {
+            char m[32];
+            snprintf(m, sizeof m, "CQ V%uAA IN8%u", i, i % 10);
+            mete(m);
+        }
+        sub = 2U;
+        an = ft8_lista_escoge(linea, g_n, 1U, 5U, &sub, visto);
+        exige(an == 5U, "ocho CQ, cinco renglones, subido dos");
+        snprintf(guardado, sizeof guardado, "%s", linea(visto[0]));
+
+        /* Entran tres, pero solo UNO es CQ. */
+        mete("DL1XX F1YY R-12");
+        mete("CQ NUEVO IN99");
+        mete("DL2XX F2YY R-13");
+        sub = (uint8_t)(sub + ft8_lista_nuevos(linea, 3U, 1U));
+        n = ft8_lista_escoge(linea, g_n, 1U, 5U, &sub, visto);
+        printf("     filtro CQ: entran tres, uno es CQ, subido %u\n", (unsigned)sub);
+        exige(sub == 3U, "solo empuja el que se enseña");
+        exige(strcmp(linea(visto[0]), guardado) == 0,
+              "y arriba del todo sigue el mismo");
+
+        /* Pegado al final NO se toca nada: lo nuevo tiene que entrar. */
+        sub = 0U;
+        an = ft8_lista_escoge(linea, g_n, 1U, 5U, &sub, visto);
+        snprintf(guardado, sizeof guardado, "%s", linea(visto[an - 1U]));
+        exige(strstr(guardado, "CQ NUEVO") != 0,
+              "pegado al final, abajo del todo esta lo ultimo que entro");
+    }
+
+    /* ---------------------------------------------------------------- */
+    printf("\n  8) el dedo, en renglones\n\n");
+    {
+        int16_t acum = 0;
+        uint8_t s2 = 0U;
+
+        exige(ft8_lista_arrastra(&acum, 5, 18U, &s2) == 0U && s2 == 0U,
+              "cinco pixeles no son un renglon");
+        exige(acum == 5, "pero se guardan para la proxima");
+        exige(ft8_lista_arrastra(&acum, 14, 18U, &s2) == 1U && s2 == 1U,
+              "cinco mas catorce si: el dedo abajo sube la lista");
+        exige(acum == 1, "y sobra un pixel");
+
+        /* Y hacia arriba vuelve. */
+        acum = 0;
+        exige(ft8_lista_arrastra(&acum, -18, 18U, &s2) == 1U && s2 == 0U,
+              "el dedo arriba la baja");
+        exige(ft8_lista_arrastra(&acum, -18, 18U, &s2) == 0U && s2 == 0U,
+              "y por debajo de cero no hay nada");
+
+        /* Un arrastre largo de golpe. */
+        acum = 0; s2 = 0U;
+        exige(ft8_lista_arrastra(&acum, 90, 18U, &s2) == 1U && s2 == 5U,
+              "noventa pixeles son cinco renglones");
+
+        /* Los casos tontos. */
+        exige(ft8_lista_arrastra(0, 18, 18U, &s2) == 0U, "sin acumulador, cero");
+        exige(ft8_lista_arrastra(&acum, 18, 0U, &s2) == 0U, "renglon de cero, cero");
+        exige(ft8_lista_arrastra(&acum, 18, 18U, 0) == 0U, "sin scroll, cero");
     }
 
     printf("\n%s (%d fallos)\n\n", fallos ? "HAY FALLOS" : "TODO CORRECTO", fallos);

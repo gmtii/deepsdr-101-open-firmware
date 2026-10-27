@@ -43,20 +43,27 @@
                                       de los dos esta bien, o que el multimetro midio otra cosa. */
 
 /*
- * Valor de VCOM (registro 0xBE01 del panel). Confirmado por extraccion
- * directa del firmware original de fabrica (update4.bin) mediante
- * desensamblado: el propio firmware que sabemos que funciona usa
- * exactamente 0x3D. Anteriormente probamos 0x0A "a ciegas" y parecio
- * arreglar el caso de area pequeña, pero dado que el firmware real
+ * Valor de VCOM (registro 0xBE01 del panel). El 0x3D salio de mirar el
+ * firmware con el que venia la radio: el que sabemos que funciona usa
+ * exactamente ese. Anteriormente probamos 0x0A "a ciegas" y parecio
+ * arreglar el caso de area pequeña, pero dado que el firmware que venia
  * usa 0x3D, sospechamos que 0x0A funcionaba por otra razon casual, no
  * porque fuera el VCOM correcto.
+ *
+ * OJO CON EL NOMBRE - 23/10/2026. Aqui ponia "el firmware original de
+ * fabrica (update4.bin)", y eso hoy es falso de las dos mitades: el
+ * update4.bin que hay en la carpeta es NUESTRO -la ultima compilacion
+ * antes del customboot- y no tiene nada que ver con la imagen de la que
+ * salio este 0x3D. Un comentario que nombra un fichero que ya significa
+ * otra cosa no informa: confunde, y ese nombre concreto ya costo un
+ * disgusto. Se deja el dato y se quita el nombre.
  */
 #define RM68120_VCOM_VALUE  0x0A /* PRUEBA: volviendo al valor empiricamente estable.
                                      0x3D es el "oficial" (confirmado del firmware real),
                                      pero desde que lo pusimos, hasta el cuadrado pequeño
                                      (antes estable) volvio a fallar. Sospecha: tu panel
-                                     fisico concreto necesita un VCOM distinto al de
-                                     update4.bin, aunque sea "el mismo modelo" de fabrica. */
+                                     fisico concreto necesita un VCOM distinto al del
+                                     firmware que venia, aunque sea "el mismo modelo". */
 
 /*
  * MADCTL (Memory Access Control, registro 0x3600) - a diferencia de

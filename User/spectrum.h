@@ -298,6 +298,20 @@ uint16_t spectrum_colormap(float db, float db_min, float db_max);
  * todo el historial y no solo las filas nuevas.
  */
 uint8_t spectrum_colormap_index(float db, float db_min, float db_max);
+
+/*
+ * LA MISMA, PARTIDA EN DOS PARA LOS BUCLES - 24/10/2026.
+ *
+ * La escala sale UNA VEZ por linea -lleva la division- y el indice de cada
+ * pixel es una resta y una multiplicacion. Quien pinte una linea entera usa
+ * estas dos; quien necesite un solo valor suelto puede seguir con la de
+ * arriba, que es estas dos juntas. El porque, en spectrum.c.
+ *
+ * Con db_max <= db_min la escala sale 0 y todos los indices salen 0, igual
+ * que hacia la de arriba.
+ */
+float   spectrum_colormap_escala(float db_min, float db_max);
+uint8_t spectrum_colormap_idx(float db, float db_min, float escala);
 const uint16_t *spectrum_colormap_lut(void);
 
 /*

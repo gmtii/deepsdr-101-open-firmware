@@ -929,9 +929,35 @@ static int32_t lat_de_py(const mapa_caja_t *c, int16_t y)
     return t - (((int32_t)y - (int32_t)c->y + (int32_t)c->off_y) * 2L * t) / mh;
 }
 
-/* La paridad de (casilla, fila dentro de la casilla), leyendo de la flash
+/*
+ * La paridad de (casilla, fila dentro de la casilla), leyendo de la flash
  * en trozos de MAPA_SEM_BUF bytes. `ult_cas`/`ult_b0` son el trozo que ya
- * esta en `buf`: con las filas en orden, casi siempre acierta. */
+ * esta en `buf`.
+ *
+ * ======================================================================
+ * Y LA MEMORIA ES UNA POR COLUMNA, NO UNA SOLA - 24/10/2026.
+ * ======================================================================
+ *
+ * Encontrado en la revision a fondo pedida por el usuario.
+ *
+ * El comentario de aqui decia "con las filas en orden, casi siempre
+ * acierta", y era falso: el bucle que llama a esto tiene la FILA fuera y la
+ * COLUMNA dentro, asi que la casilla cambia en CADA llamada y la vuelta
+ * siguiente empieza otra vez por la primera columna, que es justo la que
+ * mas lejos queda de lo ultimo guardado. Acierto cero.
+ *
+ * Con una banda de ocho filas y ocho columnas de casilla son ochenta
+ * lecturas de la flash por banda, todas fallo, y unas cuarenta bandas por
+ * cuadro del mapa: tres mil lecturas de SPI por cuadro, que a lo que mide
+ * este proyecto para el bus rapido son milisegundos de los de verdad.
+ *
+ * Se arregla sin tocar el orden de los bucles -que es donde se meteria un
+ * fallo- dandole a cada columna su propio trozo recordado. Entonces, para
+ * una columna fija, la casilla solo cambia cuando cambia la fila de
+ * casillas, que dentro de una banda de ocho filas de pantalla casi nunca
+ * pasa. Los datos que devuelve son exactamente los mismos; lo unico que
+ * cambia es cuantas veces hay que ir a buscarlos.
+ */
 static uint8_t semilla(uint16_t cas, uint16_t bit, uint8_t *buf,
                        uint16_t *ult_cas, uint16_t *ult_b0)
 {
@@ -1401,8 +1427,14 @@ void mapa_dibuja(gfx2_surf_t *s, const mapa_caja_t *c)
                  */
                 uint8_t  sem[GFX2_BAND_H];
                 uint8_t  crudo[GFX2_BAND_H + 2U];
-                uint8_t  pbuf[MAPA_SEM_BUF];
-                uint16_t ult_cas = 0xFFFFU, ult_b0 = 0xFFFFU;
+                /* Uno por columna de casilla: ver semilla(). */
+                uint8_t  pbuf[MAPA_SEM_COLS][MAPA_SEM_BUF];
+                uint16_t ult_cas[MAPA_SEM_COLS], ult_b0[MAPA_SEM_COLS];
+                uint8_t  ic;
+
+                for (ic = 0U; ic < (uint8_t)MAPA_SEM_COLS; ic++) {
+                    ult_cas[ic] = 0xFFFFU; ult_b0[ic] = 0xFFFFU;
+                }
                 uint8_t  nx = mapa_bin_nx(), ny = mapa_bin_ny();
                 uint8_t  ci;
 
@@ -1503,7 +1535,8 @@ void mapa_dibuja(gfx2_surf_t *s, const mapa_caja_t *c)
                         for (ci = 0U; ci < ncol; ci++) {
                             uint16_t cas = (uint16_t)((uint16_t)cy * (uint16_t)nx
                                                       + (uint16_t)(cx0 + (int16_t)ci));
-                            if (semilla(cas, bit, pbuf, &ult_cas, &ult_b0)) {
+                            if (semilla(cas, bit, pbuf[ci],
+                                        &ult_cas[ci], &ult_b0[ci])) {
                                 m |= (uint8_t)(1U << ci);
                             }
                         }

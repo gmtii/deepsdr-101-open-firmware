@@ -211,6 +211,38 @@ uint8_t emisoras_rango(uint32_t hz0, uint32_t hz1,
                        uint16_t *hubo);
 
 /*
+ * ======================================================================
+ * LO MISMO, PERO SIN DEJAR MUDA LA MITAD DERECHA - 24/10/2026
+ * ======================================================================
+ *
+ * emisoras_rango() se queda con las `max` PRIMERAS en frecuencia cuando
+ * hay mas de las que caben. Es lo razonable mientras el que llama tenga
+ * sitio de sobra, y lo tenia: en una ventana de 96 kHz raramente hay mas
+ * de veintiocho emisoras en antena a la vez.
+ *
+ * A 192 kHz la ventana mide el doble y eso deja de ser verdad. Medido
+ * sobre EMISORAS.BIN, barriendo de 2,3 a 30 MHz y las veinticuatro horas:
+ * la ventana mas llena tiene TREINTA Y NUEVE emisoras en antena, y hay
+ * 102 ventanas donde quedarse con las veintiocho de menos frecuencia
+ * deja sin un solo nombre el tercio derecho de la pantalla. En la peor,
+ * la ultima candidata cae al 64 % del ancho.
+ *
+ * Esto reparte: si cabe todo, una sola consulta y exactamente el mismo
+ * resultado de siempre. Si no cabe, se pregunta por mitades y cada una se
+ * lleva su parte, con lo que sobre de la izquierda pasando a la derecha.
+ * Cuesta una busqueda binaria mas, y solo en las ventanas donde hacia
+ * falta.
+ *
+ * NO ES UN FILTRO MEJOR: siguen saliendo `max` como mucho. Lo que cambia
+ * es que salen repartidas por la ventana en vez de apelotonadas al
+ * principio, que es lo que el que las pinta necesita.
+ */
+uint8_t emisoras_rango_repartido(uint32_t hz0, uint32_t hz1,
+                                 uint16_t minuto, uint8_t dia,
+                                 emisoras_rango_r_t *out, uint8_t max,
+                                 uint16_t *hubo);
+
+/*
  * SALTAR A LA SIGUIENTE EMISORA EN ANTENA - 15/10/2026.
  *
  * `dir` positivo busca hacia arriba y negativo hacia abajo, siempre

@@ -38,4 +38,19 @@ void rf_lpf_init(void);
  * range, 1..4. */
 uint8_t rf_lpf_select(uint32_t freq_hz);
 
+/*
+ * EL TECHO DEL FILTRO QUE ESTA PUESTO AHORA MISMO, EN HERCIOS - 24/10/2026.
+ *
+ * Lo pide el avisador de armonicos: un armonico por encima de este numero
+ * NO llega al mezclador, asi que nombrar la banda donde cae es un falso
+ * positivo. Ver tope_rf_hz en armonico.h.
+ *
+ * Es el CORTE del filtro y no el borde del tramo de seleccion, que no son
+ * lo mismo: el tramo 1 se elige hasta 36,999 MHz y el filtro corta en 36.
+ * Ver el comentario de la tabla en rf_lpf.c. 26/10/2026.
+ *
+ * Devuelve 0 si todavia no se ha aplicado ningun filtro.
+ */
+uint32_t rf_lpf_tope_hz(void);
+
 #endif /* RF_LPF_H */

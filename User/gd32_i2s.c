@@ -212,7 +212,9 @@ void gd32_i2s_init_slave(aic3204_rate_t rate)
     i2s_init(SPI1, I2S_MODE_SLAVERX, I2S_STD_PHILLIPS, I2S_CKPL_LOW);
 
     /*
-     * MCLK: TIMER2_CH0/PC6, started once at cold boot by
+     * MCLK: TIMER7_CH0/PC6 (said TIMER2 here; the move to TIMER7 is what
+     * freed TIMER2 for the LO generator - see this file's own note 170
+     * lines below. Corrected 27/10/2026), started once at cold boot by
      * gd32_i2s_mclk_timer_start() (main.c) and never touched again -
      * fixed 1.536MHz regardless of `rate`. This is genuinely required
      * (confirmed both by a real-hardware experiment and by re-decoding
@@ -234,8 +236,16 @@ void gd32_i2s_init_slave(aic3204_rate_t rate)
      * stale 48kHz value here) - passed correctly anyway, on the "make
      * the code say what's actually true" principle.
      */
+    /* Y LAS TRES, QUE SON TRES - 26/10/2026, tercera vuelta de la revision
+     * a fondo. Aqui habia dos ramas para tres tasas: los 96 kHz se
+     * programaban con el divisor de 48. No tiene consecuencia hoy -el
+     * GD32 es esclavo y los campos DIV/OF se ignoran- pero el comentario
+     * de aqui arriba dice textualmente que se pasa el valor correcto "para
+     * que el codigo diga lo que de verdad pasa", y no lo decia. */
     i2s_psc_config(SPI1,
-                    (rate == AIC3204_RATE_192K) ? I2S_AUDIOSAMPLE_192K : I2S_AUDIOSAMPLE_48K,
+                    (rate == AIC3204_RATE_192K) ? I2S_AUDIOSAMPLE_192K :
+                    ((rate == AIC3204_RATE_96K) ? I2S_AUDIOSAMPLE_96K
+                                                : I2S_AUDIOSAMPLE_48K),
                     I2S_FRAMEFORMAT_DT16B_CH16B, I2S_MCKOUT_DISABLE);
 
     /* I2S1_ADD extension block: passed the SAME mode as the main block
@@ -351,7 +361,24 @@ static float sinf_approx(float x)
  * produce audio output. Feeding silence (all zeros) instead of the
  * audible test tone keeps BCLK/WS running without an audible tone.
  */
-static const int16_t s_silence_buf[16] = {0}; /* small, doesn't need to match any tone period */
+/*
+ * EN SRAM, NO EN FLASH - 26/10/2026, segunda vuelta de la revision a fondo.
+ *
+ * Esto era `static const`, o sea .rodata, o sea FLASH (comprobado en el
+ * mapa del enlazador: 0x0807xxxx). Y quien lo lee es el DMA0, que es el
+ * que mueve el audio. En la familia de la que este microcontrolador es un
+ * clon muy cercano, el puerto de memoria de ese controlador de DMA NO
+ * alcanza la flash: solo el otro. Si aqui pasa lo mismo, el canal armado
+ * por gd32_i2s_dma_start_silence() levanta el error de acceso y se queda
+ * inerte, y el I2S de salida se pasa pidiendo palabras a un canal muerto
+ * todo el arranque -que son los 130 ms de I2C de configurar el codec mas
+ * hasta 200 de esperar a que encienda-.
+ *
+ * No esta comprobado contra el manual, asi que esto NO es la correccion de
+ * un fallo demostrado: es quitar de en medio una pregunta que no hacia
+ * falta hacerse. Son treinta y dos bytes de SRAM y el silencio es el mismo.
+ */
+static int16_t s_silence_buf[16] = {0}; /* small, doesn't need to match any tone period */
 
 /*
  * MCLK generation via TIMER7_CH0 on PC6 - moved here 01/09/2026 from
@@ -560,11 +587,18 @@ static uint32_t s_stream_total_words     = SDR_RX_BLOCK_SAMPLES * 4U;
 /* See gd32_i2s_stream_write_half()'s own comment - counts real FERR
  * occurrences on I2S1_ADD, cheaply, once per TX block.
  *
- * ACUMULATIVO DESDE EL ARRANQUE - 06/10/2026. El comentario de al lado
- * decia que stream_arm_dma() lo pone a cero en cada armado, y NO lo hace:
- * no lo toca nadie salvo gd32_i2s_reset_tx_ferr_count(), que llama main.c
- * desde la ventana de informacion. Quien leyera el numero creyendo que era
- * "de esta sesion de stream" lo estaba sobreestimando. */
+ * ACUMULATIVO DESDE EL ARRANQUE - 06/10/2026, y de verdad desde el
+ * 26/10/2026. El comentario que habia aqui decia que stream_arm_dma() lo
+ * pone a cero en cada armado, y no lo hacia: no lo tocaba nadie ahi. Quien
+ * SI lo borraba era main.c, cada treinta cuadros, desde dentro de un bloque
+ * que solo corre con el menu CERRADO. O sea que se borraba justo cuando el
+ * sintoma esta presente y no se borraba nunca mientras la ventana de
+ * Informacion -que es un menu- lo estaba enseñando: el renglon mostraba
+ * "FERR desde que abri el menu". Ver el comentario entero en main.c, en el
+ * bloque de sdr_tick que ahora solo lee los dos contadores.
+ *
+ * Acumulativo desde el arranque es lo unico que se puede comparar entre dos
+ * condiciones. */
 static volatile uint32_t s_tx_ferr_count = 0U;
 
 /* El margen de fase del ping-pong - ver gd32_i2s_stream_write_half(). */
@@ -572,6 +606,26 @@ static volatile uint32_t s_half_repes = 0U;
 static volatile uint32_t s_half_min   = 0xFFFFFFFFU;
 static volatile uint32_t s_half_max   = 0U;
 static volatile uint8_t  s_half_ult   = 0xFFU;
+
+/* Cuantas veces el I2S de salida se ha quedado SIN PALABRA que mandar
+ * (TXURERR). Ver donde se cuenta, en gd32_i2s_stream_write_half().
+ *
+ * Y LO QUE CUENTA SON BLOQUES, NO PALABRAS - 26/10/2026, tercera vuelta de
+ * la revision a fondo. Las dos banderas de aqui son pegajosas hasta que se
+ * lee SPI_STAT, y SPI_STAT se lee UNA VEZ POR BLOQUE. A 192 kHz un bloque
+ * son 1.024 palabras: que el blit de la pantalla le robe el bus al DMA en
+ * una palabra o en cuatrocientas sube el contador EXACTAMENTE IGUAL, uno.
+ * El tope son 375 por segundo.
+ *
+ * Como aviso de "esta pasando o no esta pasando" vale. Como magnitud, no:
+ * un "vac 3" pueden ser tres palabras o tres mil. Lo mismo vale para el
+ * FERR de aqui al lado y para el de la entrada. */
+static volatile uint32_t s_tx_under_count;
+
+/* Que ya se ha dicho que las cuentas no cuadran: el aviso sale UNA vez y no
+ * se repite. Ver donde se usa, dentro de la interrupcion: una traza por
+ * bloque cuelga la radio. */
+static uint8_t s_aviso_tramas;
 
 /* Shared DMA-arming step - used by both gd32_i2s_dma_start_stream()
  * and gd32_i2s_stream_start() (the re-arm half of reconfigure - see
@@ -583,15 +637,36 @@ static void stream_arm_dma(void)
 {
     dma_single_data_parameter_struct dma_init_struct;
 
-    /* El buffer entero a cero: esto corre una vez al armar el DMA, no por
-     * bloque, asi que aqui el bucle no cuesta nada. */
-    memset(s_stream_buf, 0, sizeof s_stream_buf);
-
     rcu_periph_clock_enable(RCU_DMA0);
 
+    /*
+     * PRIMERO LA PETICION Y DESPUES EL CANAL, que es la regla que este mismo
+     * fichero escribe en gd32_i2s_stream_stop() -"al reves, entre las dos
+     * lineas el periferico seguiria pidiendo sin nadie que sirva"- y que
+     * sdr_rx_stop() ya corrigio el 08/10/2026 por lo mismo. Este tercer sitio
+     * se quedo. Encontrado en la revision a fondo, 24/10/2026.
+     */
+    spi_dma_disable(I2S1_ADD, SPI_DMA_TRANSMIT);
     dma_channel_disable(DMA0, DMA_CH4);
     espera_chen("stream_arm_dma");
     dma_deinit(DMA0, DMA_CH4);
+
+    /*
+     * Y EL BORRADO, AQUI, QUE ES LA MISMA REGLA DE ARRIBA APLICADA A TRES
+     * LINEAS EN VEZ DE A DOS - 26/10/2026, segunda vuelta de la revision.
+     *
+     * Estaba lo PRIMERO de la funcion, antes de apagar la peticion y el
+     * canal: unos mil ciclos poniendo a cero cuatro kilobytes mientras el
+     * DMA seguia leyendo de esa misma zona y sacando por el altavoz lo que
+     * se estaba borrando. Hoy no se oye porque los dos unicos llamantes
+     * caen dentro de ventanas ya silenciadas, pero el desmontaje es el
+     * desmontaje y esto era parte de el.
+     *
+     * El buffer entero y no solo la parte activa: esto corre una vez al
+     * armar, no por bloque, y es mas simple que llevar la cuenta de que
+     * bytes sobran de una geometria anterior.
+     */
+    memset(s_stream_buf, 0, sizeof s_stream_buf);
 
     dma_single_data_para_struct_init(&dma_init_struct);
     dma_init_struct.periph_addr         = (uint32_t)&SPI_DATA(I2S1_ADD);
@@ -663,6 +738,28 @@ void gd32_i2s_stream_arm(uint32_t frames_per_half)
     s_stream_words_per_half  = frames_per_half * 2U;
     s_stream_total_words     = frames_per_half * 4U;
 
+    /*
+     * Y LOS TRES NUMEROS DEL PING-PONG, QUE SE QUEDABAN DEL ARMADO
+     * ANTERIOR - 26/10/2026, revision a fondo de WFM.
+     *
+     *   - s_half_ult guarda que mitad se escribio la vez pasada, y la
+     *     primera escritura DESPUES de rearmar se comparaba con la de
+     *     antes del desmontaje. Eso es un +-1 espurio en s_half_repes por
+     *     cada cambio de modo o de tasa, o sea que el contador no podia
+     *     valer 0 limpio y el "tiene que ser 0" de la pantalla era
+     *     imposible de cumplir.
+     *
+     *   - s_half_min y s_half_max estan en PALABRAS, y la pantalla los
+     *     enseña en tanto por ciento dividiendo por la mitad DE AHORA. Si
+     *     se apuntaron con la mitad de 512 palabras (AM) y se leen con la
+     *     de 1024 (WFM), salen a la mitad de su valor real. Como aqui es
+     *     donde cambia la mitad, aqui es donde hay que olvidarlos.
+     */
+    s_half_ult = 0xFFU;
+    s_half_repes = 0UL;
+    s_half_min = 0xFFFFFFFFUL;
+    s_half_max = 0UL;
+
     stream_arm_dma();
 
     debug_print_dec("gd32_i2s: TX stream DMA armed, stereo frames per half (starts silent)",
@@ -729,7 +826,7 @@ void gd32_i2s_stream_stop(void)
  * Left in place since it's cheap and still useful for spotting a
  * genuine half-selection bug if one shows up later, just no longer
  * the leading suspect for this particular report. */
-void gd32_i2s_stream_write_half(const int16_t *stereo_frames)
+void gd32_i2s_stream_write_half(const int16_t *stereo_frames, uint32_t n_frames)
 {
     /*
      * *** 05/08/2026, ALL per-call debug_print* output removed from
@@ -858,9 +955,41 @@ void gd32_i2s_stream_write_half(const int16_t *stereo_frames)
          * regression - full-scale-saturated raw I/Q, near-constant
          * FERR - traced to this exact pattern on the RX side).
          */
+        /*
+         * ==============================================================
+         * Y EL SUBDESBORDAMIENTO, QUE ES OTRA BANDERA Y NO SE MIRABA.
+         * 26/10/2026, revision a fondo de WFM.
+         * ==============================================================
+         *
+         * FERR es BIT(8), "format error": el WS de fuera llego fuera de
+         * fase. Dice que el SINCRONISMO DE TRAMA se ha torcido.
+         *
+         * Lo que NO dice es lo otro, que es justo lo que se estaba
+         * buscando: que el DMA no llegara a servir una palabra a tiempo.
+         * Eso es TXURERR, BIT(3), "I2S transmission underrun", y en todo
+         * este proyecto no se miraba en ningun sitio. Peor: esta misma
+         * linea lee SPI_STAT una vez por bloque, y leer SPI_STAT BORRA la
+         * bandera. O sea que se estaba tirando, 375 veces por segundo,
+         * exactamente el dato que hacia falta.
+         *
+         * Y hace falta porque es el mecanismo que explicaria el sintoma
+         * que se denuncio -zumbido en WFM que se va al abrir el menu-: el
+         * blit de la pantalla y el IPA son maestros del bus AHB como el
+         * DMA del audio, y lo que la pantalla le puede hacer al audio no
+         * es robarle CPU -va por sondeo, no por interrupcion- sino
+         * robarle acceso a la SRAM. Si eso pasa, el I2S se queda sin
+         * palabra y lo dice AQUI. Con el menu abierto no se pinta el
+         * espectro, y entonces no deberia decir nada.
+         *
+         * Se cuentan las dos por separado a proposito: son dos averias
+         * distintas y la confusion entre ellas ya costo una persecucion.
+         */
         uint32_t stat = SPI_STAT(I2S1_ADD);
         if ((stat & SPI_STAT_FERR) != 0U) {
             s_tx_ferr_count++;
+        }
+        if ((stat & SPI_STAT_TXURERR) != 0U) {
+            s_tx_under_count++;
         }
     }
 
@@ -871,6 +1000,43 @@ void gd32_i2s_stream_write_half(const int16_t *stereo_frames)
      * memcpy se lleva el bloque de dieciseis en dieciseis. Medido: de unos
      * 3.000 a unos 960 ciclos por bloque. Los bytes que llegan son los
      * mismos. */
+    /*
+     * LO QUE TRAE EL QUE LLAMA CONTRA LO QUE PIDE EL I2S. Ver el
+     * comentario de esta funcion en gd32_i2s.h: esta pareja se ha
+     * desalineado dos veces, y las dos el sintoma fue audio sucio leido
+     * de mas alla de un array. Si no cuadran, silencio: un bloque mudo se
+     * oye y se dice, y lo de detras del array no se oye como lo que es.
+     */
+    if (n_frames != s_stream_frames_per_half) {
+        memset(dst, 0, (size_t)s_stream_words_per_half * sizeof dst[0]);
+        /*
+         * Y SE DICE UNA SOLA VEZ - 24/10/2026, revision a fondo.
+         *
+         * Estas dos trazas estaban sueltas, y esto es una INTERRUPCION con
+         * un presupuesto de 2,67 ms. Son unos 83 caracteres a 115.200
+         * baudios esperando bit a bit: siete milisegundos. Y la condicion no
+         * es un suceso unico - si las dos cuentas se desalinean, se
+         * desalinean en TODOS los bloques, 375 veces por segundo: la
+         * interrupcion no acabaria nunca antes de la siguiente y la radio se
+         * quedaria colgada con el DMA repitiendo el ultimo trozo.
+         *
+         * Es exactamente la historia que cuenta la cabecera de esta funcion
+         * -"la instrumentacion llego a CAUSAR el sintoma que estaba
+         * midiendo"-, por la que se quitaron todas las trazas por bloque de
+         * aqui. Estas dos volvieron a entrar.
+         *
+         * Con el UART apagado -lo de serie- no costaban nada, asi que esto
+         * es un fallo latente: muerde el dia que alguien enciende el puerto
+         * para investigar otra cosa, que es justo el peor dia.
+         */
+        if (!s_aviso_tramas) {
+            s_aviso_tramas = 1U;
+            debug_print_dec("i2s: *** tramas que no cuadran, el I2S pide",
+                             s_stream_frames_per_half);
+            debug_print_dec("i2s: ***   y le han dado", n_frames);
+        }
+        return;
+    }
     memcpy(dst, stereo_frames, (size_t)s_stream_words_per_half * sizeof dst[0]);
 
     /*
@@ -891,13 +1057,40 @@ void gd32_i2s_stream_write_half(const int16_t *stereo_frames)
      * Si algun dia esto se pasa de tiempo, el audio del altavoz ya esta a
      * salvo.
      */
+    /*
+     * LA TASA QUE VA AQUI ES LA DEL I2S, NO LA DEL DEMODULADOR
+     * - 24/10/2026, revision de los 192 kHz.
+     *
+     * Ponia demod_am_get_active_fs_hz(), que es la tasa a la que TRABAJA
+     * la cadena de audio: 96 kHz, tambien con la radiofrecuencia a 192,
+     * porque el diezmador de medio banda la devuelve ahi (ver
+     * User/semibanda.h). Pero lo que sale por este cable son las tramas
+     * que pide el conversor, y a 192 kHz son el DOBLE por bloque.
+     *
+     * O sea que grabando por USB a 192 kHz se mandaban 192.000 muestras
+     * por segundo con una cabecera que decia 96.000: la grabacion sale a
+     * mitad de velocidad y una octava por debajo. Audio correcto, reloj
+     * mentiroso.
+     *
+     * Se saca de s_stream_frames_per_half, que es lo que este fichero
+     * armo de verdad, y no de preguntarle a otro modulo por una tasa que
+     * significa otra cosa.
+     */
     usb_cdc_audio(stereo_frames, s_stream_words_per_half / 2U,
-                  (uint32_t)demod_am_get_active_fs_hz());
+                  (s_stream_frames_per_half == (uint32_t)SDR_RX_BLOCK_SAMPLES_WFM)
+                      ? 192000UL
+                      : (uint32_t)demod_am_get_active_fs_hz());
 }
 
 uint32_t gd32_i2s_get_tx_ferr_count(void)
 {
     return s_tx_ferr_count;
+}
+
+/* Y el de subdesbordamiento, por separado. Ver donde se cuenta. */
+uint32_t gd32_i2s_get_tx_under_count(void)
+{
+    return s_tx_under_count;
 }
 
 uint32_t gd32_i2s_get_half_repes(void)
@@ -931,9 +1124,67 @@ void gd32_i2s_reset_half_diag(void)
     s_half_ult   = 0xFFU;
 }
 
+/*
+ * SOLO OLVIDAR QUE MITAD TOCO, SIN TIRAR LO ACUMULADO - 26/10/2026,
+ * duodecima vuelta de la revision a fondo.
+ *
+ * apply_demod_mode() llamaba a gd32_i2s_reset_half_diag() -el de arriba, el
+ * que borra los cuatro-, y de los cuatro solo necesitaba ESTE.
+ *
+ * Lo que necesita: entre el sdr_rx_set_block_hook(0) y el de vuelta puede
+ * perderse un bloque, el DMA de salida avanza una mitad sin que nadie
+ * escriba, y la llamada siguiente elige la MISMA mitad. Eso es un +1
+ * espurio en s_half_repes que no es un fallo del ping-pong.
+ *
+ * Lo que NO necesita, y hacia daño: borrar s_half_repes, s_half_min y
+ * s_half_max enteros. El renglon de Informacion enseña SIETE numeros y sus
+ * instrucciones dicen "tocar, mirar el espectro pintando un rato, volver;
+ * la diferencia ES el dato". Pero esos tres los borraba CUALQUIER orden de
+ * modo, mientras los otros cuatro -vac, sal, rf, dsc, trd- seguian contando
+ * desde el toque. Y las ordenes de modo redundantes las manda cualquiera:
+ * los presets de banda, la rejilla de modos eligiendo el modo que ya esta
+ * puesto, y la pantalla de hora por radio, que ademas la llama su barrido
+ * automatico. O sea que medio renglon medía "desde que toque" y medio
+ * "desde la ultima orden de modo", y los dos se leian en la misma linea.
+ * Peor en "rep", que es el numero que demuestra el peine de 375 Hz.
+ *
+ * El borrado entero sigue donde SI hace falta: en gd32_i2s_stream_arm(),
+ * porque alli cambia el tamaño de la mitad y con el las unidades de min y
+ * max, y en gd32_i2s_cuentas_cero(), que es el dedo pidiendolo.
+ */
+void gd32_i2s_olvida_media(void)
+{
+    s_half_ult = 0xFFU;
+}
+
 void gd32_i2s_reset_tx_ferr_count(void)
 {
     s_tx_ferr_count = 0U;
+}
+
+/*
+ * LOS CUATRO DE GOLPE, PARA EL DEDO - 26/10/2026, revision a fondo.
+ *
+ * Desde que estos contadores son acumulativos desde el arranque -ver el
+ * comentario de s_tx_ferr_count- no hay forma de preguntarles "¿y AHORA
+ * esta pasando?". Un numero que solo sube cuenta la historia entera, y la
+ * historia entera incluye el arranque, las pruebas y el rato que la radio
+ * estuvo sin antena.
+ *
+ * El renglon de Informacion que los enseña se pone a cero al tocarlo, igual
+ * que el de la vuelta del bucle principal. Entonces se mira el espectro
+ * pintando, se vuelve, y la diferencia ES el dato - que es como se usaban
+ * antes de que main.c dejara de borrarlos, pero ahora cuando lo pide el
+ * dedo y no treinta veces por segundo a espaldas de quien mira.
+ *
+ * Van juntos a proposito: separarlos invita a poner a cero tres de cuatro y
+ * comparar peras con manzanas.
+ */
+void gd32_i2s_cuentas_cero(void)
+{
+    s_tx_ferr_count  = 0U;
+    s_tx_under_count = 0U;
+    gd32_i2s_reset_half_diag();
 }
 
 void gd32_i2s_dma_start_test_tone(void)
@@ -995,7 +1246,9 @@ void gd32_i2s_dma_start_test_tone(void)
      */
     {
         uint32_t cnt_a, cnt_b;
+#if AIC3204_TEST_LOOPBACK
         volatile uint32_t d;
+#endif
 
         debug_print_hex32("gd32_i2s: SPI_CTL1(I2S1_ADD) after spi_dma_enable (bit1=DMATEN should be 1)",
                            SPI_CTL1(I2S1_ADD));
@@ -1003,7 +1256,14 @@ void gd32_i2s_dma_start_test_tone(void)
                            DMA_CHCTL(DMA0, DMA_CH4));
 
         cnt_a = dma_transfer_number_get(DMA0, DMA_CH4);
-        for (d = 0; d < 2000000U; d++) { __NOP(); }
+        /* Setenta milisegundos de bucle principal parado. Es el mismo patron
+     * que el 24/10/2026 se metio detras de una guarda en sdr_rx_bringup()
+     * por lo mismo; este se quedo fuera. Solo lo alcanza el lazo de prueba
+     * del codec, que viene apagado, pero el dia que alguien lo encienda la
+     * radio se le queda tiesa sin motivo. */
+#if AIC3204_TEST_LOOPBACK
+    for (d = 0; d < 2000000U; d++) { __NOP(); }
+#endif
         cnt_b = dma_transfer_number_get(DMA0, DMA_CH4);
 
         debug_print_dec("gd32_i2s: DMA_CHCNT remaining, reading A", cnt_a);

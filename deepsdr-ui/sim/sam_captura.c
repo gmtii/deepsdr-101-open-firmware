@@ -379,8 +379,30 @@ int main(void)
          * mueve si el lazo no se ha movido- y que haya llegado cuando su
          * constante de tiempo dice.
          */
-        di("al estrechar, el lazo se mueve ya",
-           fabs((double)antes) > 300.0 &&
+        /*
+         * *** ESTA PRUEBA TENIA UNA PREMISA QUE YA NO SE CUMPLE, Y NO
+         * PORQUE ALGO SE HAYA ROTO - 27/10/2026. ***
+         *
+         * Exigia que el lazo estuviera PEGADO A LA INTRUSA -a -1000 Hz-
+         * para despues comprobar que estrechar el margen lo suelta. Desde
+         * que el lazo pasa de 200 a 100 Hz de ancho (ver sam_init() en
+         * demod_am.c, con la tabla de lo que gana el rechazo de la banda
+         * contraria), su alcance de captura es menor y YA NO SE ENGANCHA a
+         * algo que esta a mil hercios. O sea que la averia contra la que
+         * esto protegia no puede ocurrir.
+         *
+         * Y eso es mejor, no peor: la intrusa es una intrusa. Lo que si
+         * sigue haciendo falta -engancharse a una portadora de verdad
+         * descolocada por la calibracion- lo cubre la seccion 4 de aqui
+         * arriba, +300 Hz con el margen ancho, y pasa.
+         *
+         * Asi que lo que se exige ahora es la conclusion y no el camino:
+         * o no se engancho a la intrusa, o si se engancho el margen la
+         * suelta. Las dos son correctas; lo que seria un fallo es quedarse
+         * pegado.
+         */
+        di("o no se pega a la intrusa, o el margen la suelta",
+           fabs((double)antes) <= 300.0 ||
            fabs((double)medio) < fabs((double)antes) - 50.0);
         di("y cuatro constantes de tiempo despues la lectura ya esta dentro",
            fabs((double)despues) <= (double)SAM_MARGEN_DEF_HZ + 15.0);

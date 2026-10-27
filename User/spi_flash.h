@@ -502,6 +502,14 @@ uint8_t spi_flash_async_save_start(const char name8[8], const char ext3[3],
 spi_flash_async_status_t spi_flash_async_save_poll(void);
 
 /*
+ * SOLO MIRAR: cierto mientras hay un guardado a medias. No avanza la
+ * maquina de estados y no se come el DONE, que es lo que hay que usar desde
+ * cualquier sitio que no sea el dueño del guardado. El porque, con el fallo
+ * que costo, en spi_flash.c.
+ */
+uint8_t spi_flash_async_save_en_vuelo(void);
+
+/*
  * AQUI HABIA UN TERCER PROBE QUE NO EXISTE - quitado el 30/09/2026.
  *
  * La declaracion era esta:
@@ -589,6 +597,57 @@ uint8_t spi_flash_fichero_cadena(const char name8[8], const char ext3[3],
 /* El numero mas alto entre los <pre><NNN>.<ext> que haya en el directorio
  * raiz (0 si ninguno). Una sola lectura, no mil busquedas. */
 uint32_t spi_flash_dir_max_indice(const char pre[4], const char ext3[3]);
+
+/*
+ * LO MISMO, CON EL PREFIJO QUE SEA - 22/10/2026.
+ *
+ * El de arriba da por hecho un prefijo de cuatro y tres cifras detras, que
+ * es "PANT007" o "SSTV012". El fax pasa a llevar la frecuencia en el
+ * nombre -"W0385301", o sea W + los kHz + dos cifras-, asi que el prefijo
+ * mide seis y las cifras son dos.
+ *
+ * `npre` de 1 a 7; las cifras son las (8 - npre) que quedan, y tienen que
+ * serlo TODAS: un nombre que no cuadre con el molde no cuenta, igual que
+ * antes "SSTVABC" no contaba.
+ *
+ * El de cuatro llama a este: una sola copia del recorrido del directorio.
+ */
+uint32_t spi_flash_dir_max_indice_n(const char *pre, uint8_t npre,
+                                    const char ext3[3]);
+
+/*
+ * ======================================================================
+ * LA FECHA Y LA HORA QUE SE LE PONEN A LOS FICHEROS - 22/10/2026
+ * ======================================================================
+ *
+ * *** Pedido por un usuario del repositorio: "it would also be good to
+ * include the frequency and time in the names of the weather fax files". ***
+ *
+ * Al ir a ponerlo salio que el FAT ya tiene un sitio para eso y que este
+ * driver lo rellenaba con una CONSTANTE. Los tres sitios que crean un
+ * fichero escribian 0x5C21 -el 1 de enero de 2026- en las tres fechas de
+ * la entrada, y los campos de HORA no los escribia nadie, o sea que se
+ * quedaban en cero.
+ *
+ * Resultado: en el ordenador, todas las capturas y todas las cartas del
+ * disco salian con la misma fecha y la misma hora. No se podian ordenar,
+ * ni saber cual era de cuando. El comentario de spi_flash.c lo llamaba
+ * "fixed placeholder" desde el principio; nadie volvio a por el.
+ *
+ * Asi que se pone de verdad. spi_flash.c NO lee el reloj -no es suyo y el
+ * simulador no lo tiene-: se lo dan hecho, en el formato del propio FAT,
+ * y mientras nadie se lo de sigue poniendo el relleno de siempre. Lo
+ * llama main.c una vez por segundo.
+ *
+ * `fecha`: bits 15..9 el año menos 1980, 8..5 el mes, 4..0 el dia.
+ * `hora` : bits 15..11 la hora, 10..5 el minuto, 4..0 los segundos
+ *          PARTIDOS POR DOS, que es como el FAT guarda los segundos y la
+ *          razon de que una marca de FAT salte de dos en dos.
+ *
+ * Con fecha 0 se vuelve al relleno: sin reloj en hora es mejor una fecha
+ * que se ve que es mentira que una inventada que parece verdad.
+ */
+void spi_flash_sello_pon(uint16_t fecha, uint16_t hora);
 
 /*
  * EL PRIMER FICHERO DEL RAIZ CON ESTA EXTENSION - 12/10/2026.

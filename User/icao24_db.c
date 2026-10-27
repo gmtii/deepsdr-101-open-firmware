@@ -335,7 +335,7 @@ static bool i24_open(void)
 
 void icao24_db_report(void)
 {
-    if (spi_flash_async_save_poll() == SPI_FLASH_ASYNC_BUSY) {
+    if (spi_flash_async_save_en_vuelo()) {
         return; /* never read the chip while it programs/erases */
     }
     if (s_state == 0U) {
@@ -384,10 +384,15 @@ bool icao24_db_lookup(uint32_t icao24, char *out, uint32_t out_len)
     /*
      * NUESTRO EQUIVALENTE. El proyecto padre tiene un
      * spi_flash_async_save_in_progress(); aqui el estado se pregunta con
-     * spi_flash_async_save_poll(), que devuelve BUSY mientras graba. Mismo
+     * spi_flash_async_save_en_vuelo(), que es SOLO una pregunta. Mismo
      * motivo: el chip ignora las lecturas mientras programa o borra.
+     *
+     * Antes se preguntaba con spi_flash_async_save_poll(), que no es una
+     * pregunta sino un paso de la maquina de estados, y por ahi se perdia el
+     * DONE del guardado de los ajustes - ver el comentario de la funcion
+     * nueva en spi_flash.c. 24/10/2026.
      */
-    if (spi_flash_async_save_poll() == SPI_FLASH_ASYNC_BUSY) {
+    if (spi_flash_async_save_en_vuelo()) {
         return false;
     }
     if (s_state == 0U) {

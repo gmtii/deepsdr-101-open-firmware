@@ -93,7 +93,7 @@ static const cal_point_def_t k_cal_points[CAL_NUM_POINTS] = {
 static cal_state_t s_state = CAL_STATE_IDLE;
 static uint8_t s_point_idx = 0U;
 static uint32_t s_press_start_ms = 0U;
-static uint32_t s_bad_until_ms = 0U;
+static uint32_t s_bad_desde_ms = 0U;
 static uint16_t s_raw_x[CAL_NUM_POINTS], s_raw_y[CAL_NUM_POINTS]; /* raw reading captured at each corner, index-matched to k_cal_points[] */
 static touch_calibration_t s_result_cal;
 static touch_calib_done_cb_t s_on_done = NULL;
@@ -426,14 +426,28 @@ void touch_calib_poll(void)
                 s_state = CAL_STATE_RESULT_ARM;
             } else {
                 draw_bad_message();
-                s_bad_until_ms = g_msticks + CAL_BAD_MSG_MS;
+                s_bad_desde_ms = g_msticks;
                 s_state = CAL_STATE_BAD_WAIT;
             }
         }
         break;
 
     case CAL_STATE_BAD_WAIT:
-        if (g_msticks >= s_bad_until_ms) {
+        /*
+         * LA RESTA, NO LA COMPARACION - 24/10/2026, revision a fondo.
+         *
+         * Esto era `g_msticks >= s_bad_until_ms` con el plazo guardado ya
+         * sumado, y es la unica resta de tiempos del fichero que no seguia
+         * el idioma del resto de la radio. El contador de milisegundos da la
+         * vuelta a los 49 dias: si el aviso de "calibracion mala" arranca en
+         * los ultimos dos segundos antes de la vuelta, el plazo guardado
+         * sale pequeño, la comparacion es cierta al instante y el cartel
+         * dura cero milisegundos - o sea que no se lee.
+         *
+         * Con la resta en sin signo eso no puede pasar: la diferencia es
+         * correcta aunque el contador haya dado la vuelta en medio.
+         */
+        if ((uint32_t)(g_msticks - s_bad_desde_ms) >= CAL_BAD_MSG_MS) {
             s_point_idx = 0U;
             draw_point_prompt(0U);
             s_state = CAL_STATE_ARM;

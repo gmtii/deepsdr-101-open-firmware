@@ -18,6 +18,2055 @@ ordered by date, does not spare the detail, and is not published.
 
 ---
 
+## V6.06 · 2026-10-27
+
+### Qué cambia
+
+- **El barrido de memorias sigue solo cuando el canal se queda libre.**
+  Antes se paraba del todo donde encontraba a alguien y había que volver a
+  arrancarlo a mano. Ahora se queda escuchando mientras haya alguien y
+  sigue por donde iba cuando el canal lleva **dos segundos y medio**
+  callado. Una pausa entre dos frases de la misma conversación no le mueve
+  el dial. Y para quedarte donde estás sigue estando el gesto de siempre:
+  **tocar MEM lo para del todo**.
+
+- **Y da la vuelta tres veces más rápido: 400 ms por memoria en vez de
+  1.250.** Era lo que hacía que en los canales de servicio se perdiera las
+  frases cortas, porque lo que decide si cazas una frase no es lo que mira
+  cada memoria sino **lo que tarda la vuelta entera**: con quince memorias
+  eran 18,7 segundos y ahora son 6. Los dos tiempos —lo que espera a que la
+  cadena se asiente y lo que mira después— estaban puestos a ojo y ahora
+  están **medidos**: la lectura se asienta en 109 ms en el peor modo, y
+  mirando un cuarto de segundo se caza a alguien hablando las 24 veces de
+  24 sin inventarse ni una emisora. El segundo entero de antes no compraba
+  nada.
+
+- **Arreglado: un banco que mezcle FM ancha con cualquier otro modo se
+  paraba en todas las memorias que cambiaban de modo**, estuvieran vacías o
+  no. En FM ancha el barrido busca el ruido más bajo y en los demás el
+  nivel más alto, y la medida se arrancaba mirando el modo *anterior*. No
+  se había visto nunca en la radio.
+
+### What's new
+
+- **Memory scan resumes on its own once the channel goes free.** It used to
+  stop for good wherever it found someone, and you had to start it again by
+  hand. Now it stays and listens while anyone is there, and carries on from
+  where it was once the channel has been quiet for **two and a half
+  seconds**. A pause between two overs of the same exchange does not move
+  the dial. To stay put there is still the gesture there has always been:
+  **tapping MEM stops it for good**.
+
+- **And a full cycle is three times faster: 400 ms per memory instead of
+  1,250.** This is what made it miss short phrases on service channels,
+  because what decides whether you catch a phrase is not the dwell on each
+  memory but **how long the whole cycle takes**: with fifteen memories that
+  was 18.7 seconds and it is now 6. Both times — the settle after a hop and
+  the dwell after it — were set by eye and are now **measured**: the reading
+  settles in 109 ms in the worst mode, and a quarter-second dwell catches
+  someone talking 24 times out of 24 without inventing a single station.
+  The full second bought nothing.
+
+- **Fixed: a bank mixing wide FM with any other mode stopped on every
+  memory that changed mode**, empty or not. In wide FM the scan looks for
+  the *lowest* noise and in the other modes for the *highest* level, and the
+  measurement was being armed against the *previous* mode. This had never
+  been seen on the radio.
+
+---
+
+## V6.05 · 2026-10-27
+
+### Qué cambia
+
+- **Paso de sintonía de 9 kHz**, que es el canalizado de onda media en
+  Europa. Entra en la lista entre los 5 y los 10 kHz, donde le toca, y sale
+  en la pantalla de Paso como una más.
+
+- **Y de paso, MEM.CSV guarda el paso en hercios y no por su número de
+  orden.** Esto no se ve pero es lo que hace que lo de arriba no te rompa
+  nada: metiendo los 9 kHz en medio de la lista, todos los pasos por
+  encima se corren un puesto, y tus memorias ya grabadas habrían vuelto
+  con **otro paso** — una de marina guardada en 12,5 kHz habría vuelto en
+  10. CONFIG.CSV ya lo hacía así desde hace tiempo y lo explicaba con
+  todas las letras; MEM.CSV se había quedado sin esa lección.
+
+  Los ficheros que ya tengas **se siguen leyendo bien**: un número pequeño
+  se entiende como el orden de antes y uno grande como hercios, y no hay
+  ambigüedad posible porque el paso más pequeño son 10 Hz. La columna
+  pasa a llamarse `paso_hz`, así que editando el fichero a mano ahora se
+  ve lo que pone: `9000` en vez de `5`.
+
+### What's new
+
+- **A 9 kHz tuning step**, the mediumwave channel spacing in Europe. It
+  goes into the list between 5 and 10 kHz, where it belongs, and shows up
+  on the Step screen like any other.
+
+- **And MEM.CSV now stores the step in hertz rather than by its position
+  in the list.** You do not see this, but it is what keeps the above from
+  breaking anything: inserting 9 kHz in the middle of the list shifts
+  every coarser step up by one, and your stored memories would have come
+  back with **a different step** — a marine memory saved at 12.5 kHz would
+  have returned at 10. CONFIG.CSV has worked that way for a while and says
+  so explicitly; MEM.CSV had missed the lesson.
+
+  Files you already have **still read correctly**: a small number is taken
+  as the old position and a large one as hertz, and there is no ambiguity
+  because the smallest step is 10 Hz. The column is now called `paso_hz`,
+  so hand-editing the file shows what it means: `9000` instead of `5`.
+
+---
+
+## V6.04 · 2026-10-27
+
+### Qué cambia
+
+- **136 bytes más de flash interna**, de 2.668 a 2.804 libres. `aic3204.c`
+  estaba en la lista de ficheros que se compilan con `-O2` en vez de
+  `-Os`, y no pintaba nada ahí: no toca ni una muestra de audio ni un
+  píxel, configura el códec por I²C y se calla. Corre al arrancar y al
+  cambiar de tasa, y los dos ya pagan un reset por patilla con 100 ms de
+  espera por delante. No cambia nada de lo que oyes ni de lo que ves.
+
+### What's new
+
+- **136 more bytes of internal flash**, from 2,668 to 2,804 free.
+  `aic3204.c` was on the list of files built with `-O2` instead of `-Os`,
+  and it had no business being there: it touches neither an audio sample
+  nor a pixel, it configures the codec over I²C and goes quiet. It runs at
+  boot and on a rate change, and both already pay a pin reset with a 100 ms
+  wait in front of them. Nothing you hear or see changes.
+
+---
+
+## V6.03 · 2026-10-27
+
+### Qué cambia
+
+- **El avisador de armónicos ya sabe nombrar lo que de verdad te entra.**
+  La fila de Armónicos de Información leía la tabla de bandas, y esa tabla
+  no tenía **ni una sola** banda aérea ni marítima: entre 2.495 y 3.200,
+  entre 5.367 y 5.800 y entre 7.878 y 9.400 kHz no había nada que nombrar.
+  Y duele justo ahí, porque esos servicios emiten **las veinticuatro
+  horas** y son fuertes —son los que producen los fantasmas que uno se
+  encuentra de verdad, mientras que las de radiodifusión van y vienen con
+  la propagación—. Con el dial en 1.848,5 kHz entra Shannon Volmet por el
+  tercer armónico, y la radio contestaba «ninguno».
+
+  Ahora conoce **quince rangos más**: aeronáutico y marítimo de onda corta,
+  de 2 a 18 MHz. No son presets de banda —la rejilla no pagina y Utilidades
+  está casi llena—, y no hace falta: para nombrar un armónico bastan un
+  rango y un nombre.
+
+### What's new
+
+- **The harmonic warning can now name what actually reaches you.** The
+  Harmonics row in Information read the band table, and that table held
+  **not one** aeronautical or maritime band: between 2,495 and 3,200,
+  between 5,367 and 5,800 and between 7,878 and 9,400 kHz there was nothing
+  to name. And that is exactly where it hurts, because those services
+  transmit **around the clock** and are strong — they are the ones that
+  produce the ghosts you actually run into, while the broadcast bands come
+  and go with propagation. With the dial on 1,848.5 kHz Shannon Volmet
+  comes in through the third harmonic, and the radio answered «none».
+
+  It now knows **fifteen more ranges**: HF aeronautical and maritime, from
+  2 to 18 MHz. They are not band presets — the grid does not paginate and
+  Utility is nearly full — and they do not need to be: naming a harmonic
+  takes a range and a name.
+
+---
+
+## V6.02 · 2026-10-27
+
+### Qué cambia
+
+Una revisión a fondo de las señales espejo y los armónicos, en cuatro
+pasadas y unos cuarenta arreglos. Lo que más se nota:
+
+- **Tocar la fila de «Cuadratura I/Q» podía encender los dos osciladores a
+  la vez.** Por debajo de 300 kHz el oscilador lo hace un temporizador del
+  GD32, y se guarda su frecuencia *real* para que el dial no mienta; pero
+  esa frecuencia va en cuentas enteras forzadas a par y **puede pasarse del
+  cruce**. En el dial entre 322,9 y 324,0 kHz, las pantallas de Información
+  creían que mandaba el MS5351 y lo encendían encima del temporizador: dos
+  excitadores en contrafase sobre el mismo nodo, la cuadratura destruida y
+  espurias por toda la pantalla, sin que nadie volviera a apagarlo.
+
+- **La maniobra de 90 grados de la banda baja salía corta, siempre, por dos
+  motivos distintos.** Uno: `SystemCoreClock / 1000000` truncaba 199,68 a
+  199, así que los 62,5 ms eran 62,287. Otro, mayor: el cronómetro
+  arrancaba *después* de la escritura por I²C y se detenía *antes* de la
+  siguiente, así que al cuarto de vuelta se le sumaba una transacción
+  entera. Los dos iban siempre en el mismo sentido y ponían techo al
+  rechazo de imagen en toda la banda de 300 kHz a 4,8 MHz.
+
+- **El avisador de armónicos nombraba al sospechoso equivocado, y en el eje
+  equivocado.** Recortaba la lista por número de armónico y la ordenaba por
+  nivel *después*, así que cuatro bandas en el x2 dejaban fuera al x3 —que
+  está 20 dB más fuerte—. Y daba el desvío en radiofrecuencia cuando lo que
+  se lee es la pantalla: el 3.º y el 7.º salen con la banda lateral dada la
+  vuelta. Ahora acierta, y un armónico **par** sale con **±** porque aparece
+  por los dos lados a la vez. De regalo: con el eje bien puesto, **la prueba
+  del movimiento sí distingue un armónico de una imagen** —la imagen va al
+  doble y el 3.er armónico al cuádruple—, justo al revés de lo que decía el
+  manual de la propia radio.
+
+- **El corrector de espejo podía acabar fabricando espejo.** Su lazo se
+  abría con el corrector apagado y seguía sumando; la frecuencia de cada
+  ranura se iba al infinito a los cinco minutos y medio de escuchar una
+  emisora fija; no se tiraba nada al cambiar de banda ni al cambiar de
+  oscilador; y con el analizador de audio puesto medía el espejo sobre el
+  espectro de **audio**. Todo eso está cerrado, y de paso dejó de correr en
+  cada cuadro de pantalla cuando no hace falta.
+
+- **El notch automático ya no se mete en CW ni en los digitales.** Busca un
+  tono sostenido y lo mata, que es exactamente lo que es una señal de CW o
+  la marca de un RTTY: medido, dejaba la marca 12 dB por debajo. Y como los
+  decodificadores comen el audio *antes* del notch, la pantalla seguía
+  decodificando mientras el altavoz ya no tenía señal. Tu ajuste no se
+  toca: al volver a la voz, el notch sigue como lo dejaste.
+
+- **SAM rechaza la banda contraria entre 4 y 7 dB mejor.** El espejo nacía
+  dentro del PLL —el lazo seguía en parte la modulación y la reinyectaba al
+  otro lado—, así que se estrecha de 200 a 100 Hz. El número está medido,
+  no elegido: con 50 Hz se gana más pero el lazo deja de engancharse a una
+  portadora descolocada, y eso sí se nota.
+
+- **Banda lateral arranca con el corte bajo en 300 Hz** y no en cero. Por
+  debajo de 400 Hz el método de fases apenas rechaza la banda contraria
+  —27 dB a 300 Hz, 12 a 150—, así que una emisora pegada al dial *por el
+  lado malo* entraba como retumbe. Sigue siendo ajustable; lo que cambia es
+  de dónde parte. AM y FM se quedan como estaban.
+
+- **El interpolador de media banda** recalculaba una trama por gusto y, con
+  un bloque corto, escribía fuera del buffer.
+
+- **Y una treintena de números y comentarios que mentían**, varios de ellos
+  justo donde alguien iría a mirar para arreglar otra cosa: el escalón del
+  oscilador estaba a la mitad, el error del arcotangente rápido era el del
+  estimador anterior (dieciséis veces peor), la constante de tiempo del
+  corrector decía un segundo donde son once, y un comentario del códec
+  afirmaba que un canal estaba muerto cuando es por donde entra la señal.
+
+### What's new
+
+A deep review of image signals and harmonics, over four passes and some
+forty fixes. The ones you will notice:
+
+- **Tapping the «I/Q quadrature» row could switch both oscillators on at
+  once.** Below 300 kHz the oscillator is a GD32 timer, and its *real*
+  frequency is stored so the dial does not lie; but that frequency comes in
+  whole counts forced even and **can overshoot the crossover**. With the
+  dial between 322.9 and 324.0 kHz the Information screens believed the
+  MS5351 was in charge and switched it on top of the running timer: two
+  push-pull drivers on one node, quadrature destroyed, spurs across the
+  display, and nothing ever switched it back off.
+
+- **The low band's 90-degree manoeuvre always came up short**, for two
+  separate reasons. One: `SystemCoreClock / 1000000` truncated 199.68 to
+  199, so 62.5 ms were really 62.287. The other, larger: the stopwatch
+  started *after* the I²C write and stopped *before* the next one, so a
+  whole transaction was added to the quarter turn. Both leaned the same
+  way, capping image rejection across 300 kHz to 4.8 MHz.
+
+- **The harmonic warning named the wrong suspect, on the wrong axis.** It
+  truncated the list by harmonic number and sorted by level *afterwards*,
+  so four bands on the 2nd pushed out the 3rd — which is 20 dB stronger.
+  And it gave the offset in RF when what you read is the screen: the 3rd
+  and 7th come out with the sideband flipped. It is right now, and an
+  **even** harmonic is shown with **±** because it appears on both sides at
+  once. A bonus: with the axis right, **the movement test does tell a
+  harmonic from an image** — the image moves at twice the dial, the 3rd
+  harmonic at four times — the exact opposite of what the radio's own notes
+  claimed.
+
+- **The image corrector could end up manufacturing image.** Its loop opened
+  when the corrector was off and kept accumulating; each slot's frequency
+  ran away after five and a half minutes on one station; nothing was
+  discarded on a band change or an oscillator change; and with the audio
+  analyser on it measured image rejection against the **audio** spectrum.
+  All closed, and it no longer runs every display frame when it is not
+  needed.
+
+- **The auto-notch stays out of CW and the digital modes.** It hunts a
+  sustained tone and kills it, which is exactly what CW or an RTTY mark is:
+  measured, it left the mark 12 dB down. And since the decoders are fed
+  *before* the notch, the screen kept decoding while the speaker had
+  nothing. Your setting is untouched: back on voice, the notch is as you
+  left it.
+
+- **SAM rejects the opposite sideband 4 to 7 dB better.** The image was
+  born inside the PLL — the loop partly tracked the modulation and fed it
+  back to the other side — so it narrows from 200 to 100 Hz. The figure is
+  measured, not picked: 50 Hz gains more but the loop stops acquiring an
+  offset carrier, and that you would notice.
+
+- **Sideband now starts with the low cut at 300 Hz** instead of zero. Below
+  400 Hz the phasing method barely rejects the opposite sideband — 27 dB at
+  300 Hz, 12 at 150 — so a station sitting next to the dial *on the wrong
+  side* came through as rumble. Still adjustable; only the starting point
+  changes. AM and FM are untouched.
+
+- **The half-band interpolator** recomputed one frame for nothing and, with
+  a short block, wrote past the end of its buffer.
+
+- **And thirty-odd numbers and comments that lied**, several of them
+  exactly where someone would look to fix something else: the oscillator's
+  step was stated at half its real value, the fast arctangent's published
+  error was the previous estimator's (sixteen times worse), the corrector's
+  time constant said one second where it is eleven, and a codec comment
+  claimed a channel was dead when it is the one the signal comes in on.
+
+---
+
+## V6.01 · 2026-10-26
+
+### Qué cambia
+
+Dos fallos de la V6.00, los dos vistos en la radio.
+
+- **La radio se saturaba y dejaba de responder al entrar en STANAG** con
+  una señal enganchada. Era la medida de nivel que la V6.00 puso para el
+  barrido: 256 multiplicaciones y un logaritmo por bloque, **375 veces por
+  segundo y en todos los modos, estuvieras barriendo o no**. Por sí sola
+  no es mucha cuenta; el problema es dónde caía, porque los
+  decodificadores pesados van ya justos dentro de ese mismo bloque y lo
+  que sobra se come su margen. Ahora **sólo se mide mientras el barrido
+  anda**: se enciende al tocar SCAN y se apaga al parar, y fuera de ahí no
+  cuesta ni una instrucción más que mirar una bandera.
+
+- **El barrido se paraba al llegar a la segunda vuelta.** Había **un solo
+  suelo de ruido para el banco entero**, el más bajo de sus quince
+  memorias: la primera vuelta lo aprendía y la segunda decidía con él, por
+  eso caía justo ahí. Y no podía funcionar, por un motivo físico: **el
+  ruido de banda no vale lo mismo en 3 MHz que en 28**. La diferencia
+  entre la banda más tranquila del banco y la más ruidosa pasa de veinte
+  decibelios con facilidad, más del doble del margen, así que la memoria
+  más tranquila fijaba el suelo y **cualquier memoria de una banda más
+  ruidosa sobresalía diez decibelios sin que allí hubiera nadie**. Medido:
+  ruido contra ruido, 300 cuentas frente a 1.800, **15,1 dB de diferencia**
+  — el barrido se paraba en eso.
+
+  Ahora hay **un suelo por memoria**, que es la única referencia que
+  significa algo: el ruido de *esa* frecuencia. Se aprende de la parte
+  callada de cada visita, no del pico, y eso trae dos cosas: **ya se puede
+  parar en la primera vuelta** —en la primera visita la cuenta es «cuánto
+  sobresale el pico de las pausas», que es justo la prueba de si alguien
+  está hablando— y una memoria que estuviera ocupada al empezar **se cura
+  sola**, porque el suelo baja en el acto en cuanto la pilla callada. Sube
+  despacio, medio decibelio por visita, para que una portadora permanente
+  no deje la memoria marcada para siempre. Medido en una visita de un
+  segundo: el ruido se mueve **1,0 a 1,6 dB** y alguien hablando, **27 a
+  32**.
+
+### What's new
+
+Two bugs from V6.00, both found on the radio.
+
+- **The radio bogged down and stopped responding when entering STANAG**
+  with a signal locked. It was the level measurement V6.00 added for the
+  scan: 256 multiplies and a logarithm per block, **375 times a second and
+  in every mode, whether you were scanning or not**. On its own that is
+  not much arithmetic; the problem is where it landed, because the heavy
+  decoders are already tight inside that same block and anything spare
+  eats their margin. It is now **only measured while the scan is running**:
+  on when you tap SCAN, off when it stops, and outside that it costs no
+  more than testing a flag.
+
+- **The scan stopped once it reached the second round.** There was **a
+  single noise floor for the whole bank**, the lowest of its fifteen
+  memories: the first round learned it and the second decided with it,
+  which is exactly when it failed. And it could not work, for a physical
+  reason: **band noise is not the same at 3 MHz as at 28**. The gap
+  between the quietest and the noisiest band in a bank easily exceeds
+  twenty decibels, more than twice the margin, so the quietest memory set
+  the floor and **any memory in a noisier band stood ten decibels clear
+  with nobody there**. Measured: noise against noise, 300 counts versus
+  1,800, **15.1 dB apart** — that is what the scan was stopping on.
+
+  There is now **one floor per memory**, the only reference that means
+  anything: the noise of *that* frequency. It is learned from the quiet
+  part of each visit rather than from the peak, and that brings two
+  things: **it can now stop on the first round** —on the first visit the
+  sum becomes "how far the peak stands above the pauses", which is exactly
+  the test for someone talking— and a memory that was busy when the scan
+  started **heals itself**, because the floor drops at once as soon as it
+  catches it quiet. It rises slowly, half a decibel per visit, so a
+  permanent carrier does not mark a memory as busy forever. Measured over
+  a one-second visit: noise moves **1.0 to 1.6 dB**, someone talking,
+  **27 to 32**.
+
+---
+
+## V6.00 · 2026-10-26
+
+### Qué cambia
+
+El barrido de memorias de V5.99 **no se paraba donde había alguien
+hablando**, y esta versión es eso: que lo haga.
+
+- **El barrido ya distingue una emisora del ruido.** Lo que miraba estaba
+  mal medido en tres de los cinco modos, y de dos maneras distintas. En
+  **AM** miraba el audio, y una portadora sin modular no da audio —la come
+  el bloqueador de continua—, así que una emisora callada leía igual que
+  el ruido: 4,3 decibelios de diferencia cuando hacen falta diez. En **FM
+  estrecha** era peor, era **al revés**: el ruido de un canal vacío sale
+  por el discriminador como un siseo fuerte y una portadora limpia lo
+  calla, así que la emisora leía **30,7 decibelios por debajo** del ruido
+  y el barrido se habría parado justo en los canales vacíos. Ahora en AM y
+  en FM estrecha mira el **nivel de radiofrecuencia del canal**, que sube
+  con la portadora module o no module, y en banda lateral y CW —donde ese
+  nivel no existe— mira el audio, ya medido **dentro del paso de audio** y
+  no sobre un ancho mucho mayor, que era lo que dejaba una voz a ras del
+  umbral. Medido modo por modo en `deepsdr-ui/sim/scan_nivel.c`: una
+  emisora floja —600 cuentas sobre ruido de 300— sobresale entre **12,7 y
+  17,6 decibelios** en los cinco modos, y dos sitios con sólo ruido leen
+  igual con menos de **medio decibelio** de diferencia.
+
+- **Tocar una memoria que ya tiene frecuencia te devuelve a la pantalla
+  principal**, como ya hacían las bandas y los modos: has elegido dónde
+  escuchar, lo que quieres ver es el espectro. La casilla **vacía** no
+  cierra —no hay nada que recuperar— y hace el pip de «no», para que no
+  parezca que la pantalla no responde.
+
+- **Y la versión sube a V6.00 por una razón concreta:** seis binarios
+  distintos salieron llamándose todos V5.99 y no había forma de saber
+  cuál tenía cargado la radio. El número de versión sirve exactamente
+  para eso.
+
+### What's new
+
+The memory scan in V5.99 **did not stop where someone was talking**, and
+this release is about making it do that.
+
+- **The scan can now tell a station from noise.** What it measured was
+  wrong in three of the five modes, in two different ways. In **AM** it
+  looked at the audio, and an unmodulated carrier produces no audio —the
+  DC blocker removes it— so a silent station read the same as noise: 4.3
+  dB apart where ten are needed. In **narrow FM** it was worse, it was
+  **backwards**: the noise of an empty channel comes out of the
+  discriminator as loud hiss and a clean carrier quiets it, so the station
+  read **30.7 dB below** the noise and the scan would have stopped
+  precisely on the empty channels. AM and narrow FM now look at the
+  **in-channel RF level**, which rises with the carrier whether it is
+  modulated or not, and sideband and CW —where that level does not
+  exist— look at the audio, now measured **inside the audio passband**
+  rather than over a far wider one, which is what left a voice sitting on
+  the threshold. Measured mode by mode in
+  `deepsdr-ui/sim/scan_nivel.c`: a weak station —600 counts over noise of
+  300— stands **12.7 to 17.6 dB** clear in all five modes, and two
+  noise-only spots read the same to within **half a decibel**.
+
+- **Tapping a memory that already holds a frequency returns you to the
+  main screen**, as bands and modes already did: you have chosen where to
+  listen, what you want to see is the spectrum. An **empty** slot does not
+  close —there is nothing to recall— and gives the "no" beep, so it does
+  not read as an unresponsive screen.
+
+- **And the version goes to V6.00 for a specific reason:** six different
+  binaries all shipped calling themselves V5.99, with no way to tell which
+  one the radio had loaded. That is exactly what a version number is for.
+
+---
+
+## V5.99 · 2026-10-26
+
+### Qué cambia
+
+Un banco de memorias con escaneo, y una revisión a fondo de FM ancha de
+catorce pasadas en la que lo que de verdad le pasaba al audio no estaba en
+el demodulador.
+
+- **Banco de memorias (nuevo).** Botón **MEM** arriba a la derecha, en la
+  misma fila que las pastillas de modo y banda. La ventana es **la misma
+  que la de bandas**: los cuatro bancos —**HF, Aviones, Marina y
+  Repetidores**, y les puedes cambiar el nombre— siempre a la vista en la
+  columna de la izquierda y dieciséis botones a la derecha, quince
+  memorias y **SCAN**
+  siempre el último. **Se graba dejando el dedo dos segundos** sobre el
+  botón, y
+  suena el pip de la captura de pantalla; un toque corto recupera. Y no
+  recupera sólo la frecuencia: vuelve al **modo, al paso y al filtro** que
+  tenías. Se guardan en **MEM.CSV**, un fichero de texto del disco que
+  puedes abrir en el PC, corregir y **copiar de una radio a otra**.
+
+- **Barrido.** El botón SCAN recorre las memorias usadas del banco **en el
+  que lo toques**: se planta en cada una, mira **un segundo** si hay
+  emisión y si no sigue; al llegar a la última **vuelve a empezar**. Lo que
+  decide que hay señal es una medida propia del barrido, así
+  que **no usa el silenciador**: un umbral fijo en decibelios no distingue
+  una emisora del ruido de banda. Se compara **consigo mismo** y se para
+  donde algo sobresale diez decibelios del más bajo del banco. **La
+  primera vuelta las recorre todas** —hasta haberlas visto no hay con qué
+  comparar—, así que no hay que ajustar nada antes de usarlo. Para del todo y hace pip; no
+  sigue solo cuando la señal se va. **Al tocar SCAN la ventana se cierra y
+  vuelves a la principal**, con el espectro y la cascada delante; el botón
+  **MEM** de arriba se enciende y va cantando el **número de la memoria**
+  que escucha —01, 02, 03…—, y **tocarlo para el barrido**.
+
+- **Silenciador en FM ancha (nuevo).** FM ancha no lo había tenido nunca, y
+  por eso una frecuencia sin emisora te comía con siseo. Va **por ruido de
+  alta frecuencia**, como las radios comerciales, y no por nivel: en FM el
+  nivel no dice si hay emisora —una floja y una local dan la misma salida—,
+  pero una emisora no pone nada por encima de los 60 kHz y una frecuencia
+  vacía sí. Medido: 47,3 dB con cualquier emisora de 500 a 30.000 cuentas,
+  75,1 dB con el canal vacío. **Diecinueve decibelios de margen**, y por eso
+  no hay que reajustarlo al cambiar de emisora. Es el mando «Silenciador»
+  de siempre, que en FM no hacía nada; en su suelo sigue apagado.
+
+- **Una emisora floja encima de un desplazamiento podía desaparecer del
+  todo.** El estimador de continua tenía un atajo que, cuando la continua
+  es mayor que la portadora, devolvía la amplitud de la emisora como si
+  fuera la fuga: el tono caía de 12.518 a 20 y el 99,9 % de lo que salía
+  era basura. No era una degradación suave, era un acantilado.
+
+- **Menos distorsión en una radio sin fuga ninguna.** Dos fallos hacían que
+  el quitador de continua restara el residuo de la propia emisora: con el
+  offset a cero, la distorsión baja de **0,32 % a 0,08 %**. Un escalón de
+  nivel de un decibelio, o un desvanecimiento normal, dejaban restando
+  2.048 cuentas de una emisora limpia.
+
+- **El ancho de audio de FM ancha vuelve a tener mando.** Se había quedado
+  sin uno solo: lo que hubiera en CONFIG.CSV se quedaba ahí para siempre, y
+  un fichero de una versión anterior podía dejar la FM comercial cortada en
+  4 kHz sin forma de arreglarlo desde la radio. Ahora la chapa BW, la celda
+  de Ajustes y el mando enganchado lo cambian entre 15, 8 y 4 kHz.
+
+- **Y veinte fallos más**, entre ellos: la pantalla de hora escribía su
+  frecuencia y su modo en CONFIG.CSV, un detente hacia atrás en «Muestreo»
+  hacía dos reconfiguraciones completas del códec —medio segundo de radio
+  muerta—, el aviso de SOBRECARGA no se pintaba nunca, y cinco instrumentos
+  de la ventana de Información medían algo distinto de lo que decían medir.
+
+### What's new
+
+A memory bank with scanning, and a deep review of wide FM over fourteen
+passes in which what was really happening to the audio turned out not to be
+in the demodulator.
+
+- **Memory bank (new).** A **MEM** button at the top right, on the same row
+  as the mode and band pills. The window is **the same one the band list
+  uses**: the four banks —**HF, Aircraft, Marine and Repeaters**, and you
+  can rename them— always in view down the left-hand column and sixteen
+  buttons on the right, fifteen memories and **SCAN** always the
+  last. **You store by holding your finger for two seconds** on the
+  button, and the screenshot beep sounds; a short tap recalls. And it does
+  not just recall the frequency: it returns to the **mode, the step and the
+  filter** you had. They are kept in **MEM.CSV**, a text file on the disk
+  you can open on a PC, correct and **copy from one radio to another**.
+
+- **Scanning.** The SCAN button runs through the used memories of
+  **whichever bank you tap it in**: it settles on each one, looks for **one
+  second**, and moves on if there is nothing; after the last one it
+  **starts again**. What decides that there is a signal is not a new
+  setting and it is **not the squelch**: a fixed threshold in decibels
+  cannot tell a station from band noise. It compares **against itself** and
+  stops where something stands ten decibels above the lowest in the bank.
+  **The first lap runs through them all** —until it has seen them there is
+  nothing to compare against—, so nothing needs adjusting first. It stops for good and beeps; it does not resume by itself when the
+  signal goes. **It keeps scanning with the window closed**, so you can
+  **Tapping SCAN closes the window and takes you
+  back to the main one**, spectrum and waterfall in front of you; the
+  **MEM** button up top lights and shows the **number of the memory** it
+  is listening to —01, 02, 03…—, and **tapping it stops the scan**.
+
+- **Squelch in wide FM (new).** Wide FM had never had one, which is why a
+  frequency with no station drowned you in hiss. It works **by
+  high-frequency noise**, like commercial radios, not by level: in FM the
+  level does not tell you whether there is a station —a weak one and a local
+  one give the same output— but a station puts nothing above 60 kHz and an
+  empty frequency does. Measured: 47.3 dB with any station from 500 to
+  30,000 counts, 75.1 dB with an empty channel. **Nineteen decibels of
+  margin**, which is why it never needs readjusting between stations. It is
+  the usual «Squelch» control, which did nothing in FM; at its floor it is
+  still off.
+
+- **A weak station on top of a DC offset could vanish entirely.** The DC
+  estimator had a shortcut that, when the offset is larger than the carrier,
+  returned the station's own amplitude as if it were the leak: the tone fell
+  from 12,518 to 20 and 99.9 % of the output was rubbish. Not a gentle
+  degradation — a cliff.
+
+- **Less distortion on a radio with no leak at all.** Two bugs made the DC
+  remover subtract the station's own residue: with zero offset, distortion
+  drops from **0.32 % to 0.08 %**. A one-decibel level step, or ordinary
+  fading, left it subtracting 2,048 counts from a clean station.
+
+- **The wide-FM audio bandwidth has a control again.** It had been left with
+  none at all: whatever was in CONFIG.CSV stayed there forever, and a file
+  from an earlier version could leave commercial FM cut at 4 kHz with no way
+  to fix it from the radio. The BW chip, the Settings cell and the knob now
+  cycle it between 15, 8 and 4 kHz.
+
+- **And twenty more bugs**, among them: the clock screen wrote its own
+  frequency and mode into CONFIG.CSV, one detent backwards on «Sample rate»
+  did two full codec reconfigurations —half a second of dead radio—, the
+  OVERLOAD warning was never painted, and five instruments in the
+  Information window measured something other than what they claimed.
+
+---
+
+## V5.98 · 2026-10-25
+
+### Qué cambia
+
+Los informes de un probador, uno por uno. Cinco cosas, y la primera no era
+la que parecía.
+
+- **Los artefactos en los pasos pegados a la frecuencia intermedia cero.**
+  El oscilador local se auto-mezcla y deja una **continua encima de la I y
+  de la Q**. Esta radio la apartaba sintonizando siempre a 6 kHz o más del
+  oscilador y confiando en que el filtro de canal la matara — con un
+  comentario que decía, palabra por palabra, que «el filtro de canal es de
+  ±4 kHz, así que a 6 kHz la fuga ya está fuera con holgura». Eso era verdad
+  para AM el día que se escribió. Medido hoy sobre los coeficientes que hay
+  en el firmware, con el desplazamiento en ese mínimo de 6 kHz: **AM −14,5
+  dB, NFM −2,3 dB, AIS −0,1 dB**. O sea que en NFM el filtro de canal **no
+  hacía nada** con la fuga, y en AIS ni eso: llegaron los dos filtros anchos
+  y nadie volvió a mirar el número.
+
+  No se arregla ensanchando el agujero del NCO, que es lo primero que se
+  piensa y lo que costaría ventana de paseo: la continua **se resta de la I
+  y de la Q antes de la bajada en frecuencia**, que es donde vive, y
+  entonces deja de existir para todo lo que viene detrás. La cadena de FM
+  ancha ya lo hacía desde el 11/10; ésta no, y es la que lo tenía más fácil
+  —allí la portadora vive en continua y la corrección necesita tope, aquí
+  hay mezclador y la señal buena nunca está en el centro—. Banco nuevo
+  `sim/rf_dc.c`, que mete muestras crudas por la entrada de verdad. NFM,
+  emisora floja, 300 cuentas de fuga: **45,7 % de basura a 6 kHz, 11,1 % a
+  8 kHz, 0,1 % a 12** — antes; **0,0 % en los tres** — ahora.
+
+- **El recuadro de la rejilla de bandas señalaba otra banda.** Comparaba la
+  frecuencia sintonizada con la de **entrada** del preset en vez de mirar en
+  qué banda estás, así que sólo acertaba justo en la frecuencia de entrada;
+  en 7.188 kHz enmarcaba la casilla de 2 m.
+
+- **El valor del NCO no salía solo después de sintonizar.** Se recalcula en
+  cada cuadro, pero quien lo pinta es la franja de estado y el clic del
+  mando no la repinta —se dejó así a propósito para no gastar 32.000
+  accesos al bus por clic—. Con el oscilador aparcado, la sintonía se mueve
+  y el oscilador no: el número cambia en cada clic y la chapa se quedaba con
+  el del arranque. Ahora se repinta **sólo cuando ese número cambia de
+  verdad**, así que el coste se paga cuando hay algo nuevo que enseñar.
+
+- **En NFM la línea de sintonía del espectro no tenía ancho.** AM, SAM y
+  banda lateral sombrean su paso y NFM era la única rama sin él. Ya sale:
+  ±6,25 kHz, o ±9 kHz con AIS puesto.
+
+- **Saliendo de FT8 en 80 m la radio se quedaba en USB.** La tabla de «cómo
+  dejaste cada banda» guardaba la **portadora**, y en FT8 esa portadora es
+  USB siempre — también en los 3.573 kHz, que caen dentro de 3.500-3.800 y
+  pisan la casilla de 80 m. A partir de ahí esa casilla daba USB para
+  siempre. Un modo digital no elige banda lateral: la hereda de su norma.
+  Ahora, cuando lo que suena no es analógico, se apunta la del preset — LSB
+  por debajo de 10 MHz, USB por encima —. La frecuencia y el paso se siguen
+  apuntando tal cual.
+
+**Y el RDS dice dos cosas más**, escritas desde cero: **TRÁFICO** mientras
+dura el aviso de carretera —no la marca permanente de «esta emisora da
+tráfico», sino el bit que se levanta al entrar el boletín— y el **tipo de
+programa** en el idioma de la radio. El tipo hace falta leerlo **dos grupos
+seguidos iguales** antes de darlo por bueno: el campo viaja en todos los
+grupos y un bloque mal recibido cambiaría el rótulo sin avisar.
+
+**Antes de entregar, un revisor adversarial repasó estos cinco cambios y
+encontró tres fallos, los tres míos y de hoy**: que TRÁFICO se encendía con
+avisos que la norma dice que son de *otra* emisora; que la memoria de la
+chapa del NCO sólo la actualizaban cinco de los trece sitios que repintan
+esa franja, así que podía volver a mentir; y que lo apuntado al salir de una
+banda dejaba un par incoherente —la frecuencia de un canal digital con la
+banda lateral contraria—. Los tres están arreglados y contados enteros en
+`CAMBIOS.md`.
+
+### What's new
+
+A tester's reports, one by one. Five things, and the first was not what it
+looked like.
+
+- **The artefacts on the tuning steps next to zero IF.** The local
+  oscillator self-mixes and leaves a **DC term on I and Q**. The radio kept
+  it away by always tuning 6 kHz or more off the oscillator and trusting the
+  channel filter to kill it — with a comment stating, word for word, that
+  «the channel filter is ±4 kHz, so at 6 kHz the leak is well clear». True
+  for AM the day it was written. Measured today against the coefficients in
+  the firmware, with the offset at that 6 kHz minimum: **AM −14.5 dB, NFM
+  −2.3 dB, AIS −0.1 dB**. In NFM the channel filter was doing **nothing** to
+  the leak, and in AIS less than nothing: the two wide filters arrived and
+  nobody revisited the number.
+
+  The fix is not to widen the NCO's hole, which is the first thing you think
+  of and would cost tuning range: the DC is **subtracted from I and Q before
+  the down-mix**, where it lives, and then it does not exist for anything
+  downstream. The wide-FM chain has done this since 11/10; this one did not,
+  and it is the one with the easier job — there the carrier lives at DC and
+  the correction needs a cap, here there is a mixer and the wanted signal is
+  never at the centre. New bench `sim/rf_dc.c`, feeding raw samples through
+  the real entry point. NFM, weak station, 300 counts of leak: **45.7 % junk
+  at 6 kHz, 11.1 % at 8 kHz, 0.1 % at 12** — before; **0.0 % at all three** —
+  now.
+
+- **The band grid boxed the wrong band.** It compared the tuned frequency
+  against the preset's **entry** frequency instead of asking which band you
+  are in, so it was only right exactly at that entry point; on 7,188 kHz it
+  boxed the 2 m cell.
+
+- **The NCO value did not appear on its own after tuning.** It is recomputed
+  every frame, but the status strip paints it and a knob click does not
+  repaint that strip — deliberately, to avoid 32,000 bus accesses per click.
+  With the oscillator parked, tuning moves and the oscillator does not: the
+  number changes on every click and the badge kept the one from boot. It is
+  now repainted **only when that number really changes**, so the cost is
+  paid when there is something new to show.
+
+- **In NFM the spectrum's tuning line had no width.** AM, SAM and sideband
+  shade their passband and NFM was the only branch without it. It is there
+  now: ±6.25 kHz, or ±9 kHz with AIS on.
+
+- **Leaving FT8 on 80 m left the radio in USB.** The «how you left each
+  band» table stored the **carrier**, and in FT8 that carrier is always USB —
+  including on 3,573 kHz, which falls inside 3,500-3,800 and overwrites the
+  80 m cell. From then on that cell gave USB forever. A digital mode does not
+  choose a sideband: it inherits one from its standard. Now, when what is
+  running is not analogue, the preset's sideband is stored instead — LSB
+  below 10 MHz, USB above. Frequency and step are still stored as they were.
+
+**And RDS says two more things**, written from scratch: **TRAFFIC** while
+the road announcement lasts — not the permanent «this station carries
+traffic» mark, but the bit raised as the bulletin starts — and the
+**programme type** in the radio's own language. The type has to be read
+**two consecutive groups alike** before it is trusted: the field travels in
+every group and one badly received block would swap the label without
+warning.
+
+**Before shipping, an adversarial reviewer went over these five changes and
+found three bugs, all three mine and all three from today**: TRAFFIC lit up
+for announcements the standard says belong to *another* station; the NCO
+badge's memory was updated by only five of the thirteen places that repaint
+that strip, so it could go back to lying; and what was stored on leaving a
+band left an incoherent pair — a digital channel's frequency with the wrong
+sideband. All three are fixed and written up in full in `CAMBIOS.md`.
+
+---
+
+## V5.97 · 2026-10-25
+
+### Qué cambia
+
+Una **revisión a fondo de todo el firmware**, pedida por ti, buscando lo que
+hace ir lento, lo que corrompe el audio y lo que está duplicado. Ocho
+pasadas, hasta dos seguidas sin encontrar nada. **Treinta y cinco fallos**
+encontrados y arreglados, tres de ellos míos de la propia revisión —el
+último, de los gordos, lo cazó un banco que ya existía.
+
+**Lo que explicaba que la radio tardara tanto en arrancar y en cambiar de
+tasa:**
+
+- **Un bucle de espera de DOS MILLONES de vueltas** en `sdr_rx.c` que se
+  compilaba en la versión de producción. Los `debug_print` de alrededor se
+  evaporan con el puerto serie apagado; la espera no, porque su contador es
+  `volatile`. Son **70-90 ms con el bucle principal parado**, en el arranque
+  **y en cada cambio de tasa**.
+- **El codec seleccionaba su página antes de CADA registro**, o sea dos
+  transacciones de I²C por escritura sobre un bus que va a mano a ~70 kHz.
+  La secuencia de configuración son 334 transacciones: **134 ms cada vez que
+  cambia la tasa**. Ahora se acuerda de cuál está puesta: 189. Con banco que
+  lo comprueba contra un codec de mentira, registro por registro, incluida la
+  trampa de que el registro 0 **es** el de página.
+
+**Lo que hacía ir lento el espectro:**
+
+- **Cada clic del dial forzaba el repintado completo del panel**, aunque
+  ningún cartel se moviera. Con el oscilador de sintonía el centro está
+  aparcado y no cambia, así que se puede girar un rato sin que se mueva un
+  píxel —y se repintaban igual las 52 bandas—. Son unos 9 ms por detente,
+  justo mientras sintonizas.
+- **Los carteles de emisora se recorrían enteros en las 26 bandas del
+  cuadro**, con una división de 64 bits y una medida de texto por cartel,
+  pintando sólo en 5.
+- **El texto no se cortaba en vertical**: un glifo entero fuera de la banda
+  entraba igual en su bucle de filas. Y el bucle de glifos estaba escrito
+  **dos veces**, así que los dos arreglos de octubre entraron sólo en uno.
+- Una **división en coma flotante por píxel** en la cascada: 1.500 por cuadro
+  para obtener 1.500 veces el mismo divisor.
+- Un **recorrido de 800 columnas por cuadro** que existía sólo para deshacer
+  una mezcla de 100 bytes.
+- El **chivato del repintado parcial no veía nada de lo que pinta el
+  compositor**, que es donde se escribe toda la interfaz nueva.
+
+**Lo que corrompía o cortaba:**
+
+- **El préstamo de los 60 kB de la cascada se soltaba debajo del que acababa
+  de cogerlo.** SSTV, HELL y DSC arrancaban *antes* de que pararan los ocho
+  modos que comparten esa memoria, así que ir de AIS a SSTV-FM —que están
+  pegados en la rejilla— hacía: SSTV coge la memoria, AIS la suelta, y el
+  `waterfall_init()` borra los 60 kB encima. Foto que no baja y cascada con
+  basura, hasta cambiar de modo.
+- **`spi_flash_read()` leía el chip mientras programaba.** El guardado de
+  `CONFIG.CSV` deja la flash ocupada entre llamadas, y durante ese rato la
+  ventana del mapa y los nombres de las emisoras leían lo que diera.
+- **El guardado de los ajustes tenía dos dueños.** La base de aviones usaba
+  como pregunta una función que **avanza** la máquina de estados, así que se
+  comía el "terminado" y los ajustes se quedaban "guardando" **para
+  siempre**: ni frecuencia, ni modo, ni volumen, ni calibración del táctil, y
+  sin un aviso.
+- **El reductor de ruido no tenía forma de reiniciarse.** Al encenderlo
+  soltaba unos 10 ms de audio de otro momento y 130 ms de ganancias medidas
+  contra un suelo de otra banda. Y el notch automático no se limpiaba al
+  cambiar de modo, siendo uno solo para banda lateral y para AM.
+- **El olvido de la cadena y el silenciador de entrada vivían dentro del `if`
+  del cambio de tasa**, así que un cambio de modo que no cruza tasa no
+  reiniciaba nada.
+- **AIS:** la reparación del 09/10 no podía funcionar. La guarda que dejaba
+  entrar era la misma bandera que hacía volver a la función en su primera
+  línea, así que tocar la tasa con AIS puesto lo dejaba mudo para siempre.
+- **La fase del oscilador** en el camino rápido de Fs/4 se "avanzaba" con una
+  suma que vale exactamente cero.
+- **Entrar en SSTV estando ya en SSTV** tiraba la imagen a medias.
+
+**Duplicados fusionados:** el estimador del corrector de imagen estaba
+escrito dos veces y ya se habían separado; el recorte a 16 bits tenía una
+tercera copia; el bucle de glifos, dos. Y se han quitado **cuatro filtros de
+audio que se inicializaban en cada cambio de tasa sin que nadie los usara
+nunca**, con un comentario que describía un reparto que llevaba meses sin
+existir.
+
+**Tres bancos nuevos** y 255 comprobaciones en verde.
+
+### What's new
+
+A **deep review of the whole firmware**, as you asked, looking for what makes
+things slow, what corrupts audio and what is duplicated. Eight passes, until
+two in a row found nothing. **Thirty-five faults** found and fixed, three of
+them mine from the review itself — the last one, a serious one, was caught by
+a bench that already existed.
+
+**What explained the slow boot and the slow rate changes:**
+
+- **A TWO-MILLION-iteration busy wait** in `sdr_rx.c` that was compiled into
+  the production build. The `debug_print`s around it vanish with the serial
+  port off; the wait does not, because its counter is `volatile`. That is
+  **70-90 ms with the main loop stopped**, at boot **and on every rate
+  change**.
+- **The codec selected its page before EVERY register**, i.e. two I²C
+  transactions per write on a bit-banged ~70 kHz bus. The configuration
+  sequence is 334 transactions: **134 ms every time the rate changes**. It
+  now remembers which page is selected: 189. With a bench that checks it
+  against a fake codec, register by register, including the trap that
+  register 0 **is** the page register.
+
+**What made the spectrum slow:**
+
+- **Every dial detent forced a full panel repaint**, even when no label
+  moved. With the tuning oscillator the centre is parked and does not change,
+  so you can turn for a while without a pixel moving — and all 52 bands were
+  repainted anyway. That is about 9 ms per detent, exactly while tuning.
+- **Station labels were walked in full across all 26 bands of the frame**,
+  with a 64-bit division and a text measurement per label, painting in only
+  5.
+- **Text was not clipped vertically**: a glyph entirely outside the band
+  still entered its row loop. And the glyph loop was written **twice**, so
+  both October fixes went into only one of them.
+- A **floating-point division per pixel** in the waterfall: 1,500 per frame
+  to obtain the same divisor 1,500 times.
+- An **800-column sweep per frame** that existed only to undo a 100-byte
+  merge.
+- The **partial-repaint watchdog saw nothing the compositor painted**, which
+  is where all the new interface is written.
+
+**What corrupted or cut:**
+
+- **The 60 kB waterfall loan was released underneath whoever had just taken
+  it.** SSTV, HELL and DSC started *before* the eight modes that share that
+  memory were stopped, so going from AIS to SSTV-FM — adjacent in the grid —
+  did: SSTV takes the memory, AIS releases it, and `waterfall_init()` wipes
+  the 60 kB on top. No picture and a garbage waterfall until you change mode.
+- **`spi_flash_read()` read the chip while it was programming.** Saving
+  `CONFIG.CSV` leaves the flash busy between calls, and during that window
+  the map window and the station names read whatever came out.
+- **The settings save had two owners.** The aircraft database used as a
+  question a function that **advances** the state machine, so it swallowed
+  the "done" and the settings stayed "saving" **forever**: no frequency, no
+  mode, no volume, no touch calibration, and no warning.
+- **The noise reducer had no way to reset.** Switching it on released about
+  10 ms of audio from another moment and 130 ms of gains measured against
+  another band's noise floor. And the auto-notch was not cleared on a mode
+  change, being a single one for sideband and AM.
+- **The chain reset and the input mute lived inside the rate-change `if`**,
+  so a mode change that does not cross a rate reset nothing.
+- **AIS:** the 09/10 fix could not work. The guard that let it in was the
+  same flag that made the function return on its first line, so touching the
+  rate with AIS on left it mute forever.
+- **The oscillator phase** on the fast Fs/4 path was "advanced" by a sum that
+  is exactly zero.
+- **Entering SSTV while already in SSTV** threw away the half-received image.
+
+**Duplicates merged:** the image-corrector estimator was written twice and
+had already diverged; the 16-bit saturation had a third copy; the glyph loop,
+two. And **four audio filters that were initialised on every rate change
+without anyone ever using them** have been removed, along with a comment
+describing a routing that had not existed for months.
+
+**Three new benches** and 255 checks green.
+
+---
+
+## V5.96 · 2026-10-24
+
+### Qué cambia
+
+- **Reparada la V5.95, que dejó el espectro inservible.** Fue mío y fue
+  gordo: el panadaptador pasó a hacer la FFT de **512 puntos siempre**, y a
+  96 y a 48 kHz el bloque de la captura son **256 muestras**, así que había
+  que juntar dos bloques por ventana. Dos averías de una vez:
+
+  - juntar bloques obligaba a volver del tick del espectro **a la mitad de
+    las pasadas**, antes de la puerta que decide si toca dibujar: la
+    cadencia de cuadros partida por dos, y a 48 kHz por cuatro;
+  - y los dos bloques **no son seguidos**. El bloque que llega pisa al
+    anterior, y entre dos pasadas del bucle principal pasan de 10 a 35 ms,
+    así que la ventana se montaba con dos trozos separados unos 20 ms: un
+    salto de fase en medio. No era más resolución, era la traza emborronada.
+
+- **Ahora una ventana es un bloque, y la transformada se adapta a él.**
+
+  | | bloque | ahora |
+  |---|---|---|
+  | 192 kHz | 512 | **375 Hz por bin** |
+  | 96 kHz | 256 | **375 Hz por bin** |
+  | 48 kHz | 256 | **187 Hz por bin** |
+
+  Los 375 Hz de 192 kHz —que es de donde salió todo esto, las emisoras con
+  la punta plana— se quedan. A 96 kHz se vuelve exactamente a lo de la
+  V5.94, sin juntar nada y sin pagar la transformada doble. Y a 48 kHz sale
+  gratis el doble de resolución, porque ahí el bloque ya daba para ello.
+
+- **Y no hacen falta dos juegos de tablas.** Las de 512 sirven para 256: los
+  giros tal cual —el índice de la columna sale del tamaño de la *tabla*, no
+  del de la transformada—, la ventana de Hann cogiendo las muestras pares, y
+  la tabla de inversión de bits desplazada uno. Cero bytes de memoria
+  añadidos.
+
+- **Con su banco, porque son tres afirmaciones sobre índices.** Se comparan
+  contra `User/fft.c` **compilado otra vez, nativo a 256 puntos y con sus
+  propias tablas**: el único patrón que no puede equivocarse en lo mismo.
+  Donde hay señal las dos salidas coinciden en **0,017 dB**.
+
+- **El osciloscopio de los nueve modos no se entera:** sigue siendo de 512
+  pase lo que pase, y el banco lo comprueba cambiando el tamaño del
+  panadaptador por debajo.
+
+### What's new
+
+- **Fixes V5.95, which left the spectrum unusable.** It was mine and it was
+  bad: the panadapter moved to a **512-point FFT always**, and at 96 and
+  48 kHz the capture block is **256 samples**, so two blocks had to be
+  joined per window. Two faults at once:
+
+  - joining blocks meant returning from the spectrum tick **on half the
+    passes**, before the gate that decides whether to draw: frame cadence
+    halved, and quartered at 48 kHz;
+  - and the two blocks **are not consecutive**. An arriving block overwrites
+    the previous one, and 10 to 35 ms pass between two main-loop passes, so
+    the window was assembled from two chunks about 20 ms apart: a phase step
+    in the middle. Not more resolution — a smeared trace.
+
+- **Now one window is one block, and the transform follows it.**
+
+  | | block | now |
+  |---|---|---|
+  | 192 kHz | 512 | **375 Hz per bin** |
+  | 96 kHz | 256 | **375 Hz per bin** |
+  | 48 kHz | 256 | **187 Hz per bin** |
+
+  The 375 Hz at 192 kHz — where all this started, the flat-topped stations —
+  stay. At 96 kHz it is exactly V5.94 again, joining nothing and not paying
+  for the double transform. And at 48 kHz twice the resolution comes free,
+  because the block was already big enough there.
+
+- **And two sets of tables are not needed.** The 512 ones serve 256: the
+  twiddles as they are — the column index comes from the size of the
+  *table*, not of the transform —, the Hann window taking the even samples,
+  and the bit-reversal table shifted by one. Zero bytes of memory added.
+
+- **With its own bench, because that is three claims about indices.** They
+  are compared against `User/fft.c` **compiled again, native at 256 points
+  with its own tables**: the only reference that cannot be wrong in the same
+  way. Where there is signal the two outputs agree to **0.017 dB**.
+
+- **The nine-mode scope does not notice:** it stays at 512 whatever happens,
+  and the bench checks it by changing the panadapter size underneath it.
+
+---
+
+## V5.95 · 2026-10-24
+
+### Qué cambia
+
+- **El doble de resolución en el panadaptador, en las dos tasas.**
+
+  | | antes | ahora |
+  |---|---|---|
+  | 96 kHz | 375 Hz por bin | **187** |
+  | 192 kHz | 750 Hz por bin | **375** |
+
+  Eso es lo que hacía que a 192 kHz las emisoras salieran con la punta
+  plana: a 750 Hz por bin una emisora de fonía de 2,5 kHz cabe en tres
+  muestras y no queda con qué dibujarla.
+- **Y la memoria salió de una FFT duplicada.** `rtty_scope.c` llevaba una
+  **transformada de 512 puntos entera** —sus propias tablas de giro, ventana
+  de Hann y tabla de bits, 9.216 bytes— para el osciloscopio de RTTY. O sea
+  que la radio ya tenía dentro la FFT de 512 que hacía falta; sólo que era
+  del módulo equivocado. Ahora hay **una sola**, y el osciloscopio se lleva
+  de regalo la versión optimizada de la mariposa.
+- **La deuda estaba escrita desde el 05/08/2026**, en un comentario que
+  decía que el panadaptador en FM ancha enseñaba «sólo las primeras 256 de
+  las 512 muestras por bloque… hasta que se redimensione». Ésta es esa
+  pieza.
+- **Y una guarda que miraba la constante equivocada:** exigía que la ventana
+  de la FFT fuera igual al bloque, pero comparaba contra el bloque de 96
+  kHz. A 192 la invariante que defendía llevaba rota desde ayer y la guarda
+  ni se enteraba.
+- **Y un banco nuevo para el osciloscopio**, que no es de RTTY: lo
+  alimentan **nueve modos** (RTTY, CW, NAVTEX, WEFAX, SSTV, FT8, PSK31, DSC
+  y APRS) y hasta hoy sólo lo tocaba el banco de uno de ellos, de rebote.
+  Ahora se mira de frente: un tono conocido entra y el pico tiene que salir
+  en su bin.
+- **Lo que no me gusta, y se dice:** el margen de pila baja de 3.792 a 2.256
+  bytes (del 46 % al 34 %). No es alarmante, pero es menos colchón. La
+  vuelta está identificada: SSTV, NAVTEX y APRS ocupan 8.448 bytes de TCM
+  los tres a la vez aunque sólo pueda vivir uno, y una unión entre ellos
+  devuelve 4.608 — más de lo que había antes. Es el siguiente paso.
+
+### What's new
+
+- **Twice the panadapter resolution, at both rates.**
+
+  | | before | now |
+  |---|---|---|
+  | 96 kHz | 375 Hz per bin | **187** |
+  | 192 kHz | 750 Hz per bin | **375** |
+
+  That is what made stations come out flat-topped at 192 kHz: at 750 Hz per
+  bin a 2.5 kHz voice signal fits in three samples and there is nothing left
+  to draw it with.
+- **And the memory came out of a duplicated FFT.** `rtty_scope.c` carried a
+  **complete 512-point transform** — its own twiddle tables, Hann window and
+  bit-reversal table, 9,216 bytes — for the RTTY scope. The radio already
+  had inside it the 512-point FFT that was needed; it just belonged to the
+  wrong module. There is **one** now, and the scope gets the optimised
+  butterfly for free.
+- **The debt had been written down since 05/08/2026**, in a comment saying
+  the panadapter in wide FM showed "only the FIRST 256 of the 512 samples
+  per block… until that's resized too". This is that piece.
+- **And a guard that checked the wrong constant:** it required the FFT
+  window to equal the block, but compared against the 96 kHz block. At 192
+  the invariant it defends had been broken since yesterday and the guard
+  never noticed.
+- **And a new bench for the scope**, which is not RTTY's: **nine modes**
+  feed it (RTTY, CW, NAVTEX, WEFAX, SSTV, FT8, PSK31, DSC and APRS) and
+  until today only one of them's bench touched it, indirectly. Now it is
+  checked head-on: a known tone goes in and the peak has to land in its bin.
+- **What I am not happy about, said plainly:** stack margin drops from 3,792
+  to 2,256 bytes (46 % to 34 %). Not alarming, but less cushion. The way
+  back is identified: SSTV, NAVTEX and APRS take 8,448 bytes of TCM all at
+  once although only one can ever live, and a union between them returns
+  4,608 — more than there was before. That is the next step.
+
+---
+
+## V5.94 · 2026-10-24
+
+### Qué cambia
+
+Cuatro de la revisión que arrancó con lo de «señales por donde no toca».
+Ninguno lo habías visto todavía: estaban escritos en el código esperando.
+
+- **El zoom seguía permitido en FM ancha.** El comentario explicaba muy bien
+  por qué el zoom no puede convivir con bloques de 512 muestras… y la guarda
+  preguntaba por la casilla de 192 kHz, que vale **cero** en FM ancha aunque
+  ahí la tasa sean 192 igualmente. Lo que decide es la tasa, no la casilla.
+  Y faltaba un cuarto sitio que no existía: **entrar en FM comercial con el
+  zoom puesto lo dejaba puesto**.
+- **Con zoom, el borrado de la raya de continua tapaba la emisora que estás
+  escuchando.** El zoom remezcla al dial antes de diezmar, así que el centro
+  de esa ventana es el dial y no el oscilador: se borraban 234 Hz justo
+  encima del punto de demodulación —la portadora de AM o el tono de CW— y a
+  la vez **quedaba destapada la fuga del oscilador**, que aparecía como una
+  portadora fija que no es ninguna emisora.
+- **El automático de radiofrecuencia se pasaba 250 ms creyendo que
+  actuaba.** Su tope de recorte eran 30 dB y el techo del que baja son 20:
+  por debajo de cero el codec ya no cambia, así que seguía dando cinco pasos
+  de 50 ms sin tocar nada antes de pasar al atenuador. Un cuarto de segundo
+  de intermodulación de regalo cada vez que entra una señal fuerte, que es
+  justo cuando duele.
+- **Los 84 dB del filtro del zoom no existen.** El comentario decía que
+  encadenar etapas multiplica el rechazo. No: cada etapa trabaja sobre lo ya
+  diezmado por la anterior, así que en el punto crítico la anterior está en
+  su banda de paso y no aporta. Medido: **28 dB en el borde, sea cual sea el
+  zoom** (2x, 4x y 8x dan lo mismo). No se arregla en esta versión —haría
+  falta un filtro más largo y eso cuesta interrupción—, pero el número
+  medido queda escrito para que nadie vuelva a creerse los 84.
+
+### What's new
+
+Four from the review that started with "signals where they shouldn't be".
+None of these had shown up yet: they were sitting in the code, waiting.
+
+- **Zoom was still allowed in wide FM.** The comment explained perfectly why
+  zoom cannot live with 512-sample blocks… and the guard asked about the
+  192 kHz checkbox, which is **zero** in wide FM even though the rate there
+  is 192 anyway. What decides is the rate, not the checkbox. And a fourth
+  place was missing entirely: **entering commercial FM with zoom on left it
+  on**.
+- **With zoom, the DC-line blanking erased the station you are listening
+  to.** Zoom re-mixes to the dial before decimating, so that window's centre
+  is the dial and not the oscillator: it blanked 234 Hz right on the
+  demodulation point — an AM carrier or a CW tone — while **leaving the
+  oscillator's own leakage uncovered**, showing up as a fixed carrier that
+  is not a station at all.
+- **The RF auto-gain spent 250 ms believing it was acting.** Its backoff
+  limit was 30 dB and the ceiling it backs off from is 20: below zero the
+  codec stops changing, so it kept taking five 50 ms steps that did nothing
+  before escalating to the attenuator. A quarter second of intermodulation
+  free of charge every time a strong signal arrives — exactly when it hurts.
+- **The zoom filter's 84 dB do not exist.** The comment claimed cascading
+  stages multiplies the rejection. It does not: each stage works on what the
+  previous one already decimated, so at the critical point the previous one
+  is in its passband and contributes nothing. Measured: **28 dB at the edge,
+  whatever the zoom** (2x, 4x and 8x all the same). Not fixed in this
+  release — that needs a longer filter and interrupt time we do not have —
+  but the measured number is now written down so nobody believes the 84
+  again.
+
+---
+
+## V5.93 · 2026-10-24
+
+### Qué cambia
+
+- **«SOBRECARGA» sale centrado en su pastilla.** Iba pegado a la izquierda
+  porque el ancho de la pastilla se calcula para lo que pone el mando, que
+  es más largo. Ahora se centra con lo que mide el texto de verdad — porque
+  «SOBRECARGA» y «OVERLOAD» no miden lo mismo.
+- **Y al comprobarlo me equivoqué yo.** Centré el texto, rehice el banco de
+  la franja de arriba, y salió **idéntico**: `deepsdr-ui/gfx2/` lleva una
+  copia de los ficheros de interfaz y es esa copia la que compilan los
+  bancos. Hasta ahí, cierto. Pero escribí que eso no lo vigilaba nadie y me
+  puse a hacer una red nueva — **y sí lo vigila**, desde hace meses y mejor
+  (54 ficheros, no 39). No saltó porque yo mismo había copiado el fichero a
+  mano antes de correr las comprobaciones. La red que hice se ha quitado:
+  era un duplicado peor del que ya había.
+- **Y el aviso de sobrecarga, que no se refrescaba.** Dos cosas, y la
+  primera era mía de esta misma tarde: el repintado de la franja sólo se
+  dispara «si la barra de S se ha movido», y eso valía mientras el aviso
+  dependiera del automático de radiofrecuencia. Al soltarlo de ahí, podía
+  encenderse y apagarse sin que nada lo pintara. La segunda: el plazo de
+  permanencia era de segundo y medio, y el recorte va **por sílabas** —
+  entre dos picos hay más de eso y el aviso se apagaba. Ahora **tres
+  segundos**, que es lo que hace falta para que no parpadee robándole la
+  pastilla a la lectura del mando.
+
+### What's new
+
+- **"OVERLOAD" is now centred in its pill.** It sat to the left because the
+  pill's width is sized for whatever the knob is showing, which is longer.
+  It is now centred on the text's measured width — because "SOBRECARGA" and
+  "OVERLOAD" are not the same width.
+- **And checking it, I was the one who got it wrong.** I centred the text,
+  rebuilt the top-strip bench, and it came out **identical**:
+  `deepsdr-ui/gfx2/` holds a copy of the interface files and it is that copy
+  the benches compile. True so far. But I wrote that nothing was guarding
+  it and set about writing a new net — **and something is**, for months, and
+  better (54 files, not 39). It did not fire because I had copied the file
+  by hand myself before running the checks. The net I wrote has been
+  removed: it was a worse duplicate of the one already there.
+- **And the overload warning, which did not refresh.** Two things, the first
+  of them mine from this same afternoon: the strip only repaints "if the S
+  bar moved", which held while the warning depended on the RF auto-gain.
+  Once it was cut loose from that, it could come and go with nothing
+  painting it. The second: the hold time was a second and a half, and
+  clipping goes **by syllables** — the gap between two peaks is longer than
+  that, so the warning kept dropping out. Now **three seconds**, which is
+  what it takes to stop it flickering and stealing the knob readout's pill.
+
+---
+
+## V5.92 · 2026-10-24
+
+### Qué cambia
+
+- **Las señales de otra banda que se te meten: ya se pueden identificar de
+  un vistazo.** Un armónico del oscilador y una imagen de I/Q se movían
+  igual en la pantalla y no había forma de distinguirlos. Sí la hay, y la
+  cuenta es de una línea: los dos osciladores van separados 90°, así que en
+  el armónico **n** esa separación vale **n × 90°**.
+
+  | lo que ves y oyes | lo que es |
+  |---|---|
+  | una copia, en su modo | emisora de verdad |
+  | una copia, en el modo contrario | imagen de I/Q, o armónico **impar** |
+  | **dos copias simétricas, una en USB y otra en LSB** | armónico **par**: otra banda metiéndose |
+
+  Con 180° (2.º armónico) I y Q quedan en contrafase: eso ya no es una señal
+  compleja sino **real**, y una señal real sale **dos veces**, una a cada
+  lado del centro, y la de abajo **con el espectro invertido**. Por eso una
+  de 20 m en USB se oye en 40 m en LSB sin tocar el modo.
+
+- **El avisador de armónicos tenía cuatro fallos y por eso no te lo decía.**
+  Buscaba en una ventana que **se encogía con el zoom de pantalla** (un
+  armónico entra por el mezclador y le da igual cómo mires tú); **ordenaba
+  al revés** —decía que el 2.º es el sospechoso principal, cuando el 3.º
+  está 20 dB por encima porque sale de la propia onda cuadrada y el 2.º sólo
+  existe por el error de ciclo de trabajo—; **no sabía que hay un filtro de
+  entrada**, así que nombraba bandas que el filtro rechaza; y calculaba el
+  desvío dos veces.
+
+- **La insignia de entrada saturada no se encendía nunca de fábrica.** El
+  detector de recorte funcionaba y el dato se tiraba: su único lector salía
+  por la puerta antes de leerlo cuando el automático de radiofrecuencia está
+  apagado, que es como viene. Con señales fuertes el convertidor recortaba,
+  aparecían productos por toda la pantalla y la radio no decía nada. Ahora
+  se avisa con el automático o sin él.
+
+- **Lo que no se puede, y se dice:** quitar el armónico. Entra por el
+  mezclador, delante del convertidor, y el filtro de entrada de 7 MHz es un
+  paso-bajo de 36 MHz: a 14 y a 21 MHz no les hace nada. Haría falta un
+  filtro de banda a la entrada, y eso es hardware.
+
+### What's new
+
+- **Signals from another band leaking in: now you can tell which is which at
+  a glance.** An oscillator harmonic and an I/Q image moved the same way on
+  screen and could not be told apart. They can, and it is one line of
+  arithmetic: the two oscillators sit 90° apart, so at harmonic **n** that
+  separation is **n × 90°**.
+
+  | what you see and hear | what it is |
+  |---|---|
+  | one copy, in its own mode | a real station |
+  | one copy, in the opposite mode | I/Q image, or an **odd** harmonic |
+  | **two symmetric copies, one USB and one LSB** | **even** harmonic: another band leaking in |
+
+  At 180° (2nd harmonic) I and Q are in antiphase: that is no longer a
+  complex signal but a **real** one, and a real signal appears **twice**,
+  one each side of centre, the lower one **spectrum-inverted**. That is why
+  a 20 m USB station is heard on 40 m in LSB without touching the mode.
+
+- **The harmonic warner had four faults, which is why it never said so.** It
+  searched a window that **shrank with the display zoom** (a harmonic comes
+  in through the mixer and does not care how closely you are looking); it
+  **ranked them backwards** — it called the 2nd the prime suspect, when the
+  3rd is 20 dB above it because it comes from the square wave itself while
+  the 2nd exists only through duty-cycle error; it **did not know there is
+  an input filter**, so it named bands the filter rejects; and it computed
+  the offset twice.
+
+- **The input-overload badge never lit with the factory settings.** The clip
+  detector worked and the measurement was thrown away: its only reader
+  returned early when the RF auto-gain is off, which is how it ships. With
+  strong signals the converter clipped, products appeared all over the
+  screen, and the radio said nothing. Now it warns either way.
+
+- **What is not possible, said plainly:** removing the harmonic. It enters
+  through the mixer, ahead of the converter, and the input filter for 7 MHz
+  is a 36 MHz low-pass: it does nothing at 14 or 21 MHz. That needs a
+  band-pass filter at the input, and that is hardware.
+
+---
+
+## V5.91 · 2026-10-24
+
+### Qué cambia
+
+- **El corrector de espejo era quien metía el espejo.** Medido, con un
+  desequilibrio de hardware conocido y sólo cambiando lo que hay en el
+  aire:
+
+  | lo que hay en el aire | corrector apagado | corrector puesto |
+  |---|---|---|
+  | dos emisoras, una enfrente de otra | 20,2 dB | **10,3 dB** |
+  | una banda a medias (una pareja) | 20,2 dB | **13,5 dB** |
+  | la banda llena (tres parejas) | 20,2 dB | **12,3 dB** |
+
+- **Por qué.** El estimador se apoya en que `E[I·Q]` y `E[I²]−E[Q²]` valen
+  cero si I y Q están bien. Eso es cierto con una emisora, pero **dos
+  emisoras de verdad colocadas simétricamente respecto al oscilador dejan
+  exactamente la misma huella que un desequilibrio**: el producto cruzado
+  de las dos no gira y deja un término constante. El corrector se lo creía
+  y aplicaba una ganancia y una fase que no existen.
+- **No es de los 40 metros ni de los 192 kHz.** Dos emisoras bastan, y son
+  el caso peor. En 40 m se ve siempre —aficionados de un lado,
+  radiodifusión del otro, el oscilador en medio— pero en 20 m, en 31 m o
+  en onda media de noche pasa igual en cuanto se junten dos.
+- **Lo que se ha puesto.** Una guarda que reconoce un número imposible: si
+  lo medido implica un espejo peor de 21 dB, eso no puede ser el
+  desequilibrio de un receptor en cuadratura, así que **no se actualiza
+  nada y el corrector se queda con lo último bueno**. Donde sí hay
+  desequilibrio de verdad sigue trabajando igual (78 dB en el caso plano,
+  22 → 38 en el de pendiente).
+- **Tres más de la misma zona.** El calibrador del filtro daba por buena
+  una pareja con sólo 6 dB de diferencia —imposible en este aparato, que
+  en lo peor da 22—; miraba también la ventana del **zoom**, que va
+  remezclada al dial y diezmada, o sea que emparejaba emisoras que no
+  tienen nada que ver; y el reinicio de sus coeficientes al cambiar de
+  tasa **estaba escrito y no lo llamaba nadie**, con lo que al pasar de 96
+  a 192 seguían puestos en la frecuencia equivocada.
+
+### What's new
+
+- **The image corrector was the one putting the image there.** Measured,
+  with a known hardware imbalance and only changing what is on the air:
+
+  | what is on the air | corrector off | corrector on |
+  |---|---|---|
+  | two stations, one facing the other | 20.2 dB | **10.3 dB** |
+  | a half-full band (one pair) | 20.2 dB | **13.5 dB** |
+  | the full band (three pairs) | 20.2 dB | **12.3 dB** |
+
+- **Why.** The estimator relies on `E[I·Q]` and `E[I²]−E[Q²]` being zero
+  when I and Q are right. That holds for one carrier, but **two real
+  stations placed symmetrically about the oscillator leave exactly the
+  same signature as an imbalance**: their cross product does not rotate
+  and leaves a constant term. The corrector believed it and applied a gain
+  and a phase that do not exist.
+- **It is not a 40 m thing, nor a 192 kHz thing.** Two stations are
+  enough, and they are the worst case. On 40 m it shows all the time — ham
+  band one side, broadcast the other, the oscillator in between — but on
+  20 m, on 31 m or on medium wave at night it happens the moment two line
+  up.
+- **What went in.** A guard that recognises an impossible number: if what
+  is measured implies an image worse than 21 dB, that cannot be the
+  imbalance of a quadrature receiver, so **nothing is updated and the
+  corrector keeps the last good value**. Where there really is an
+  imbalance it works exactly as before (78 dB in the flat case, 22 → 38 in
+  the sloped one).
+- **Three more in the same area.** The filter's calibrator accepted a pair
+  only 6 dB apart — impossible in this radio, whose worst is 22; it also
+  looked at the **zoom** window, which is re-mixed to the dial and
+  decimated, so it paired up stations with nothing to do with each other;
+  and the reset of its coefficients on a rate change **was written and
+  nobody called it**, so going from 96 to 192 left them placed at the
+  wrong frequency.
+
+---
+
+## V5.90 · 2026-10-24
+
+### Qué cambia
+
+- **Revisión a fondo de los 192 kHz: ocho fallos, todos arreglados.** Tres
+  pasadas sobre todo lo que toca la tasa doble; la primera sacó ocho, la
+  segunda y la tercera ninguno.
+- **Lo que se nota al usarla.** La cascada iba lenta porque los rótulos de
+  emisora preguntaban a la flash en **cada clic del mando** —unas catorce
+  mil lecturas por segundo a 192 kHz—; ahora la lista de candidatas se
+  guarda y girar dentro del mismo rango no pregunta nada. Arrancar con el
+  zoom guardado en 2x o 4x y la tasa doble dejaba el zoom puesto sobre
+  bloques que no son los suyos: basura con forma de espectro. Y la pantalla
+  copiaba 512 muestras para una FFT que lee 256.
+- **Lo que no se oía pero estaba.** El reparto del desplazamiento se
+  escribía desde el bucle principal y se leía desde la interrupción: si caía
+  entre las dos escrituras, un bloque entero sonaba 48 kHz movido —un
+  chasquido—. El audio por USB anunciaba 96 kHz mientras entregaba 192, así
+  que lo grabado salía a mitad de velocidad. Y el vigilante que baja sola la
+  tasa si la radio se ahoga contaba vueltas del bucle en vez de
+  milisegundos: tardaba nueve segundos en vez de medio, y cuanto más se
+  ahogaba, más tardaba.
+- **Dos más, de arranque.** Un fichero de ajustes con la tasa guardada pero
+  sin el modo dejaba el codec a 96 kHz con todo lo demás calculado para 192.
+  Y cambiar de modo borraba la memoria del diezmador aunque la tasa no
+  cambiara.
+
+### What's new
+
+- **Deep review of the 192 kHz path: eight faults, all fixed.** Three passes
+  over everything the double rate touches; the first found eight, the second
+  and third none.
+- **What you notice while using it.** The waterfall was slow because the
+  station labels queried the flash on **every click of the knob** — around
+  fourteen thousand reads a second at 192 kHz; the candidate list is now
+  kept, and turning within the same range asks nothing. Booting with the
+  zoom saved at 2x or 4x and the double rate left the zoom engaged over
+  blocks that are not its own: rubbish shaped like a spectrum. And the
+  display copied 512 samples for an FFT that reads 256.
+- **What you could not hear but was there.** The offset split was written
+  from the main loop and read from the interrupt: if it landed between the
+  two writes, a whole block played 48 kHz off — a click. USB audio announced
+  96 kHz while delivering 192, so recordings came out at half speed. And the
+  watchdog that drops the rate if the radio chokes counted loop passes
+  instead of milliseconds: nine seconds instead of half a one, and the more
+  it choked, the longer it took.
+- **Two more, at boot.** A settings file with the rate saved but not the mode
+  left the codec at 96 kHz with everything else computed for 192. And
+  changing mode wiped the decimator's history even when the rate did not
+  change.
+
+---
+
+## V5.89 · 2026-10-24
+
+### Qué cambia
+
+- **El NCO ya alcanza los dos lados del oscilador.** Hasta ahora sólo
+  admitía distancias POSITIVAS: como el oscilador se queda en el centro
+  de lo que se ve, el NCO cubría del centro al borde derecho y **la mitad
+  izquierda de la pantalla no era suya**. Bajando, saltaba al llegar al
+  centro. Una distancia negativa no tiene nada de malo —significa que el
+  oscilador está por encima de lo que escuchas, y a un receptor en
+  cuadratura eso le da igual—, así que lo que se exige ahora es el valor
+  absoluto.
+- **Lo que se gana, medido:** **84 kHz seguidos sin que la imagen se
+  mueva, a cada lado del centro**. Antes eran 34 y sólo por la derecha.
+- **Lo que no se puede, y se dice:** que los 192 kHz sean un solo tramo.
+  La señal no puede sentarse encima del propio oscilador —ahí se le pega
+  su fuga— así que cruzar el centro obliga a moverlo una vez. Es un salto
+  pequeño, de once kilohercios, y en un sitio predecible. Y quedan seis
+  kilohercios en cada borde de la pantalla por el mismo motivo.
+
+### What's new
+
+- **The NCO now reaches both sides of the oscillator.** Until now it only
+  accepted POSITIVE offsets: since the oscillator sits at the centre of
+  what you see, the NCO covered centre to right edge and **the left half
+  of the screen was never its own**. Tuning down, it jumped on reaching
+  the centre. A negative offset is not wrong — it means the oscillator is
+  above what you are listening to, and a quadrature receiver does not
+  care — so what is required now is the absolute value.
+- **What that buys, measured:** **84 kHz in a row with the picture
+  standing still, on each side of the centre**. It was 34, and only to
+  the right.
+- **What is not possible, said plainly:** making all 192 kHz one single
+  stretch. The signal cannot sit on top of the oscillator itself — its
+  leakage lands right there — so crossing the centre forces one move. It
+  is a small jump, eleven kilohertz, in a predictable place. And six
+  kilohertz remain at each edge of the screen for the same reason.
+
+---
+
+## V5.88 · 2026-10-24
+
+### Qué cambia
+
+- **La FM comercial pintaba las señales y no daba audio.** Y era mío. El
+  conmutador que decide qué camino corre en la interrupción —el de FM
+  ancha o el de todo lo demás— sólo se tocaba **si cambiaba la tasa de
+  muestreo**. Durante meses eso bastó, porque la FM ancha era el único
+  modo a 192 kHz. En cuanto dejé elegir 192 kHz para los demás, pasar de
+  banda lateral a FM dejó de cambiar la tasa, el conmutador no se tocaba,
+  y la radio seguía corriendo el camino de banda lateral sobre una señal
+  de FM. El espectro se pinta aparte, así que seguía viéndose: por eso el
+  fallo no se parecía a lo que era. Ahora el conmutador sigue al modo y a
+  nada más.
+- **El NCO ya recorre toda la pantalla a 192 kHz.** Alcanzaba 40 kHz de
+  los 96 que hay a cada lado, así que a mitad de camino había que mover el
+  oscilador y saltaba la imagen entera. El desplazamiento se parte ahora
+  en un giro grueso —en cuartos de vuelta, sin una sola multiplicación, y
+  antes del diezmador— más el fino de siempre. El alcance pasa de 40 a
+  90 kHz y la pantalla se queda quieta.
+- **Tres redes nuevas**, porque los fallos de estos dos días los ha
+  encontrado el usuario y no las pruebas: una recorre **todos los modos a
+  todas las tasas** exigiendo que cada uno entregue audio y las muestras
+  que el altavoz pide; otra comprueba que el conmutador del demodulador no
+  esté dentro de ninguna condición; y la tercera, que toda clave de ajustes
+  tenga quien la escriba y quien la lea.
+
+### What's new
+
+- **Commercial FM drew the signals and gave no audio.** And it was mine.
+  The switch that picks which path runs in the interrupt — wide FM or
+  everything else — was only touched **if the sample rate changed**. For
+  months that was enough, because wide FM was the only mode at 192 kHz.
+  Once I let the other modes pick 192 kHz, going from sideband to FM
+  stopped changing the rate, the switch was never touched, and the radio
+  kept running the sideband path over an FM signal. The spectrum is drawn
+  separately, so it still appeared: that is why the fault did not look
+  like what it was. The switch now follows the mode and nothing else.
+- **The NCO now covers the whole screen at 192 kHz.** It reached 40 kHz of
+  the 96 on each side, so halfway across you had to move the oscillator
+  and the whole picture jumped. The offset is now split into a coarse
+  rotation — in quarter turns, without a single multiply, ahead of the
+  decimator — plus the usual fine one. Reach goes from 40 to 90 kHz and
+  the picture stays still.
+- **Three new nets**, because the faults of these two days were found by
+  the user and not by the tests: one runs **every mode at every rate**,
+  requiring each to deliver audio and exactly the samples the speaker
+  asks for; another checks the demodulator switch is not inside any
+  condition; the third, that every settings key has someone writing it
+  and someone reading it.
+
+---
+
+## V5.87 · 2026-10-24
+
+### Qué cambia
+
+- **El ancho del filtro de CW ya se guarda al apagar.** El mando lo afina
+  de 100 a 800 Hz de cincuenta en cincuenta, pero ese número **no estaba
+  en `CONFIG.CSV`**: al encender se sacaba del selector de ancho de audio,
+  que sólo tiene tres posiciones, así que cualquier valor afinado a mano
+  se perdía. Y el fichero sí se reescribía —la rama del mando marcaba los
+  ajustes como sucios—, que es justo lo que hacía que no se notara: por
+  fuera todo cuadraba.
+- **Y una red para que no vuelva a pasar.** Hay una comprobación nueva que
+  verifica, en cada compilación, que toda clave de `CONFIG.CSV` tenga
+  quien la escriba y quien la lea. Es el mismo fallo que el interruptor
+  de la reducción de ruido del 01/10, y van dos.
+- **Revisado el NCO de sintonía a 192 kHz**, pedido. Funciona igual que a
+  96: medido en el simulador, idéntico hasta su tope dentro de 0,01 dB.
+  Lo que conviene saber es que ese tope son 40 kHz en las dos tasas, así
+  que a 192 kHz cubre el 42 % de lo que se ve; más allá, sintonizar mueve
+  el oscilador, como sin NCO. No es un fallo: es el filtro que hay delante
+  de la mezcla.
+- **Medido también el reductor de ruido a las dos tasas**, por el aviso de
+  que a 192 parecía reducir menos: la diferencia es de 0,05 dB. El camino
+  de 192 kHz no le cambia nada de lo que ve.
+
+### What's new
+
+- **The CW filter width is now saved on power-off.** The knob tunes it
+  from 100 to 800 Hz in 50 Hz steps, but that number **was not in
+  `CONFIG.CSV`**: at boot it came from the audio-width selector, which has
+  only three positions, so any hand-tuned value was lost. And the file was
+  being rewritten — the knob's branch did mark the settings dirty — which
+  is exactly what kept this hidden: from the outside everything added up.
+- **And a net so it does not happen again.** A new check verifies, on
+  every build, that every `CONFIG.CSV` key has someone writing it and
+  someone reading it. This is the same fault as the noise-reduction
+  switch on 01/10, and that makes two.
+- **The tuning NCO reviewed at 192 kHz**, as asked. It behaves exactly as
+  at 96: measured in the simulator, identical up to its limit within
+  0.01 dB. What is worth knowing is that the limit is 40 kHz at both
+  rates, so at 192 kHz it covers 42 % of what you see; beyond that,
+  tuning moves the oscillator, as it does without the NCO. Not a fault:
+  it is the filter sitting ahead of the mixer.
+- **The noise reduction measured at both rates too**, after the report
+  that it seemed to reduce less at 192: the difference is 0.05 dB. The
+  192 kHz path changes nothing about what it sees.
+
+---
+
+## V5.86 · 2026-10-24
+
+### Qué cambia
+
+- **Menos trabajo en el camino de 192 kHz.** El filtro que vuelve a subir
+  el audio tenía 35 tomas y le sobraban 28: lo que sube es audio de
+  6 kHz, no radiofrecuencia, así que con 7 tomas se queda la copia no
+  deseada 78 dB abajo. Medido en el ordenador, ese filtro pasa de 5.280 a
+  1.853 ns por bloque. El que baja la señal también adelgaza: de 4.005 a
+  3.507. Entre los dos, **la mitad del trabajo que añadían los 192 kHz**.
+- **Los nombres de las emisoras ya no se amontonan a la izquierda.** La
+  consulta a la base se quedaba con las 28 de menos frecuencia cuando no
+  cabían todas. En 96 kHz casi nunca pasa; en 192 la ventana es el doble
+  y sí: barriendo la base entera y las 24 horas, la ventana más llena
+  tiene 39 emisoras en antena, y había 48 ventanas donde el tercio
+  derecho de la pantalla se quedaba sin un solo nombre. Ahora se pregunta
+  por mitades cuando hace falta.
+- **Y los 192 kHz siguen costando lo que cuestan.** Medido en la radio:
+  61 % de carga de audio contra 46 % a 96 kHz, con la vuelta del bucle en
+  45 ms en vez de 22. Esta versión recorta parte de esa diferencia, no
+  toda: procesar el doble de muestras cuesta el doble, y lo que se lleva
+  la interrupción se lo quita a quien pinta la cascada. **El reductor de
+  ruido son 10 de esos puntos**: apagarlo a 192 kHz devuelve más que
+  todo lo que optimiza esta versión.
+
+### What's new
+
+- **Less work on the 192 kHz path.** The filter that brings the audio
+  back up had 35 taps and needed 7: what goes up is 6 kHz of audio, not
+  radio frequency, so 7 taps already leave the unwanted copy 78 dB down.
+  Measured on the host, that filter drops from 5,280 to 1,853 ns per
+  block. The one on the way down gets leaner too: 4,005 to 3,507.
+  Together, **half the work 192 kHz was adding**.
+- **Station names no longer bunch up on the left.** The database query
+  kept the 28 lowest in frequency when they did not all fit. At 96 kHz
+  that almost never happens; at 192 the window is twice as wide and it
+  does: sweeping the whole database over 24 hours, the busiest window has
+  39 stations on air, and there were 48 windows where the right third of
+  the screen got no name at all. It now asks in halves when needed.
+- **And 192 kHz still costs what it costs.** Measured on the radio: 61 %
+  audio load against 46 % at 96 kHz, with the main loop at 45 ms instead
+  of 22. This release claws back part of that gap, not all of it:
+  processing twice the samples costs twice as much, and what the
+  interrupt takes comes out of whoever draws the waterfall. **The noise
+  reduction is 10 of those points**: turning it off at 192 kHz gives back
+  more than everything this release optimises.
+
+---
+
+## V5.85 · 2026-10-24
+
+### Qué cambia
+
+- **Arreglado lo de ayer: a 192 kHz el audio salía roto y la radio iba a
+  rastras.** El convertidor de entrada y el de salida cuelgan del mismo
+  reloj, así que al poner la entrada a 192 kHz el altavoz pasa a pedir el
+  doble de muestras por bloque —y el demodulador seguía dando la mitad,
+  porque detrás del nuevo filtro todo sigue a 96. La mitad de cada bloque
+  de audio era memoria de más allá del final del buffer. Ahora el audio
+  vuelve a subir a 192 kHz antes de salir, con el mismo filtro al revés.
+- **El diezmador iba tres veces más lento de lo que debía.** Estaba
+  escrito con una comprobación de límites por cada muestra que leía
+  —diecinueve por cada muestra de salida—, y lo que costaba no eran las
+  multiplicaciones sino los saltos. Reescrito: el 87 % de las muestras
+  salen ahora de un bucle sin una sola bifurcación.
+- **Y una red, por si acaso:** si a 192 kHz el bloque de audio se pasa
+  del 90 % de su tiempo durante medio segundo seguido, la radio vuelve
+  sola a 96 kHz y lo dice en pantalla. Una tasa que no quepa ya no puede
+  estropearte la sesión.
+- **El altavoz ya no acepta un bloque de longitud desconocida.** La
+  función que entrega el audio al conversor copiaba lo que ella creía que
+  medía un bloque, sin que nadie le dijera lo que traía de verdad. Esa
+  pareja se ha desalineado dos veces en la vida de este firmware, y las
+  dos el síntoma fue audio sucio. Ahora quien entrega dice cuántas
+  muestras trae, y si no cuadran sale silencio y un aviso por el puerto
+  serie en vez de lo que hubiera detrás.
+
+### What's new
+
+- **Fix for yesterday: at 192 kHz the audio came out broken and the radio
+  crawled.** The input and output converters hang off the same clock, so
+  setting the input to 192 kHz makes the speaker ask for twice as many
+  samples per block — and the demodulator was still producing half,
+  because behind the new filter everything still runs at 96. Half of
+  every audio block was memory past the end of the buffer. The audio is
+  now brought back up to 192 kHz before it leaves, with the same filter
+  run backwards.
+- **The decimator was three times slower than it had any right to be.**
+  It was written with a bounds check on every sample it read — nineteen
+  per output sample — and the cost was not the multiplies, it was the
+  branches. Rewritten: 87 % of the samples now come out of a loop with no
+  branch in it at all.
+- **And a safety net:** if at 192 kHz the audio block goes over 90 % of
+  its time budget for half a second straight, the radio drops back to
+  96 kHz by itself and says so on screen. A rate that does not fit can no
+  longer ruin your session.
+- **The speaker no longer accepts a block of unknown length.** The
+  function that hands audio to the converter used to copy whatever it
+  believed a block was, with no word from the caller about what had
+  actually been handed over. That pair has drifted apart twice in this
+  firmware's life, and both times the symptom was dirty audio. Now the
+  caller states how many samples it brings, and if the two disagree the
+  output is silence plus a warning on the serial port instead of whatever
+  sat behind the buffer.
+
+---
+
+## V5.84 · 2026-10-23
+
+### Qué cambia
+
+- **El espectro puede verse al doble de ancho: 192 kHz.** La casilla
+  **Ajustes → Equipo → Muestreo** tenía dos posiciones —48 y 96 kHz— y
+  ahora tiene tres. Con 192 kHz puestos el panadaptador y la cascada
+  enseñan 192 kHz de banda de una vez, y se sigue sintonizando en todo lo
+  que se ve: tocar el espectro mueve el oscilador igual que siempre.
+- **El audio sigue trabajando a 96 kHz, a propósito.** Lo que entra al
+  doble lo diezma a la mitad un filtro justo al principio de la cadena,
+  así que el filtro de canal, el Hilbert, la reducción de ruido y los
+  quince decodificadores siguen siendo exactamente los de antes. Correr
+  toda la cadena al doble no cabía en el procesador: lo último medido en
+  la radio fueron 46 % de carga de audio.
+- **Qué cuesta, y cómo verlo tú mismo** en vez de creerte una
+  estimación: **Ajustes → Equipo → Información → «Carga de audio»**, una
+  vez a 96 kHz y otra a 192. La cuenta de esa fila ya sabe que a 192 kHz
+  el bloque es el doble de largo, así que el tanto por ciento sigue
+  significando lo mismo.
+- **Lo que NO hace, dicho aquí y no escondido:**
+  - el **zoom se queda en 1×** mientras estén puestos los 192 kHz. Su
+    camino lleva sus propios diezmadores montados para el bloque corto, y
+    darles medio bloque ensuciaría la ventana en vez de estrecharla. Para
+    acercarse, la casilla Muestreo vuelve a 96.
+  - la **resolución es la mitad**: los mismos 256 puntos de FFT repartidos
+    entre el doble de banda. Se ve el doble de ancho con el doble de
+    grano.
+  - y el ancho que llega al **demodulador** sigue siendo de 96 kHz: se ve
+    el doble, se oye lo de siempre.
+- No se queda puesto de fábrica, y se guarda en `CONFIG.CSV` en el mismo
+  campo de siempre: un fichero de una versión anterior se lee igual que
+  antes.
+
+### What's new
+
+- **The spectrum can now be twice as wide: 192 kHz.** The **Settings →
+  Device → Sampling** tile had two positions — 48 and 96 kHz — and now has
+  three. With 192 kHz selected the panadapter and the waterfall show
+  192 kHz of band at once, and you still tune anywhere you can see:
+  tapping the spectrum moves the oscillator exactly as before.
+- **The audio still runs at 96 kHz, on purpose.** What comes in at double
+  rate is halved by a filter right at the head of the chain, so the
+  channel filter, the Hilbert, the noise reduction and the fifteen
+  decoders are exactly the ones you already had. Running the whole chain
+  at double rate did not fit in the processor: the last figure measured on
+  the radio was 46 % audio load.
+- **What it costs, and how to see it yourself** instead of taking an
+  estimate on trust: **Settings → Device → Information → "Audio load"**,
+  once at 96 kHz and once at 192. That row's arithmetic already knows the
+  block is twice as long at 192 kHz, so the percentage still means the
+  same thing.
+- **What it does NOT do, said here and not buried:**
+  - **zoom stays at 1×** while 192 kHz is selected. Its path carries its
+    own decimators built for the short block, and feeding them half a
+    block would dirty the window rather than narrow it. To zoom in, set
+    Sampling back to 96.
+  - **resolution is halved**: the same 256 FFT points spread over twice
+    the band. Twice as wide, twice as coarse.
+  - and the width reaching the **demodulator** is still 96 kHz: you see
+    twice as much, you hear the same as before.
+- It is not on by default, and it is stored in `CONFIG.CSV` in the same
+  field as always: a file from an earlier version reads exactly as it did.
+
+---
+
+## V5.83 · 2026-10-23
+
+### Qué cambia
+
+- **La lista de FT8 se sube con el dedo.** El panel enseña quince
+  renglones y la lista guardaba dieciséis: lo que entraba por abajo
+  empujaba lo de arriba y no había forma de volver a mirarlo. Ahora se
+  arrastra el cuerpo del panel hacia abajo y aparecen los mensajes
+  viejos, igual que una lista de teléfono. Soltar no hace falta: en
+  cuanto el dedo vuelve abajo del todo, la lista se queda otra vez
+  pegada a lo nuevo.
+- **Y guarda cuarenta y ocho en vez de dieciséis.** Son unas tres
+  pantallas de historial: entre cuarenta segundos con la banda abierta y
+  dos minutos y medio con la banda floja. El mapa se llena del triple,
+  porque los puntos y los indicativos salen de esta misma lista.
+- **Con la lista subida, lo que estás leyendo no se mueve.** Los mensajes
+  nuevos siguen entrando por abajo, pero la ventana se queda sobre los
+  mismos renglones en vez de resbalar uno por cada mensaje. Con el filtro
+  de «sólo CQ» puesto sólo empujan los que se enseñan.
+- Tocar el filtro de CQ o «Borrar» devuelve la lista al final, que es
+  donde se espera encontrarla después de pedir ver otra cosa.
+
+### What's new
+
+- **The FT8 list now scrolls with your finger.** The panel shows fifteen
+  rows and the list only kept sixteen: whatever came in at the bottom
+  pushed the top out and there was no way to look at it again. Drag the
+  body of the panel downwards and the older messages appear, the same as
+  any phone list. There is nothing to release: as soon as your finger
+  brings it back to the bottom, the list sticks to the newest again.
+- **And it keeps forty-eight instead of sixteen.** That is about three
+  screens of history — from forty seconds on a busy band to two and a
+  half minutes on a quiet one. The map fills up three times as much,
+  because its dots and callsigns come from this same list.
+- **While scrolled up, what you are reading stays put.** New messages
+  keep arriving at the bottom, but the window stays on the same rows
+  instead of sliding one row per message. With the "CQ only" filter on,
+  only the messages actually shown push it.
+- Tapping the CQ filter or "Clear" takes the list back to the end, which
+  is where you expect it after asking to see something else.
+
+---
+
+## V5.82 · 2026-10-23
+
+### Qué cambia
+
+- **FT8 dejaba de decodificar para siempre si salías del modo mientras
+  estaba decodificando.** Decodificar ocupa entre uno y cinco segundos de
+  cada quince, así que cambiar de modo justo ahí no es raro. La captura se
+  quedaba «desviada» —un estado interno que sobrevive al cambio de modo— y
+  al volver a entrar en FT8 la ranura no se llenaba nunca: ni un mensaje
+  más hasta apagar la radio. **Éste es el gordo de esta revisión.**
+- **Dos mensajes distintos podían contar como uno.** El quitado de
+  repetidos usaba el CRC de catorce bits que trae la biblioteca —ella misma
+  lo marca como provisional— y con veinte mensajes en una ranura hay un uno
+  por ciento de que dos coincidan: el segundo se tiraba. Ahora la huella
+  sale de los 77 bits del mensaje. Hay dos CQ corrientes que lo
+  demuestran, y están en el banco.
+- **Con el bucle principal atrasado, dos trozos de audio entraban
+  cambiados de orden.** El remuestreador usa dos buffers y se vaciaban por
+  número, no por antigüedad.
+- **La cola de mensajes pasa de 20 a 40 y la lista de 16 a 32.** Una ranura
+  de banda abierta da hasta 21 mensajes —medido—, y lo que no cabía en la
+  cola se contaba en el total pero no aparecía en pantalla. Las 32 líneas
+  además **llenan el mapa**: los puntos y los indicativos salen de esa misma
+  lista.
+- **El margen de dB ya sale en pantalla.** Dos ficheros mandaban mirarlo
+  «en la chapa» y no se pintaba en ningún sitio. Aparece cuando no hay
+  ningún candidato, que es cuando dice algo: dB planos es que no llega
+  nada o cae fuera de la ventana; dB vivos es que hay señal pero no es FT8.
+- **Y la respuesta a «decodifica menos de lo que entra», con número.**
+  Hay un banco nuevo que mete una ranura de FT8 completa por un lado y
+  cuenta los mensajes por el otro. Con veinticinco estaciones repartidas de
+  300 a 2.700 Hz se leen **trece**: todas las de debajo de 1.500 Hz y
+  ninguna por encima. No es un fallo escondido —la ventana son 1.600 Hz por
+  memoria, y la pantalla pinta la raya— pero ahora está medido. Dentro de
+  la ventana se lee el **84 %** de lo que entra.
+
+### What's new
+
+- **FT8 stopped decoding for good if you left the mode while it was
+  decoding.** Decoding takes one to five seconds out of every fifteen, so
+  switching modes right then is not unusual. The capture stayed "diverted"
+  — an internal state that survives a mode change — and on re-entering FT8
+  the slot never filled again: not one more message until a power cycle.
+  **This is the big one in this revision.**
+- **Two different messages could count as one.** Duplicate removal used the
+  library's 14-bit CRC — which the library itself marks as provisional —
+  and with twenty messages in a slot there is a one percent chance two
+  collide: the second was thrown away. The fingerprint now comes from the
+  message's own 77 bits. Two ordinary CQs that prove it are in the bench.
+- **With the main loop running behind, two chunks of audio went in out of
+  order.** The resampler uses two buffers and they were drained by index,
+  not by age.
+- **The message queue goes from 20 to 40 and the list from 16 to 32.** One
+  busy slot yields up to 21 messages — measured — and anything beyond the
+  queue was counted in the total but never shown. The 32 lines also **fill
+  the map**: dots and callsigns come from that same list.
+- **The dB range is now on screen.** Two files told you to check it "on the
+  badge" and it was painted nowhere. It appears when there are no
+  candidates, which is when it says something: flat dB means nothing is
+  arriving or it falls outside the window; live dB means there is signal
+  but it is not FT8.
+- **And the answer to "it decodes less than what comes in", with a
+  number.** A new bench feeds a whole FT8 slot in one end and counts
+  messages at the other. With twenty-five stations spread from 300 to
+  2,700 Hz it reads **thirteen**: every one below 1,500 Hz and none above.
+  It is not a hidden fault — the window is 1,600 Hz for memory reasons, and
+  the screen draws the line — but now it is measured. Inside the window,
+  **84 %** of what comes in is read.
+
+---
+
+## V5.81 · 2026-10-23
+
+### Qué cambia
+
+- **Al salir del decodificador de CW con el botón «Modo» ya no sale media
+  pantalla de cada una.** Avisado por un probador: el espectro arriba, la
+  chapa de los ppm en medio, dos pestañas sueltas de la rejilla de modos
+  por la izquierda, y así se quedaba hasta volver a pulsar.
+- **Era un problema de orden, no de dibujo.** La vuelta del bucle miraba
+  el táctil *después* de decidir qué iba a pintar, así que el toque abría
+  la rejilla de modos —y la pintaba entera— y acto seguido el reparto de
+  esa misma vuelta, con la foto vieja en la mano, pintaba el panel digital
+  por encima. Ahora se toca, se mira cómo ha quedado la radio, y entonces
+  se dibuja.
+- **Y no se curaba solo**, que es lo que lo hacía visible: en la vuelta
+  siguiente la radio ya sabe que hay un menú abierto y entonces no repinta
+  nadie. Pasaba en cualquier modo digital; en CW es donde se vio.
+- **Una comprobación nueva que vigila ese orden** (`tools/orden_check.py`),
+  porque las tres partes de la vuelta están a doscientas líneas unas de
+  otras y volver a cruzarlas no se ve leyendo.
+
+### What's new
+
+- **Leaving the CW decoder with the "Mode" button no longer leaves half of
+  each screen on display.** Reported by a tester: the spectrum on top, the
+  ppm badge in the middle, two stray tabs of the mode grid on the left —
+  and it stayed that way until the button was pressed again.
+- **It was an ordering problem, not a drawing one.** The main loop read the
+  touch panel *after* deciding what to paint, so the tap opened the mode
+  grid, painted it in full, and then that same pass — working from the
+  stale snapshot — painted the digital panel over it. Now it reads the
+  touch, looks at how the radio ended up, and only then draws.
+- **And it did not heal by itself**, which is what made it visible: on the
+  next pass the radio knows a menu is open, so nobody repaints. It affected
+  every digital mode; CW is where it showed up.
+- **A new check guards that order** (`tools/orden_check.py`), because the
+  three parts of the pass sit two hundred lines apart and crossing them
+  again is not something you catch by reading.
+
+---
+
+## V5.80 · 2026-10-23
+
+### Qué cambia
+
+- **El mapa de FT8 ya enseña el indicativo de todas las estaciones con
+  localizador, no sólo de las que llaman CQ.** Avisado por un usuario del
+  repositorio con una foto que no deja lugar a dudas: la lista traía
+  **siete** estaciones con localizador y el mapa enseñaba **un** nombre.
+  El botón de CQ manda ahora también sobre las etiquetas: encendido, sólo
+  los CQ; apagado, todas las que tengan dónde pintarse.
+- **Y no, una respuesta no es rara: es lo normal.** El segundo mensaje de
+  un ciclo de FT8 es «LLAMADO QUIENCONTESTA LOCALIZADOR», así que trae
+  localizador igual que un CQ. De las siete de aquella foto, seis eran
+  respuestas. El nombre que sale es el del que **transmite** —el segundo
+  indicativo—, no el del llamado.
+- **Y ahora hay una sola pregunta y no tres.** El botón decide lo que se
+  ve en tres sitios —la lista, los puntos y las etiquetas— y cada uno se
+  lo preguntaba por su cuenta: los puntos se quedaron fuera el 13/10 y las
+  etiquetas hasta hoy. Las tres pasan por la misma función.
+
+### What's new
+
+- **The FT8 map now labels every station that has a locator, not just
+  those calling CQ.** Reported by a user of the repository with a photo
+  that leaves no room for doubt: the list held **seven** stations with a
+  locator and the map showed **one** name. The CQ button now governs the
+  labels too: on, CQ only; off, everything that has somewhere to be drawn.
+- **And no, a reply carrying a locator is not rare — it is the norm.** The
+  second message of an FT8 cycle is "CALLED ANSWERING LOCATOR", so it
+  carries a grid just like a CQ. Six of the seven in that photo were
+  replies. The name shown is the **transmitting** station — the second
+  callsign — not the one being called.
+- **And there is now one question instead of three.** The button decides
+  what is shown in three places — list, dots and labels — and each asked
+  on its own: the dots were left out on 13/10 and the labels until today.
+  All three now go through the same function.
+
+## V5.79 · 2026-10-23
+
+### Qué cambia
+
+- **El botón Func sale del modo «elegir» tocándolo otra vez.** Avisado por
+  un usuario del repositorio: entrar sin querer te dejaba dentro, porque la
+  única salida era elegir un ajuste —o sea enganchar algo que no querías
+  para después soltarlo—. Func tiene tres estados y sólo dos tenían salida:
+  suelto abre, con algo enganchado suelta, y el de en medio no hacía nada.
+  Ahora cierra, y acaba exactamente igual que salir por el botón Ajustes.
+- **Y un guardián nuevo para que no vuelva a pasar.** Que los dos estados
+  simétricos estuvieran hechos es lo que hacía que el código pareciera
+  completo leyéndolo. `tools/func_check.py` lee el manejador y exige los
+  tres.
+
+### What's new
+
+- **The Func button now leaves "pick a setting" mode when you tap it
+  again.** Reported by a user of the repository: entering it by accident
+  left you stuck, because the only way out was to pick a setting — that
+  is, to hook something you did not want just to unhook it. Func has three
+  states and only two had an exit: idle opens, hooked releases, and the
+  middle one did nothing. It now closes, ending exactly where leaving via
+  the Settings button does.
+- **And a new guardian so it cannot happen again.** The two symmetric
+  states being present is what made the code look complete when read.
+  `tools/func_check.py` reads the handler and demands all three.
+
+## V5.78 · 2026-10-22
+
+### Qué cambia
+
+- **Las cartas de fax llevan la frecuencia en el nombre.** Pedido por un
+  usuario del repositorio. `W0385301.BMP` es la primera carta de 3.853
+  kHz, `W1388201.BMP` la de 13.882. La cuenta va por frecuencia, así que
+  cada emisora numera las suyas.
+- **Y todos los ficheros del disco llevan ya su fecha y su hora de
+  verdad.** Pedía también la hora en el nombre, y en ocho caracteres no
+  caben las dos cosas — pero el FAT tiene un sitio propio para la fecha y
+  este driver lo rellenaba con una **constante**: los tres sitios que
+  crean un fichero escribían el 1 de enero de 2026 y los campos de hora
+  no los escribía nadie. O sea que en el ordenador todas las capturas y
+  todas las cartas salían con la misma fecha y no se podían ordenar.
+  Ahora llevan la hora a la que se abrieron —para una carta, cuando
+  empezó a entrar—, y el nombre se queda entero para la frecuencia.
+- **Sin reloj en hora no se inventa nada**: vuelve al relleno de siempre,
+  que al menos se ve que es mentira.
+
+### What's new
+
+- **Fax charts now carry the frequency in the file name.** Requested by a
+  user of the repository. `W0385301.BMP` is the first chart from 3,853
+  kHz, `W1388201.BMP` the one from 13,882. The counter runs per
+  frequency, so each station numbers its own.
+- **And every file on the disk now carries its real date and time.** The
+  request was for the time in the name too, and eight characters will not
+  hold both — but FAT has a field of its own for the date, and this
+  driver was filling it with a **constant**: all three places that create
+  a file wrote 1 January 2026, and nobody ever wrote the time fields. So
+  on a computer every screenshot and every chart showed the same date and
+  could not be sorted. They now carry the time they were opened —for a
+  chart, when it started coming in— and the name is free for the
+  frequency.
+- **With no clock set nothing is invented**: it falls back to the old
+  placeholder, which at least looks like the lie it is.
+
+## V5.77 · 2026-10-22
+
+### Qué cambia
+
+- **La fila «Margen SAM» ya dice POR QUÉ no engancha.** Avisado por un
+  usuario con un vídeo: una emisora floja que no sincronizaba, y la
+  sospecha razonable de que el lazo filtrara mal. Medido: **no filtra
+  mal**. El detector engancha con la portadora por debajo del ruido
+  —hasta −6 dB, por la cadena entera— si está dentro del margen, y no
+  engancha nunca si está fuera, ni con 40 dB. Lo que decide es el desvío,
+  no el nivel. Y estrechar el lazo lo empeora: con uno cuatro veces más
+  estrecho deja de enganchar incluso con portadora limpia a 120 Hz.
+- **Lo que faltaba era decirlo, y la radio lo sabía.** Con la portadora
+  fuera de alcance el lazo se queda clavado contra el tope —el 100 % del
+  tiempo, de 300 a 1.000 Hz de desvío— y con sólo ruido lo toca el 3 %.
+  Ahora la fila distingue «sin enganche» de **«fuera: sube»** y **«fuera:
+  baja»**, que además dicen hacia dónde girar el mando.
+- **Y el texto de esa fila ya se salía de la celda.** Con el margen de
+  4.000 Hz, «+- 4000 Hz · sin enganche» medía 200 px en una celda de 184:
+  el que abre el margen —justo el que tiene un problema de enganche— era
+  el que no podía leer el motivo. La fila no estaba en el banco de anchos;
+  ahora sí, con sus nueve textos.
+
+### What's new
+
+- **The "SAM range" row now says WHY it is not locking.** Reported by a
+  user with a video: a weak station that would not sync, and the
+  reasonable suspicion that the loop filtering was at fault. Measured:
+  **it is not**. The detector locks with the carrier below the noise
+  —down to −6 dB, through the whole chain— as long as it is inside the
+  range, and never locks outside it, not even with 40 dB. What decides is
+  the offset, not the level. And narrowing the loop makes it worse: four
+  times narrower and it stops locking even on a clean carrier 120 Hz off.
+- **What was missing was saying so, and the radio knew.** With a carrier
+  out of reach the loop sits pinned against the edge —100 % of the time,
+  from 300 to 1,000 Hz of offset— while on noise alone it touches it 3 %.
+  The row now tells «no lock» apart from **«out: higher»** and **«out:
+  lower»**, which also say which way to turn the knob.
+- **And that row's text was already overflowing its cell.** With the
+  4,000 Hz range, "+- 4000 Hz · no lock" measured 200 px in a 184 px
+  cell: whoever widens the range —precisely the person with a lock
+  problem— was the one who could not read the reason. The row was not in
+  the width bench; it is now, with its nine texts.
+
+## V5.76 · 2026-10-22
+
+### Qué cambia
+
+- **En SAM-U y SAM-L, perder el enganche ya no devuelve a AM.** Avisado por
+  un usuario del repositorio. A una sola banda no se llega por gusto: se
+  llega porque hay otra emisora pisando por un lado, y el detector de
+  envolvente ve las dos bandas sumadas, así que volver a AM devolvía entera
+  la intrusa de la que se huía. Medido antes de tocarlo: sin enganche,
+  SAM-U y SAM daban **exactamente el mismo audio**, con la intrusa 7,7 dB
+  **por encima** del tono que se quería oír. Elegir banda no hacía nada.
+  Ahora sale banda lateral de frecuencia fija —la misma banda, el mismo
+  rechazo, el oscilador quieto en la sintonía— y la intrusa se queda unos
+  50 dB por debajo.
+- **SAM con las dos bandas no cambia**: ahí la vuelta a la envolvente sigue
+  siendo lo correcto, y el banco nuevo lo exige para que nadie lo
+  «arregle» de paso.
+- **El manual decía que el margen del SAM por omisión era ±100 Hz.** Son 250
+  desde el 19/10. Corregido en los dos idiomas.
+- **`make comprueba` moría en un clon recién hecho**, en el único banco de
+  catorce que usa `vendor/` y se había quedado fuera de la guarda que los
+  descuelga. Arreglado, y con un guardián nuevo que lo vigila leyendo el
+  grafo.
+
+### What's new
+
+- **In SAM-U and SAM-L, losing lock no longer falls back to AM.** Reported
+  by a user of the repository. Nobody picks a single sideband on a whim:
+  they pick it because another station is sitting on one side, and the
+  envelope detector sees both sidebands summed, so falling back to AM
+  handed back the interfering station whole. Measured before touching it:
+  unlocked, SAM-U and SAM produced **exactly the same audio**, with the
+  interferer 7.7 dB **above** the tone you were trying to hear. Picking a
+  sideband did nothing. It now outputs fixed-frequency sideband —same
+  sideband, same rejection, oscillator parked at the dial— and the
+  interferer sits some 50 dB below.
+- **SAM with both sidebands is unchanged**: there the envelope fallback is
+  still the right answer, and the new bench demands it so nobody "fixes"
+  it in passing.
+- **The manual said the SAM margin defaulted to ±100 Hz.** It has been 250
+  since 19/10. Corrected in both languages.
+- **`make comprueba` died on a fresh clone**, on the one bench of fourteen
+  using `vendor/` that had been left outside the guard that unhooks them.
+  Fixed, with a new guardian that watches for it by walking the graph.
+
 ## V5.75 · 2026-10-21
 
 ### Qué cambia

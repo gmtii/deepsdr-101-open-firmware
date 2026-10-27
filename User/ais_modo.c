@@ -103,9 +103,40 @@ void ais_modo_borra(void)
     ais_rx_cuentas_cero();
 }
 
+/*
+ * ======================================================================
+ * Y AHORA LA TASA SE APLICA DE VERDAD - 24/10/2026.
+ * ======================================================================
+ *
+ * Encontrado en la revision a fondo pedida por el usuario.
+ *
+ * Esto solo GUARDABA el numero. Quien configura el lazo de bit es
+ * ais_rx_start(), y a eso se llega desde ais_modo_start()... que empieza
+ * con "si ya estoy encendido, vuelve". O sea que la reparacion que hizo
+ * main.c el 09/10/2026 -llamar aqui y despues a ais_modo_start()- no podia
+ * funcionar: la guarda que le dejaba entrar, ais_modo_activo(), es la misma
+ * bandera que hacia volver a ais_modo_start() en su primera linea.
+ *
+ * Resultado: tocar la casilla de la tasa con AIS puesto -o que la red de
+ * los 192 kHz vuelva sola a 96, que pasa sin que nadie toque nada- dejaba
+ * el lazo de bit a la tasa anterior y el panel vacio para siempre, igual
+ * que antes de aquella reparacion.
+ *
+ * Se arregla aqui y no alli a proposito: quien sabe si hay que rearmar el
+ * demodulador es este fichero, que es el que tiene la bandera. Y
+ * ais_rx_start() no toca la memoria prestada -de eso se ocupa
+ * ais_modo_start()-, asi que llamarlo con el modo ya en marcha es
+ * exactamente lo que hace falta y nada mas.
+ */
 void ais_modo_tasa_pon(float hz)
 {
-    if (hz > 1000.0f) { s_fs_hz = hz; }
+    if (hz <= 1000.0f) { return; }
+    if (s_on && hz != s_fs_hz) {
+        s_fs_hz = hz;
+        ais_rx_start(s_fs_hz);      /* rearma el lazo de bit a la tasa nueva */
+        return;
+    }
+    s_fs_hz = hz;
 }
 
 uint8_t ais_modo_start(void)

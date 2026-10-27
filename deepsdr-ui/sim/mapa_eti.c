@@ -178,7 +178,31 @@ int main(void)
             { "CQ EA1ABC",           ""       },   /* sin localizador */
             { "CQ EA1ABC RR73",      ""       },   /* RR73 no es localizador */
             { "EA1ABC JA5AFW -10",   ""       },   /* no es un CQ con loc */
-            { "CQ DX EA1ABC IN80HJ", "EA1ABC" }    /* localizador de seis */
+            { "CQ DX EA1ABC IN80HJ", "EA1ABC" },   /* localizador de seis */
+            /*
+             * Y LAS RESPUESTAS, QUE SON LA MAYORIA - 23/10/2026.
+             *
+             * Avisado por un usuario con una foto de la lista: de siete
+             * renglones con localizador, SEIS eran respuestas y uno era
+             * el CQ. El segundo mensaje de un ciclo de FT8 es "LLAMADO
+             * QUIENCONTESTA LOCATOR", asi que trae localizador igual que
+             * un CQ.
+             *
+             * Y lo que hay que sacar de ahi es el SEGUNDO indicativo, que
+             * es quien transmite; el primero es a quien llama. Poner el
+             * primero seria pintar en el mapa a quien NO esta hablando, y
+             * encima en el sitio del otro.
+             *
+             * Sale bien sin tocar nada porque mapa_ind_de_linea() cuenta
+             * desde el final -la palabra anterior al localizador-, pero
+             * eso no estaba medido: la tabla solo traia CQ.
+             */
+            { "EP2AES YC2ULK OI52",  "YC2ULK" },
+            { "3B8GL IW4DLP JN54",   "IW4DLP" },
+            { "PP1WW UA3DTS KO95",   "UA3DTS" },
+            { "M1DOZ 5Z4RS -04",     ""       },   /* informe: sin loc */
+            { "M1DOZ 5Z4RS RR73",    ""       },   /* despedida: tampoco */
+            { "UG4P 5Z4RS R-11",     ""       }
         };
         unsigned i;
         int bien = 1;

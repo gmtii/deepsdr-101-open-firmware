@@ -102,6 +102,9 @@ void sam_reset(sam_t *s)
     s->audio = 0.0f;
     s->carrier_hz_raw = 0.0f;
     s->carrier_hz = 0.0f;
+    s->tope = 0U;
+    s->tope_lado = 0U;
+    s->tope_prom = 0.0f;
 }
 
 /*
@@ -139,8 +142,32 @@ void sam_reset(sam_t *s)
  * la suma es el angulo medio del tramo, con el ruido promediado. Lo que pone
  * el tope a SAM_DR es cuanto gira ese fasor dentro del tramo; esta en sam.h.
  */
+/*
+ * LA MEZCLA, Y POR QUE ENTRA AQUI Y NO FUERA - 22/10/2026
+ *
+ * Avisado por un usuario del repositorio. Sin enganche, SAM de una sola
+ * banda volvia a la envolvente, o sea a AM, o sea a oir las DOS bandas: la
+ * intrusa de la que se huia volvia entera. Lo que se quiere en su lugar es
+ * banda lateral de frecuencia fija - el oscilador quieto en la sintonia -,
+ * que es lo que hace el modo USB/LSB de siempre.
+ *
+ * `mez` cruza entre las dos SIN UN SEGUNDO BUFFER: 1 saca lo desrotado por
+ * el lazo, 0 saca la entrada tal cual, y lo de en medio es la mezcla. Un
+ * par de multiplicaciones por muestra contra 2 kB de RAM que esta radio no
+ * tiene -quedan 5.676 libres-.
+ *
+ * Y se puede mezclar AQUI, antes del Hilbert y de los diezmadores, porque
+ * todo lo que viene detras es lineal: mezclar antes da lo mismo que mezclar
+ * despues. Si algun dia deja de ser lineal, esto deja de valer.
+ *
+ * EL LAZO CORRE IGUAL CON mez=0. Eso no es un detalle: es lo que permite
+ * que el enganche se note y se vuelva solo a la demodulacion sincrona en
+ * cuanto la portadora entre en el margen. Un lazo parado no se entera de
+ * nada.
+ */
 static void sam_nucleo(sam_t *s, const float32_t *i_in, const float32_t *q_in,
-                       float32_t *salida, float32_t *cuad, uint32_t n)
+                       float32_t *salida, float32_t *cuad, uint32_t n,
+                       float32_t mez)
 {
     /* Todo en locales: es la otra mitad del arreglo. Ver sam_bloque(). */
     uint32_t fase = s->fase;
@@ -163,6 +190,7 @@ static void sam_nucleo(sam_t *s, const float32_t *i_in, const float32_t *q_in,
     const uint8_t nivela = s->fade_leveler;
     uint8_t cuenta = s->cuenta;
     uint32_t k;
+    const float32_t unm = 1.0f - mez;
     float32_t c0 = s->corr0, c1 = s->corr1, au = s->audio;
 
     for (k = 0U; k < n; k++) {
@@ -188,7 +216,7 @@ static void sam_nucleo(sam_t *s, const float32_t *i_in, const float32_t *q_in,
             dci = mI * dci + nI * c0;
             au  = au + dci - dc;
         }
-        salida[k] = au;
+        salida[k] = mez * au + unm * i_v;
         /*
          * LA COMPONENTE EN CUADRATURA, PARA QUIEN QUIERA UNA SOLA BANDA -
          * 11/10/2026.
@@ -208,7 +236,7 @@ static void sam_nucleo(sam_t *s, const float32_t *i_in, const float32_t *q_in,
          * NULL cuando no se quiere: el modo de dos bandas no paga ni una
          * escritura.
          */
-        if (cuad != (float32_t *)0) { cuad[k] = c1; }
+        if (cuad != (float32_t *)0) { cuad[k] = mez * c1 + unm * q_v; }
 
         a0 += c0;
         a1 += c1;
@@ -287,13 +315,94 @@ static void sam_lectura(sam_t *s, uint32_t n, float32_t sample_rate_hz)
         if (s->eng) { if (v < SAM_ENG_SALE)  { s->eng = 0U; } }
         else        { if (v >= SAM_ENG_ENTRA) { s->eng = 1U; } }
     }
+
+    /*
+     * Y SI ESTA CLAVADO CONTRA EL TOPE. Ver sam_tope() en sam.h: esto es
+     * lo que separa "no hay portadora" de "la hay y no llego".
+     *
+     * El 0,98 no es un margen de seguridad numerico, es lo que hace que
+     * cuente como tope estar PEGADO a el: el integrador recortado se queda
+     * exactamente en omega_max, pero el que viene empujando desde fuera
+     * oscila un poco por debajo. Medido con una portadora a 300 Hz y
+     * margen 250: se queda en +244, o sea al 97,6 %.
+     *
+     * Medio segundo de bloques seguidos -la misma escala que la media del
+     * detector- antes de darlo por bueno. Un lazo buscando toca el tope de
+     * pasada constantemente.
+     */
+    {
+        /*
+         * EL 0,90 Y LA MEDIA SALEN DE MEDIR, Y LA PRIMERA VERSION FALLABA.
+         *
+         * Pedia estar pegado al 98 % del tope durante medio segundo
+         * SEGUIDO, y se le escapaba justo el caso que mas lejos esta.
+         * Medido -cuatro segundos por desvio, % del tiempo pegado-:
+         *
+         *     desvio  300 Hz   >=99,9%: 100 %
+         *     desvio  400 Hz   >=99,9%: 100 %
+         *     desvio  500 Hz   >=99,9%:  30 %   >=90%: 100 %
+         *     desvio 1000 Hz   >=99,9%:   7 %   >=90%: 100 %
+         *     solo ruido                        >=90%: 3,4 %
+         *
+         * Cuanto MAS lejos esta la portadora, menos se queda clavado: el
+         * detector de fase gira tan deprisa que el lazo rebota alrededor
+         * del tope en vez de apoyarse en el. O sea que la racha seguida
+         * medía al reves de como se comporta esto.
+         *
+         * Con el 90 % y una MEDIA en vez de una racha, los cuatro desvios
+         * dan el 100 % y el ruido el 3,4 %: separa de sobra.
+         */
+        const float32_t cerca = 0.90f;
+        uint8_t donde = 0U;
+        float32_t ind;
+
+        /*
+         * CON VUELO NO SE MIRA, y no es un detalle: el lazo esta congelado
+         * donde lo dejo la emisora, y si la dejo cerca del tope -una
+         * portadora a 240 con margen 250- la fila diria "fuera de alcance"
+         * cuando lo que ha pasado es que la señal se ha desvanecido. Son
+         * dos motivos distintos con el mismo sintoma, y el que sabe cual
+         * es, es este.
+         */
+        if (s->omega2 >= s->omega_max * cerca)      { donde = 1U; }
+        else if (s->omega2 <= s->omega_min * cerca) { donde = 2U; }
+
+        /* Cambiar de lado tira la media: son dos cosas distintas y
+         * promediarlas juntas daria un numero que no es ninguna. */
+        if ((donde != s->tope_lado) && (donde != 0U)) {
+            s->tope_prom = 0.0f;
+        }
+        s->tope_lado = donde;
+
+        ind = (donde != 0U) ? 1.0f : 0.0f;
+        {
+            /* Medio segundo de constante de tiempo. Se calcula con la
+             * tasa y el tamaño de bloque porque sam.c no conoce ninguno
+             * de los dos de antemano. */
+            float32_t a = (float32_t)n / (sample_rate_hz * 0.5f);
+            if (a > 1.0f) { a = 1.0f; }
+            s->tope_prom += a * (ind - s->tope_prom);
+        }
+
+        /* Histeresis, por lo mismo que la tiene el si/no del enganche: un
+         * cartel que parpadea no se lee, se ignora. */
+        if (s->tope != 0U) {
+            if ((s->tope_prom < 0.5f) || (donde == 0U && s->tope_prom < 0.5f)) {
+                s->tope = 0U;
+            } else if (donde != 0U) {
+                s->tope = donde;
+            }
+        } else if ((s->tope_prom >= 0.8f) && (donde != 0U)) {
+            s->tope = donde;
+        }
+    }
 }
 
 void sam_bloque(sam_t *s, const float32_t *i_in, const float32_t *q_in,
                 float32_t *audio, uint32_t n, float32_t sample_rate_hz)
 {
     if (n == 0U) { return; }
-    sam_nucleo(s, i_in, q_in, audio, (float32_t *)0, n);
+    sam_nucleo(s, i_in, q_in, audio, (float32_t *)0, n, 1.0f);
     sam_lectura(s, n, sample_rate_hz);
 }
 
@@ -306,8 +415,22 @@ void sam_bloque_cuad(sam_t *s, const float32_t *i_in, const float32_t *q_in,
                      float32_t *audio, float32_t *cuad, uint32_t n,
                      float32_t sample_rate_hz)
 {
+    sam_bloque_cuad_mez(s, i_in, q_in, audio, cuad, n, sample_rate_hz, 1.0f);
+}
+
+/*
+ * Lo mismo, cruzando hacia la entrada SIN DESROTAR segun `mez`. Ver el
+ * comentario de `mez` encima de sam_nucleo(): una sola copia del lazo,
+ * tambien para esto.
+ */
+void sam_bloque_cuad_mez(sam_t *s, const float32_t *i_in, const float32_t *q_in,
+                         float32_t *audio, float32_t *cuad, uint32_t n,
+                         float32_t sample_rate_hz, float32_t mez)
+{
     if (n == 0U) { return; }
-    sam_nucleo(s, i_in, q_in, audio, cuad, n);
+    if (mez > 1.0f) { mez = 1.0f; }
+    if (mez < 0.0f) { mez = 0.0f; }
+    sam_nucleo(s, i_in, q_in, audio, cuad, n, mez);
     sam_lectura(s, n, sample_rate_hz);
 }
 
@@ -315,7 +438,7 @@ float32_t sam_step(sam_t *s, float32_t i_in, float32_t q_in, float32_t sample_ra
 {
     float32_t fuera;
 
-    sam_nucleo(s, &i_in, &q_in, &fuera, (float32_t *)0, 1U);
+    sam_nucleo(s, &i_in, &q_in, &fuera, (float32_t *)0, 1U, 1.0f);
     sam_lectura(s, 1U, sample_rate_hz);
     return fuera;
 }
@@ -335,4 +458,11 @@ float32_t sam_enganche(const sam_t *s)
 uint8_t sam_enganchado(const sam_t *s)
 {
     return s->eng;
+}
+
+int8_t sam_tope(const sam_t *s)
+{
+    if (s->tope == 1U) { return  1; }
+    if (s->tope == 2U) { return -1; }
+    return 0;
 }

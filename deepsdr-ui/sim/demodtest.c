@@ -98,9 +98,14 @@ static int16_t g_estre[SDR_RX_BLOCK_SAMPLES * 2u];
  *
  *     desplazamiento = 3 * MUESTRAS * sizeof(float32_t)
  *
- * que son 6.144 bytes en el camino ancho (512 muestras) y 3.072 en el
- * estrecho (256). Restando cada una su desplazamiento tiene que salir LA
- * MISMA direccion: el principio de la union.
+ * que son 6.144 bytes en el camino ancho (512 muestras). En el estrecho
+ * eran 3.072 y desde el 23/10/2026 son 5.120: sus i_buf y q_buf pasaron a
+ * 512 muestras porque con la radiofrecuencia al doble el DMA entrega 512
+ * y el diezmador de medio banda no las convierte en 256 hasta tres pasos
+ * mas adelante (ver User/semibanda.h). `env` y `audio_out` se quedaron en
+ * 256, que es de despues del diezmado. Restando cada una su
+ * desplazamiento tiene que salir LA MISMA direccion: el principio de la
+ * union.
  *
  * Esto NO se puede falsear leyendo el fuente: si alguien deshace la union
  * y vuelve a los dos juegos de buffers separados, las dos bases dejan de
@@ -108,11 +113,99 @@ static int16_t g_estre[SDR_RX_BLOCK_SAMPLES * 2u];
  * sonando igual de bien. Que es exactamente el fallo del que no avisa
  * nadie: perder 4.096 bytes sin enterarse.
  * -------------------------------------------------------------------- */
+/* --------------------------------------------------------------------
+ * 0. LAS TRAMAS QUE PIDE EL DAC Y LAS QUE DA EL DEMODULADOR.
+ *
+ * ESTA PRUEBA EXISTE PORQUE FALTABA - 24/10/2026.
+ *
+ * El convertidor de entrada y el de salida cuelgan del MISMO reloj del
+ * codec. Asi que la tasa de radiofrecuencia no decide solo cuantas
+ * muestras ENTRAN: decide tambien cuantas tramas de audio hay que SACAR
+ * por bloque. Poner la entrada a 192 kHz y dejar el audio produciendo
+ * 256 tramas hizo que gd32_i2s_stream_write_half() copiara 512 de un
+ * array de 256, y lo que se oyo fue media pantalla de memoria de mas
+ * alla del final.
+ *
+ * Nada lo miraba. Ni el compilador -la funcion no llevaba longitud- ni
+ * ningun banco. Ahora la lleva, y esto compara lo que el demodulador
+ * DICE traer con lo que la tasa pide, en las dos.
+ * -------------------------------------------------------------------- */
+extern uint32_t g_i2s_tramas;
+
+static void prueba_tramas(void)
+{
+    printf("\n  0. las tramas de audio que pide cada tasa\n");
+
+    cons_todos_apagados();
+
+    /* 96 kHz: bloque de 256 dentro, 256 tramas fuera. */
+    demod_am_init();
+    demod_am_set_active_rate(0u);
+    demod_am_set_rf_doble(0u);
+    demod_am_set_mode(DEMOD_MODE_AM);
+    cons_reinicia();
+    g_i2s_tramas = 0u;
+    genera(g_estre, SDR_RX_BLOCK_SAMPLES, 15000.0f, 96000.0f, 0.2f);
+    demod_am_process_raw(g_estre);
+    {
+        char d[96];
+        snprintf(d, sizeof d, "ha dado %u", (unsigned)g_i2s_tramas);
+        ok("a 96 kHz entrega SDR_RX_BLOCK_SAMPLES tramas",
+           g_i2s_tramas == (uint32_t)SDR_RX_BLOCK_SAMPLES, d);
+    }
+
+    /* 192 kHz: bloque de 512 dentro, y 512 tramas fuera - el audio
+     * trabaja a 96 pero el DAC va a 192 y pide el doble. */
+    demod_am_init();
+    demod_am_set_active_rate(0u);
+    demod_am_set_rf_doble(1u);
+    demod_am_set_mode(DEMOD_MODE_AM);
+    cons_reinicia();
+    g_i2s_tramas = 0u;
+    genera(g_ancho, SDR_RX_BLOCK_SAMPLES_WFM, 15000.0f, 192000.0f, 0.2f);
+    demod_am_process_raw(g_ancho);
+    {
+        char d[128];
+        snprintf(d, sizeof d, "ha dado %u, y el DAC a 192 kHz pide %u",
+                 (unsigned)g_i2s_tramas, (unsigned)SDR_RX_BLOCK_SAMPLES_WFM);
+        ok("a 192 kHz entrega el DOBLE, que es lo que pide el DAC",
+           g_i2s_tramas == (uint32_t)SDR_RX_BLOCK_SAMPLES_WFM, d);
+    }
+
+    /* Y que el audio de 192 no sea silencio: si el interpolador no
+     * hiciera nada, esto seguiria dando 512 tramas vacias. */
+    {
+        const int16_t *a = cons_audio();
+        unsigned k, vivas = 0u;
+
+        cons_captura_tramas(SDR_RX_BLOCK_SAMPLES_WFM);
+        g_i2s_tramas = 0u;
+        genera(g_ancho, SDR_RX_BLOCK_SAMPLES_WFM, 15000.0f, 192000.0f, 0.2f);
+        demod_am_process_raw(g_ancho);
+        for (k = 0u; k < SDR_RX_BLOCK_SAMPLES_WFM * 2u; k++) {
+            if (a[k] != 0) { vivas++; }
+        }
+        {
+            char d[96];
+            snprintf(d, sizeof d, "%u muestras distintas de cero de %u",
+                     vivas, (unsigned)(SDR_RX_BLOCK_SAMPLES_WFM * 2u));
+            /* La mitad de arriba es la que llenaba el interpolador. */
+            ok("y la segunda mitad del bloque lleva audio, no basura ni ceros",
+               vivas > SDR_RX_BLOCK_SAMPLES_WFM, d);
+        }
+        cons_captura_tramas(0u);
+    }
+
+    demod_am_set_rf_doble(0u);
+}
+
 static void prueba_union(void)
 {
     uintptr_t p_ancho, p_estre, base_a, base_e;
     const size_t D_ANCHO = 3u * SDR_RX_BLOCK_SAMPLES_WFM * sizeof(float);
-    const size_t D_ESTRE = 3u * SDR_RX_BLOCK_SAMPLES * sizeof(float);
+    /* i_buf y q_buf al ancho del bloque CRUDO, env al del diezmado. */
+    const size_t D_ESTRE = 2u * SDR_RX_BLOCK_SAMPLES_WFM * sizeof(float)
+                         + 1u * SDR_RX_BLOCK_SAMPLES * sizeof(float);
     const size_t FIN_ANCHO = D_ANCHO + SDR_RX_BLOCK_SAMPLES_WFM * 2u * sizeof(int16_t);
     const size_t FIN_ESTRE = D_ESTRE + SDR_RX_BLOCK_SAMPLES * 2u * sizeof(int16_t);
 
@@ -573,6 +666,7 @@ int main(void)
 {
     printf("\nEL CAMINO DE AUDIO DE demod_am.c, CORRIENDO DE VERDAD\n");
     prueba_banda_lado();
+    prueba_tramas();
     prueba_union();
     prueba_longitudes();
     prueba_sin_residuo();

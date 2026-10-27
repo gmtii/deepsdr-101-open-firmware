@@ -53,11 +53,32 @@ static void grupo(uint16_t a, uint16_t b, uint16_t c, uint16_t d, uint32_t *out)
     out[3] = bloque(d, RDS_OFF_D);
 }
 
-/* El grupo 0A: nombre de emisora, dos caracteres por grupo. */
+/*
+ * El grupo 0A con TODAS sus banderas - 25/10/2026, al añadir el tipo de
+ * programa y el aviso de trafico.
+ *
+ * El bloque B del grupo 0: tipo (4 bits, 15..12), version (11), TP (10),
+ * PTY (9..5), TA (4), M/S (3), DI (2) y el segmento (1..0). Lo que se
+ * escribe aqui es LA NORMA, no lo que hace rds.c: si el firmware lee otro
+ * bit, este banco se pone rojo.
+ */
+static void grupo_0a_banderas(uint16_t pi, uint8_t seg, char c1, char c2,
+                              uint8_t tp, uint8_t pty, uint8_t ta,
+                              uint32_t *out)
+{
+    uint16_t b = (uint16_t)((0U << 12) | (0U << 11)
+                            | ((uint16_t)(tp & 1U) << 10)
+                            | ((uint16_t)(pty & 0x1FU) << 5)
+                            | ((uint16_t)(ta & 1U) << 4)
+                            | seg);
+    grupo(pi, b, (uint16_t)0x1234, (uint16_t)(((uint8_t)c1 << 8) | (uint8_t)c2), out);
+}
+
+/* El grupo 0A de siempre: nombre de emisora, dos caracteres por grupo, sin
+ * trafico y con el tipo 5. */
 static void grupo_0a(uint16_t pi, uint8_t seg, char c1, char c2, uint32_t *out)
 {
-    uint16_t b = (uint16_t)((0U << 12) | (0U << 11) | (0U << 10) | (5U << 5) | seg);
-    grupo(pi, b, (uint16_t)0x1234, (uint16_t)(((uint8_t)c1 << 8) | (uint8_t)c2), out);
+    grupo_0a_banderas(pi, seg, c1, c2, 0U, 5U, 0U, out);
 }
 
 /* El grupo 4A: la hora. */
@@ -572,6 +593,77 @@ int main(void)
                "    A esto hay que sumarle lo que la propia norma admite:\n"
                "    el borde de minuto cae a +/-0,1 s del final del grupo, y\n"
                "    eso no lo arregla ningun banco.\n");
+    }
+
+    /*
+     * =================================================================
+     * EL TIPO DE PROGRAMA, EL TP Y EL AVISO DE TRAFICO - 25/10/2026.
+     * =================================================================
+     *
+     * Tres cosas que se miden aqui y no a ojo:
+     *
+     *   (a) que los bits que lee el firmware son los de la norma,
+     *   (b) que el tipo de programa NO se da por bueno con un solo grupo
+     *       -el campo viaja en todos y un bloque mal recibido cambiaria el
+     *       rotulo sin avisar-, y
+     *   (c) que un cambio de verdad, sostenido, SI pasa.
+     *
+     * El (b) es el que importa: sin la regla de los dos seguidos, una
+     * emisora con ruido enseñaria un genero distinto cada pocos segundos.
+     */
+    printf("\n7. el tipo de programa, el TP y el trafico\n");
+    {
+        static uint32_t gp[8 * 4];
+        int k;
+
+        /* (a) Ocho grupos iguales: TP=1, tipo 11 -musica rock-, TA=1. */
+        for (k = 0; k < 8; k++) {
+            grupo_0a_banderas(0xE2A1U, (uint8_t)(k & 3U), 'R', 'A',
+                              1U, 11U, 1U, &gp[k * 4]);
+        }
+        rds_start((float)FS);
+        tx_init(&tx, gp, 8);
+        corre(&tx, 3.0, 0.0, 0.0, &info);
+        printf("    TP %u   TA %u   tipo %u (%s)\n",
+               info.tp, info.ta, info.pty, info.tiene_pty ? "confirmado" : "sin confirmar");
+        comprueba(info.tp == 1U, "el TP sale del bit 10 del bloque B");
+        comprueba(info.ta == 1U, "el TA sale del bit 4, y solo del grupo 0");
+        comprueba(info.tiene_pty && info.pty == 11U,
+                  "el tipo de programa sale de los bits 9..5");
+        rds_stop();
+
+        /* (b) El tipo cambia en CADA grupo: no hay dos seguidos iguales, asi
+         * que no se puede confirmar ninguno. */
+        for (k = 0; k < 8; k++) {
+            grupo_0a_banderas(0xE2A1U, (uint8_t)(k & 3U), 'R', 'A',
+                              1U, (uint8_t)((k & 1) ? 11U : 12U), 0U, &gp[k * 4]);
+        }
+        rds_start((float)FS);
+        tx_init(&tx, gp, 8);
+        corre(&tx, 3.0, 0.0, 0.0, &info);
+        printf("    alternando 11 y 12 en cada grupo -> %s\n",
+               info.tiene_pty ? "CONFIRMA UNO (mal)" : "no confirma ninguno");
+        comprueba(!info.tiene_pty,
+                  "un tipo que cambia en cada grupo no se da por bueno");
+        comprueba(info.ta == 0U, "y el TA de estos grupos es cero");
+        rds_stop();
+
+        /* (c) Y un cambio sostenido si entra: el tipo 1 -noticias- en los
+         * ocho. Si la regla de los dos seguidos no dejara pasar nada, esto
+         * se quedaria sin confirmar y el rotulo no saldria nunca. */
+        for (k = 0; k < 8; k++) {
+            grupo_0a_banderas(0xE2A1U, (uint8_t)(k & 3U), 'R', 'A',
+                              0U, 1U, 0U, &gp[k * 4]);
+        }
+        rds_start((float)FS);
+        tx_init(&tx, gp, 8);
+        corre(&tx, 3.0, 0.0, 0.0, &info);
+        printf("    tipo 1 sostenido -> %s %u\n",
+               info.tiene_pty ? "confirmado" : "SIN CONFIRMAR (mal)", info.pty);
+        comprueba(info.tiene_pty && info.pty == 1U,
+                  "un tipo sostenido si se confirma");
+        comprueba(info.tp == 0U, "y el TP vuelve a cero cuando la emisora lo baja");
+        rds_stop();
     }
 
     printf("\n  %s\n", fallos ? "HAY FALLOS" : "TODO CORRECTO (0 fallos)");

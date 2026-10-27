@@ -4,6 +4,7 @@ Empaqueta las listas EiBi y Aoki en EMISORAS.BIN, que es lo que la radio
 lee para decir quien emite en la frecuencia que estas oyendo.
 
   python3 emisoras_pack.py eibi.txt aoki.txt EMISORAS.BIN [horas_utc]
+                           [--hfcc hfcc.txt] [--aoki-xy aoki_xy.txt]
                            [--qth JN97] [--radio 3000] [--pais HNG,D,I]
 
 `horas_utc` es CUANTO HAY QUE RESTARLE AL RELOJ DE LA RADIO PARA TENER
@@ -17,16 +18,32 @@ marzo al 25 de octubre de 2026, que es EXACTAMENTE el periodo de horario
 de verano europeo. Mientras esa lista vale, España esta en UTC+2 siempre.
 Para la lista de invierno (B26) hay que pasar 1.
 
-LAS DOS LISTAS NO SON LA MISMA COSA, y por eso se meten las dos:
+LAS LISTAS NO SON LA MISMA COSA, y por eso se meten las tres:
 
-  EiBi   8.186 filas. Lleva radiodifusion Y utilitarias: balizas de
+  EiBi   8.226 filas. Lleva radiodifusion Y utilitarias: balizas de
          tiempo, fax meteorologico, radio maritima, aviacion. Trae el
          AREA DE DESTINO (a quien apunta la antena).
-  Aoki   5.325 filas. Solo radiodifusion, pero trae el SITIO DESDE EL QUE
-         SE EMITE, que EiBi no da.
+  Aoki   5.352 filas. Solo radiodifusion, pero trae el SITIO DESDE EL QUE
+         SE EMITE, que EiBi no da. Con --aoki-xy se lee ademas su version
+         ancha, que da ese sitio entero y con coordenadas.
+  HFCC   3.114 filas, con --hfcc. No es una recopilacion: es el REGISTRO
+         donde las emisoras apuntan sus transmisiones antes de emitirlas.
+         Trae el emplazamiento con coordenadas, la potencia y el azimut, y
+         es la unica que esta en la temporada que corre. No lleva
+         utilitarias: esas no se coordinan ahi.
 
-Se fusionan por (frecuencia, hora, emisora): lo que esta en las dos sale
-una vez, con el sitio de Aoki y el destino de EiBi.
+EiBi y Aoki se fusionan por (frecuencia, hora, emisora), como siempre: lo
+que esta en las dos sale una vez, con el sitio de Aoki y el destino de
+EiBi.
+
+HFCC NO se puede fusionar asi, porque el nombre es justo lo que las tres
+escriben distinto -"CNR 1 Voice of China", "China National Radio", "CHINA
+RADIO INTERNATIONAL"-. Lo que si identifica una transmision son tres cosas
+que las tres escriben igual: la FRECUENCIA, el PAIS y que las HORAS SE
+SOLAPEN. Donde el registro tiene algo que decir de un par (frecuencia,
+pais), manda el registro y las filas de la temporada anterior se apartan;
+las utilitarias nunca se apartan. El detalle esta en el comentario de la
+pasada, en main().
 
 QUIEN SALE PRIMERO, Y POR QUE HACE FALTA DECIRLO - 05/10/2026.
 
@@ -174,6 +191,207 @@ def lee_aoki(ruta):
     return filas
 
 
+
+# ----------------------------------------------------------------------
+# HFCC: EL REGISTRO OFICIAL - 26/10/2026, pedido por el usuario.
+# ----------------------------------------------------------------------
+#
+# Las dos listas de siempre son RECOPILACIONES: alguien escucha, apunta y
+# publica. La HFCC (High Frequency Coordination Conference) es otra cosa -
+# es donde las emisoras REGISTRAN sus transmisiones antes de emitirlas,
+# temporada por temporada, para repartirse las frecuencias. O sea que trae
+# cosas que una recopilacion no puede traer:
+#
+#   - El EMPLAZAMIENTO del transmisor con sus coordenadas, en site.txt.
+#     Aoki da el sitio recortado a doce caracteres y sin posicion; EiBi no
+#     lo da. Esto lo da entero y situado.
+#   - La POTENCIA y el AZIMUT, que de momento no se guardan pero estan.
+#   - Y, sobre todo, LA TEMPORADA DE VERDAD. Cuando se escribio esto, EiBi
+#     y Aoki seguian publicando la A26 -verano- cinco dias despues de que
+#     empezara el invierno. HFCC ya tenia la B26 al dia.
+#
+# Lo que NO trae: utilitarias. Las balizas horarias, el fax meteorologico,
+# el marítimo y la aviacion no se coordinan aqui porque no son
+# radiodifusion. Esas siguen saliendo de EiBi, que las marca con un guion
+# delante del idioma (-TS, -CW, -TY, -HF, -MX), y no caducan de temporada
+# en temporada como los horarios de las emisoras.
+#
+# EL FORMATO es de ancho fijo y lo dice el propio fichero en su cabecera:
+#
+#   ;----+----+----+---...---+---+----+-------+---+---+-------+------+---...
+#   ;FREQ STRT STOP CIRAF ZONES  LOC POWR AZIMUTH SLW ANT DAYS  FDATE  TDATE ...
+#
+# Las columnas de abajo salen de contar los '+' de esa regla, no de mirar
+# el fichero a ojo. Si algun dia la cambian, lo que hay que cambiar es esta
+# tabla y nada mas.
+HFCC_COLS = ((1, 5, 'freq'), (6, 10, 'ini'), (11, 15, 'fin'),
+             (47, 50, 'loc'), (51, 55, 'kw'), (56, 63, 'az'),
+             (72, 79, 'dias'), (87, 93, 'hasta'), (102, 112, 'lang'),
+             (113, 116, 'adm'), (117, 120, 'brc'))
+
+
+def hfcc_grados(txt):
+    """'43N17' o '077E00' -> grados decimales. None si no se entiende."""
+    m = re.match(r'^(\d+)([NSEW])(\d+)$', txt.strip())
+    if not m:
+        return None
+    v = float(m.group(1)) + float(m.group(3)) / 60.0
+    return -v if m.group(2) in 'SW' else v
+
+
+def lee_hfcc_sitios(ruta):
+    """site.txt: codigo -> (nombre, (lat, lon)).
+
+    Es la tabla que hace que esto valga la pena: 1.200 emplazamientos con
+    su nombre entero y su posicion, que es lo que ni EiBi ni el Aoki corto
+    dan.
+    """
+    tabla = {}
+    try:
+        f = io.open(ruta, encoding='cp1252', errors='replace')
+    except IOError:
+        return tabla
+    with f:
+        for l in f:
+            l = l.rstrip('\n\r')
+            if not l or l.startswith(';') or len(l) < 42:
+                continue
+            cod = l[0:3].strip()
+            nom = l[4:34].strip()
+            xy = (hfcc_grados(l[39:44]), hfcc_grados(l[45:51]))
+            if not cod:
+                continue
+            tabla[cod] = (nom, xy if None not in xy else None)
+    return tabla
+
+
+def lee_hfcc_emisoras(ruta):
+    """broadcas.txt: codigo -> nombre de la emisora."""
+    tabla = {}
+    try:
+        f = io.open(ruta, encoding='cp1252', errors='replace')
+    except IOError:
+        return tabla
+    with f:
+        for l in f:
+            l = l.rstrip('\n\r')
+            if not l or l.startswith(';') or len(l) < 5:
+                continue
+            cod, nom = l[0:3].strip(), l[4:].strip()
+            if cod and nom:
+                tabla[cod] = nom
+    return tabla
+
+
+def lee_hfcc(ruta):
+    """Las transmisiones registradas, ya con el sitio y la posicion puestos.
+
+    Las tablas de referencia se buscan AL LADO del fichero y con el nombre
+    que les pone este proyecto al guardarlas. Si no estan, se sigue: se
+    pierde el nombre largo del sitio y la posicion, no la transmision.
+    """
+    aqui = os.path.dirname(os.path.abspath(ruta))
+    sitios = lee_hfcc_sitios(os.path.join(aqui, 'hfcc_sitios.txt'))
+    emis = lee_hfcc_emisoras(os.path.join(aqui, 'hfcc_emisoras.txt'))
+    filas = []
+    try:
+        f = io.open(ruta, encoding='cp1252', errors='replace')
+    except IOError:
+        return None
+    with f:
+        for l in f:
+            l = l.rstrip('\n\r')
+            if not l or l.startswith(';') or len(l) < 120:
+                continue
+            v = dict((n, l[a:b].strip()) for a, b, n in HFCC_COLS)
+            if not re.match(r'^\d+$', v['freq']):
+                continue
+            nom, xy = sitios.get(v['loc'], ('', None))
+            filas.append(dict(khz=v['freq'],
+                              t=v['ini'] + '-' + v['fin'],
+                              d=v['dias'],
+                              itu=v['adm'],
+                              est=emis.get(v['brc'], v['brc']),
+                              lang=v['lang'],
+                              sitio=nom or v['loc'],
+                              xy=xy,
+                              hasta=v['hasta']))
+    return filas
+
+
+def dias_hfcc(d):
+    """HFCC numera 1 = DOMINGO, igual que Aoki y al reves que EiBi.
+
+    Lo dice su propia tabla publicada: "Days of operation (Sun=1)". Como el
+    formato es siempre la lista de digitos -'1234567', '23456', '17'- y
+    nunca un rango con guion, basta con esto.
+    """
+    d = d.strip()
+    if d == '' or d == '1234567':
+        return 0x7F
+    if re.match(r'^[1-7]+$', d):
+        return sum(1 << ((int(c) + 5) % 7) for c in d)
+    return 0x7F
+
+
+def hfcc_valido(filas):
+    """La caducidad: la fecha TDATE mas tardia de todas las filas.
+
+    En ddmmaa, que es como la escribe HFCC. Se coge la mayor y no la
+    primera porque las transmisiones no acaban todas el mismo dia: la
+    temporada acaba cuando acaba la ultima.
+    """
+    mejor = 0
+    for v in filas:
+        m = re.match(r'^(\d{2})(\d{2})(\d{2})$', v.get('hasta', '') or '')
+        if not m:
+            continue
+        aaaammdd = (2000 + int(m.group(3))) * 10000 + int(m.group(2)) * 100 \
+                   + int(m.group(1))
+        if aaaammdd > mejor:
+            mejor = aaaammdd
+    return mejor or None
+
+
+def lee_aoki_xy(ruta):
+    """El Aoki ANCHO (xta26.txt): sitio entero -> (lat, lon).
+
+    Es el mismo listado que aoki.txt fila por fila, pero sin recortar y con
+    la posicion del transmisor en grados, minutos y segundos. Aqui no se
+    usa como fuente de filas -eso rompería el "byte a byte igual que antes"
+    del fichero de siempre- sino SOLO como tabla de posiciones, que es lo
+    que le falta a la version corta.
+
+    La clave se guarda recortada a doce caracteres ADEMAS de entera, porque
+    eso es justo lo que aoki.txt trae en su columna de sitio y es por donde
+    lo va a buscar donde().
+    """
+    tabla = {}
+    try:
+        f = io.open(ruta, encoding='cp1252', errors='replace')
+    except IOError:
+        return tabla
+    with f:
+        for l in f:
+            l = l.rstrip('\n\r')
+            if len(l) < 129 or l.startswith('FRE'):
+                continue
+            sitio = l[85:109].strip()
+            m = re.match(r'^(\d{2})(\d{2})(\d{2})([NS])(\d{3})(\d{2})(\d{2})([EW])$',
+                         l[113:129].strip())
+            if not sitio or not m:
+                continue
+            lat = int(m.group(1)) + int(m.group(2)) / 60.0 + int(m.group(3)) / 3600.0
+            lon = int(m.group(5)) + int(m.group(6)) / 60.0 + int(m.group(7)) / 3600.0
+            if m.group(4) == 'S':
+                lat = -lat
+            if m.group(8) == 'W':
+                lon = -lon
+            tabla.setdefault(sitio.upper(), (lat, lon))
+            tabla.setdefault(sitio.upper()[:12].strip(), (lat, lon))
+    return tabla
+
+
 def hz(khz):
     try:
         return int(round(float(khz) * 1000.0))
@@ -188,6 +406,30 @@ def minutos(t):
     a = int(m.group(1)) * 60 + int(m.group(2))
     b = int(m.group(3)) * 60 + int(m.group(4))
     return a, b
+
+
+def solape_min(a1, a2, b1, b2):
+    """Minutos en que dos ventanas horarias coinciden. 0 si no se tocan.
+
+    Las ventanas pueden CRUZAR LA MEDIANOCHE -es el convenio del fichero:
+    si el fin no es mayor que el principio, se pasa de las 24:00- asi que
+    cada una se parte en uno o dos tramos antes de compararlas. Una vuelta
+    entera, 0000-2400, es un solo tramo de 1.440 minutos y no un cruce.
+    """
+    def tramos(x, y):
+        if y > x:
+            return ((x, y),)
+        if y == 0:
+            return ((x, 1440),)
+        return ((x, 1440), (0, y))
+
+    n = 0
+    for p, q in tramos(a1, a2):
+        for r, t in tramos(b1, b2):
+            lo, hi = max(p, r), min(q, t)
+            if hi > lo:
+                n += hi - lo
+    return n
 
 
 def dias(d):
@@ -367,6 +609,12 @@ def donde(v, paises, sitios, faltan):
     el nombre a doce caracteres: "Urumqi Hutu" tiene que ganarle a
     "Urumqi", que es otra ciudad a 90 km.
     """
+    # LA POSICION EXACTA MANDA SOBRE CUALQUIER TABLA - 26/10/2026. Las
+    # filas que vienen de HFCC traen las coordenadas del transmisor en el
+    # propio registro, asi que no hay nada que adivinar: ni prefijo de
+    # nombre ni centroide de pais.
+    if v.get('xy') is not None:
+        return v['xy']
     sit = v['sitio'].strip().upper()
     if sit:
         mejor = None
@@ -414,6 +662,8 @@ def main():
     xy_paises = os.path.join(aqui, 'paises_xy.csv')
     xy_sitios = os.path.join(aqui, 'sitios_xy.csv')
     hasta = None
+    ruta_hfcc = None
+    ruta_axy = None
     i = 1
     while i < len(sys.argv):
         a = sys.argv[i]
@@ -438,6 +688,10 @@ def main():
                 xy_sitios = val
             elif a == '--hasta':
                 hasta = int(val)
+            elif a == '--hfcc':
+                ruta_hfcc = val
+            elif a == '--aoki-xy':
+                ruta_axy = val
             else:
                 print("  MAL: no conozco %s" % a)
                 return 1
@@ -490,6 +744,186 @@ def main():
     print("  %d entradas despues de fusionar (de %d)" % (len(ent), len(crudas)))
 
     filas = list(ent.values())
+    for v in filas:
+        v.setdefault('xy', None)
+
+    # ------------------------------------------------------------------
+    # Y ENCIMA, EL REGISTRO OFICIAL - 26/10/2026.
+    # ------------------------------------------------------------------
+    #
+    # Pedido por el usuario: "añade tambien hfcc, evita duplicados".
+    #
+    # LO DIFICIL ES LO SEGUNDO, y no es un detalle de implementacion: la
+    # MISMA transmision esta en las tres listas con TRES NOMBRES DISTINTOS.
+    # EiBi la llama por el programa -"CNR 1 Voice of China"-, HFCC por la
+    # organizacion que la registro -"China National Radio"- y Aoki en
+    # mayusculas y recortada. Asi que la clave de siempre, que lleva el
+    # nombre dentro, aqui no sirve: fusionar por nombre dejaria las tres.
+    #
+    # LO QUE SI IDENTIFICA UNA TRANSMISION son cuatro cosas que las tres
+    # listas escriben igual: la FRECUENCIA, el PAIS que emite, y que las
+    # HORAS SE SOLAPEN. Dos emisiones del mismo pais en la misma frecuencia
+    # a la misma hora no son dos emisiones: son la misma contada dos veces.
+    #
+    # Y EL EMPAREJAMIENTO ES UNO A UNO, a proposito. En una frecuencia puede
+    # haber varias emisiones del mismo pais en horas que se solapan -idiomas
+    # distintos, por ejemplo- y si se dejara que una fila de HFCC se comiera
+    # TODAS las que casan, se perderian emisiones de verdad. Cada fila de
+    # HFCC se queda con UNA, la que mas solapa, y las demas siguen vivas.
+    #
+    # QUE SE QUEDA DE CADA UNA. El NOMBRE, de EiBi: es el del programa, el
+    # que la gente reconoce. Todo lo demas, de HFCC: las HORAS y los DIAS
+    # porque son los de esta temporada y los de EiBi son los de la anterior,
+    # y el SITIO con sus coordenadas porque es el unico que lo da entero.
+    #
+    # Es la misma regla que ya seguian EiBi y Aoki -"el sitio de Aoki y el
+    # destino de EiBi"-, un escalon mas arriba.
+    if ruta_hfcc is not None:
+        hf = lee_hfcc(ruta_hfcc)
+        if hf is None:
+            print("  MAL: no encuentro %s" % ruta_hfcc)
+            return 1
+
+        # (1) QUE PARES (FRECUENCIA, PAIS) CUBRE EL REGISTRO ESTA TEMPORADA.
+        cubre = set()
+        for f in hf:
+            h = hz(f['khz'])
+            if h is not None:
+                cubre.add((h, f['itu'].strip().upper()))
+
+        # (2) LO QUE LAS LISTAS DE AFICIONADO DICEN DE ESOS MISMOS PARES SE
+        #     APARTA. No porque este mal escrito, sino porque es DE LA
+        #     TEMPORADA ANTERIOR: cuando se escribio esto, EiBi y Aoki
+        #     seguian publicando la A26 cinco dias despues de empezar el
+        #     invierno, y en el cambio de temporada media banda se mueve una
+        #     hora. Dejar las dos versiones seria dejar la radio diciendo que
+        #     una emisora esta en el aire cuando ya no lo esta - que es el
+        #     mismo fallo que el de las horas UTC: PARECE bueno.
+        #
+        #     LAS UTILITARIAS NO SE APARTAN NUNCA. EiBi las marca con un
+        #     guion delante del idioma (-TS balizas horarias, -CW, -TY
+        #     teletipo, -HF datos, -MX). No son radiodifusion, no se
+        #     coordinan en la HFCC y no cambian de temporada: son servicios
+        #     fijos. Que una baliza comparta frecuencia y pais con una
+        #     emisora registrada no la convierte en esa emisora.
+        viejas, quedan = [], []
+        for v in filas:
+            if (v['hz'], v['itu'].strip().upper()) in cubre \
+               and not v['lang'].strip().startswith('-'):
+                viejas.append(v)
+            else:
+                quedan.append(v)
+
+        # (3) EL NOMBRE SI SE HEREDA. HFCC registra la ORGANIZACION -"China
+        #     National Radio"- y EiBi apunta el PROGRAMA -"CNR 1 Voice of
+        #     China"-, que es el que la gente reconoce y el que esta radio
+        #     lleva enseñando desde que existe. Asi que cada transmision
+        #     registrada busca entre las apartadas la que mas horas solapa
+        #     con ella, y se queda con su nombre.
+        #
+        #     UNO A UNO: en una frecuencia puede haber varias emisiones del
+        #     mismo pais a horas que se solapan -idiomas distintos- y si una
+        #     fila de HFCC se quedara con TODAS las que casan, dos
+        #     transmisiones distintas acabarian con el mismo nombre.
+        porfrec = {}
+        for v in viejas:
+            porfrec.setdefault(v['hz'], []).append(v)
+        n_nom = n_tiradas = 0
+        nuevas = []
+        for f in hf:
+            h = hz(f['khz'])
+            mm = minutos(f['t'])
+            if h is None or mm is None or f['est'] == '':
+                n_tiradas += 1
+                continue
+            mejor, mejor_sol = None, 0
+            for v in porfrec.get(h, ()):
+                if v.get('usada') \
+                   or v['itu'].strip().upper() != f['itu'].strip().upper():
+                    continue
+                sol = solape_min(mm[0], mm[1], v['ini'], v['fin'])
+                if sol > mejor_sol:
+                    mejor, mejor_sol = v, sol
+            est, lang = f['est'], f['lang']
+            if mejor is not None:
+                mejor['usada'] = 1
+                est = mejor['est']
+                if not lang and mejor['lang']:
+                    lang = mejor['lang']
+                n_nom += 1
+            nuevas.append(dict(hz=h, ini=mm[0], fin=mm[1], dias=dias_hfcc(f['d']),
+                               est=est, itu=f['itu'], lang=lang,
+                               sitio=f['sitio'], xy=f['xy']))
+        print("  HFCC %d filas en %d pares (frecuencia, pais)"
+              % (len(hf), len(cubre)))
+        print("  %d entradas de EiBi/Aoki eran de esos mismos pares y se "
+              "sustituyen por las del registro" % len(viejas))
+        print("  %d transmisiones registradas se quedan con el nombre que les "
+              "daba EiBi" % n_nom)
+        if n_tiradas:
+            print("  %d filas de HFCC sin frecuencia/hora utilizable, tiradas"
+                  % n_tiradas)
+
+        # (4) Y por si dos han acabado diciendo exactamente lo mismo.
+        filas = quedan + nuevas
+        vistas, limpias, n_rep = set(), [], 0
+        for v in filas:
+            k = (v['hz'], v['ini'], v['fin'], v['est'].upper(),
+                 v['sitio'].upper())
+            if k in vistas:
+                n_rep += 1
+                continue
+            vistas.add(k)
+            limpias.append(v)
+        if n_rep:
+            print("  %d entradas repetidas despues de fusionar, tiradas" % n_rep)
+        filas = limpias
+        print("  %d entradas en total" % len(filas))
+
+    # ------------------------------------------------------------------
+    # LA MISMA EMISION CONTADA DOS VECES CON DOS NOMBRES - 26/10/2026.
+    # ------------------------------------------------------------------
+    #
+    # La fusion de arriba empareja por (frecuencia, hora, NOMBRE), y el
+    # nombre es justo lo que las listas escriben distinto: EiBi pone "China
+    # Radio Int." y Aoki "CHINA RADIO INTERNATIONAL", asi que las dos
+    # entraban. Se veia en la radio: 603 kHz, la misma emision a la misma
+    # hora, dos renglones, uno con sitio y otro sin el.
+    #
+    # LO QUE SE TIRA ES SOLO LO QUE NO PUEDE SER OTRA COSA: misma
+    # frecuencia, mismo pais, MISMA HORA DE PRINCIPIO Y DE FIN, y un nombre
+    # que es el prefijo del otro con ocho caracteres por lo menos. Si las
+    # horas no coinciden EXACTAMENTE no se toca, porque entonces puede ser
+    # otra emision: China Radio emite de verdad a horas distintas desde
+    # sitios distintos, y tirar una por parecerse seria perder una emisora.
+    #
+    # Y SE QUEDA LA QUE TIENE SITIO. Es la que puede situarse en el mapa y
+    # la que el orden por cercania sabe colocar; la otra no añade nada.
+    porclave = {}
+    for v in filas:
+        porclave.setdefault((v['hz'], v['itu'].strip().upper(),
+                             v['ini'], v['fin']), []).append(v)
+    fuera = set()
+    for grupo in porclave.values():
+        if len(grupo) < 2:
+            continue
+        for a in grupo:
+            if a['sitio'].strip() or id(a) in fuera:
+                continue
+            na = re.sub(r'[^A-Z0-9]', '', a['est'].upper())
+            if len(na) < 8:
+                continue
+            for b in grupo:
+                if b is a or not b['sitio'].strip():
+                    continue
+                nb = re.sub(r'[^A-Z0-9]', '', b['est'].upper())
+                if len(nb) >= 8 and (nb.startswith(na) or na.startswith(nb)):
+                    fuera.add(id(a))
+                    break
+    if fuera:
+        filas = [v for v in filas if id(v) not in fuera]
+        print("  %d entradas eran la misma emision con otro nombre y sin "
+              "sitio, tiradas" % len(fuera))
 
     # EL ORDEN DENTRO DE CADA FRECUENCIA.
     #
@@ -509,6 +943,37 @@ def main():
             print("  AVISO: no encuentro %s, solo se usaran los paises"
                   % xy_sitios)
             sitios = {}
+        # LAS POSICIONES QUE REGALAN LAS PROPIAS LISTAS - 26/10/2026.
+        #
+        # sitios_xy.csv esta escrito a mano y tiene 596 renglones. El Aoki
+        # ANCHO (xta26.txt) trae la posicion del transmisor en grados,
+        # minutos y segundos para casi mil emplazamientos, y site.txt de
+        # HFCC para setecientos mas. Meterlos aqui es gratis y hace que el
+        # orden por cercania deje de apoyarse en el centroide del pais para
+        # media lista.
+        #
+        # VAN DETRAS de sitios_xy.csv y no delante: esa tabla esta escrita a
+        # mano precisamente para corregir lo que las listas dicen mal, asi
+        # que si alguien se tomo la molestia de apuntar un sitio ahi, gana.
+        if ruta_axy is not None:
+            extra = lee_aoki_xy(ruta_axy)
+            n_ant = len(sitios)
+            for k, xy in extra.items():
+                sitios.setdefault(k, xy)
+            print("  %d emplazamientos del Aoki ancho (%d ya estaban)"
+                  % (len(extra), len(extra) - (len(sitios) - n_ant)))
+        if ruta_hfcc is not None:
+            n_ant = len(sitios)
+            n_h = 0
+            for nom, xy in lee_hfcc_sitios(
+                    os.path.join(os.path.dirname(os.path.abspath(ruta_hfcc)),
+                                 'hfcc_sitios.txt')).values():
+                if nom and xy is not None:
+                    n_h += 1
+                    sitios.setdefault(nom.upper(), xy)
+                    sitios.setdefault(nom.upper()[:12].strip(), xy)
+            print("  %d emplazamientos de HFCC (%d nuevos)"
+                  % (n_h, len(sitios) - n_ant))
         faltan = set()
         n_sitio = n_sin = 0
         for v in filas:
@@ -615,6 +1080,17 @@ def main():
             v = ((v ^ x) * 16777619) & 0xFFFFFFFF
         return v
 
+    if hasta is None and ruta_hfcc is not None:
+        # LA CADUCIDAD LA PONE EL REGISTRO, no la lista de aficionado.
+        # Cuando se escribio esto, la cabecera de EiBi decia que caducaba el
+        # 25/10/2026 -o sea, ayer- mientras que las transmisiones de HFCC
+        # llegan hasta el 28/03/2027. Lo que la radio tiene dentro es la
+        # temporada de invierno, asi que lo que tiene que avisar es cuando
+        # acaba el invierno.
+        hasta = hfcc_valido(lee_hfcc(ruta_hfcc) or [])
+        if hasta is not None:
+            print("  caduca el %08d, que es cuando acaba la ultima "
+                  "transmision registrada" % hasta)
     if hasta is None:
         hasta = lee_valido(eibi)
     if hasta is None:

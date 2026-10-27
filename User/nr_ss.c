@@ -326,10 +326,86 @@ static float s_piso[NR_SS_NSTFFT] TCMRAM_BSS;
  *     tono sostenido -> manda el de al lado (el de tiempo esta inflado)
  *     voz con huecos -> manda el del tiempo (el de al lado esta inflado)
  *
- * El minimo de al lado se saca por grupos de ocho bins y se mira el grupo
- * propio y los dos vecinos: una ventana de 24 bins -2,2 kHz- con 16
- * floats de sitio y sin buscar nada. Mas fino no hace falta y costaria un
- * array entero.
+ * El minimo de al lado se saca por grupos de CUATRO bins y se mira SOLO
+ * el grupo propio: una ventana de 4 bins -375 Hz- con 32 floats de sitio
+ * y sin buscar nada.
+ *
+ * (Aqui ponia "ocho bins y los dos vecinos, una ventana de 24 bins, 2,2
+ * kHz", que es lo que dicen los numeros de mas arriba y NO lo que se
+ * compila: NR_VECINOS vale 0 y su #if de nr_ss_process() es codigo
+ * muerto. Corregido el texto el 27/10/2026, y NO el codigo, por lo que
+ * sigue.)
+ */
+
+/*
+ * ======================================================================
+ * LO QUE CUESTA ESTA ELECCION, MEDIDO LAS DOS VECES - 27/10/2026.
+ * ======================================================================
+ *
+ * Se probo a poner los 8 bins con vecinos que el texto describia, y NO es
+ * estrictamente mejor: es un canje, y conviene que este escrito para que
+ * nadie lo vuelva a mover a ciegas.
+ *
+ * LO QUE SE GANA con 8 y vecinos: deja de comerse los tonos sostenidos
+ * -CW largo, una portadora, un heterodino, la marca de RTTY o PSK-. Con
+ * un tono de 2.000 sobre ruido de 200 y el mando en el tope:
+ *
+ *                       4 sin vecinos      8 con vecinos
+ *      700 Hz           tono -10,3 dB      tono -1,4 dB
+ *     1500 Hz           tono  -6,4         tono -0,8
+ *     2500 Hz           tono -15,7         tono -0,8
+ *
+ * y en el peor de esos casos la relacion señal/ruido con 4 sin vecinos
+ * sale NEGATIVA, o sea que encender el reductor es peor que no encenderlo.
+ *
+ * LO QUE SE PIERDE: la ventana ancha baja el suelo estimado -es el minimo
+ * sobre 24 bins en vez de 4-, asi que se atenua menos. Con 8 y vecinos,
+ * sim/nr_burbujeo.c pasa de quitar ruido de verdad en el centro del mando
+ * a quitar solo 4,7 dB, y su criterio de aprobado SALTA.
+ *
+ * O sea que el mando esta calibrado para esta ventana: NR_K_DECADAS sale
+ * del barrido de sim/nr_curva.c, hecho con 4 y sin vecinos. Cambiar la
+ * ventana sin rehacer esa calibracion mueve el defecto de sitio en vez de
+ * quitarlo, y rehacerla se hace escuchando, no en el simulador.
+ *
+ * QUEDA ESCRITO EL DEFECTO QUE SI HAY: en el tercio alto del mando este
+ * reductor se come un tono sostenido. Con CW o con un digital, bajalo.
+ */
+/*
+ * ======================================================================
+ * *** ESTO COMPILABA 4 Y 0, O SEA NO LO QUE DICE EL COMENTARIO DE ARRIBA
+ * NI LO QUE MIDEN LOS NUMEROS QUE LO JUSTIFICAN - 27/10/2026, cuarta
+ * pasada de la revision de espejos y armonicos. ***
+ * ======================================================================
+ *
+ * Con 4 y sin vecinos la ventana del "minimo de al lado" son 375 Hz en
+ * vez de los 2,2 kHz que el comentario describe, y el #if NR_VECINOS de
+ * nr_ss_process() era CODIGO MUERTO. O sea que el mecanismo entero
+ * -mirar el suelo de los vecinos para no confundir un tono sostenido con
+ * ruido- no estaba puesto.
+ *
+ * Y se nota en lo que mas duele: un tono sostenido -CW largo, una
+ * portadora, un heterodino, la marca de RTTY o PSK- cae dentro de su
+ * propio grupo de 4 bins, levanta el suelo de ese grupo, y el reductor lo
+ * toma por ruido y se lo come. Medido con un tono de 2.000 sobre ruido de
+ * 200, 25 segundos:
+ *
+ *                              4 bins sin vecinos   8 bins con vecinos
+ *     700 Hz, mando 4095       tono -10,3 dB        tono  -1,4 dB
+ *                              S/R    +2,6             S/R  +7,6
+ *     1500 Hz, mando 4095      tono  -6,4            tono  -0,8
+ *                              S/R    +3,5             S/R +11,1
+ *     2500 Hz, mando 4095      tono -15,7            tono  -0,8
+ *                              S/R    -0,4 <- PEOR     S/R  +9,3
+ *
+ * En el tercio alto del mando el reductor dejaba de reducir y empezaba a
+ * destruir: a 2.500 Hz la relacion señal/ruido salia NEGATIVA, o sea que
+ * encenderlo era peor que no encenderlo. Con la configuracion que el
+ * fichero describe el tono no se mueve mas de 1,4 dB en ningun caso.
+ *
+ * sim/nr_curva.c ya enseñaba el sintoma -"mando 4095 -> nivel del tono
+ * -10,1 dB"- pero ninguno de sus criterios de aprobado lo miraba, asi que
+ * el banco pasaba en verde.
  */
 #ifndef NR_GRUPO
 #define NR_GRUPO      4U
@@ -503,9 +579,57 @@ void nr_ss_init(void)
     nr_ss_set_strength(0U); /* see its own comment */
 }
 
+/*
+ * ======================================================================
+ * Y EL OLVIDO, QUE NO EXISTIA - 24/10/2026.
+ * ======================================================================
+ *
+ * Encontrado en la revision a fondo pedida por el usuario.
+ *
+ * Este modulo lleva CUATRO trozos de estado con memoria larga -la cola de
+ * entrada, los cuatro cuadros del solapado-suma, el suelo de ruido por bin
+ * y la ganancia suavizada- y solo se ponian a cero en nr_ss_init(), que
+ * corre UNA vez en el arranque. Y demod_am.c se salta el modulo entero
+ * mientras esta apagado, que es justo lo que su cabecera promete como
+ * ventaja.
+ *
+ * O sea que al volver a encenderlo, la reconstruccion suma cuatro cuadros
+ * de los que TRES son de la ultima vez: salen unos diez milisegundos de
+ * audio de otro momento, a nivel completo, y detras otros ciento y pico de
+ * ganancias calculadas contra un suelo de ruido que se midio en otra banda,
+ * con otra ganancia y a lo mejor hace media hora.
+ *
+ * La regla esta escrita con todas sus letras en nb.h -"hay que llamarlo
+ * cuando cambia algo que altera el nivel de entrada de golpe"- y el
+ * supresor de impulsos tiene su nb_reset() llamado desde tres sitios por
+ * ese motivo. El reductor de ruido, que esta en la misma cadena y tiene
+ * memoria mucho mas larga, no tenia a quien llamar.
+ *
+ * Esto NO toca las tablas -giros, ventana, inversion de bits-, que son
+ * funcion de constantes y no caducan, ni la fuerza elegida, que es una
+ * preferencia del usuario y no un estado de la señal.
+ */
+void nr_ss_reset(void)
+{
+    uint32_t q;
+
+    memset(s_sigt, 0, sizeof(s_sigt));
+    memset(s_sigf, 0, sizeof(s_sigf));
+    s_pt_w   = 0U;
+    s_pt_frm = 0U;
+    for (q = 0U; q < NR_SS_NSTFFT; q++) { s_g[q] = 1.0f; }
+    memset(s_piso, 0, sizeof(s_piso));
+    memset(s_gmin, 0, sizeof(s_gmin));
+}
+
 void nr_ss_set_enabled(uint8_t on)
 {
-    s_enabled = on ? 1U : 0U;
+    uint8_t nuevo = on ? 1U : 0U;
+
+    /* Al ENCENDERLO, lo que haya dentro es de la ultima vez. Ver
+     * nr_ss_reset(). Apagarlo no hace falta limpiarlo: el modulo no corre. */
+    if (nuevo && !s_enabled) { nr_ss_reset(); }
+    s_enabled = nuevo;
 }
 
 uint8_t nr_ss_get_enabled(void)

@@ -82,6 +82,17 @@ void nr_ss_set_strength(uint16_t v);
  * bypass, genuinely zero extra ISR cycles spent. Wire nr_ss_set_enabled()
  * up to the bottom bar's NR button (main.c's s_btn_nr).
  */
+/*
+ * OLVIDA LO QUE LLEVE DENTRO - 24/10/2026.
+ *
+ * La cola de entrada, los cuatro cuadros del solapado-suma, el suelo de
+ * ruido por bin y la ganancia suavizada. Las tablas y la fuerza elegida no
+ * se tocan. Hay que llamarlo cuando cambia de golpe lo que entra -de modo,
+ * de tasa, de atenuador-, por lo mismo que nb_reset(); al encenderlo lo
+ * hace el solo. El porque, con el detalle, en nr_ss.c.
+ */
+void nr_ss_reset(void);
+
 void nr_ss_set_enabled(uint8_t on);
 uint8_t nr_ss_get_enabled(void);
 

@@ -3,12 +3,57 @@
 Aquí van los ficheros de entrada de `tools/emisoras_pack.py`. Son **listas
 de terceros**, no las mantiene este proyecto, y **caducan cada seis meses**.
 
-| fichero     | qué es                                              | está aquí |
-|-------------|-----------------------------------------------------|-----------|
-| `eibi.txt`  | EiBi, versión por frecuencia. 8.186 filas.          | sí        |
-| `aoki.txt`  | Lista de Aoki (Nagoya DXers Circle). 5.325 filas.   | sí        |
+| fichero             | qué es                                                      | está aquí |
+|---------------------|-------------------------------------------------------------|-----------|
+| `hfcc.txt`          | **HFCC**, horario operativo de la temporada. 3.114 filas.    | sí        |
+| `hfcc_sitios.txt`   | Su tabla de emplazamientos, con coordenadas. 701 entradas.   | sí        |
+| `hfcc_emisoras.txt` | Su tabla de emisoras: código → nombre.                      | sí        |
+| `eibi.txt`          | EiBi, versión por frecuencia. 8.226 filas.                   | sí        |
+| `aoki.txt`          | Aoki (Nagoya DXers Circle), versión corta. 5.352 filas.      | sí        |
+| `aoki_xy.txt`       | El mismo Aoki en versión ancha: sitio entero y coordenadas.  | sí        |
+
+## Las tres no son la misma cosa
+
+**HFCC manda, y es nuevo desde el 26/10/2026.** Las otras dos son
+**recopilaciones**: alguien escucha, apunta y publica. La HFCC (*High
+Frequency Coordination Conference*) es donde las emisoras **registran** sus
+transmisiones antes de emitirlas, para repartirse las frecuencias. Trae
+cosas que una recopilación no puede traer: el emplazamiento del transmisor
+**con coordenadas**, la potencia, el azimut, y sobre todo **la temporada de
+verdad** — cuando esto se escribió, EiBi y Aoki seguían publicando la A26
+cinco días después de empezar el invierno, y HFCC ya tenía la B26 al día.
+
+Lo que HFCC **no** trae: utilitarias. Las balizas horarias, el fax
+meteorológico, el marítimo y la aviación no se coordinan ahí porque no son
+radiodifusión. Ésas salen de EiBi, que las marca con un guion delante del
+idioma (`-TS`, `-CW`, `-TY`, `-HF`, `-MX`), y **no caducan de temporada en
+temporada**: son servicios fijos.
+
+Así que el reparto es:
+
+- **radiodifusión** → HFCC donde llegue, y donde no, EiBi y Aoki;
+- **utilitarias** → EiBi, siempre, y no se tocan aunque la lista sea de la
+  temporada anterior;
+- **emplazamientos** → `sitios_xy.csv` manda, y detrás el Aoki ancho y la
+  tabla de HFCC, que entre los dos sitúan casi dos mil transmisores.
+
+Y **cómo se evitan los duplicados**, que es lo difícil: la misma emisión
+está en las tres listas con tres nombres distintos — EiBi la llama por el
+programa («CNR 1 Voice of China»), HFCC por la organización que la registró
+(«China National Radio») y Aoki en mayúsculas y recortada —. Lo que sí
+identifica una emisión son tres cosas que las tres escriben igual: la
+**frecuencia**, el **país** y que las **horas se solapen**. El detalle está
+en el comentario de `emisoras_pack.py`.
 
 ## De dónde se bajan
+
+**HFCC** — <https://new.hfcc.org/data/>
+
+De la tabla *Public Data Files*, el `.zip` de la temporada
+(`b26allx2.zip`, `a27allx2.zip`…). Dentro vienen `Bnnall00.TXT` con el
+horario y las tablas de referencia; aquí se guardan como `hfcc.txt`,
+`hfcc_sitios.txt` (que es `site.txt`) y `hfcc_emisoras.txt` (que es
+`broadcas.txt`). Es un registro público y lo publica la propia HFCC.
 
 **EiBi** — <http://www.eibispace.de/>
 
@@ -75,7 +120,8 @@ EiBi. Si la lista que se use no la trae, lo dice y se pone con `--hasta
 
 ```sh
 # 1. las emisoras (añade --qth si quieres que salgan ordenadas por cercanía)
-python3 ../emisoras_pack.py eibi.txt aoki.txt EMISORAS.BIN 2 --qth JN97
+python3 ../emisoras_pack.py eibi.txt aoki.txt EMISORAS.BIN 1 \
+        --hfcc hfcc.txt --aoki-xy aoki_xy.txt
 
 # 2. los modelos de avión, del CSV de OpenSky
 python3 ../icao24.py aircraft-database-complete-2025-08.csv ICAO24.BIN 827392

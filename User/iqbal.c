@@ -31,8 +31,12 @@
 
 /*
  * Constante de tiempo del promedio. A 96 kHz con bloques de 256 muestras son
- * 375 bloques por segundo; con 1/512 el promedio tarda algo mas de un
- * segundo en llegar y varios en asentarse del todo.
+ * 375 bloques por segundo, pero SOLO SE MIDE UNO DE CADA OCHO, asi que con
+ * 1/512 la constante son 512 * 8 * 2,667 ms = **10,9 segundos** (21,8 a 48
+ * kHz). Aqui ponia "algo mas de un segundo", que es lo que saldria midiendo
+ * todos los bloques; el diezmado por ocho lo multiplica por ocho y eso es
+ * justo lo que tarda en reabsorberse lo aprendido en otra banda. Corregido
+ * el 27/10/2026; doscientas lineas mas abajo ya estaba bien.
  *
  * Lenta a proposito. El desequilibrio del hardware no cambia con el tiempo,
  * cambia con la FRECUENCIA -el reparto del clon de reloj no es el mismo en
@@ -75,10 +79,18 @@
  * lados y perderse lo que escribio el otro.
  */
 static volatile uint8_t s_on  TCMRAM_BSS;
+/* Si el estimador puede aprender de lo que entra. Ver iqbal_aprende(): en
+ * FM ancha no puede, porque la portadora vive en continua. Volatil por lo
+ * mismo que s_on: lo escribe el bucle principal y lo lee la interrupcion. */
+static volatile uint8_t s_aprende TCMRAM_BSS;
 static uint8_t  s_hay         TCMRAM_BSS;  /* ya hay una estimacion creible */
 static float    s_ii TCMRAM_BSS, s_qq TCMRAM_BSS, s_iq TCMRAM_BSS;
 static float    s_theta TCMRAM_BSS, s_g TCMRAM_BSS;
 static uint32_t s_bloques     TCMRAM_BSS;
+/* Bloques que la guarda de la pareja simetrica ha dejado fuera del
+ * promedio. Ver IQB_PAR_MAX: en una banda llena esto sube y el estimador
+ * se queda quieto, que es lo correcto. */
+static uint32_t s_pares       TCMRAM_BSS;
 static uint8_t  s_turno       TCMRAM_BSS;
 static float    s_esp_db      TCMRAM_BSS;
 static int16_t  s_esp_bin     TCMRAM_BSS;
@@ -131,13 +143,51 @@ static volatile float    s_ab_on      TCMRAM_BSS;
 /* Volatil por lo mismo que las de arriba: la cuenta la lleva la
  * interrupcion y el bucle principal la pone a cero. */
 static volatile uint16_t s_ab_plazo   TCMRAM_BSS;
+/*
+ * CUANTAS VECES SE HA ABORTADO. 26/10/2026, revision a fondo de espejos y
+ * armonicos. Lo unico que hace falta para que el bucle principal se entere
+ * de que la interrupcion aborto MIENTRAS el estaba a mitad de camino: no
+ * se puede mirar el estado -la interrupcion lo deja en AB_PARADA y el
+ * bucle principal esta a punto de escribirlo- ni el plazo -que vale cero
+ * tanto despues de abortar como recien lanzada-. Ver iqbal_ab_paso().
+ */
+static volatile uint16_t s_ab_gen     TCMRAM_BSS;
 
 static void ab_aborta(void);
 
 
 void iqbal_init(void)
 {
+    /*
+     * SIN_IQ: LA COMPILACION DE DIAGNOSTICO, QUE HASTA HOY NO HACIA NADA.
+     * 26/10/2026, revision a fondo de espejos y armonicos.
+     *
+     * avisos.mk ofrece `make SINIQ=1` y dice que "lo deja fuera; si con eso
+     * la radio vuelve a ir fina, ya sabemos donde mirar". Pero -DSIN_IQ no
+     * lo miraba NI UN FICHERO del arbol: el firmware salia identico y la
+     * respuesta era "no era eso" pasara lo que pasara, que es peor que no
+     * tener el interruptor.
+     *
+     * Y NO BASTA CON ARRANCAR APAGADO, que fue el primer intento: a
+     * s_aprende lo vuelve a encender apply_demod_mode() con
+     * iqbal_aprende(!wfm) en cuanto se aplica cualquier modo que no sea FM
+     * ancha, o sea siempre. Con s_on = 0 y s_aprende = 1 se quedaban
+     * muertos la correccion, iqbal_calibra() y iqbal_resuelve() -su puerta
+     * mira los dos-, pero el ESTIMADOR seguia corriendo DENTRO DE LA
+     * INTERRUPCION DEL DMA, que es lo primero que avisos.mk nombra. Asi
+     * que las puertas de verdad van en las propias funciones, abajo.
+     *
+     * (Esa compilacion avisa de que ab_aborta() y fir_aplica() se quedan
+     * sin llamar. Es correcto y es justo lo que se busca: con SIN_IQ no
+     * hay nada que abortar ni ningun FIR que aplicar.)
+     */
+#ifdef SIN_IQ
+    s_on      = 0U;
+    s_aprende = 0U;
+#else
     s_on      = 1U;
+    s_aprende = 1U;
+#endif
     s_hay     = 0U;
     s_ii      = 0.0f;
     s_qq      = 0.0f;
@@ -145,10 +195,12 @@ void iqbal_init(void)
     s_theta   = 0.0f;
     s_g       = 1.0f;
     s_bloques = 0U;
+    s_pares   = 0U;   /* va en pareja con s_bloques: ver iqbal_pares() */
     s_turno   = 0U;
     s_esp_db  = 0.0f;
     s_esp_bin = 0;
     s_ab_est  = AB_PARADA;
+    s_ab_gen  = 0U;
     s_ab_hay  = 0U;
     s_ab_off  = 0.0f;
     s_ab_on   = 0.0f;
@@ -157,10 +209,225 @@ void iqbal_init(void)
 void iqbal_set_on(uint8_t on) { s_on = on ? 1U : 0U; }
 uint8_t iqbal_get_on(void)    { return s_on; }
 
+/*
+ * ======================================================================
+ * APRENDER Y CORREGIR SON DOS COSAS, Y EN FM ANCHA SOLO VALE LA SEGUNDA
+ * 26/10/2026, decimocuarta vuelta de la revision a fondo.
+ * ======================================================================
+ *
+ * POR QUE. Todo el estimador plano se apoya en que E[x^2] tiende a cero
+ * con x = I + jQ. Eso es cierto cuando lo que se recibe esta DESPLAZADO
+ * del oscilador, porque entonces x^2 gira y se promedia solo. En FM ancha
+ * NO HAY MEZCLADOR: la portadora vive en continua, y entonces
+ *
+ *     E[x^2] = A^2 * E[e^{j2*fase}]
+ *
+ * que no es cero: lo fija el indice de modulacion. La guarda de la pareja
+ * simetrica (IQB_PAR_MAX) caza los casos extremos -rechaza todo por debajo
+ * de +-40 kHz de desviacion, comprobado 750 bloques de 750- pero deja
+ * pasar justo hasta su propio limite de diseño.
+ *
+ * Y entonces el corrector no corrige: SE INVENTA UN ESPEJO QUE NO EXISTE.
+ * Medido con hardware perfecto (eg = 1,00, psi = 0 grados), portadora de
+ * 8.000 cuentas, 16 s por fila. La ultima columna es el rechazo de imagen
+ * que el propio corrector FABRICA sobre un tono limpio:
+ *
+ *     programa                theta      g       espejo fabricado
+ *     musica fuerte +-75 kHz  -0,0069   1,0139      42,3 dB
+ *     pasaje normal +-30 kHz  -0,1257   0,9617      23,8 dB
+ *     voz floja     +-10 kHz  -0,0348   0,9480      30,0 dB
+ *     voz muy floja  +-3 kHz  +0,0220   1,0742      28,5 dB
+ *
+ * Con un desequilibrio DE VERDAD de 25,3 dB, en el pasaje mas comun deja
+ * 23,8 dB: PEOR que no tocar nada.
+ *
+ * Y LO QUE DE VERDAD DUELE ES LO QUE SE LLEVA A ONDA CORTA. Las medias
+ * s_ii/s_qq/s_iq se actualizan SIEMPRE -la guarda solo decide si el numero
+ * se acepta- y su constante de tiempo son 10,9 segundos, asi que el hueco
+ * de programa las envenena y lo aprendido viaja. Medido, radio con espejo
+ * nativo de 25,3 dB:
+ *
+ *     60 s solo en onda corta ....................  86,7 dB
+ *     15 s de musica en FM ancha .................  44,5 dB
+ *     + 7,5 s de hueco de programa ...............  32,0 dB
+ *     de vuelta en onda corta: 0 s -> 32,0   20 s -> 51,7   40 s -> 67,6
+ *
+ * O sea que UN PASO POR LA FM COMERCIAL CUESTA DE 42 A 55 dB DE RECHAZO DE
+ * IMAGEN EN ONDA CORTA, y cerca de un minuto en recuperarse. Que es,
+ * palabra por palabra, el sintoma para el que se escribio este modulo.
+ *
+ * EL ARREGLO. No apagar el corrector -lo ya aprendido en onda corta sigue
+ * siendo bueno y la pantalla lo agradece-, sino APAGAR EL APRENDIZAJE
+ * mientras la señal no este desplazada. Asi la calibracion de onda corta
+ * sobrevive intacta a un paseo por la FM.
+ *
+ * POR QUE NO LO MEDIA NADIE: sim/wfm_espejo.c mide el espejo del HARDWARE
+ * sobre el audio de WFM y nunca llama a iqbal_bloque(); sim/iqbaltest.c no
+ * tiene ni un caso a 192 kHz ni de FM ancha.
+ */
+void iqbal_aprende(uint8_t si)
+{
+#ifdef SIN_IQ
+    (void)si;
+    s_aprende = 0U;   /* ver iqbal_init(): con SIN_IQ no se aprende nunca */
+#else
+    s_aprende = si ? 1U : 0U;
+#endif
+}
+uint8_t iqbal_get_aprende(void) { return s_aprende; }
+
+/*
+ * ======================================================================
+ * LA PAREJA SIMETRICA, QUE ES LO QUE DE VERDAD ROMPIA ESTO - 24/10/2026.
+ * ======================================================================
+ *
+ * *** Avisado por el usuario: le salen señales espejo, de esas que van al
+ * contrario de la marcha, en 40 metros. Y en las dos tasas. ***
+ *
+ * Y NO ERA EL ESPEJO DEL APARATO: ERA ESTE FICHERO METIENDOLO. Medido en
+ * sim/iqbaltest.c, seccion "la banda poblada", con veinte emisoras y tres
+ * parejas puestas una enfrente de otra:
+ *
+ *     corrector apagado     26,8 dB de rechazo
+ *     corrector encendido   12,3 dB     <- CATORCE dB PEOR
+ *
+ * DE DONDE SALE. El estimador plano se apoya en dos numeros:
+ *
+ *     E[I*Q]   tiene que ser cero si I y Q estan en cuadratura
+ *     E[I*I] - E[Q*Q]   tiene que ser cero si las dos ramas pesan igual
+ *
+ * Los dos son la parte real y la imaginaria de E[x^2] con x = I + jQ. Para
+ * UNA portadora en +f, x^2 gira al doble de velocidad y promedia cero: por
+ * eso el metodo funciona. Pero con DOS portadoras, una en +f y otra en -f,
+ * el producto cruzado NO GIRA -las frecuencias se cancelan- y deja un
+ * termino constante 2*a*b en E[x^2].
+ *
+ * O sea que dos emisoras de verdad colocadas simetricamente respecto al
+ * oscilador producen exactamente la misma firma que un desequilibrio. El
+ * estimador no puede distinguirlas: se cree el 2*a*b, calcula una ganancia
+ * y una fase que no existen, y al aplicarlas CREA la imagen que venia a
+ * quitar. Y en los 40 metros eso no es raro, es lo normal: banda de
+ * aficionados llena de un lado, radiodifusion del otro, decenas de señales
+ * dentro de la pantalla y el oscilador en medio.
+ *
+ * LA GUARDA, Y POR QUE ES UN TOPE ABSOLUTO Y NO UN FILTRO.
+ *
+ * Las dos cosas -el desequilibrio y la pareja- dejan la misma huella en
+ * E[x^2], y por la magnitud sola NO se pueden separar: lo unico que las
+ * distingue es que una es coherente con la frecuencia y la otra no, y eso
+ * se mide en el espectro, no aqui. Lo que si se puede hacer aqui es
+ * reconocer un numero IMPOSIBLE.
+ *
+ * |E[x^2]| / E[|x|^2] vale aproximadamente 2*epsilon, con epsilon la
+ * relacion imagen/señal. O sea:
+ *
+ *     rechazo nativo   epsilon   la razon
+ *     ---------------- --------- ---------
+ *     22 dB (el peor      0,079    0,158     <- lo peor que ha enseñado
+ *       visto en la                             esta radio
+ *       radio)
+ *     25 dB (el caso      0,056    0,112     <- el que se arreglo de 25
+ *       de la cabecera)                         a 86 dB
+ *     20,8 dB             0,091    0,180     <- el tope
+ *
+ * Por encima de 0,18 lo que se esta midiendo no puede ser el desequilibrio
+ * de un receptor en cuadratura: es la escena. Medido en sim/iqbaltest.c,
+ * la banda poblada da 0,24.
+ *
+ * LO QUE ESTO CUESTA, dicho claro: si algun dia un ejemplar viene peor de
+ * 21 dB, el corrector plano no lo tocara y se quedara como esta. Eso es
+ * exactamente lo que tiene que pasar -la alternativa es creerse una medida
+ * que puede ser de la escena y DOBLAR el espejo, que es lo que estaba
+ * haciendo- y ademas el FIR del espectro sigue pudiendo con ello, porque
+ * aquel si sabe mirar bin a bin.
+ *
+ * Lo que pasa en una banda llena, con esto puesto, es que el estimador se
+ * QUEDA QUIETO con lo ultimo bueno que midio. Que es justo lo que dice la
+ * cabecera que tiene que hacer: lo peor que puede hacer cuando se equivoca
+ * es no hacer nada.
+ */
+#define IQB_PAR_MAX      0.18f
+
+/*
+ * ======================================================================
+ * RESOLVER LAS MEDIAS: UNA SOLA ESCRITURA - 24/10/2026.
+ * ======================================================================
+ *
+ * Encontrado en la revision a fondo pedida por el usuario, y es el fallo
+ * que agc.h describe en su cabecera con todas las letras: dos copias del
+ * mismo lazo se separan solas.
+ *
+ * Habia DOS: la de iqbal_mide() -que usan los bancos del PC- y la de
+ * iqbal_bloque() -la que corre en la radio-. Hacian la misma cuenta: de las
+ * tres medias saca theta, de theta saca E[Q1*Q1], de ahi la ganancia, y
+ * acepta solo si los tres numeros caen dentro de sus topes.
+ *
+ * Y YA SE HABIAN SEPARADO. El 24/10/2026, por la mañana, se añadio la
+ * guarda de la pareja simetrica -IQB_PAR_MAX, la que impide que dos
+ * emisoras enfrentadas respecto al oscilador se tomen por desequilibrio del
+ * hardware- y se escribio SOLO en iqbal_bloque(). O sea que el banco que
+ * respalda las cifras de rechazo de este modulo estaba midiendo un
+ * estimador que ya no era el de la radio, y encima la copia que se quedo
+ * atras es la que valida a la otra.
+ *
+ * Ahora la cuenta esta aqui y las dos entran por la misma puerta.
+ *
+ * Devuelve 1 si la estimacion se ha aceptado y 0 si no, y en el segundo
+ * caso dice por `pareja` si el motivo fue el tope de la pareja simetrica,
+ * que es el unico que se cuenta aparte (ver iqbal_pares()).
+ */
+static uint8_t resuelve(uint8_t *pareja)
+{
+    float pot = s_ii + s_qq;
+    float re  = s_ii - s_qq;
+    float im  = 2.0f * s_iq;
+    float th, q1q1, g;
+
+    *pareja = 0U;
+
+    /* Sin potencia no hay nada que medir, y eso NO es una pareja simetrica:
+     * es que no entra nada -el I2S parado, o un bloque de muestras todas
+     * iguales-. Contarlo como pareja ensuciaria la fila que existe para
+     * decir si la banda esta poblada. 24/10/2026. */
+    if (pot <= 0.0f) { return 0U; }
+    /*
+     * Y EL UMBRAL DE POTENCIA, TAMBIEN ANTES - 26/10/2026.
+     *
+     * Estaba DESPUES de la prueba de pareja simetrica, y entonces el
+     * comentario de arriba solo era cierto para pot EXACTAMENTE cero. Con
+     * un canal del codec vivo y el otro mudo -s_ii = 50, s_qq ~ 0- sale
+     * re/pot ~ 1, que pasa de largo cualquier IQB_PAR_MAX, y el bloque se
+     * contaba como pareja. O sea que media cadena de recepcion caida se
+     * enseñaba en la fila de Informacion como "la banda esta poblada",
+     * que es justo lo contrario de lo que pasa.
+     */
+    if (s_ii < IQB_POT_MIN || s_qq < IQB_POT_MIN) { return 0U; }
+    if ((re * re + im * im) > (IQB_PAR_MAX * IQB_PAR_MAX) * pot * pot) {
+        *pareja = 1U;
+        return 0U;
+    }
+
+    th = s_iq / s_ii;
+    if (th > IQB_THETA_MAX || th < -IQB_THETA_MAX) { return 0U; }
+
+    /* E[Q1*Q1] = E[QQ] - 2*th*E[IQ] + th*th*E[II], sin tener que volver a
+     * recorrer el bloque: sale de las tres medias que ya hay. */
+    q1q1 = s_qq - 2.0f * th * s_iq + th * th * s_ii;
+    if (q1q1 < IQB_POT_MIN) { return 0U; }
+
+    g = sqrtf(s_ii / q1q1);
+    if (g > IQB_G_MAX || g < IQB_G_MIN) { return 0U; }
+
+    s_theta = th;
+    s_g     = g;
+    s_hay   = 1U;
+    return 1U;
+}
+
 void iqbal_mide(const int16_t *i, const int16_t *q, uint32_t n)
 {
     float ii = 0.0f, qq = 0.0f, iq = 0.0f;
-    float inv, q1q1, th, g;
+    float inv;
     uint32_t k;
 
     if (n == 0U) { return; }
@@ -196,36 +463,25 @@ void iqbal_mide(const int16_t *i, const int16_t *q, uint32_t n)
     s_iq += IQB_ALFA * (iq - s_iq);
     s_bloques++;
 
-    if (s_ii < IQB_POT_MIN || s_qq < IQB_POT_MIN) {
-        /* Sin señal no se toca lo que ya habia. Poner theta a cero aqui
-         * seria tirar la estimacion cada vez que el usuario baja el volumen de
-         * la antena o cambia de banda a un hueco vacio. */
-        return;
-    }
-
     /*
-     * Y SI SE SALE DE LOS TOPES, NO SE ACEPTA. Recortar y quedarse con el
-     * tope es lo peor de los dos mundos: una medida que ya se sabe mala se
-     * aplica igual, y encima con el valor mas extremo posible. Un numero
-     * fuera de rango aqui solo puede querer decir que lo que se esta
-     * midiendo no es el desequilibrio del hardware -una continua grande, un
-     * bloque recortado, una portadora justo en el centro-, y ante eso lo
-     * correcto es no tocar nada y esperar al bloque siguiente.
-     */
-    th = s_iq / s_ii;
-    if (th > IQB_THETA_MAX || th < -IQB_THETA_MAX) { return; }
+     * Sin señal, y fuera de los topes, no se toca lo que ya habia: poner
+     * theta a cero seria tirar la estimacion cada vez que el usuario baja la
+     * ganancia de antena o cambia de banda a un hueco vacio. Y una medida
+     * fuera de rango solo puede querer decir que lo que se esta midiendo no
+     * es el desequilibrio del hardware -una continua grande, un bloque
+     * recortado, una portadora justo en el centro, o dos emisoras
+     * enfrentadas respecto al oscilador-, y ante eso lo correcto es no tocar
+     * nada y esperar al bloque siguiente.
+     *
+     * Las dos cosas las decide resuelve(), que es la MISMA que usa el camino
+     * de la radio. Ver su comentario. */
+    {
+        uint8_t pareja = 0U;
 
-    /* E[Q1*Q1] = E[QQ] - 2*th*E[IQ] + th*th*E[II], sin tener que volver a
-     * recorrer el bloque: sale de las tres medias que ya hay. */
-    q1q1 = s_qq - 2.0f * th * s_iq + th * th * s_ii;
-    if (q1q1 < IQB_POT_MIN) { return; }
-
-    g = sqrtf(s_ii / q1q1);
-    if (g > IQB_G_MAX || g < IQB_G_MIN) { return; }
-
-    s_theta = th;
-    s_g     = g;
-    s_hay   = 1U;
+        if (!resuelve(&pareja) && pareja && s_pares < 0xFFFFFFFFUL) {
+            s_pares++;
+        }
+    }
 }
 
 void iqbal_aplica(int16_t *i, int16_t *q, uint32_t n)
@@ -268,16 +524,30 @@ void iqbal_aplica(int16_t *i, int16_t *q, uint32_t n)
  * desplazado (centro en n/2) y este en el orden natural de la FFT. */
 #define IQB_CAL_GUARDA   4U
 
-/* Y el bin de enfrente tiene que estar al menos 6 dB por debajo. Si no, lo
- * que hay ahi no es una imagen: son dos emisoras, y medirlas contamina el
- * ajuste. Es uno de los dos fallos que el banco encontro en el estimador. */
-#define IQB_ESPEJO_BAJO  0.25f
+/*
+ * Y EL BIN DE ENFRENTE TIENE QUE ESTAR BIEN POR DEBAJO. Si no, lo que hay
+ * ahi no es una imagen: son dos emisoras, y medirlas contamina el ajuste.
+ * Es uno de los dos fallos que el banco encontro en el estimador.
+ *
+ * ERAN 6 dB HASTA EL 24/10/2026, Y SEIS NO SON NADA. Un receptor con un
+ * espejo a 6 dB no es un receptor: el peor que ha enseñado esta radio son
+ * 22 dB, y la cabecera de iqbal.h dice que tres grados de error dejan 30.
+ * O sea que todo lo que entraba entre 6 y 20 dB NO PODIA ser una imagen de
+ * este aparato, y sin embargo se tomaba por buena.
+ *
+ * 0,02 son 17 dB: cinco por debajo del peor caso real, que es margen de
+ * sobra, y deja fuera las parejas de emisoras de verdad.
+ */
+#define IQB_ESPEJO_BAJO  0.02f
 
 /* Medidas minimas en una ranura para fiarse de ella, y ranuras minimas para
- * poder resolver. Cuatro incognitas piden al menos cuatro puntos; se exigen
- * seis para que el ajuste no pase exactamente por todos y copie su ruido. */
+ * poder resolver. Cuatro incognitas piden al menos cuatro puntos; se exige
+ * UNA MAS -cinco- para que el ajuste no pase exactamente por todos y copie
+ * su ruido. (Aqui ponia "seis" y el numero de abajo es cinco desde que
+ * existe; corregido el 26/10/2026 al revisar espejos y armonicos.) */
 #define IQB_CAL_MIN_N    4U
 #define IQB_RANURAS_MIN  5U
+
 
 /*
  * LAS RANURAS VIVEN EN LA SRAM Y EL FIR EN EL TCM, y no es indiferente: de
@@ -301,9 +571,35 @@ static uint8_t s_fir_hay               TCMRAM_BSS;
 
 uint8_t iqbal_fir_hay(void) { return s_fir_hay; }
 
+/* Ver iqbal.h para cuando hace falta y por que. */
+void iqbal_plano_olvida(void)
+{
+    s_hay   = 0U;
+    s_theta = 0.0f;
+    s_g     = 1.0f;
+    s_ii    = 0.0f;
+    s_qq    = 0.0f;
+    s_iq    = 0.0f;
+}
+
 void iqbal_fir_olvida(void)
 {
     uint8_t m;
+
+    /*
+     * LA BANDERA SE APAGA LA PRIMERA, Y NO LA ULTIMA - 26/10/2026.
+     *
+     * Estaba al final, detras de borrar las 16 ranuras y las 16 tomas mas
+     * la historia. Esto se llama desde el bucle principal y fir_aplica()
+     * corre en la interrupcion del DMA mirando s_fir_hay: con la bandera
+     * todavia a uno, un bloque de audio podia entrar y correr con MEDIO
+     * FIR a cero. Apagandola primero, la interrupcion ve "no hay FIR" ya
+     * desde la primera instruccion y se va por la rama plana.
+     *
+     * Es el mismo orden que iqbal_ab_lanza() ya se cuida de respetar con
+     * s_ab_est; aqui faltaba.
+     */
+    s_fir_hay = 0U;
     for (m = 0U; m < (uint8_t)IQB_RANURAS; m++) {
         s_cal_nre[m] = 0.0f; s_cal_nim[m] = 0.0f;
         s_cal_den[m] = 0.0f; s_cal_fs[m] = 0.0f; s_cal_n[m] = 0U;
@@ -312,7 +608,6 @@ void iqbal_fir_olvida(void)
         s_fir_re[m] = 0.0f; s_fir_im[m] = 0.0f;
         s_hre[m] = 0.0f;    s_him[m] = 0.0f;
     }
-    s_fir_hay = 0U;
 }
 
 uint8_t iqbal_cal_ranuras(void)
@@ -330,6 +625,41 @@ void iqbal_calibra(const float *re, const float *im, uint32_t n)
     float media = 0.0f, umbral;
 
     if (re == 0 || im == 0 || n < 64U) { return; }
+    /*
+     * ==================================================================
+     * *** Y SOLO CON EL CORRECTOR ENCENDIDO Y APRENDIENDO - 26/10/2026,
+     * revision a fondo de espejos y armonicos. ***
+     * ==================================================================
+     *
+     * Esto son dos cosas a la vez, y las dos importan.
+     *
+     * 1. EL LAZO SE ABRIA. iqbal_resuelve() SUMA al FIR porque da por
+     *    hecho que lo que el panadaptador mide es el RESIDUO, o sea lo que
+     *    queda DESPUES de corregir. Eso solo es cierto si el corrector
+     *    esta puesto. Con s_on = 0 -la fase apagada de la prueba A/B-,
+     *    aqui entraba el desequilibrio ENTERO, y la vuelta siguiente le
+     *    sumaba otro medio desequilibrio completo a un FIR que ya estaba
+     *    bien. El tope de iqbal_resuelve() no lo paraba: vigila el
+     *    INCREMENTO, no lo acumulado. Con el corrector apagado a mano, el
+     *    coeficiente crece lineal y sin freno hasta que el "corrector"
+     *    deja de quitar espejo y lo FABRICA a escala completa.
+     *
+     *    Hoy en la radio s_on solo se apaga 1,5 s por prueba A/B, asi que
+     *    el daño era un escalon y la contaminacion de las ranuras con
+     *    medidas del desequilibrio completo. Pero el mecanismo estaba
+     *    entero y nada en el modulo lo acotaba.
+     *
+     * 2. Y ERA LO MAS CARO QUE CORRIA SIN NINGUNA PUERTA. Esto lo llama
+     *    fft.c en CADA FFT cruda del panadaptador, hasta seis por cuadro,
+     *    unas 180 por segundo: del orden de 276.000 multiplicaciones por
+     *    segundo en el bucle de pantalla, se estuviera usando o no. No
+     *    miraba s_on, ni s_aprende, ni s_hay, ni el modo.
+     *
+     * s_aprende ademas es la puerta que ya existe para FM ancha
+     * -iqbal_aprende(!wfm) en main.c-, asi que con esto el FIR deja de
+     * intentar aprender alli tambien.
+     */
+    if (!s_on || !s_aprende) { return; }
     mitad = n / 2U;
 
     /*
@@ -402,11 +732,47 @@ void iqbal_calibra(const float *re, const float *im, uint32_t n)
         fq = (ki < mitad) ? ((float)ki / (float)n)
                           : (((float)ki - (float)n) / (float)n);
 
+        /*
+         * *** SE PARTEN POR LA MITAD AL LLENARSE, Y NO SE DEJA DE CONTAR.
+         * 26/10/2026. ***
+         *
+         * Aqui el contador se paraba en 60.000 y los CUATRO acumuladores
+         * seguian sumando. Dos consecuencias, y la primera es grave:
+         *
+         *   - fq = s_cal_fs[r] / s_cal_n[r] (ver mas abajo) se divide por
+         *     el contador parado, asi que a partir de la medida 60.000 la
+         *     frecuencia que se le atribuye a la ranura CRECE SIN LIMITE.
+         *     Y esa frecuencia es la que arma la matriz: el ajuste pasa a
+         *     colocar la correccion en una frecuencia que no existe. Se
+         *     llega en cinco minutos y medio de escuchar una emisora fija,
+         *     porque las ranuras solo se borran cuando iqbal_resuelve()
+         *     consigue resolver, y con una sola emisora nunca junta las
+         *     cinco que necesita.
+         *
+         *   - y el peso de la ranura tambien se congela mientras sus
+         *     sumas siguen creciendo, asi que deja de decir cuantas
+         *     medidas tiene.
+         *
+         * Partiendo los cuatro y el contador a la vez, TODAS las medias
+         * salen iguales -es la misma division con numerador y denominador
+         * divididos por dos- y ninguna suma puede crecer sin fin. De paso
+         * se va el otro problema que esto tenia: con s_cal_den subiendo
+         * sin tope, pasadas unas 26 horas el float de 32 bits ya no podia
+         * representar las sumas nuevas y la ranura se quedaba clavada en
+         * lo que midio el primer dia.
+         */
+        if (s_cal_n[r] >= 60000U) {
+            s_cal_nre[r] *= 0.5f;
+            s_cal_nim[r] *= 0.5f;
+            s_cal_den[r] *= 0.5f;
+            s_cal_fs[r]  *= 0.5f;
+            s_cal_n[r]    = (uint16_t)(s_cal_n[r] / 2U);
+        }
         s_cal_nre[r] += dr;
         s_cal_nim[r] += di;
         s_cal_den[r] += pk;
         s_cal_fs[r]  += fq;
-        if (s_cal_n[r] < 60000U) { s_cal_n[r]++; }
+        s_cal_n[r]++;
     }
 }
 
@@ -421,6 +787,37 @@ static uint8_t resuelve_sistema(float ar[IQB_FIR_TOMAS][IQB_FIR_TOMAS + 1U],
 {
     const uint8_t L = (uint8_t)IQB_FIR_TOMAS;
     uint8_t c, f, p;
+    float lim;
+
+    /*
+     * LA ESCALA DE LA MATRIZ, PARA PODER MIRAR EL PIVOTE EN RELATIVO.
+     * 26/10/2026, revision a fondo de espejos y armonicos.
+     *
+     * Aqui abajo habia un umbral ABSOLUTO -1e-20- contra una matriz cuya
+     * escala la fija la suma de los pesos de las ranuras, o sea entre unos
+     * cientos y 1e12. El umbral quedaba entre veinticuatro y treinta y dos
+     * ordenes de magnitud por debajo de lo que queria vigilar: NO SALTABA
+     * NUNCA. Un sistema casi singular -que es justo el caso que el
+     * comentario dice querer cazar, "todas las portadoras en el mismo
+     * sitio", lo normal cuando no se ha recorrido la banda- pasaba el
+     * pivoteo, amplificaba el ruido de la medida y lo unico que lo frenaba
+     * era el tope de |x| < 0,5 de mas abajo.
+     *
+     * Con la escala delante, el umbral puede ser lo que tenia que ser: una
+     * fraccion de la propia matriz. 1e-12 sobre el mayor |a|^2 de la
+     * diagonal son seis ordenes de magnitud en amplitud, de sobra para
+     * pasar un sistema sano y suficiente para parar uno degenerado.
+     */
+    {
+        float esc = 0.0f;
+
+        for (c = 0U; c < L; c++) {
+            float v = ar[c][c] * ar[c][c] + ai[c][c] * ai[c][c];
+            if (v > esc) { esc = v; }
+        }
+        if (!(esc > 0.0f)) { return 0U; }
+        lim = esc * 1e-12f;
+    }
 
     for (c = 0U; c < L; c++) {
         float mejor = -1.0f;
@@ -432,7 +829,7 @@ static uint8_t resuelve_sistema(float ar[IQB_FIR_TOMAS][IQB_FIR_TOMAS + 1U],
         /* Un pivote a cero quiere decir que las medidas no dan para tantas
          * incognitas -por ejemplo, todas las portadanas en el mismo sitio-.
          * No se inventa una solucion: se dice que no. */
-        if (mejor <= 1e-20f) { return 0U; }
+        if (!(mejor > lim)) { return 0U; }
         if (p != c) {
             for (f = 0U; f <= L; f++) {
                 float t = ar[c][f]; ar[c][f] = ar[p][f]; ar[p][f] = t;
@@ -474,15 +871,38 @@ uint8_t iqbal_resuelve(void)
     float xr[IQB_FIR_TOMAS], xi[IQB_FIR_TOMAS];
     uint8_t r, m, j, usadas = 0U;
 
+    /*
+     * LA MISMA PUERTA QUE iqbal_calibra() - 26/10/2026. Con el corrector
+     * apagado las ranuras no traen el residuo sino el desequilibrio
+     * entero, y sumar eso al FIR es abrir el lazo. Ver alli.
+     */
+    if (!s_on || !s_aprende) { return 0U; }
+
+    /*
+     * Y SE CUENTAN LAS RANURAS ANTES DE ARMAR NADA - 26/10/2026.
+     *
+     * Esta cuenta estaba DESPUES del bucle que monta la matriz, o sea que
+     * en la mayoria de las vueltas -las que no juntan cinco ranuras, que
+     * son casi todas: con una sola emisora en la banda no se juntan
+     * nunca- se pagaban hasta 640 llamadas a cosf/sinf en el bucle de
+     * pantalla para tirarlo todo a la basura dos lineas despues.
+     */
+    for (r = 0U; r < (uint8_t)IQB_RANURAS; r++) {
+        if (s_cal_n[r] < (uint16_t)IQB_CAL_MIN_N) { continue; }
+        if (s_cal_den[r] <= 0.0f) { continue; }
+        usadas++;
+    }
+    if (usadas < (uint8_t)IQB_RANURAS_MIN) { return 0U; }
+
     for (m = 0U; m < L; m++) {
         for (j = 0U; j <= L; j++) { ar[m][j] = 0.0f; ai[m][j] = 0.0f; }
     }
 
     for (r = 0U; r < (uint8_t)IQB_RANURAS; r++) {
         float wr, wi, fq, peso;
+        float cr[IQB_FIR_TOMAS], ci[IQB_FIR_TOMAS];
         if (s_cal_n[r] < (uint16_t)IQB_CAL_MIN_N) { continue; }
         if (s_cal_den[r] <= 0.0f) { continue; }
-        usadas++;
 
         wr = s_cal_nre[r] / s_cal_den[r];
         wi = s_cal_nim[r] / s_cal_den[r];
@@ -494,12 +914,26 @@ uint8_t iqbal_resuelve(void)
          * A[m] = exp(-j 2 pi f m) (CAUSAL; ver iqbal.h para por que no
          * centrado). Se acumula directamente, sin montar A entera.
          */
+        /*
+         * LOS CUATRO ANGULOS, UNA VEZ - 26/10/2026.
+         *
+         * aj_r/aj_i se calculaban DENTRO del bucle de m aunque solo
+         * dependen de j: por ranura salian 40 llamadas a cosf/sinf donde
+         * hacen falta 8. Cinco veces mas trigonometria de la necesaria, en
+         * el bucle de pantalla. El resultado es identico: es el mismo
+         * coseno del mismo angulo.
+         */
         for (m = 0U; m < L; m++) {
-            float am_r = cosf(-6.2831853f * fq * (float)m);
-            float am_i = sinf(-6.2831853f * fq * (float)m);
+            cr[m] = cosf(-6.2831853f * fq * (float)m);
+            ci[m] = sinf(-6.2831853f * fq * (float)m);
+        }
+
+        for (m = 0U; m < L; m++) {
+            float am_r = cr[m];
+            float am_i = ci[m];
             for (j = 0U; j < L; j++) {
-                float aj_r = cosf(-6.2831853f * fq * (float)j);
-                float aj_i = sinf(-6.2831853f * fq * (float)j);
+                float aj_r = cr[j];
+                float aj_i = ci[j];
                 /* conj(A[m]) * A[j] * peso */
                 ar[m][j] += peso * (am_r * aj_r + am_i * aj_i);
                 ai[m][j] += peso * (am_r * aj_i - am_i * aj_r);
@@ -509,8 +943,6 @@ uint8_t iqbal_resuelve(void)
             ai[m][L] += peso * (am_r * wi - am_i * wr);
         }
     }
-
-    if (usadas < (uint8_t)IQB_RANURAS_MIN) { return 0U; }
 
     /*
      * SI YA NO HAY ESPEJO, NO SE TOCA NADA - y esto no es prudencia, es un
@@ -579,6 +1011,32 @@ uint8_t iqbal_resuelve(void)
      * toda la vida, y aqui se nota porque el lazo corre muchas veces y la
      * prisa no sirve de nada.
      */
+    /*
+     * *** Y EL TOPE TAMBIEN SOBRE LO ACUMULADO - 26/10/2026. ***
+     *
+     * El tope de arriba mira el INCREMENTO. Eso basta mientras el lazo
+     * este cerrado -cada vuelta mide el residuo y el residuo se encoge-,
+     * pero no es una garantia: si por lo que sea entraran medidas que no
+     * son el residuo, el acumulado podria crecer sin que nada lo mirara, y
+     * un coeficiente grande no corrige espejo, lo FABRICA.
+     *
+     * Ahora mismo la puerta de arriba cierra el unico camino conocido,
+     * asi que esto no deberia saltar jamas. Esta precisamente por eso: es
+     * barato -cuatro modulos- y convierte una suposicion en una
+     * comprobacion. Y ademas hace verdadero el comentario del paso por
+     * int32 de fir_aplica(), que afirmaba que las tomas valen menos de
+     * 0,5 apoyandose en un tope que no existia.
+     *
+     * Si salta, no se aplica NADA de esta vuelta: se deja el FIR como
+     * estaba, que es lo ultimo que se sabe bueno.
+     */
+    for (m = 0U; m < L; m++) {
+        float nr = s_fir_re[m] + 0.5f * xr[m];
+        float ni = s_fir_im[m] + 0.5f * xi[m];
+
+        if (!((nr * nr + ni * ni) < 0.25f)) { return 0U; }
+    }
+
     for (m = 0U; m < L; m++) {
         s_fir_re[m] += 0.5f * xr[m];
         s_fir_im[m] += 0.5f * xi[m];
@@ -637,21 +1095,17 @@ uint8_t iqbal_resuelve(void)
  * menor que 0,5 (iqbal_resuelve() rechaza las que no lo cumplan). El mayor
  * valor posible es 32768 * 2 * 1,5 * 3 = 294.912, que cabe de sobra.
  */
-#if defined(__ARM_FEATURE_SAT) && (__ARM_FEATURE_SAT == 1)
-static inline int16_t sat16(int32_t v)
-{
-    int32_t r;
-    __asm volatile ("ssat %0, #16, %1" : "=r" (r) : "r" (v));
-    return (int16_t)r;
-}
-#else
-static inline int16_t sat16(int32_t v)
-{
-    if (v >  32767)  { v =  32767; }
-    if (v < -32768)  { v = -32768; }
-    return (int16_t)v;
-}
-#endif
+/*
+ * Y LA FUNCION ESTA EN sat16.h, QUE EXISTE PARA ESTO - 24/10/2026.
+ *
+ * Aqui habia una copia byte a byte de la de aquel fichero, incluido el
+ * ensamblador y el respaldo del PC. La cabecera compartida se escribio el
+ * 11/10/2026 justo porque esta operacion estaba repetida y una de las copias
+ * se habia quedado sin el SSAT -17 instrucciones por muestra en vez de 13,
+ * medido-; agc.c la incluye desde entonces y este fichero se quedo con la
+ * suya. Encontrado en la revision a fondo pedida por el usuario.
+ */
+#include "sat16.h"
 
 _Static_assert(IQB_FIR_TOMAS == 4U, "fir_aplica() va desenrollada a cuatro tomas");
 
@@ -703,6 +1157,13 @@ static void fir_aplica(int16_t *crudo, uint32_t n, float th, float g)
 
 void iqbal_bloque(int16_t *crudo, uint32_t n)
 {
+#ifdef SIN_IQ
+    /* El interruptor de diagnostico: esto es lo que corre DENTRO de la
+     * interrupcion del DMA, o sea lo primero que avisos.mk dice que
+     * SINIQ=1 quita. Ver iqbal_init(). */
+    (void)crudo; (void)n;
+    return;
+#else
     uint32_t k;
     float th, g;
 
@@ -716,7 +1177,7 @@ void iqbal_bloque(int16_t *crudo, uint32_t n)
         if (s_ab_plazo >= IQB_AB_PLAZO) { ab_aborta(); }
     }
 
-    if (s_turno == 0U) {
+    if (s_turno == 0U && s_aprende) {
         /*
          * La medida sobre el entrelazado. Es la misma cuenta que
          * iqbal_mide() -incluido quitar la continua- pero recorriendo de dos
@@ -743,21 +1204,76 @@ void iqbal_bloque(int16_t *crudo, uint32_t n)
         s_iq += IQB_ALFA * (iq - s_iq);
         s_bloques++;
 
-        if (s_ii >= IQB_POT_MIN && s_qq >= IQB_POT_MIN) {
-            th = s_iq / s_ii;
-            if (th <= IQB_THETA_MAX && th >= -IQB_THETA_MAX) {
-                float q1q1 = s_qq - 2.0f * th * s_iq + th * th * s_ii;
-                if (q1q1 >= IQB_POT_MIN) {
-                    g = sqrtf(s_ii / q1q1);
-                    if (g <= IQB_G_MAX && g >= IQB_G_MIN) {
-                        s_theta = th;
-                        s_g     = g;
-                        s_hay   = 1U;
-                    }
-                }
+        /*
+         * LA GUARDA DE LA PAREJA SIMETRICA, SOBRE EL PROMEDIO Y NO SOBRE EL
+         * BLOQUE. Ver IQB_PAR_MAX.
+         *
+         * Y SOBRE EL PROMEDIO NO ES UN DETALLE: la primera version miraba el
+         * bloque suelto y DEJABA PASAR. Con 256 muestras los productos
+         * cruzados de las emisoras que NO forman pareja no promedian a cero
+         * del todo, asi que la razon baila de bloque a bloque alrededor de su
+         * valor medio; un tope duro sobre un numero que baila deja colarse
+         * justo los bloques que caen por debajo, y esos estan sesgados todos
+         * hacia el mismo lado. Medido: de 2.580 bloques se colaban 246, y con
+         * esos 246 el estimador salia con g = 1,175 cuando lo cierto era
+         * 0,912. El promedio no baila, y ahi el tope hace lo que dice.
+         *
+         * Las medias se siguen actualizando SIEMPRE -son la mejor estimacion
+         * que hay de lo que entra-; lo que la guarda decide es si ese numero
+         * se puede creer o no.
+         */
+        /* Y la cuenta, en resuelve(), que es la MISMA que usa iqbal_mide().
+         * Estaban escritas dos veces y ya se habian separado una vez; ver
+         * el comentario de aquella funcion. */
+        {
+            uint8_t pareja = 0U;
+
+            if (!resuelve(&pareja) && pareja && s_pares < 0xFFFFFFFFUL) {
+                s_pares++;
             }
         }
     }
+    /*
+     * ==================================================================
+     * EL TURNO SE QUEDA CLAVADO, Y ESO SE DECIDIO MIDIENDO - 26/10/2026.
+     * ==================================================================
+     *
+     * EL RAZONAMIENTO QUE LLEVO A TOCARLO, que sigue siendo cierto: esto
+     * corre DENTRO de la interrupcion de audio, y la medida de arriba
+     * cuesta el triple que la correccion -13 instrucciones por muestra
+     * todos los bloques mas 24 por muestra uno de cada ocho-. En FM ancha
+     * son 6.656 ciclos de base y 13.512 de mas en el bloque que toca, y
+     * uno de cada ocho clavados son 46,875 Hz sin vaiven ninguno. Este
+     * proyecto tiene escrito -busca "EL VAIVEN DEL FOTOGRAMA" en main.c-
+     * que una perturbacion periodica enganchada a un numero entero de
+     * bloques apila su energia en unas pocas rayas y el oido las junta en
+     * un tono.
+     *
+     * POR QUE NO SE TOCA, DE TODAS FORMAS. Se sorteo el turno entre 5 y
+     * 11 bloques, con la misma media de ocho, y pasaron dos cosas:
+     *
+     *   1. La bateria se puso ROJA. sim/iqanchotest.c compara el
+     *      corrector plano con el de banda ancha y exige que el ancho no
+     *      quede mas de 1 dB por debajo. Con el turno sorteado los
+     *      bloques que miden caen sobre otros trozos de la señal, el
+     *      PLANO converge mejor -de 34,4 a 35,2 dB en 5.000 Hz- y el
+     *      hueco entre los dos se abre a 1,3 dB. No es que el receptor
+     *      empeore: es que la comparacion era fragil y el sorteo la
+     *      cruza.
+     *
+     *   2. Y sobre todo: el presupuesto dice que ese escalon NO PUEDE
+     *      hacer daño. Contadas una a una las instrucciones del
+     *      desensamblado, la interrupcion de WFM gasta del 17 al 21 % de
+     *      sus 533.333 ciclos en regimen, y del 45 % en el peor caso con
+     *      todo encendido. sim/pingpong.c midio que el transporte de
+     *      audio no falla ni una vez en cien mil bloques por debajo del
+     *      85 % del presupuesto. Un escalon del 2,5 al 3,3 % que va y
+     *      viene sobre un 21 % no se acerca a ninguna frontera.
+     *
+     * O sea: la regla del vaiven es buena, pero se aplica donde el
+     * enganche puede morder. Aqui no muerde, y aplicarla costaba una
+     * comprobacion en verde. Primero se mide.
+     */
     s_turno = (uint8_t)((s_turno + 1U) % IQB_UNO_DE);
 
     if (!s_on) { return; }
@@ -790,6 +1306,7 @@ void iqbal_bloque(int16_t *crudo, uint32_t n)
             crudo[2U * k + 1U] = sat16((int32_t)v);
         }
     }
+#endif
 }
 
 /* --- el espejo leido del espectro (ver iqbal.h) ------------------------- */
@@ -805,6 +1322,10 @@ void iqbal_bloque(int16_t *crudo, uint32_t n)
 
 void iqbal_mira_espectro(const float *db, uint16_t n)
 {
+#ifdef SIN_IQ
+    (void)db; (void)n;   /* ver iqbal_init() */
+    return;
+#else
     uint16_t c, k, mejor = 0U;
     float pico = -1e30f, suelo, dif;
 
@@ -892,6 +1413,7 @@ void iqbal_mira_espectro(const float *db, uint16_t n)
     if (dif < 0.0f) { dif = 0.0f; }
     s_esp_db  = dif;
     s_esp_bin = (int16_t)((int32_t)mejor - (int32_t)c);
+#endif
 }
 
 /* --- la prueba A/B (ver iqbal.h) ---------------------------------------- */
@@ -905,6 +1427,9 @@ void iqbal_mira_espectro(const float *db, uint16_t n)
  */
 void iqbal_ab_lanza(void)
 {
+#ifdef SIN_IQ
+    return;   /* sin corrector no hay nada que comparar; ver iqbal_init() */
+#else
     if (s_ab_est != AB_PARADA) { return; }   /* ya hay una en marcha */
     s_ab_antes = s_on;
     s_ab_n     = 0U;
@@ -939,6 +1464,7 @@ void iqbal_ab_lanza(void)
      * en marcha hasta que todo lo demas -plazo incluido- ya esta puesto.
      */
     s_ab_est   = AB_OFF_ESPERA;
+#endif
 }
 
 /* Aborta la prueba y devuelve el corrector a como estaba. Se llama sola
@@ -946,6 +1472,7 @@ void iqbal_ab_lanza(void)
  * que no ha terminado no ha medido nada. */
 static void ab_aborta(void)
 {
+    s_ab_gen++;
     s_on     = s_ab_antes;
     iqa_set_on(s_ab_antes);
     s_ab_est = AB_PARADA;
@@ -977,7 +1504,18 @@ float   iqbal_ab_on(void)  { return s_ab_on;  }
 
 void iqbal_ab_paso(void)
 {
+#ifdef SIN_IQ
+    return;   /* ver iqbal_init() */
+#else
+    uint16_t gen;
+
     if (s_ab_est == AB_PARADA) { return; }
+    /*
+     * La generacion CON LA QUE SE ENTRA. Si al salir no es la misma, la
+     * interrupcion aborto por el medio y lo que se ha escrito aqui hay que
+     * deshacerlo: ver el guardian del final.
+     */
+    gen = s_ab_gen;
     s_ab_n++;
 
     switch (s_ab_est) {
@@ -1030,6 +1568,41 @@ void iqbal_ab_paso(void)
         s_ab_est = AB_PARADA;
         break;
     }
+
+    /*
+     * ==================================================================
+     * Y SI LA INTERRUPCION HA ABORTADO MIENTRAS SE CORRIA ESTO, SE
+     * RESPETA. 26/10/2026, revision a fondo de espejos y armonicos.
+     * ==================================================================
+     *
+     * ab_aborta() corre en la interrupcion del DMA y puede caer entre el
+     * `switch (s_ab_est)` de arriba y la escritura de la rama que se
+     * eligio. Cuando pasa, esto escribe DESPUES de que ab_aborta() haya
+     * dejado el corrector como estaba, y resucita una prueba ya abortada:
+     * vuelve a poner s_ab_est a una fase y s_on a uno, con el plazo ya a
+     * cero, y iqbal_ab_corriendo() dice que hay prueba otros seis segundos
+     * largos hasta que se aborta otra vez, sin resultado.
+     *
+     * Hoy el daño queda ahi porque s_ab_antes vale siempre 1 -nadie apaga
+     * el corrector desde la interfaz-, asi que lo que se resucita deja el
+     * corrector encendido igual. Pero `volatile` no es un cerrojo y la
+     * ventana no son dos instrucciones como decia la cabecera: es la
+     * maquina de estados entera.
+     *
+     * No hace falta un cerrojo: basta con mirar DESPUES si la cuenta de
+     * abortos ha cambiado. El plazo NO vale para esto -vale cero tanto
+     * despues de abortar como recien lanzada la prueba-, y el estado
+     * tampoco, porque es precisamente lo que esta funcion acaba de
+     * escribir. Por eso s_ab_gen.
+     */
+    if (gen != s_ab_gen) {
+        s_ab_est = AB_PARADA;
+        s_ab_n   = 0U;
+        s_ab_hay = 0U;
+        s_on     = s_ab_antes;
+        iqa_set_on(s_ab_antes);
+    }
+#endif
 }
 
 float   iqbal_espejo_db(void)  { return s_esp_db; }
@@ -1095,3 +1668,4 @@ float iqbal_rechazo_db(void)
 }
 
 uint32_t iqbal_bloques(void) { return s_bloques; }
+uint32_t iqbal_pares(void)    { return s_pares; }

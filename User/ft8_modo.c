@@ -143,6 +143,11 @@ void ft8_modo_start(float fs_hz)
     s_total = 0UL;
     s_ultima = 0U;
     s_decodificando = 0U;
+    /* El DT que sale en la chapa, por lo mismo que la cuenta de candidatos
+     * que se pone a cero al arrancar el decodificador: sin esto son los
+     * milisegundos de la ultima ranura de la sesion anterior, y ese numero
+     * se mira para decidir si el reloj esta torcido AHORA. */
+    s_dt_visto = 0;
 
     /*
      * LO PRIMERO, ANTES DE ESCRIBIR UN SOLO BYTE: pedir el buffer.
@@ -155,6 +160,7 @@ void ft8_modo_start(float fs_hz)
      */
     waterfall_presta(1U);
     ft8_decimator_reset_perdidos();
+    ft8_waterfall_reset_desbordes();   /* el otro sumando de ft8_modo_perdidos() */
     s_ms_dec = 0U;
 
     /*
@@ -171,8 +177,26 @@ void ft8_modo_start(float fs_hz)
     ft8_fft1024_init();
 
     ft8_decimator_reset();
+    /*
+     * ARRANCA ANTES DE RESET, y el orden no es un gusto: reset() respeta el
+     * desvio a proposito -lo necesita el borde de ranura- asi que llamarlo a
+     * secas al entrar en el modo no limpia nada si se salio a medio
+     * decodificar. Ver ft8_waterfall_arranca().
+     */
+    ft8_waterfall_arranca();
     ft8_waterfall_reset();
     ft8_decoder_init();
+
+    /*
+     * Y NINGUN ARRANQUE PENDIENTE DE LA SESION ANTERIOR. 23/10/2026.
+     *
+     * s_pendiente sobrevivia a ft8_modo_stop(), asi que al volver a entrar
+     * en FT8 la primera vuelta del bucle encontraba una cita vencida -con
+     * un s_arranca_ms de hace rato- y reiniciaba la captura que esta misma
+     * funcion acaba de dejar lista. Se curaba solo en el siguiente borde de
+     * ranura, pero la cura no es la razon para dejarlo.
+     */
+    s_pendiente = 0U;
 
     mira_reloj();
     s_seg_ant = s_seg;
@@ -372,11 +396,43 @@ void ft8_modo_come(const float *muestras, uint16_t n)
  * en la interfaz. Ver el comentario largo en ft8_modo_poll(). */
 #define FT8_PASO_MS 8UL
 
-/* Cuantas ranuras se han perdido por estar todavia decodificando la
- * anterior. Era invisible y es justo el numero que dice si esto va bien. */
-static uint16_t s_perdidas;
-
-uint16_t ft8_modo_perdidas(void) { return s_perdidas; }
+/*
+ * ======================================================================
+ * AQUI VIVIA s_perdidas, Y NO PODIA CONTAR NADA - 23/10/2026
+ * ======================================================================
+ *
+ * Era "cuantas ranuras se han perdido por estar todavia decodificando la
+ * anterior", y se subia aqui:
+ *
+ *     if (s_decodificando && ft8_waterfall_is_full()) { s_perdidas++; }
+ *
+ * Esa condicion es IMPOSIBLE. s_decodificando vale 1 exactamente mientras
+ * la captura esta desviada -se enciende justo detras de
+ * ft8_waterfall_cierra_ranura() y se apaga justo detras de
+ * ft8_waterfall_reintegra()-, y lo primero que hace is_full() es
+ * devolver false si esta desviada. O sea que el contador leia cero
+ * precisamente en el caso que existia para contar.
+ *
+ * Es la misma familia de fallo que ya cazaron el cronometro del tactil
+ * ("un cronometro que se lee en un sitio distinto de donde se usa no mide
+ * nada") y la bandera del subbloque: un instrumento que mide otra cosa.
+ *
+ * Y ADEMAS NO LO LEIA NADIE. ft8_modo_perdidas() estaba declarada,
+ * definida y documentada, y no aparecia en ningun otro fichero del arbol.
+ * Un numero roto que ademas no sale por pantalla no es media red: es cero
+ * red y un fichero mas largo.
+ *
+ * NO SE SUSTITUYE POR OTRO, y eso es lo que hace que quitarlo no deje un
+ * agujero: lo que de verdad hay que saber -si a la captura le faltan
+ * trozos- ya lo cuentan DOS contadores que SI funcionan y que SI salen en
+ * la chapa, sumados en ft8_modo_perdidos():
+ *
+ *   ft8_decimator_perdidos()   el bucle principal tardo mas de 320 ms
+ *   ft8_waterfall_desbordes()  la decodificacion tardo mas de 3,84 s
+ *
+ * El segundo es exactamente el sintoma que s_perdidas perseguia, medido
+ * donde pasa en vez de donde se suponia.
+ */
 
 /* Mete una linea nueva arriba y empuja las demas hacia abajo. Doce lineas,
  * asi que mover el bloque entero es mas barato que llevar un indice de
@@ -425,12 +481,9 @@ void ft8_modo_tick(void)
     }
 
     /* Mientras se decodifica NO se arma nada nuevo: la captura ya se rearmo
-     * al empezar, y is_full() mira la captura viva, no la foto. */
-    if (s_decodificando && ft8_waterfall_is_full()) {
-        /* La ranura nueva esta lista y la anterior sigue decodificando: se
-         * pierde. Se cuenta, que antes no se veia por ningun lado. */
-        if (s_perdidas < 0xFFFFU) { s_perdidas++; }
-    }
+     * al empezar, y is_full() mira la captura viva, no la foto. Esa es
+     * ademas la razon por la que aqui ya no hay un contador de ranuras
+     * perdidas: ver el bloque de arriba donde vivia. */
     if (!s_decodificando && ft8_waterfall_is_full()) {
         /*
          * El orden importa y no es el evidente: PRIMERO la foto y volver a

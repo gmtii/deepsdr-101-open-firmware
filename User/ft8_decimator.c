@@ -200,7 +200,14 @@ static uint32_t s_input_count;      /* how many real 12kHz samples have been fed
  */
 #define FT8_AGC_TARGET 8000.0f   /* comfortably under int16 full scale - leaves headroom for the release's attack-side overshoot before it catches up */
 #define FT8_AGC_PEAK_MIN 50.0f   /* floor for the peak tracker - avoids a huge, noisy gain spike during near-silence between transmissions */
-#define FT8_AGC_RELEASE 0.99995f /* slow exponential release (~a few hundred ms time constant at 12kHz) - fast enough to recover from one clipped transmission, slow enough not to pump within a single ~12.6s FT8 burst */
+/* Caida exponencial lenta. LA CONSTANTE DE TIEMPO SON 1,67 s, no "unos
+ * cientos de milisegundos" como decia aqui: a 12 kHz, 1/0,00005 son 20.000
+ * muestras. Corregido el 23/10/2026 - el numero que habia hacia pensar que
+ * el AGC se recupera dentro de una ranura de 15 s cuatro o cinco veces, y
+ * lo que hace es recuperarse una. (Que la cifra fuera 1,67 s y no 0,3 no
+ * cambia nada medible: ver el banco sim/ft8_banda.c, donde arrancar cada
+ * ranura con el AGC a tope no cuesta ni una decodificacion.) */
+#define FT8_AGC_RELEASE 0.99995f
 static float32_t s_agc_peak;
 
 /*
@@ -440,10 +447,37 @@ void ft8_decimator_poll(void)
      * both slots (not just "the one not currently being written") so
      * a single main-loop iteration that's briefly fallen behind can
      * catch back up without waiting for the ISR to wrap around again. */
+    /*
+     * ======================================================================
+     * Y EL MAS VIEJO PRIMERO, QUE NO ES EL NUMERO 0 - 23/10/2026
+     * ======================================================================
+     *
+     * Aqui se recorrian los dos buffers por indice: primero el 0 y despues
+     * el 1. Con uno solo lleno da igual, que es lo que pasa casi siempre.
+     *
+     * Con LOS DOS llenos no da igual, y los dos llenos es exactamente el
+     * caso que este bucle dice cubrir ("so a single main-loop iteration
+     * that's briefly fallen behind can catch back up"). La interrupcion los
+     * llena alternando, asi que si el que se lleno antes fue el 1, este
+     * orden metia en mag[] el subbloque NUEVO delante del VIEJO: dos
+     * simbolos de la emision cambiados de sitio, que es ruido para el
+     * decodificador justo en la ranura en la que el bucle ya iba mal.
+     *
+     * Cual es el viejo se sabe sin guardar nada: la interrupcion marca uno
+     * como lleno y SE CAMBIA al otro, asi que el que esta escribiendo ahora
+     * -s_out_block_writing- es el que lleva mas tiempo lleno de los dos. Se
+     * empieza por ese.
+     *
+     * Se lee UNA vez: si la interrupcion cambia a media vuelta es que ya se
+     * ha perdido un subbloque entero, y eso lo cuenta s_perdidos.
+     */
+    uint8_t viejo = s_out_block_writing;
     uint8_t i;
     for (i = 0; i < 2U; i++)
     {
-        if (s_out_block_ready[i])
+        uint8_t k = (uint8_t)((viejo + i) & 1U);
+
+        if (s_out_block_ready[k])
         {
             /*
              * CONSUMIR Y DESPUES BAJAR LA BANDERA - 09/10/2026.
@@ -457,8 +491,8 @@ void ft8_decimator_poll(void)
              * quedado atras" marcaba cero exactamente cuando se quedaba
              * atras.
              */
-            ft8_waterfall_feed_subblock(s_out_block[i]);
-            s_out_block_ready[i] = false;
+            ft8_waterfall_feed_subblock(s_out_block[k]);
+            s_out_block_ready[k] = false;
         }
     }
 }

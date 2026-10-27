@@ -276,7 +276,7 @@ int main(void)
         casos[c].llena(ii, qq);
 
         carga_iq(ii, qq);
-        fft_run();
+        fft_run(FFT_SIZE);
         memcpy(g_nue_re, s_re, sizeof g_nue_re);
         memcpy(g_nue_im, s_im, sizeof g_nue_im);
 
@@ -302,7 +302,7 @@ int main(void)
         casos[c].llena(ii, qq);
 
         carga_real(ii);
-        fft_run();
+        fft_run(FFT_SIZE);
         memcpy(g_nue_re, s_re, sizeof g_nue_re);
         memcpy(g_nue_im, s_im, sizeof g_nue_im);
 
@@ -368,7 +368,7 @@ int main(void)
             memcpy(g_vie_re, s_re, sizeof g_vie_re);
             memcpy(g_vie_im, s_im, sizeof g_vie_im);
 
-            fft_run();
+            fft_run(FFT_SIZE);
             memcpy(g_nue_re, s_re, sizeof g_nue_re);
             memcpy(g_nue_im, s_im, sizeof g_nue_im);
 

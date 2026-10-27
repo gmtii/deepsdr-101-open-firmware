@@ -61,7 +61,22 @@
 #include <stdint.h>
 
 /*
- * Cuatro coeficientes. A 96 kHz son 42 microsegundos de memoria, que cubre de
+ * ESTE MODULO ESTA FUERA DEL CAMINO DESDE EL 08/10/2026, y ademas lo
+ * DUPLICA iqbal.c - 27/10/2026, revision a fondo de espejos y armonicos.
+ *
+ * iqa_bloque() no la llama nadie: los unicos usuarios son dos bancos del
+ * simulador. En el firmware solo quedan iqa_init() y los iqa_set_on() de
+ * la prueba A/B. Esta escrito a proposito en la cabecera de iqbal.c -costo
+ * 9,5 veces mas que la rama plana dentro de la interrupcion del DMA- y es
+ * una decision, no un descuido.
+ *
+ * Lo que NO estaba dicho y conviene saber antes de volver a enchufarlo:
+ * iqbal.c ya trae su propio corrector de banda ancha, cuatro tomas
+ * (IQB_FIR_TOMAS), montado desde el panadaptador y aplicado en la
+ * interrupcion. O sea que esto no esta solo apartado: esta SUSTITUIDO.
+ *
+ * Seis coeficientes, no cuatro. A 96 kHz son 62 microsegundos de memoria,
+ * que cubre de
  * sobra cualquier diferencia de retardo entre dos ramas del mismo circuito
  * -son nanosegundos- y el rizado de dos filtros antialias que no casan, que
  * es lo que de verdad se esta corrigiendo. Mas coeficientes no corrigen mas:
@@ -78,7 +93,8 @@
  *
  * o sea que el retardo l NO habla de w[l]: habla de la SUMA de los dos
  * coeficientes que caen a l de distancia de D. Con D = 2 y cuatro
- * coeficientes eso da
+ * coeficientes -que es como estaba escrito cuando se descubrio esto; hoy
+ * son seis, ver IQA_TAPS- eso da
  *
  *     l=0 -> 2*w[2]      l=1 -> w[1]+w[3]
  *     l=2 -> w[0]        l=3 -> nada en absoluto

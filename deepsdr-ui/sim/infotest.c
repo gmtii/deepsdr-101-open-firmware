@@ -178,9 +178,15 @@ static const struct { const char *nombre; const char *peor; } k_peor[] = {
     { "Armónicos",      "sin LO"                },
     { "Armónicos",      "x7 49 m difusión -48k" },
     { "Armónicos",      "x7 49 m difusión +3"   },
+    /* Y con el ± de los armonicos PARES, que es lo que se pone desde el
+     * 26/10: salen por los dos lados a la vez, asi que el numero va sin
+     * signo y con ±. El glifo es U+00B1 y mide casi lo mismo que el '+',
+     * pero "casi" no es "lo mismo" y esta fila va al limite. */
+    { "Armónicos",      "x6 49 m difusión ±48k" },
     { "Harmonics",      "none"                  },
     { "Harmonics",      "x7 49 m broadcast -48k" },
     { "Harmonics",      "x7 49 m broadcast +3"  },
+    { "Harmonics",      "x6 49 m broadcast ±48k" },
     /*
      * FORMATEAR DISCO - 06/10/2026. La primera version decia
      * "4096 B/cluster, 1788 clusters" y en la radio salio cortada:
@@ -270,6 +276,20 @@ static const struct { const char *nombre; const char *peor; } k_peor[] = {
     { "Erase whole chip", "done: chip is blank" },
     { "Erase whole chip", "busy: try later" },
     { "Erase whole chip", "no chip" },
+    /* La fila del margen del SAM, que desde el 22/10/2026 dice POR QUE no
+     * engancha y no solo que no engancha. El texto se arma pegando el
+     * margen delante, asi que lo que hay que medir es la linea ENTERA; el
+     * margen mas ancho (4.000) es el que mas ocupa. Ver INFO_XSAMMARG en
+     * main.c y sam_tope() en sam.h. */
+    { "Margen SAM",      "+-4000 · fuera: sube" },
+    { "Margen SAM",      "+-4000 · fuera: baja" },
+    { "Margen SAM",      "+-4000 · sin enganche" },
+    { "Margen SAM",      "+-4000 · en SAM" },
+    { "Margen SAM",      "+-4000 · -4000 Hz" },
+    { "SAM range",       "+-4000 · out: higher" },
+    { "SAM range",       "+-4000 · out: lower" },
+    { "SAM range",       "+-4000 · no lock" },
+    { "SAM range",       "+-4000 · in SAM" },
 };
 
 int main(void)

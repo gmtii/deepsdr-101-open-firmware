@@ -156,8 +156,34 @@ DEFS += -DARM_MATH_LOOPUNROLL
 # La lista caliente: todo lo que toca una muestra de audio o un pixel del
 # espectro por fotograma, mas los CMSIS-DSP que llaman. Si anades un
 # fichero nuevo a la cadena de audio, tiene que entrar AQUI.
+#
+# ----------------------------------------------------------------------
+# AIC3204.O SALE DE LA LISTA - 27/10/2026, buscando sitio en la flash.
+#
+# No pintaba nada aqui. Este fichero NO toca ni una muestra de audio ni un
+# pixel: configura el codec por I2C y se calla. Corre en el arranque y en
+# el cambio de tasa, y los dos pagan ya un reset por patilla con 100 ms de
+# espera por delante, al lado del cual la diferencia entre -O2 y -Os no se
+# puede ni medir.
+#
+# Medido compilando el fichero de las dos maneras: -O2 2.628 bytes, -Os
+# 2.486. Son 142 bytes que estaban pagandose por nada, y con 2.668 libres
+# en la flash interna eso ya no es despreciable.
+#
+# Lo que SI se queda, y conviene decir por que, porque a primera vista
+# tambien parecen candidatos:
+#
+#   spectrum.o (693 bytes de diferencia) y waterfall.o (140) pintan en
+#   CADA cuadro, treinta veces por segundo. Ahi -Os se paga en fluidez de
+#   pantalla, que es justo lo que se nota.
+#
+#   gd32_i2s.o (154) lleva el memcpy del ping-pong DENTRO de la
+#   interrupcion.
+#
+#   anotch.o (336), audiofil.o (224) y nb.o (120) corren por bloque.
+# ----------------------------------------------------------------------
 CALIENTES = demod_am.o nr_ss.o anotch.o audiofil.o sam.o disc_fm.o nco.o \
-            fft.o spectrum.o waterfall.o aic3204.o gd32_i2s.o sdr_rx.o \
+            fft.o spectrum.o waterfall.o gd32_i2s.o sdr_rx.o \
             nb.o \
             arm_biquad_cascade_df1_f32.o arm_cmplx_mag_f32.o arm_fir_f32.o \
             arm_fir_decimate_f32.o arm_fir_interpolate_f32.o

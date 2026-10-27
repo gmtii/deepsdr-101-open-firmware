@@ -51,10 +51,25 @@ static uint16_t s_guard_top = 0U;
  * ASI QUE SE MIDE. Las cinco funciones de este fichero que abren una
  * ventana en el panel -pixel, rectangulo, los dos volcados y el borrado
  * entero- pasan por aqui, y si lo que van a pintar toca el rectangulo
- * vigilado, sube el contador. Todo lo que dibuja en la radio acaba en una
- * de esas cinco, incluido gfx2_render(). No hay nada que recordar
- * actualizar, y los caminos que aun no existen quedan cubiertos el dia que
- * se escriban.
+ * vigilado, sube el contador.
+ *
+ * Y AQUI DECIA QUE ESO LO CUBRIA TODO, "incluido gfx2_render()". ERA FALSO,
+ * y lo encontro la revision a fondo del 24/10/2026: gfx2.c no pasa por
+ * ninguna de las cinco. Abre la ventana y empuja los pixeles el mismo, con
+ * rm68120_set_window() y rm68120_dato(). O sea que TODO lo que pinta el
+ * compositor -la cabecera, la franja de estado, la marquesina, el eje de
+ * dB, el panel digital, los carteles- era invisible para este contador, que
+ * es justo donde se escribe la interfaz nueva.
+ *
+ * Hoy no rompia nada por casualidad -lo unico del compositor que cae dentro
+ * del rectangulo del espectro es el cartel de la captura, y ese para el
+ * tick entero mientras esta puesto- pero la red estaba escrita como
+ * automatica y no lo era: el dia que alguien pinte algo dentro del panel
+ * con gfx2_render(), el espectro se saltaria bandas creyendo que nadie ha
+ * tocado, y el resto se quedaria pegado hasta el refresco completo.
+ *
+ * Por eso gfx_chiva() es ahora publica y gfx2.c la llama desde sus dos
+ * sitios. Ahora si es verdad que todo lo que dibuja acaba apuntandose.
  *
  * gfx.c sigue sin saber nada de spectrum.c: aqui solo hay un rectangulo y
  * un contador.
@@ -74,7 +89,7 @@ void gfx_vigila(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 uint32_t gfx_vigilancia(void) { return s_vig_n; }
 
 /* Un rectangulo que se va a pintar. Si toca el vigilado, se apunta. */
-static void chiva(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1)
+void gfx_chiva(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1)
 {
     if (s_vig_on == 0U) { return; }
     if (x1 < s_vig_x0 || x0 > s_vig_x1) { return; }
@@ -97,7 +112,7 @@ void gfx_pixel(uint16_t x, uint16_t y, uint16_t color)
     if (y < s_guard_top) {
         return;
     }
-    chiva(x, y, x, y);
+    gfx_chiva(x, y, x, y);
     rm68120_set_window(x, y, x, y);
     rm68120_write_data(color);
 }
@@ -119,7 +134,7 @@ void gfx_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t colo
         h = (uint16_t)(h - skip);
     }
 
-    chiva(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
+    gfx_chiva(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
     rm68120_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
 
     n = (uint32_t)w * (uint32_t)h;
@@ -243,7 +258,7 @@ uint8_t gfx_blit_arranca(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const u
     }
 
     if (lcd_dma_hay()) {
-        chiva(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
+        gfx_chiva(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
     rm68120_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
         if (lcd_dma_manda(pixels, (uint32_t)w * (uint32_t)h)) {
             return 1U;
@@ -290,7 +305,7 @@ void gfx_blit(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pi
          * devuelven cero y el bucle queda igual. */
         uint32_t t0 = rm68120_ciclo();
 
-        chiva(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
+        gfx_chiva(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
     rm68120_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
 
         n = (uint32_t)w * (uint32_t)h;

@@ -117,7 +117,12 @@ typedef enum {
     SET_X_ZOOM,         /* 0=1x, 1=2x, 2=4x, 3=8x */
     SET_X_CONTORNO,     /* pasadas de suavizado de la traza */
     SET_X_TACTIL,       /* firmeza del tactil, 1..3 */
-    SET_X_IFBW,         /* filtro de FI en WFM, 0=estrecho 1=ancho */
+    /* Filtro de FI en WFM. OJO AL ORDEN, que es al reves de lo que parece:
+     * 0 = ANCHO, 1 = ESTRECHO. Lo fija demod_am.h (WFM_IFBW_WIDE = 0,
+     * WFM_IFBW_NARROW = 1) y aqui ponia justo lo contrario, que es
+     * exactamente el texto que indujo el fallo que main.c cuenta haber
+     * tenido al recortar este ajuste. 27/10/2026. */
+    SET_X_IFBW,
     SET_X_RTTY_SHIFT,   /* desplazamiento, Hz */
     SET_X_RTTY_BAUD,    /* indice en la tabla de baudios */
     SET_X_RTTY_INV,     /* estacion invertida, 0/1 */
@@ -244,6 +249,60 @@ typedef enum {
      *
      * Un CONFIG.CSV viejo trae la clave; no pasa nada, las que no estan en
      * k_extra_claves[] se ignoran al leer. */
+    /*
+     * ======================================================================
+     * EL ANCHO DEL PASO BANDA DE CW - 24/10/2026, avisado por el usuario.
+     * ======================================================================
+     *
+     * Y era cierto, y es el mismo fallo que el de la reduccion de ruido del
+     * 01/10: NO ES QUE EL FICHERO FALLARA, ES QUE ESTE DATO NO ESTABA EN EL
+     * FICHERO.
+     *
+     * El mando afina el paso banda de CW de 100 a 800 Hz de cincuenta en
+     * cincuenta -ver el camino de ENCODER_TARGET_FILTRO en main.c- y esa
+     * rama hasta llamaba a settings_mark_dirty(), o sea que el fichero se
+     * reescribia... sin el numero dentro. Al encender, el ancho de CW se
+     * sacaba del selector compartido de ancho de audio, que solo tiene tres
+     * posiciones (1.000, 500 y 250 Hz), asi que cualquier valor afinado a
+     * mano se perdia y aparecia uno de esos tres.
+     *
+     * Marcar sucio y no guardar el dato es peor que no marcar: deja la
+     * cuenta cuadrada por fuera -el fichero se escribe- mientras el ajuste
+     * se pierde igual, y por eso no se habia visto.
+     *
+     * Al final de la lista, como todas las de aqui arriba y por lo mismo: un
+     * CONFIG.CSV de una version anterior no la trae, su bit queda a 0 y el
+     * ancho de CW sale de donde salia, que es exactamente lo que hacia esa
+     * radio hasta hoy.
+     */
+    SET_X_CW_BW,        /* paso banda de CW en Hz, 100..800 */
+    /*
+     * EL SILENCIADOR DE FM ANCHA LLEVA SU PROPIO NUMERO - 26/10/2026,
+     * decimocuarta vuelta de la revision a fondo.
+     *
+     * Y hace falta, porque los dos silenciadores miden COSAS DISTINTAS en
+     * escalas que no se solapan. El de AM/NFM mide el NIVEL de la señal; el
+     * de FM ancha mide el RUIDO de arriba del multiplex, que es un numero
+     * que sube cuando la señal baja. Compartir el ajuste, que es lo que se
+     * hizo al meterlo esta misma tarde, sale asi:
+     *
+     *     mando       en AM/NFM          en FM ancha
+     *      -10..0     abierto            abierto
+     *       4..30     por debajo del     correcto
+     *                 suelo de ruido
+     *      36..60     correcto           MUDA, hasta una local
+     *
+     * O sea que un umbral razonable de onda media dejaba la FM comercial
+     * callada del todo -con el medidor de S lleno y el RDS decodificando- y
+     * encima se guardaba en el fichero, asi que sobrevivia al apagado y la
+     * radio aparecia muerta sin que nada lo explicara.
+     *
+     * Al final de la lista, como todas las de aqui arriba y por lo mismo: un
+     * CONFIG.CSV de una version anterior no la trae, su bit queda a 0 y el
+     * silenciador de FM arranca apagado, que es como estaba esa radio hasta
+     * hoy.
+     */
+    SET_X_SQL_WFM,      /* silenciador de FM ancha, dB enteros */
     SET_X_N
 } settings_extra_id_t;
 

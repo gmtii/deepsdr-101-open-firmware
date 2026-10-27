@@ -30,7 +30,26 @@
 #define FT8_DECODER_MAX_CANDIDATES 140 /* matches ft8_lib's own demo default (kMax_candidates) */
 #define FT8_DECODER_MIN_SCORE      10  /* matches ft8_lib's own demo default (kMin_score) */
 #define FT8_DECODER_LDPC_ITERATIONS 25 /* matches ft8_lib's own demo default (kLDPC_iterations) */
-#define FT8_DECODER_MSG_QUEUE_SIZE 20  /* generous for our 400Hz search window - a busy full-band capture might see more, ours won't */
+/*
+ * CUARENTA Y NO VEINTE - 23/10/2026.
+ *
+ * Aqui ponia 20 con esta razon: "generous for our 400Hz search window - a
+ * busy full-band capture might see more, ours won't". La ventana lleva
+ * desde el 25/09 en 1.600 Hz, cuatro veces mas ancha, y el comentario se
+ * quedo describiendo la de antes.
+ *
+ * Y el tope NO avisa cuando se pasa: queue_push() cuenta el mensaje en el
+ * total y se vuelve sin guardarlo (ver su comentario). O sea que en una
+ * ranura con mas de veinte decodificaciones el contador de la pantalla
+ * sube y los renglones no aparecen, que es exactamente la pinta de
+ * "decodifica menos de lo que entra" sin que nada lo diga.
+ *
+ * Cuarenta caben: son 1.760 bytes mas dentro de la union, que tenia 7.316
+ * libres (medido, ver ft8_shared_ram.h). No es "por si acaso": una banda
+ * abierta de verdad da del orden de veinte a cuarenta mensajes por ranura
+ * en 3 kHz, o sea la mitad de eso en los 1.600 Hz que se miran.
+ */
+#define FT8_DECODER_MSG_QUEUE_SIZE 40
 #define FT8_DECODER_LINE_LEN       88   /* + la columna de pais, 25/09/2026 */  /* "HH:MM " (6) + "0169Hz -05dB ~ " (15) + message (up to 35) + " 1234km" (7) + NUL, rounded up (09/2026 #2: was 56, before the distance-to-grid suffix) */
 
 /* One decoded message, already formatted as a display-ready line
@@ -131,8 +150,10 @@ bool ft8_decoder_grid_coord_txt(const char *grid, int len,
  * multi-pass would give you, but ordinary messages - the large
  * majority in practice - decode in full without it, same tradeoff
  * already accepted in the host WAV test's own hash stub - ese banco ya no
- * esta en test/host/, que desaparecio: el camino lo ejercita hoy
- * deepsdr-ui/sim, ver out/qthcoord). */
+ * esta en test/host/, que desaparecio. Desde el 23/10/2026 el camino
+ * entero -audio de 12 kHz por un lado, mensajes por el otro- lo recorre
+ * deepsdr-ui/sim/ft8_banda.c, que compila ESTE fichero; out/qthcoord
+ * sigue mirando solo las cuentas del localizador). */
 void ft8_decoder_process_slot(void);
 
 /*

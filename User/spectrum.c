@@ -635,19 +635,54 @@ uint8_t spectrum_get_heatmap_trace_white(void)
     return s_heatmap_trace_white;
 }
 
-uint8_t spectrum_colormap_index(float db, float db_min, float db_max)
+/*
+ * ======================================================================
+ * LA ESCALA SE SACA UNA VEZ POR LINEA, NO POR PIXEL - 24/10/2026.
+ * ======================================================================
+ *
+ * Encontrado en la revision a fondo pedida por el usuario.
+ *
+ * spectrum_colormap_index() lleva dentro una DIVISION en coma flotante por
+ * (db_max - db_min), y los dos limites son los mismos en toda la linea. Se
+ * llamaba desde tres bucles de 756 columnas, hasta dos por cuadro: unas
+ * 1.500 divisiones por cuadro para obtener 1.500 veces el mismo divisor.
+ *
+ * Y el compilador no lo puede arreglar: la funcion vive aqui, se llama
+ * desde main.c y el proyecto compila sin enlazado con optimizacion global,
+ * asi que es una llamada de verdad, sin meter en linea y sin izar.
+ *
+ * Es lo que spectrum_draw() ya hace bien tres funciones mas abajo, donde
+ * `scale_t = 1 / (db_max - db_min)` sale fuera del bucle de columnas.
+ *
+ * LO QUE CAMBIA Y LO QUE NO, dicho claro: multiplicar por 255/(max-min) no
+ * es, bit a bit, lo mismo que dividir y despues multiplicar por 255. Puede
+ * dar un indice de color distinto en UNA unidad de 256, y solo en valores
+ * que caen justo en la frontera. Es un paso de la paleta de la cascada, o
+ * sea invisible, y la funcion de siempre se queda tal cual para quien la
+ * llame fuera de un bucle: lo unico que cambia es que ahora se apoya en las
+ * dos de abajo en vez de llevar la cuenta repetida.
+ */
+float spectrum_colormap_escala(float db_min, float db_max)
 {
-    float t;
-    int32_t idx;
+    if (db_max <= db_min) { return 0.0f; }
+    return 255.0f / (db_max - db_min);
+}
 
-    if (db_max <= db_min) {
-        return 0U;
-    }
-    t = (db - db_min) / (db_max - db_min);
-    idx = (int32_t)(t * 255.0f);
+uint8_t spectrum_colormap_idx(float db, float db_min, float escala)
+{
+    int32_t idx = (int32_t)((db - db_min) * escala);
+
     if (idx < 0)   { idx = 0; }
     if (idx > 255) { idx = 255; }
     return (uint8_t)idx;
+}
+
+uint8_t spectrum_colormap_index(float db, float db_min, float db_max)
+{
+    float esc = spectrum_colormap_escala(db_min, db_max);
+
+    if (esc == 0.0f) { return 0U; }
+    return spectrum_colormap_idx(db, db_min, esc);
 }
 
 const uint16_t *spectrum_colormap_lut(void)
@@ -838,7 +873,21 @@ static float    s_col_peak[SPEC_MAX_W] TCMRAM_BSS;  /* peak-hold dB per column  
 #endif
 static uint16_t s_bar_h[SPEC_MAX_W] TCMRAM_BSS;     /* bar height, px from bottom  */
 static uint16_t s_bar_h_smooth[SPEC_MAX_W] TCMRAM_BSS; /* scratch buf for spatial smoothing */
+/*
+ * Y ESTE SOLO EXISTE SI HAY PICO QUE SOSTENER - 24/10/2026.
+ *
+ * SPECTRUM_PEAK_HOLD vale 0, y con el a cero los TRES sitios que LEEN
+ * s_peak_h[] estan dentro de un #if que no se compila. Lo unico que
+ * quedaba era la escritura: 800 columnas puestas a cero en cada cuadro, 30
+ * veces por segundo, en un array de 1.600 bytes de TCM que no lee nadie.
+ *
+ * 1.600 bytes y 24.000 escrituras por segundo por un array muerto. Vuelve
+ * entero en cuanto alguien ponga SPECTRUM_PEAK_HOLD a 1, que es de lo que
+ * se trata.
+ */
+#if SPECTRUM_PEAK_HOLD
 static uint16_t s_peak_h[SPEC_MAX_W] TCMRAM_BSS;    /* peak marker height          */
+#endif
 static uint8_t  s_bridge = 1U;   /* ver spectrum_set_bridge() */
 static uint16_t s_bar_lo[SPEC_MAX_W] TCMRAM_BSS;    /* vertical trace bridge to the left neighbor, low end - see Pass 1.6 */
 static uint16_t s_bar_hi[SPEC_MAX_W] TCMRAM_BSS;    /* vertical trace bridge to the left neighbor, high end - see Pass 1.6 */
@@ -1185,14 +1234,24 @@ static void compon(uint16_t *dst, uint32_t stride, uint16_t row, uint16_t nf,
          * Solo cuesta cuando hay gancho Y la fila esta dentro de su
          * franja: en los otros 200 y pico renglones no se mira nada.
          */
-        if (s_encima_fn != 0 && band_active && row < rot_techo()) {
+        /* rot_techo() recorre la rejilla desde la fila 1 buscando la
+         * primera raya, y se pedia DOS veces en cada banda: una en la
+         * condicion y otra dentro. Es el mismo numero. 24/10/2026. */
+        if (s_encima_fn != 0 && band_active) {
+            const uint16_t tope = (uint16_t)rot_techo();
             uint16_t lo2 = (band_col_lo > c0) ? band_col_lo : c0;
             uint16_t hi2 = (band_col_hi < c1) ? band_col_hi : c1;
-            uint16_t tope = rot_techo();
 
+            /* La guarda de fuera era redundante: con k = 0 la condicion
+             * del bucle ya pide row < tope. */
             for (k = 0; k < nf && (uint16_t)(row + k) < tope; k++) {
                 uint16_t rej = s_row_grid[row + k];
-                for (col = lo2; col <= hi2 && lo2 <= hi2; col++) {
+                /* `lo2 <= hi2` estaba DENTRO de la condicion del bucle de
+                 * columnas, o sea reevaluado en cada pixel, y es invariante.
+                 * Si la banda de paso no cae en este trozo, no hay nada que
+                 * deshacer. 24/10/2026. */
+                if (lo2 > hi2) { break; }
+                for (col = lo2; col <= hi2; col++) {
                     dst[(uint32_t)k * stride + (col - c0)] =
                         (rej || s_col_grid[col]) ? s_ult.grid_color
                                                  : s_ult.bg_color;
@@ -1416,8 +1475,6 @@ void spectrum_draw(const float *db, uint32_t n_bins,
         if (t < 0.0f) { t = 0.0f; }
         if (t > 1.0f) { t = 1.0f; }
         s_peak_h[col] = (uint16_t)(t * (float)h);
-#else
-        s_peak_h[col] = 0;
 #endif
 
         t = (s_col_ema[col] - db_min) * scale_t;
@@ -1449,9 +1506,10 @@ void spectrum_draw(const float *db, uint32_t n_bins,
                                                    (uint32_t)s_bar_h[col + 1U]) / 4U);
             }
             s_bar_h_smooth[w - 1U] = s_bar_h[w - 1U];
-            for (col = 0; col < w; col++) {
-                s_bar_h[col] = s_bar_h_smooth[col];
-            }
+            /* De una sola vez: eran 756 copias de 16 bits por pasada y hay
+             * hasta tres pasadas por cuadro. Mismo resultado, y el memcpy
+             * de la biblioteca mueve palabras enteras. 24/10/2026. */
+            memcpy(s_bar_h, s_bar_h_smooth, (size_t)w * sizeof s_bar_h[0]);
         }
     }
 
@@ -1501,19 +1559,34 @@ void spectrum_draw(const float *db, uint32_t n_bins,
      * `row` on screen corresponds to level (h - row) px from the
      * bottom.
      */
-    for (row = 0; row < h; row++) {
-        if (s_style == SPECTRUM_STYLE_HEATMAP) {
-            uint32_t level = (uint32_t)(h - row);
-            int32_t idx = (int32_t)((level * 255U) / h);
-            s_row_color[row] = s_lut[idx];
-        } else {
-            /* LINE reads this as its flat fill color. OUTLINE never
-             * reads it (fill_enabled below is 0 for that style) - left
-             * assigned anyway so the two styles share this branch. */
-            s_row_color[row] = tema_claro() ? color_relleno_claro()
-                                           : SPEC_LINE_FILL;
+    /*
+     * Y EL COLOR PLANO, IZADO - 24/10/2026, revision a fondo.
+     *
+     * Era el mismo para las 208 filas y se evaluaba DENTRO del bucle:
+     * color_relleno_claro() hace una mezcla de paleta -seis multiplicaciones
+     * y tres divisiones por 255- y despues pal565(). Doscientas ocho veces
+     * por cuadro para obtener doscientas ocho veces el mismo numero.
+     *
+     * Es exactamente lo que ya se arreglo para el color del pico en
+     * compon() -ver su comentario-, con sus tres vecinos; este se quedo.
+     */
+    {
+        const uint16_t plano = (uint16_t)(tema_claro() ? color_relleno_claro()
+                                                       : SPEC_LINE_FILL);
+
+        for (row = 0; row < h; row++) {
+            if (s_style == SPECTRUM_STYLE_HEATMAP) {
+                uint32_t level = (uint32_t)(h - row);
+                int32_t idx = (int32_t)((level * 255U) / h);
+                s_row_color[row] = s_lut[idx];
+            } else {
+                /* LINE reads this as its flat fill color. OUTLINE never
+                 * reads it (fill_enabled below is 0 for that style) - left
+                 * assigned anyway so the two styles share this branch. */
+                s_row_color[row] = plano;
+            }
+            s_row_grid[row] = 0;
         }
-        s_row_grid[row] = 0;
     }
     /*
      * Fixed-pixel reference grid (08/09/2026) - see SPECTRUM_GRID_ROWS/
@@ -1741,15 +1814,44 @@ void spectrum_draw(const float *db, uint32_t n_bins,
                 /* El techo que manda es el MAS ALTO de los dos cuadros: hay
                  * que repintar tanto lo que esta traza pinta como lo que
                  * pintaba la anterior y ahora destapa. */
+                /*
+                 * Y LA COPIA PARA EL CUADRO SIGUIENTE SE HACE AQUI, DENTRO
+                 * DE LA MISMA VUELTA - 25/10/2026.
+                 *
+                 * Antes esto se resolvia al final del cuadro volviendo a
+                 * recorrer las 800 columnas, solo para recuperar los techos
+                 * SIN MEZCLAR: guardar la mezcla haria que el techo solo
+                 * pudiera bajar, y un pico alto de hace diez cuadros
+                 * obligaria a repintar media pantalla para siempre.
+                 *
+                 * *** Y EL PRIMER INTENTO DE QUITAR ESE SEGUNDO RECORRIDO
+                 * FUE UN FALLO MIO, del 24/10: se copiaba a s_tramo_techo_ant
+                 * ANTES de la mezcla, o sea que la mezcla de aqui abajo
+                 * comparaba el cuadro consigo mismo y no hacia NADA. El
+                 * repintado parcial dejaba de repintar lo que la traza
+                 * anterior destapaba. Lo cazo sim/salto_pinta.c, que mide
+                 * que saltarse bandas no dependa de cuanto se movio el
+                 * dial. ***
+                 *
+                 * Asi que el valor sin mezclar se guarda en la MISMA vuelta,
+                 * antes de pisarlo: una variable por tramo y ni un recorrido
+                 * de mas.
+                 */
                 s_parcial_hay = 1U;
                 for (t = 0; t < s_n_tramos; t++) {
+                    uint16_t sin_mezclar = s_tramo_techo[t];
+
                     if (s_tramo_techo_ant[t] < s_tramo_techo[t]) {
                         s_tramo_techo[t] = s_tramo_techo_ant[t];
                     }
+                    s_tramo_techo_ant[t] = sin_mezclar;
                 }
             } else {
                 s_parcial_hay = 0U;
                 s_cuadros_desde = 0U;
+                /* Sin mezcla que deshacer: lo que hay ES lo de este cuadro. */
+                memcpy(s_tramo_techo_ant, s_tramo_techo,
+                       (size_t)s_n_tramos * sizeof s_tramo_techo[0]);
             }
             s_firma_ant = firma;
             s_parcial_vale = 1U;
@@ -1835,14 +1937,14 @@ void spectrum_draw(const float *db, uint32_t n_bins,
         if (vuela) { (void)gfx_blit_espera(); }
         gfx2_banda_suelta();
 
-        /* El techo de ESTE cuadro para la vez siguiente. Se vuelve a calcular
-         * AQUI, al final, y no se guarda el de arriba: aquel ya se mezclo con
-         * el del cuadro anterior, y guardar la mezcla haria que el techo solo
-         * pudiera bajar - un pico alto de hace diez cuadros seguiria
-         * obligando a repintar media pantalla para siempre. */
-        techos_por_tramo(w, h, fill_enabled);
-        memcpy(s_tramo_techo_ant, s_tramo_techo,
-               (size_t)s_n_tramos * sizeof s_tramo_techo[0]);
+        /* El techo de ESTE cuadro para la vez siguiente ya esta guardado,
+         * arriba y ANTES de la mezcla. Aqui habia una segunda llamada a
+         * techos_por_tramo() -otro recorrido de las 800 columnas- que
+         * existia solo para recuperar los techos sin mezclar: guardar la
+         * mezcla haria que el techo solo pudiera bajar, y un pico alto de
+         * hace diez cuadros obligaria a repintar media pantalla para
+         * siempre. Copiarlos antes da lo mismo y cuesta cien bytes de
+         * memcpy en vez de ochocientas vueltas. 24/10/2026. */
 
         /* Y el contador del chivato, AQUI, cuando ya se ha volcado todo lo
          * de este cuadro: lo que suba a partir de ahora lo habra pintado

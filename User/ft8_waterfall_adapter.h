@@ -29,10 +29,14 @@
  *   block_size  = sample_rate * symbol_period = 512 samples/symbol
  *   time_osr    = 1               (A/B tested - see MEMORY BUDGET CONTEXT below)
  *   subblock_size = block_size / time_osr = 512 samples (=160ms) per feed
- *   freq_osr    = 2               (A/B tested, kept at ft8_lib's own default -
- *                                  see MEMORY BUDGET CONTEXT below for why this
- *                                  one specifically can't be reduced)
- *   nfft        = block_size * freq_osr = 1024  <-- == ft8_fft1024.h's FT8_FFT_SIZE, exactly
+ *   freq_osr    = 1               (ERA 2 cuando se escribio esto, y este
+ *                                  parrafo se quedo diciendolo DOS SEMANAS
+ *                                  despues de bajarlo - ver el bloque del
+ *                                  25/09/2026 justo debajo de FREQ_OSR y
+ *                                  "LO QUE ESTO ES HOY" mas abajo)
+ *   nfft        = block_size * 2 = 1024  <-- == ft8_fft1024.h's FT8_FFT_SIZE, exactly
+ *                                  (el 2 es la geometria de la ventana de
+ *                                  analisis, NO freq_osr: ver RAW_BIN_STEP)
  *   native bin spacing at 3200Hz/1024pt = 3200/1024 = 3.125 Hz = 6.25Hz / freq_osr
  *     -> same ratio as the original 800Hz/256pt design (quadrupled both
  *        fs and nfft proportionally) - our own FFT's raw bins still sit
@@ -43,9 +47,69 @@
  *
  * FT8_ADAPTER_NUM_BINS = 256 (256 * 6.25Hz = 1600Hz search span) - the
  * ENTIRE useful output of a 1024-pt real FFT at 3200Hz
- * (FT8_FFT_BINS_USEFUL=512 raw bins / freq_osr(2) = 256 6.25Hz-bins),
+ * (FT8_FFT_BINS_USEFUL=512 raw bins / RAW_BIN_STEP(2) = 256 6.25Hz-bins),
  * same "cover everything available, not a narrow pre-tuned window"
  * choice as the original 400Hz design.
+ */
+/*
+ * ======================================================================
+ * LO QUE ESTO ES HOY, MEDIDO Y NO CONTADO - 23/10/2026
+ * ======================================================================
+ *
+ * *** Avisado: la radio decodifica menos estaciones de las que se oyen
+ * en antena. Y hasta hoy no habia forma de contestar con un numero: toda
+ * esta cadena no tenia ningun banco que la recorriera entera. Ahora lo
+ * tiene -deepsdr-ui/sim/ft8_banda.c, que mete audio de 12 kHz por un lado
+ * y cuenta mensajes por el otro, compilando ESTOS ficheros- y estas son
+ * sus medidas. ***
+ *
+ * 1) LA VENTANA SE ACABA EN 1.600 Hz, Y SE ACABA DE GOLPE. Con veinticinco
+ *    emisiones repartidas de 300 a 2.700 Hz, el firmware lee TRECE: todas
+ *    las de 300 a 1.500 y ninguna de 1.600 para arriba. No es que decodifique
+ *    peor ahi: es que ahi no hay nada que mirar - el remuestreador entrega
+ *    3.200 muestras por segundo y 1.600 Hz es su Nyquist.
+ *
+ *    O sea que "decodifica menos de lo que entra" es CIERTO y el numero es
+ *    13 de 25. Y no es un fallo escondido: es el precio de la memoria, esta
+ *    escrito aqui debajo desde el primer dia y la pantalla pinta la raya de
+ *    la ventana para que se pueda sintonizar alrededor de ella.
+ *
+ * 2) HAY UN AGUJERO A MEDIO BIN, y este si costaba entenderlo. La ventana de
+ *    analisis mide 1.024 muestras -DOS simbolos- asi que sus bins estan a
+ *    3,125 Hz, y de ellos se guarda UNO DE CADA DOS (RAW_BIN_STEP). Una
+ *    emision que caiga en un bin PAR se ve entera; una que caiga justo en
+ *    medio, a 3,125 Hz, cae en el bin impar que no se guarda y se pierde
+ *    6 dB. Medido al borde de la sensibilidad (-15 dB, ocho semillas):
+ *
+ *        +0,00 Hz  8/8      +3,12 Hz  0/8
+ *        +0,78 Hz  8/8      +3,91 Hz  7/8
+ *        +1,56 Hz  8/8      +4,69 Hz  8/8
+ *        +2,34 Hz  5/8      +5,47 Hz  8/8
+ *
+ *    O sea: una de cada ocho frecuencias es un agujero y otra esta a medias.
+ *
+ * 3) Y LO EVIDENTE NO ARREGLA ESO. Se probo -compilando, no razonando- la
+ *    alternativa obvia: muestrear a 6.400 y hacer la FFT sobre UN simbolo,
+ *    con lo que los bins caen a 6,25 Hz naturales y el agujero desaparece.
+ *    Desaparece, si. Y la sensibilidad empeora TRES dB en todas las
+ *    frecuencias, porque un bin de 6,25 Hz recoge el doble de ruido que uno
+ *    de 3,125:
+ *
+ *        hoy (dos simbolos, bins pares)   -15 dB: 8/8 ... -18 dB: 5/8
+ *        a 6.400 (un simbolo)             -12 dB: 8/8 ... -15 dB: 0/8
+ *
+ *    Gana el de hoy en seis de las ocho frecuencias y pierde en una. Asi que
+ *    NO SE CAMBIA. Lo que arreglaria las dos cosas a la vez es guardar los
+ *    dos subbins (FREQ_OSR=2 de verdad), y eso dobla mag[]: 47.616 bytes
+ *    donde hay 60.304 para todo FT8. No cabe, y por eso esta medido y
+ *    escrito aqui en vez de intentado otra vez dentro de seis meses.
+ *
+ * 4) LO QUE NO ERA EL PROBLEMA, tambien medido, para que nadie lo vuelva a
+ *    mirar: el tope de candidatos (140, se usan 20), el umbral de
+ *    sincronismo (bajarlo de 10 a 3 no cambia NI UNA decodificacion), las
+ *    iteraciones del LDPC (de 25 a 60 gana una de ocho a -18 dB y cuesta el
+ *    doble de cuenta), el borrado de la ventana deslizante en cada ranura y
+ *    el arranque del AGC en cada ranura (ninguno de los dos cambia nada).
  */
 #define FT8_ADAPTER_SAMPLE_RATE_HZ 3200 /* was 800 - see ft8_decimator.h for the resampler this now needs */
 #define FT8_ADAPTER_TIME_OSR       1   /* A/B tested against the ft8_lib WAV corpus: TIME_OSR alone costs no measured decode sensitivity (still decodes the same reference signals as the original (2,2) design across 5 corpus files) */
@@ -55,7 +119,9 @@
  * decodifica tres.
  *
  * Lo que se gana: FREQ_OSR multiplica el tamano de mag[], asi que bajarlo a
- * 1 deja sitio para el DOBLE de bins. La ventana pasa de 600 a 1.200 Hz.
+ * 1 deja sitio para el DOBLE de bins. La ventana paso de 600 a 1.200 Hz ese
+ * dia, y a 1.600 cuando ademas se encontraron los 12.800 bytes de la banda
+ * de dibujo (ver la escalera medida en NUM_BINS, mas abajo).
  *
  * Lo que se paga, dicho con el numero que hay y no con uno inventado: el
  * proyecto padre hizo el A/B contra el corpus de ft8_lib y con FREQ_OSR=1
@@ -66,7 +132,12 @@
  * limite de cuantas estaciones se miran siquiera. Una senal fuerte fuera de
  * la ventana no se decodifica nunca, y eso es peor que una debil que se
  * decodifica peor. Es reversible: volver a 2 es cambiar este numero y bajar
- * NUM_BINS a 96.
+ * NUM_BINS hasta que mag[] vuelva a caber (con la ventana de hoy serian 128
+ * bins, o sea 800 Hz; con la de aquel dia eran 96).
+ *
+ * Y LO QUE CUESTA, MEDIDO AQUI Y NO HEREDADO - 23/10/2026: una de cada ocho
+ * frecuencias se queda sin decodificar al borde de la sensibilidad. Ver el
+ * bloque "LO QUE ESTO ES HOY" al principio de este fichero.
  */
 #define FT8_ADAPTER_FREQ_OSR       1   /* ver el bloque de arriba (era 2) - A/B testing showed THIS is the axis that actually matters: reducing it to 1 (alone or combined with TIME_OSR=1) lost a real decode (CT3IQ EI8GVB IO63, -9dB) that the (2,2) and (1,2) configs both still get */
 #define FT8_ADAPTER_BLOCK_SIZE     512 /* = FT8_ADAPTER_SAMPLE_RATE_HZ * FT8_SYMBOL_PERIOD */
@@ -115,7 +186,13 @@
  *
  * i.e. a 4x wider window (400Hz -> 1600Hz) for about double the
  * original (2,2)/400Hz design's RAM (23.2KB -> 46.5KB) - only possible
- * because step 1 already halved the per-bin cost first. Confirmed
+ * because step 1 already halved the per-bin cost first.
+ *
+ * *** Y LO QUE SE ENTREGO NO FUE ESO: FREQ_OSR acabo en 1 (ver su propio
+ * comentario, el del 25/09) y mag[] mide 23.808 bytes, no 47.616. Este
+ * parrafo describe el plan, no el resultado; se deja porque explica de
+ * donde salen los numeros de arriba, pero las dos cifras del renglon
+ * "(1,2), NUM_BINS=256" no son las de esta radio. 23/10/2026. *** Confirmed
  * against real hardware: two live decodes (9dB, 11dB - see this
  * session's own log) at the (1,2)/400Hz stage before committing to
  * this wider revision.
@@ -192,10 +269,22 @@
  * -110dB, real signals topping out a few dB under 0dB after this
  * offset). If real decodes come up empty after any future hardware
  * change (gain staging, front-end revision, etc.), check the on-screen
- * "dB min/max" diagnostic (see main.c's FT8 slot-processing block) and
+ * "dB min/max" diagnostic - sale en la chapa de FT8 cuando no hay NINGUN
+ * candidato, que es cuando dice algo; ver ft8_chapa() en main.c. (Hasta
+ * el 23/10/2026 esta linea mandaba mirar un numero que no se pintaba en
+ * ningun sitio: ft8_modo_db() existia y no la llamaba nadie.) - y
  * retune this - it's inherently an iterative, hardware-specific
  * calibration, not something derivable from first principles alone. */
 #define FT8_ADAPTER_DB_OFFSET      -112.0f
+
+/*
+ * DEJA EL ADAPTADOR COMO RECIEN ENCENDIDO: sin desvio, sin bloques y sin
+ * ranura a medias. Se llama UNA vez, al ARRANCAR el modo (ft8_modo_start()),
+ * y nunca en el borde de ranura - para eso esta ft8_waterfall_reset(), que a
+ * proposito respeta el desvio. Ver el comentario de la funcion para el fallo
+ * que existe cuando no se llama.
+ */
+void ft8_waterfall_arranca(void);
 
 /* Resets the sliding analysis window and the waterfall's block/time_sub
  * counters back to empty - call once at the START of each new 15s slot
@@ -250,6 +339,11 @@ void ft8_waterfall_reintegra(void);
 
 /* 1 mientras la captura esta desviada. */
 uint8_t ft8_waterfall_desviada(void);
+
+/* Pone a cero la cuenta de desbordes. La llama ft8_modo_start(), para que
+ * lo que sale en la chapa sea "desde que se encendio FT8" como promete
+ * ft8_modo.h - ver el comentario de la funcion. */
+void ft8_waterfall_reset_desbordes(void);
 
 /* Bloques que no cupieron en el desvio, o sea audio perdido porque la
  * decodificacion tardo mas que FT8_ADAPTER_LADO_BLOQUES. Deberia ser 0. */

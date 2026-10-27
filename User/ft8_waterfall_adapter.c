@@ -18,7 +18,7 @@
 #define s_window    (g_ft8_shared_ram.ft8.window)    /* sliding analysis window, oldest sample first - see ft8_waterfall_feed_subblock() */
 #define s_dbout     (g_ft8_shared_ram.ft8.dbout)
 #define s_lado      (g_ft8_shared_ram.ft8.lado)      /* ver su comentario en ft8_shared_ram.h */     /* scratch, reused every subblock */
-#define s_mag       (g_ft8_shared_ram.ft8.mag)       /* ~46.5KB with NUM_BINS=256 - see header comment */
+#define s_mag       (g_ft8_shared_ram.ft8.mag)       /* 23.808 bytes con 256 bins y FREQ_OSR=1 - ver la cabecera */
 
 #define FT8_ADAPTER_MAG_SIZE (FT8_ADAPTER_MAX_BLOCKS * FT8_ADAPTER_TIME_OSR * FT8_ADAPTER_FREQ_OSR * FT8_ADAPTER_NUM_BINS)
 
@@ -59,6 +59,38 @@ static float s_db_max;
  * git, y el espectro en vivo no hace falta guardarlo aparte -es la fila de
  * mag[] que se acaba de escribir-.
  */
+
+/*
+ * ARRANCAR NO ES EMPEZAR UNA RANURA - 23/10/2026.
+ *
+ * ft8_waterfall_reset() es "empieza otra ranura", y por eso mira el desvio:
+ * con la captura desviada reinicia EL DESVIO y deja mag[] quieto, que es lo
+ * que tiene que pasar en el borde de ranura mientras el decodificador lee.
+ *
+ * Eso lo hace inservible para ARRANCAR el modo, que es otra cosa: ahi hay
+ * que dejar el adaptador como recien encendido, pase lo que pase. Y "pase lo
+ * que pase" incluye el caso que fallaba: salirse de FT8 MIENTRAS decodifica.
+ * Decodificar ocupa entre uno y cinco segundos de cada quince, asi que no es
+ * un caso raro.
+ *
+ * Lo que pasaba: s_desviada y s_lado_n no viven en la union que
+ * ft8_modo_stop() borra -son estaticas normales de este fichero- asi que
+ * sobrevivian al cambio de modo. Al volver a entrar, ft8_modo_start()
+ * llamaba a reset(), reset() veia el desvio puesto y no tocaba num_blocks,
+ * que seguia en 93. Y is_full() devuelve false mientras hay desvio. Circulo
+ * cerrado: nunca se llena, nunca se decodifica, nunca se reintegra, nunca se
+ * suelta el desvio. FT8 no volvia a sacar un mensaje hasta reiniciar la
+ * radio.
+ *
+ * Lo mide sim/ft8_desvio.c, que lo deja rojo si alguien quita esta llamada.
+ */
+void ft8_waterfall_arranca(void)
+{
+    s_desviada = 0U;
+    s_lado_n   = 0;
+    s_time_sub = 0;
+    s_wf.num_blocks = 0;
+}
 
 void ft8_waterfall_reset(void)
 {
@@ -130,6 +162,27 @@ void ft8_waterfall_reintegra(void)
 
 uint8_t  ft8_waterfall_desviada(void)  { return s_desviada; }
 uint16_t ft8_waterfall_desbordes(void) { return s_desbordes; }
+
+/*
+ * Y SE BORRA AL ENCENDER FT8, NO NUNCA - 23/10/2026.
+ *
+ * ft8_modo.h promete que lo que sale en la chapa son los subbloques
+ * perdidos "desde que se encendio FT8", y de los dos sumandos solo uno
+ * cumplia: ft8_modo_start() llama a ft8_decimator_reset_perdidos() y
+ * nadie llamaba al equivalente de aqui, que no existia. O sea que el
+ * numero de la pantalla arrastraba los desbordes de todas las sesiones
+ * de FT8 desde que la radio arranco.
+ *
+ * Eso no es un detalle de limpieza: ese numero esta para mirarlo DESPUES
+ * de tocar algo -cambiar de banda, apagar la cascada, mover el filtro- y
+ * decidir si lo que se ha tocado ha ido bien. Un contador que no se
+ * puede poner a cero no sirve para eso.
+ *
+ * Aqui no se reinicia desde ft8_waterfall_reset(), que corre en CADA
+ * borde de ranura: entonces el aviso duraria quince segundos y se
+ * borraria solo justo antes de que nadie lo mire.
+ */
+void ft8_waterfall_reset_desbordes(void) { s_desbordes = 0U; }
 
 const ftx_waterfall_t *ft8_waterfall_get(void)
 {

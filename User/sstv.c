@@ -928,6 +928,13 @@ uint8_t sstv_activo(void) { return s_on; }
 
 void sstv_fuerza(uint8_t indice_modo)
 {
+    /* Con el modo parado, aqui no hay nada que forzar: su gemela sstv_busca()
+     * ya lo comprobaba y esta no. Importa porque mas abajo se llama a
+     * linea_limpia(), que barre los acumuladores de linea, y el dia que esos
+     * vivan en la memoria prestada -que es la direccion en la que va este
+     * modulo- barrerlos con SSTV parado seria escribir en la RAM de otro
+     * modo. 24/10/2026. */
+    if (!s_on) { return; }
     if (indice_modo >= MODOS_N) { return; }
     /* El desvio que haya puesto la maquina del VIS sin llegar a leer una
      * cabecera no lo ha medido nadie: ver s_off_bueno. */

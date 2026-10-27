@@ -116,9 +116,24 @@ static void llena_portadoras(void)
  * monta el FIR. Devuelve 1 si lo consiguio. */
 static int enciende_fir(void)
 {
-    static int16_t ii[N], qq[N];
-    static float   db[N];
+    /*
+     * LA VENTANA DE LA FFT NO ES EL BLOQUE DEL CONVERTIDOR - 24/10/2026.
+     *
+     * Esto declaraba ii[N], qq[N] y db[N] con N = 256, el tamaño del
+     * BLOQUE, y se lo daba a fft_compute_db_iq(). Valia mientras la FFT
+     * fuesen tambien 256; desde que son FFT_SIZE (512) eso es leer y
+     * escribir el doble de lo que hay: el banco se pasaba de los tres
+     * arrays y la calibracion no encendia el FIR nunca.
+     *
+     * Ahora se junta igual que en la radio -ver el tick del espectro en
+     * main.c-: los bloques se van metiendo en la ventana y la transformada
+     * corre cuando esta llena. Asi este banco mide lo que de verdad pasa y
+     * no una version suya mas comoda.
+     */
+    static int16_t ii[FFT_SIZE], qq[FFT_SIZE];
+    static float   db[FFT_BINS_IQ];
     int ronda, b, n;
+    int llenas = 0;
 
     fft_init();
     fft_set_bins_hook(iqbal_calibra);
@@ -126,8 +141,15 @@ static int enciende_fir(void)
         for (b = 0; b < 600; b++) {
             llena_portadoras();
             iqbal_bloque(g_b, N);
-            for (n = 0; n < N; n++) { ii[n] = g_b[2 * n]; qq[n] = g_b[2 * n + 1]; }
-            fft_compute_db_iq(ii, qq, db);
+            for (n = 0; n < N; n++) {
+                ii[llenas] = g_b[2 * n];
+                qq[llenas] = g_b[2 * n + 1];
+                llenas++;
+                if (llenas >= (int)FFT_SIZE) {
+                    fft_compute_db_iq(ii, qq, db);
+                    llenas = 0;
+                }
+            }
         }
         (void)iqbal_resuelve();
     }

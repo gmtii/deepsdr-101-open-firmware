@@ -44,9 +44,28 @@ static void pinta(gfx2_surf_t *s, void *ctx)
     /* una "traza" falsa, solo para ver donde cae la rayita */
     gfx2_line(s, X0, (int16_t)(ALTO - 10), (int16_t)(X0 + ANCHO),
               (int16_t)(ALTO - 10), gfx2_rgb(0x2A4A6AUL));
-    g_puestos = spec_rotulos_draw(s, &g_rr, g_txt, g_centro, g_span,
-                                  X0, ANCHO, ROT_Y, ROT_H, 0,
-                                  gfx2_rgb(0xD8E6F2UL), gfx2_rgb(0x4A6E92UL));
+    /*
+     * LA CUENTA SE ACUMULA ENTRE BANDAS, NO SE PISA - 24/10/2026.
+     *
+     * gfx2_render() llama a esto UNA VEZ POR BANDA, y desde hoy
+     * spec_rotulos_draw() devuelve pronto -con cero- en las bandas que no
+     * tocan la franja de carteles, que es lo que le ahorra a la radio
+     * recorrer la lista entera veintiuna veces por cuadro. La ultima banda
+     * del panel es una de esas, asi que guardar su devolucion a secas
+     * dejaba g_puestos en cero y este banco leia "no se pinto ninguno" de
+     * carteles que si estaban.
+     *
+     * Es el mismo apaño que sim/rotulos_elige.c ya tenia para su tabla de
+     * filas, y por el mismo motivo. Se queda con el mayor, que es lo que
+     * pinto la banda que de verdad lleva la franja.
+     */
+    {
+        uint8_t p = spec_rotulos_draw(s, &g_rr, g_txt, g_centro, g_span,
+                                      X0, ANCHO, ROT_Y, ROT_H, 0,
+                                      gfx2_rgb(0xD8E6F2UL),
+                                      gfx2_rgb(0x4A6E92UL));
+        if (p > g_puestos) { g_puestos = p; }
+    }
 }
 
 /* El empaquetado vive en spec_rotulos.c (base_hz + decenas de hercio) y
@@ -69,6 +88,7 @@ static void render(const char *ruta)
     FILE *f;
     int x, y;
 
+    g_puestos = 0U;          /* se acumula entre bandas: ver pinta() */
     lcd_sim_reset(0x0000);
     gfx2_render(0, 0, 800, ALTO, pinta, 0);
 
@@ -150,6 +170,7 @@ int main(void)
     g_rr.n = 2U;
     {
         uint8_t n;
+        g_puestos = 0U;      /* se acumula entre bandas: ver pinta() */
         lcd_sim_reset(0x0000);
         gfx2_render(0, 0, 800, ALTO, pinta, 0);
         n = g_puestos;

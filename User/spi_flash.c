@@ -393,10 +393,74 @@ uint8_t spi_flash_unique_id(uint8_t out[8])
     return (iguales && (out[0] == 0x00U || out[0] == 0xFFU)) ? 0U : 1U;
 }
 
+static uint8_t spi_read_status1(void);
+static uint8_t s_async_phase_es_reposo(void);
+
+/*
+ * ======================================================================
+ * Y NO SE LEE EL CHIP MIENTRAS PROGRAMA - 24/10/2026.
+ * ======================================================================
+ *
+ * Encontrado en la revision a fondo pedida por el usuario.
+ *
+ * La regla la tenia escrita icao24_db.c -"el chip ignora las lecturas
+ * mientras programa o borra"- y la cumplia EL SOLO. Los demas lectores no:
+ * la ventana del mapa, los nombres de las emisoras, los rotulos del
+ * espectro, la zona alta. Y esos corren en el bucle principal, en cada
+ * cuadro.
+ *
+ * El guardado asincrono deja el chip ocupado ENTRE llamadas a su poll: manda
+ * el borrado de 4 kB y vuelve, y el chip tarda unos 45 ms por dentro. Durante
+ * ese rato -y durante los dieciseis programados de pagina que vienen detras-
+ * cualquier lectura le manda un 0x03 a un chip que solo acepta leer el
+ * estado. Lo que devuelve no son los bytes del mapa ni los de la lista de
+ * emisoras: es una ventana de costas inventadas, o un nombre que no es.
+ *
+ * LO QUE SE HACE, Y LO QUE CUESTA, dicho sin adornos. Antes de leer, si hay
+ * un guardado a medias, se espera a que el chip quede libre. No es gratis:
+ * el borrado son 45 ms y ahi se pierde un cuadro. Pero pasa UNA VEZ por
+ * guardado -y un guardado son tres segundos despues de soltar el mando-, y
+ * la alternativa es enseñar datos falsos sin avisar.
+ *
+ * LO QUE NO SE HACE: esperar siempre. Sin guardado a medias esto es una
+ * comparacion de un entero y no toca el bus. El camino normal de la radio
+ * -que es leer de una flash que no esta haciendo nada- no paga nada.
+ *
+ * EL PLAZO, CON EL MISMO PATRON QUE spi_wait_busy() Y POR UN MOTIVO.
+ *
+ * El primer intento de esto contaba VUELTAS DE BUCLE sin retardo dentro -
+ * veinte mil-, dando por hecho que eran de sobra. No lo eran: con el bus
+ * rapido una mirada al registro de estado son unos tres microsegundos, o
+ * sea que el plazo salia de unos SESENTA MILISEGUNDOS, y la hoja de
+ * caracteristicas de este chip da el borrado de un sector de 4 kB en 45 ms
+ * TIPICOS y 400 ms de MAXIMO. El plazo quedaba por debajo del maximo por un
+ * factor de siete: justo en el ejemplar lento -el que mas falta hace- se
+ * agotaba y se leia igual, que es lo que esto venia a evitar, y encima en
+ * silencio.
+ *
+ * Asi que se cuenta con un retardo dentro, igual que spi_wait_busy() cuatro
+ * funciones mas abajo, y entonces el tope SI es tiempo: 100 us por vuelta y
+ * 8.000 vueltas son 0,8 segundos, el doble del peor borrado de la hoja. Si
+ * no se libera en eso es que algo va mal de verdad, y salir y leer lo que
+ * haya es menos malo que quedarse aqui para siempre: en esta radio un
+ * cuelgue no reinicia solo.
+ */
+static void espera_chip_libre(void)
+{
+    uint32_t vueltas = 0UL;
+
+    if (s_async_phase_es_reposo()) { return; }
+    while ((spi_read_status1() & 0x01U) != 0U) {
+        delay_us_approx(100);
+        if (++vueltas > 8000UL) { break; }
+    }
+}
+
 void spi_flash_read(uint32_t addr, uint8_t *buf, uint32_t len)
 {
     uint32_t i;
 
+    espera_chip_libre();
     f_cs(0);
     delay_us_approx(1);
     (void)spi_xfer_byte(CMD_READ);
@@ -2121,6 +2185,48 @@ static void fat_free_chain(uint32_t fat_start_lba, uint32_t first_cluster, uint3
     escribe_datos_fichero(abs_addr, buf, span_bytes);   /* ver fat_write_chain() */
 }
 
+/*
+ * EL SELLO DE FECHA Y HORA. Ver spi_flash_sello_pon() en spi_flash.h: lo
+ * pone main.c desde el reloj, y hasta que lo haga vale el relleno de
+ * siempre -el 1 de enero de 2026 a las 0:00-.
+ */
+static uint16_t s_sello_fecha = 0x5C21U;
+static uint16_t s_sello_hora  = 0x0000U;
+
+void spi_flash_sello_pon(uint16_t fecha, uint16_t hora)
+{
+    if (fecha == 0U) {
+        s_sello_fecha = 0x5C21U;
+        s_sello_hora  = 0x0000U;
+    } else {
+        s_sello_fecha = fecha;
+        s_sello_hora  = hora;
+    }
+}
+
+/*
+ * Lo escribe en una entrada de directorio ya montada: creacion (14..17),
+ * ultimo acceso (18..19, que no lleva hora) y escritura (22..25).
+ *
+ * UNA SOLA COPIA, y no es manía: eran TRES sitios con las mismas seis
+ * lineas, y los tres se quedaron con el relleno porque cambiar uno no
+ * cambiaba los otros. Lo que hace que esto no vuelva a pasar es que ya no
+ * haya tres sitios.
+ */
+static void sello_pega(uint8_t *e)
+{
+    e[14] = (uint8_t)(s_sello_hora & 0xFFU);
+    e[15] = (uint8_t)(s_sello_hora >> 8);
+    e[16] = (uint8_t)(s_sello_fecha & 0xFFU);
+    e[17] = (uint8_t)(s_sello_fecha >> 8);
+    e[18] = (uint8_t)(s_sello_fecha & 0xFFU);
+    e[19] = (uint8_t)(s_sello_fecha >> 8);
+    e[22] = (uint8_t)(s_sello_hora & 0xFFU);
+    e[23] = (uint8_t)(s_sello_hora >> 8);
+    e[24] = (uint8_t)(s_sello_fecha & 0xFFU);
+    e[25] = (uint8_t)(s_sello_fecha >> 8);
+}
+
 /* Shared tail for both spi_flash_write_new_file() and
  * spi_flash_write_or_update_file(): chains both FAT copies, writes the
  * file data (the whole confirmed-free block, this file owns all of
@@ -2175,9 +2281,7 @@ static int write_file_data_and_entry(uint32_t dir_off, uint8_t write_terminator,
         entry_buf[8U + i] = (uint8_t)ext3[i];
     }
     entry_buf[11] = 0x20U; /* ATTR_ARCHIVE */
-    entry_buf[16] = 0x21U; entry_buf[17] = 0x5CU; /* creation date, DOS format, fixed placeholder (2026-01-01) */
-    entry_buf[18] = 0x21U; entry_buf[19] = 0x5CU; /* last access date, same placeholder */
-    entry_buf[24] = 0x21U; entry_buf[25] = 0x5CU; /* write date, same placeholder */
+    sello_pega(entry_buf);   /* fecha y hora de verdad; ver sello_pega() */
     entry_buf[26] = (uint8_t)(first_cluster & 0xFFU);
     entry_buf[27] = (uint8_t)((first_cluster >> 8) & 0xFFU);
     entry_buf[28] = (uint8_t)(len & 0xFFU);
@@ -2668,6 +2772,13 @@ typedef enum {
 static uint8_t s_async_scratch[FLASH_SECTOR_SIZE];
 static spi_flash_async_block_t s_async_block_op;
 static uint8_t s_async_phase = (uint8_t)ASAVE_IDLE;
+
+/* Lo pregunta espera_chip_libre(), alla arriba, que no puede ver ni esta
+ * variable ni este enumerado porque se declaran aqui. Ver su comentario. */
+static uint8_t s_async_phase_es_reposo(void)
+{
+    return (uint8_t)(s_async_phase == (uint8_t)ASAVE_IDLE);
+}
 static uint32_t s_async_dir_off;
 static uint16_t s_async_cluster;
 static char s_async_name8[8];
@@ -2783,6 +2894,49 @@ uint8_t spi_flash_async_save_start(const char name8[8], const char ext3[3],
     return 1U;
 }
 
+/*
+ * ======================================================================
+ * PREGUNTAR SIN AVANZAR - 24/10/2026.
+ * ======================================================================
+ *
+ * Encontrado en la revision a fondo pedida por el usuario, y es de los que
+ * se llevan por delante algo que el usuario SI nota.
+ *
+ * spi_flash_async_save_poll() NO es una consulta: avanza la maquina de
+ * estados y devuelve DONE o ERROR UNA SOLA VEZ -despues deja la fase en
+ * reposo y todo el que pregunte vera IDLE-. Su cabecera lo dice: "llamalo
+ * una vez por vuelta del bucle principal".
+ *
+ * Y tenia DOS dueños. icao24_db.c lo usaba como si fuera un predicado sin
+ * efectos, solo para saber si la flash esta ocupada antes de leerla:
+ *
+ *     if (spi_flash_async_save_poll() == SPI_FLASH_ASYNC_BUSY) { return; }
+ *
+ * Compara unicamente contra BUSY. Si esa llamada es justo la que TERMINA el
+ * guardado, se lleva el DONE y lo tira. Y entonces settings.c, que mira la
+ * misma funcion mas abajo en la misma vuelta, recibe IDLE: no casa ni con
+ * DONE ni con ERROR, asi que no baja su bandera y
+ * s_async_save_in_progress SE QUEDA A UNO PARA SIEMPRE.
+ *
+ * A partir de ahi, y hasta reiniciar: CONFIG.CSV no se vuelve a guardar -ni
+ * frecuencia, ni modo, ni volumen, ni calibracion del tactil-, el contador
+ * de guardados de la ventana de Informacion se queda clavado, y encima
+ * settings_hay_faena() devuelve cierto siempre, con lo que el bucle
+ * principal vuelve a leer los treinta y cinco campos de los extras en cada
+ * vuelta - la regresion que se quito el 05/10/2026, de vuelta y permanente.
+ *
+ * Para dispararlo basta con tener ICAO24.BIN cargado y HFDL escuchando: cada
+ * avion nuevo pregunta, y cada cambio de frecuencia arranca un guardado tres
+ * segundos despues.
+ *
+ * Asi que quien solo quiera SABER si el chip esta ocupado pregunta aqui, que
+ * no toca nada. El avance se queda con un solo dueño, settings.c.
+ */
+uint8_t spi_flash_async_save_en_vuelo(void)
+{
+    return (uint8_t)(s_async_phase != (uint8_t)ASAVE_IDLE);
+}
+
 spi_flash_async_status_t spi_flash_async_save_poll(void)
 {
     if (s_async_phase == (uint8_t)ASAVE_IDLE) {
@@ -2862,9 +3016,7 @@ spi_flash_async_status_t spi_flash_async_save_poll(void)
             for (i = 0U; i < 8U; i++) { e[i] = (uint8_t)s_async_name8[i]; }
             for (i = 0U; i < 3U; i++) { e[8U + i] = (uint8_t)s_async_ext3[i]; }
             e[11] = 0x20U;
-            e[16] = 0x21U; e[17] = 0x5CU;
-            e[18] = 0x21U; e[19] = 0x5CU;
-            e[24] = 0x21U; e[25] = 0x5CU;
+            sello_pega(e);
             e[26] = (uint8_t)(s_async_cluster & 0xFFU);
             e[27] = (uint8_t)((s_async_cluster >> 8) & 0xFFU);
             e[28] = (uint8_t)(s_async_data_len & 0xFFU);
@@ -4383,6 +4535,12 @@ uint8_t spi_flash_dir_primero_ext(const char ext3[3], char name8[8])
 
 uint32_t spi_flash_dir_max_indice(const char pre[4], const char ext3[3])
 {
+    return spi_flash_dir_max_indice_n(pre, 4U, ext3);
+}
+
+uint32_t spi_flash_dir_max_indice_n(const char *pre, uint8_t npre,
+                                    const char ext3[3])
+{
     uint8_t  sector[ROOT_DIR_SECTOR_BYTES];
     uint32_t i, sec, max = 0UL;
     uint32_t nsec = ROOT_DIR_SECTORS;
@@ -4399,13 +4557,15 @@ uint32_t spi_flash_dir_max_indice(const char pre[4], const char ext3[3])
 
         if (e[0] == 0x00U || e[0] == 0xE5U || e[0] == 0xFFU) { continue; }
         if ((e[11] & 0x0FU) == 0x0FU) { continue; }   /* trozo de nombre largo */
-        for (j = 0U; j < 4U; j++) { if (e[j] != (uint8_t)pre[j]) { ok = 0U; } }
+        if (npre == 0U || npre > 7U) { continue; }
+        for (j = 0U; j < npre; j++) { if (e[j] != (uint8_t)pre[j]) { ok = 0U; } }
         for (j = 0U; j < 3U; j++) { if (e[8U + j] != (uint8_t)ext3[j]) { ok = 0U; } }
         if (!ok) { continue; }
-        /* Las tres cifras, y la octava posicion en blanco: "SSTV12" no
-         * cuenta, ni "SSTVABC". */
-        if (e[7] != (uint8_t)' ') { continue; }
-        for (j = 4U; j < 7U; j++) {
+        /* Y las cifras que quedan, TODAS: "SSTV12" no cuenta, ni
+         * "SSTVABC". Con el prefijo de cuatro la octava posicion es un
+         * blanco y tambien se exige; con uno de seis no sobra ninguna. */
+        if (npre == 4U && e[7] != (uint8_t)' ') { continue; }
+        for (j = npre; j < (uint8_t)((npre == 4U) ? 7U : 8U); j++) {
             if (e[j] < (uint8_t)'0' || e[j] > (uint8_t)'9') { ok = 0U; break; }
             n = (n * 10UL) + (uint32_t)(e[j] - (uint8_t)'0');
         }
@@ -4747,9 +4907,7 @@ static uint8_t reserva_interno(const char name8[8], const char ext3[3],
     for (i = 0U; i < 8U; i++) { entrada[i] = (uint8_t)name8[i]; }
     for (i = 0U; i < 3U; i++) { entrada[8U + i] = (uint8_t)ext3[i]; }
     entrada[11] = 0x20U;                                  /* ATTR_ARCHIVE */
-    entrada[16] = 0x21U; entrada[17] = 0x5CU;
-    entrada[18] = 0x21U; entrada[19] = 0x5CU;
-    entrada[24] = 0x21U; entrada[25] = 0x5CU;
+    sello_pega(entrada);
     entrada[26] = (uint8_t)(primero & 0xFFU);
     entrada[27] = (uint8_t)((primero >> 8) & 0xFFU);
     entrada[28] = (uint8_t)(bytes & 0xFFU);

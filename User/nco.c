@@ -248,18 +248,54 @@ uint32_t nco_lo_aparcado(uint32_t freq_hz, uint32_t lo_actual_hz,
         return freq_hz - off_min_hz;
     }
 
-    /* Y por ABAJO al reves: venia bajando, se deja en el maximo. Esta rama
-     * cubre tambien las distancias negativas, que no se admiten nunca.
+    /*
+     * ==================================================================
+     * Y POR ABAJO, CON EL OSCILADOR POR ENCIMA - 24/10/2026, avisado por
+     * el usuario: "el NCO no barre toda la pantalla".
+     * ==================================================================
      *
-     * Y "el maximo" es el maximo QUE CABE: por debajo de off_max de dial no
-     * hay sitio para la distancia entera, asi que se deja la minima, que es
-     * lo mas lejos que se puede dejar el oscilador sin cruzar el cero. Ver
-     * la cuenta de arriba. */
-    if (off < (int64_t)off_min_hz) {
-        if (freq_hz > off_max_hz) {
-            return freq_hz - off_max_hz;
-        }
-        return freq_hz - off_min_hz;
+     * Y no la barria. Aqui ponia que las distancias NEGATIVAS no se
+     * admiten nunca, asi que la ventana util iba de off_min a off_max y
+     * se acababa ahi: el oscilador queda en el CENTRO de lo que se ve, de
+     * modo que el NCO cubria del centro al borde derecho y la mitad
+     * izquierda de la pantalla no era suya. Pasar del centro reaparcaba,
+     * y al reaparcar se mueve la imagen entera.
+     *
+     * Era una limitacion heredada de cuando la distancia era fija: con el
+     * oscilador SIEMPRE por debajo, no habia nada que decidir. Pero una
+     * distancia negativa no tiene nada de malo -significa que el
+     * oscilador esta por encima de lo que se escucha, y a un receptor en
+     * cuadratura eso le da igual-, y el giro grueso de demod_am.c ya la
+     * admite con signo.
+     *
+     * AHORA LO QUE SE EXIGE ES |distancia| entre min y max, no la
+     * distancia a secas. Lo que no cambia es el AGUJERO DEL MEDIO: por
+     * debajo de off_min de cualquiera de los dos lados, la señal se sienta
+     * encima de la fuga del oscilador y de la continua, y eso no se
+     * arregla con signos. Cruzar el centro sigue pidiendo un reaparcado,
+     * pero es UNO y pequeño -el oscilador se mueve dos veces off_min- en
+     * vez de uno grande cada vez que se llegaba al centro.
+     *
+     * HACIA DONDE SE REAPARCA, que es lo unico con miga: al salirse por
+     * arriba se deja en +min, con toda la ventana por delante hacia
+     * arriba; al salirse por abajo, en -min, con toda la ventana por
+     * delante hacia abajo. Y al caer DENTRO del agujero se sale por el
+     * lado contrario al que se venia, que es el sentido en el que se
+     * estaba yendo: llegando desde arriba (off >= 0) se sale a -min.
+     *
+     * Y las dos salidas usan SUMA o una resta ya protegida por la guarda
+     * de arriba, asi que la cuenta de onda larga que arreglo lo de
+     * 09/10/2026 no puede volver: `freq + off_min` no se desborda nunca y
+     * `freq - off_min` solo corre con freq > off_min.
+     */
+    if (off < -(int64_t)off_max_hz) {
+        return freq_hz + off_min_hz;          /* venia bajando: sitio abajo */
+    }
+    if (off < (int64_t)off_min_hz && off > -(int64_t)off_min_hz) {
+        /* Dentro del agujero del medio: se sale por el lado hacia el que
+         * se iba. */
+        return (off >= 0) ? (freq_hz + off_min_hz)   /* bajando */
+                          : (freq_hz - off_min_hz);  /* subiendo */
     }
 
     return lo_actual_hz;                      /* cabe: no se toca nada */

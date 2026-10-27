@@ -170,6 +170,37 @@ static inline void px_blend(gfx2_surf_t *s, int16_t x, int16_t y,
  * que se note. */
 static void (*s_pump)(void) = 0;
 
+/*
+ * ======================================================================
+ * EL CHIVATO DEL REPINTADO PARCIAL - 24/10/2026.
+ * ======================================================================
+ *
+ * Encontrado en la revision a fondo pedida por el usuario.
+ *
+ * El espectro se salta las bandas que no han cambiado, y lo que le autoriza
+ * a hacerlo es un contador de gfx.c: si alguien ha pintado dentro de su
+ * rectangulo, no se salta nada. El comentario de aquel fichero afirmaba que
+ * "todo lo que dibuja en la radio" pasaba por sus cinco funciones,
+ * "incluido gfx2_render()". No era verdad: este fichero abre la ventana y
+ * empuja los pixeles el mismo, asi que todo lo que pinta el compositor era
+ * invisible para esa cuenta.
+ *
+ * Va por puntero y no por llamada directa a gfx.c, por lo mismo que
+ * gfx2_set_pump() y que el gancho de fft.c: gfx2 es un compositor y no
+ * tiene por que saber que existe un espectro que se salta bandas. Y, muy
+ * concreto, media docena de bancos del simulador enlazan gfx2.c SIN gfx.c:
+ * con la llamada escrita por su nombre dejarian de enlazar.
+ *
+ * Quien no lo ponga -los bancos- no paga nada: una comparacion de puntero
+ * por banda.
+ */
+static void (*s_chivato)(uint16_t, uint16_t, uint16_t, uint16_t) = 0;
+
+void gfx2_set_chivato(void (*fn)(uint16_t, uint16_t, uint16_t, uint16_t))
+{
+    s_chivato = fn;
+}
+
 void gfx2_set_pump(void (*fn)(void))
 {
     s_pump = fn;
@@ -266,6 +297,10 @@ uint8_t gfx2_render(int16_t x, int16_t y, int16_t w, int16_t h,
         {
             uint32_t t0 = rm68120_ciclo();
 
+            if (s_chivato) {
+                s_chivato((uint16_t)x, (uint16_t)by,
+                          (uint16_t)(x + w - 1), (uint16_t)(by + bh - 1));
+            }
             rm68120_set_window((uint16_t)x, (uint16_t)by,
                                (uint16_t)(x + w - 1), (uint16_t)(by + bh - 1));
             for (i = 0; i < n; i++) {
@@ -718,14 +753,52 @@ uint8_t gfx2_text_cabe(const char *str, const gfx2_font_t *f, int16_t tope,
     return (uint8_t)(bueno - ini);
 }
 
-/* UN glifo. Sale del bucle de gfx2_text() para que gfx2_text_in(), cuando
+/*
+ * UN glifo. Sale del bucle de gfx2_text() para que gfx2_text_in(), cuando
  * tiene que cortar, no lleve una copia del mismo dibujado. Devuelve lo que
- * avanza el cursor. */
+ * avanza el cursor.
+ *
+ * ======================================================================
+ * Y AHORA LAS DOS GUARDAS VIVEN AQUI - 24/10/2026.
+ * ======================================================================
+ *
+ * Encontrado en la revision a fondo pedida por el usuario: habia DOS copias
+ * de este bucle -esta y la de dentro de gfx2_text()-, byte por byte iguales
+ * salvo por las guardas, y los dos arreglos de octubre entraron solo en una.
+ * El comentario de arriba dice que esta funcion existe precisamente para no
+ * tener dos copias, y gfx2_text() se quedo con la suya igualmente.
+ *
+ * Asi que ahora hay una sola y las guardas van dentro:
+ *
+ *   - EL CORTE HORIZONTAL (13/10/2026): un glifo entero fuera de la ventana
+ *     recorria igual sus g->h x g->w medios bytes, los descodificaba,
+ *     calculaba la cobertura y llamaba a px_blend(), que es quien lo
+ *     rechazaba pixel a pixel. Medido con la marquesina de RDS -62
+ *     caracteres en un hueco de 150x44-: 4.522 medios bytes leidos para
+ *     escribir 758, o sea el 83 % tirado, veinticinco veces por segundo.
+ *   - EL CORTE VERTICAL (24/10/2026): lo mismo por arriba y por abajo. El
+ *     bucle de filas se entraba igual y se descartaba fila a fila con el
+ *     `continue` de dentro. gfx2 compone por bandas de ocho filas sobre
+ *     textos de catorce de alto, asi que la mayoria de las bandas no tocan
+ *     la mayoria de los textos.
+ *
+ * SE SALTA, NO SE SALE: esta funcion devuelve lo que avanza el cursor y hay
+ * quien encadena con eso -la lectura de dBm del S-metro, en ui_top.c-, asi
+ * que el avance se devuelve siempre, se haya pintado o no.
+ */
 static int16_t gfx2_text_uno(gfx2_surf_t *s, int16_t cx, int16_t y,
                              uint16_t cp, const gfx2_font_t *f, gfx2_rgba_t c)
 {
     const gfx2_glyph_t *g = glyph_for(f, cp);
     int16_t gy, gx;
+
+    if ((int16_t)(cx + g->bx + g->w) <= s->x
+        || (int16_t)(cx + g->bx) >= (int16_t)(s->x + s->w)) {
+        return g->adv;
+    }
+    if (!gfx2_band_hits(s, (int16_t)(y + g->by), (int16_t)g->h)) {
+        return g->adv;
+    }
 
     if (g->w && g->h) {
         const uint8_t *bm = &f->bitmap[g->off];
@@ -754,69 +827,21 @@ int16_t gfx2_text(gfx2_surf_t *s, int16_t x, int16_t y, const char *str,
     int16_t cx = x;
     uint16_t cp;
 
+    /*
+     * EL BUCLE DE PIXELES ESTA EN gfx2_text_uno(), Y SOLO ALLI - 24/10/2026.
+     *
+     * Aqui habia una copia byte por byte de aquella funcion, con sus dos
+     * guardas de recorte. Dos copias del mismo dibujado es como se llega a
+     * que un arreglo valga en un sitio y no en el otro, y ya habia pasado:
+     * los dos cortes de octubre -el horizontal y el vertical- entraron solo
+     * en esta y gfx2_text_uno() se quedo sin ninguno, asi que el camino de
+     * recorte de gfx2_text_in() seguia descodificando glifos enteros contra
+     * ventanas que no los contienen. Ver el comentario de alli.
+     */
     if (str == 0) { return cx; }   /* ver gfx2_text_w() */
     while (*str) {
-        const gfx2_glyph_t *g;
-        int16_t gy, gx;
-
         str = next_cp(str, &cp);
-        g = glyph_for(f, cp);
-
-        /*
-         * EL GLIFO QUE CAE FUERA DE LA VENTANA NI SE DESCODIFICA.
-         * 13/10/2026.
-         *
-         * Arriba se comprueba la banda EN VERTICAL (`sy < s->y ...`) pero
-         * no habia nada en horizontal: un glifo entero fuera de la ventana
-         * recorria igual sus g->h x g->w medios bytes, los descodificaba,
-         * calculaba la cobertura y llamaba a px_blend(), que es quien lo
-         * rechazaba pixel a pixel.
-         *
-         * Y eso no es raro: gfx2 compone por bandas y recorta por ventana,
-         * asi que casi todo el texto del firmware se dibuja al menos una
-         * vez contra una ventana que no lo contiene. Medido con la
-         * marquesina de RDS -62 caracteres en un hueco de 150x44-: 4.522
-         * medios bytes leidos por repintado para escribir 758, o sea el
-         * 83 % tirado, veinticinco veces por segundo.
-         *
-         * Y SE SALTA, NO SE SALE. Lo de la derecha invitaba a un `break`
-         * -el texto va de izquierda a derecha, asi que si este empieza
-         * pasado el borde los siguientes tambien- y seria un fallo: esta
-         * funcion DEVUELVE cx, o sea donde acaba el texto, y hay quien
-         * encadena con eso (la lectura de dBm del S-metro, ui_top.c). Con
-         * un `break` devolveria donde dejo de pintar y no donde acaba, y
-         * lo siguiente se dibujaria encima. Saltando se ahorra el bucle de
-         * pixeles, que es lo caro, y cx sigue siendo verdad.
-         */
-        if ((int16_t)(cx + g->bx + g->w) <= s->x
-            || (int16_t)(cx + g->bx) >= (int16_t)(s->x + s->w)) {
-            cx = (int16_t)(cx + g->adv);
-            continue;
-        }
-
-        if (g->w && g->h) {
-            /* Una sola pasada sobre la tinta del glyph, mezclando la
-             * cobertura de 4 bpp. Comparar con gfx_char() del firmware
-             * actual, que abria una ventana del panel por cada pixel. */
-            const uint8_t *bm = &f->bitmap[g->off];
-            int16_t row_bytes = (int16_t)((g->w + 1) / 2);
-
-            for (gy = 0; gy < g->h; gy++) {
-                int16_t sy = (int16_t)(y + g->by + gy);
-                if (sy < s->y || sy >= (int16_t)(s->y + s->h)) continue;
-                for (gx = 0; gx < g->w; gx++) {
-                    uint8_t byte = bm[gy * row_bytes + (gx >> 1)];
-                    uint8_t nib = (gx & 1) ? (uint8_t)(byte & 0x0F)
-                                           : (uint8_t)(byte >> 4);
-                    if (nib) {
-                        /* 0..15 -> 0..255 sin perder el extremo */
-                        uint16_t cov = (uint16_t)((nib * 255u) / 15u);
-                        px_blend(s, (int16_t)(cx + g->bx + gx), sy, c, cov);
-                    }
-                }
-            }
-        }
-        cx = (int16_t)(cx + g->adv);
+        cx = (int16_t)(cx + gfx2_text_uno(s, cx, y, cp, f, c));
     }
     return (int16_t)(cx - x);
 }
@@ -845,6 +870,13 @@ void gfx2_text_in(gfx2_surf_t *s, int16_t x, int16_t y, int16_t w,
     int16_t tx = x;
 
     if (str == 0) { return; }      /* ver gfx2_text_w() */
+    /* Y si esta banda no toca el renglon, fuera antes de medir: gfx2_text_w()
+     * recorre la cadena entera buscando glifos, y esto se llama una vez por
+     * banda. Es la guarda que ya tienen gfx2_rrect(), gfx2_line() y, desde
+     * hoy, gfx2_text_uno(); aqui faltaba. El alto es el de la linea de la
+     * fuente, que es lo que ocupa el renglon. 24/10/2026. */
+    if (!gfx2_band_hits(s, (int16_t)(y - 2),
+                        (int16_t)(f->line_h + 4))) { return; }
     tw = gfx2_text_w(str, f);
 
     if (tw > w) {
@@ -921,6 +953,11 @@ void gfx2_wf_blit(int16_t x, int16_t y, int16_t w, int16_t rows,
             for (i = 0; i < w; i++) dp[i] = cmap[sp[i]];
         }
 
+        if (s_chivato) {
+            s_chivato((uint16_t)x, (uint16_t)(y + done),
+                      (uint16_t)(x + w - 1),
+                      (uint16_t)(y + done + chunk - 1));
+        }
         rm68120_set_window((uint16_t)x, (uint16_t)(y + done),
                            (uint16_t)(x + w - 1), (uint16_t)(y + done + chunk - 1));
         n = (int32_t)w * chunk;

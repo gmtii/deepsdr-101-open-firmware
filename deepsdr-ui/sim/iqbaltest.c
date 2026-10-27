@@ -195,8 +195,25 @@ uint8_t iqa_get_on(void)       { return (uint8_t)(g_iqa_on > 0); }
 #define FIR_N  FFT_SIZE
 
 static double g_fir_hi[2], g_fir_hq[2];
-static double g_fir_fase[5], g_fir_zi, g_fir_zq;
+static double g_fir_zi, g_fir_zq;
 static unsigned g_fir_sem;
+
+/*
+ * LA ESCENA, QUE DEJA DE SER UNA CONSTANTE - 24/10/2026.
+ *
+ * Hasta hoy eran CINCO portadoras fijas en -31, -17, +5, +19 y +33 kHz, y
+ * esa lista tiene una propiedad que nadie eligio a proposito y que lo
+ * cambia todo: NINGUNA cae en el bin espejo de otra. Los espejos de esas
+ * cinco son +31, +17, -5, -19 y -33, y ahi no hay nada.
+ *
+ * O sea que el banco solo probaba el caso facil. Ver la seccion "la banda
+ * poblada" del final, que es donde esto se puso rojo.
+ */
+#define FIR_NC_MAX  40
+static int    g_fir_nc = 0;
+static double g_fir_fp[FIR_NC_MAX];
+static double g_fir_am[FIR_NC_MAX];
+static double g_fir_fase[FIR_NC_MAX];
 
 static double fir_rnd(void)
 {
@@ -213,12 +230,26 @@ static void fir_desq(double i, double q, double *io, double *qo)
     g_fir_zi = i; g_fir_zq = q;
 }
 
+/* La escena de siempre: cinco emisoras repartidas y ninguna enfrente de
+ * otra. Se deja como estaba porque es la que mide el caso limpio. */
+static void fir_escena_cinco(void)
+{
+    static const double fp[5] = { -31000.0, -17000.0, 5000.0, 19000.0, 33000.0 };
+    int c;
+    g_fir_nc = 5;
+    for (c = 0; c < 5; c++) {
+        g_fir_fp[c] = fp[c];
+        g_fir_am[c] = 3000.0;
+    }
+}
+
 static void fir_escena_init(double a, double b, double c, double d)
 {
-    unsigned k;
+    int k;
     g_fir_hi[0] = a; g_fir_hi[1] = b;
     g_fir_hq[0] = c; g_fir_hq[1] = d;
-    for (k = 0U; k < 5U; k++) { g_fir_fase[k] = 0.0; }
+    if (g_fir_nc == 0) { fir_escena_cinco(); }
+    for (k = 0; k < g_fir_nc; k++) { g_fir_fase[k] = 0.0; }
     g_fir_zi = 0.0; g_fir_zq = 0.0; g_fir_sem = 12345u;
     fft_init();
     fft_set_bins_hook(iqbal_calibra);
@@ -227,17 +258,16 @@ static void fir_escena_init(double a, double b, double c, double d)
     iqbal_fir_olvida();
 }
 
-/* Un bloque de la escena: cinco emisoras repartidas por la banda, mas ruido. */
+/* Un bloque de la escena, mas ruido. */
 static void fir_bloque(int16_t *raw)
 {
-    static const double fp[5] = { -31000.0, -17000.0, 5000.0, 19000.0, 33000.0 };
     int n, c;
     for (n = 0; n < FIR_N; n++) {
         double i = 0.0, q = 0.0, io, qo;
-        for (c = 0; c < 5; c++) {
-            i += 3000.0 * cos(g_fir_fase[c]);
-            q += 3000.0 * sin(g_fir_fase[c]);
-            g_fir_fase[c] += 2.0 * M_PI * fp[c] / 96000.0;
+        for (c = 0; c < g_fir_nc; c++) {
+            i += g_fir_am[c] * cos(g_fir_fase[c]);
+            q += g_fir_am[c] * sin(g_fir_fase[c]);
+            g_fir_fase[c] += 2.0 * M_PI * g_fir_fp[c] / 96000.0;
         }
         i += 300.0 * fir_rnd(); q += 300.0 * fir_rnd();
         fir_desq(i, q, &io, &qo);
@@ -250,18 +280,47 @@ static void fir_bloque(int16_t *raw)
     }
 }
 
+/*
+ * EL TONO DE PRUEBA VA ENCIMA DE LA ESCENA, NO EN SU LUGAR - 24/10/2026.
+ *
+ * Y esto no es un adorno del banco: era un fallo de medida. fir_rechazo()
+ * mandaba un tono LIMPIO, el solo, por iqbal_bloque(), y iqbal_bloque()
+ * sigue estimando mientras lo recibe. Un tono limpio es la escena mas
+ * amable que existe para el estimador -E[x^2] vale cero-, asi que durante
+ * los 200 bloques de la medida el corrector SE REENTRENABA con el propio
+ * tono de prueba y el numero que salia no era el de la banda que se estaba
+ * probando: era el de un tono solo.
+ *
+ * Con g_fir_fondo puesto, el tono va sumado a las veinte emisoras, que es
+ * como esta la radio cuando el usuario mira. La deteccion es coherente a la
+ * frecuencia del tono y las emisoras estan en otras, asi que no estorban -y
+ * por eso los tonos de prueba van a media rejilla, en multiplos de 375 mas
+ * 187,5: ni ellos ni sus espejos caen encima de ninguna-.
+ */
+static int g_fir_fondo = 0;
+
 /* Rechazo de imagen con un tono, PASANDO POR EL CORRECTOR. */
 static double fir_rechazo(double f)
 {
     static int16_t raw[2 * FIR_N];
     double cr = 0.0, ci = 0.0, mr = 0.0, mi = 0.0, ph = 0.0, s, m;
-    int b, n, B = 200;
+    int b, n, c, B = 200;
 
     g_fir_zi = 0.0; g_fir_zq = 0.0;
+    if (g_fir_fondo) {
+        for (c = 0; c < g_fir_nc; c++) { g_fir_fase[c] = 0.0; }
+    }
     for (b = 0; b < B; b++) {
         for (n = 0; n < FIR_N; n++) {
             double i = 6000.0 * cos(ph), q = 6000.0 * sin(ph), io, qo;
             ph += 2.0 * M_PI * f / 96000.0;
+            if (g_fir_fondo) {
+                for (c = 0; c < g_fir_nc; c++) {
+                    i += g_fir_am[c] * cos(g_fir_fase[c]);
+                    q += g_fir_am[c] * sin(g_fir_fase[c]);
+                    g_fir_fase[c] += 2.0 * M_PI * g_fir_fp[c] / 96000.0;
+                }
+            }
             fir_desq(i, q, &io, &qo);
             if (io >  32767.0) { io =  32767.0; }
             if (io < -32768.0) { io = -32768.0; }
@@ -292,7 +351,8 @@ static double fir_peor(void)
     for (f = -40000.0; f <= 40000.0; f += 8000.0) {
         double r;
         if (fabs(f) < 5000.0) { continue; }
-        r = fir_rechazo(f);
+        /* A media rejilla cuando hay fondo: ver g_fir_fondo. */
+        r = fir_rechazo(g_fir_fondo ? (f + 187.5) : f);
         if (r < p) { p = r; }
     }
     return p;
@@ -662,6 +722,126 @@ int main(void)
                    despues > antes - 6.0, 0);
             }
         }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*
+     * LA BANDA POBLADA - 24/10/2026.
+     *
+     * *** Avisado por el usuario: le salen señales espejo, de las que van
+     * al contrario de la marcha, en 40 metros. Y en las dos tasas. ***
+     *
+     * POR QUE ESTA SECCION. La de arriba calibra con CINCO portadoras
+     * colocadas de modo que ninguna cae enfrente de otra. Los 40 metros no
+     * son eso: de 7,0 a 7,2 hay banda de aficionados llena de telegrafia y
+     * banda lateral, de 7,2 a 7,45 radiodifusion con portadoras de
+     * cincuenta kilovatios, y en 96 kHz de pantalla caben decenas de
+     * señales. Que una caiga en el bin ESPEJO de otra no es raro: es lo
+     * normal.
+     *
+     * Y eso le importa al calibrador porque su unica defensa contra
+     * confundir una emisora con un espejo es IQB_ESPEJO_BAJO: mira el bin
+     * de enfrente y, si tiene menos potencia que el pico, da la pareja por
+     * buena y se cree que lo que hay enfrente es la imagen. Con dos
+     * emisoras de verdad una frente a otra, eso es FALSO, y el FIR aprende
+     * a restar una de la otra.
+     *
+     * LO QUE SE EXIGE: con la banda llena, calibrar no puede dejar el
+     * rechazo PEOR que no calibrar. Puede no mejorarlo -no hay nada que
+     * obligue a que haya parejas aprovechables- pero empeorarlo significa
+     * que el corrector esta METIENDO el espejo que viene a quitar.
+     */
+    printf("\n  emisoras enfrente de otras: cuantas hacen falta\n");
+    {
+        /*
+         * NO ES COSA DE LOS 40 METROS, Y HAY QUE DECIRLO CON NUMEROS.
+         *
+         * *** Preguntado por el usuario, y es la pregunta correcta: que
+         * mire si no pasa en todas las bandas. ***
+         *
+         * El mecanismo no sabe en que banda esta: lo unico que le hace
+         * falta es que haya señal a +f y a -f del oscilador a la vez. En
+         * 40 metros eso es seguro -banda de aficionados de un lado,
+         * radiodifusion del otro, decenas de señales en pantalla-, pero
+         * DOS emisoras bastan, y dos emisoras las hay en todas partes.
+         *
+         * Asi que esto barre la densidad: desde una sola pareja hasta la
+         * banda llena, con el MISMO desequilibrio de hardware. Lo que mide
+         * es a partir de cuanto el corrector empieza a estorbar.
+         *
+         * Todas las portadoras van en multiplos de 375 Hz, que es el bin
+         * de esta FFT: asi caen limpias y la pareja es una pareja de
+         * verdad, no dos bins vecinos.
+         */
+        static const double fp_par[2]  = { -21375.0, 21375.0 };
+        static const double am_par[2]  = {   3000.0,  1900.0 };
+
+        static const double fp_med[8]  = {
+            -28125.0, -21375.0, -12000.0, -3375.0,
+              6750.0,  16875.0,  21375.0, 30000.0
+        };
+        static const double am_med[8]  = {
+               700.0,   3000.0,    500.0,  1500.0,
+              1100.0,   2000.0,   1900.0,  1300.0
+        };
+
+        /* Veinte emisoras, veinte dB entre la mas fuerte y la mas floja y
+         * TRES parejas puestas a proposito: +-9.000, +-21.375 y +-34.500.
+         * Esto son los 40 metros de una tarde cualquiera. */
+        static const double fp_lle[20] = {
+            -45000.0, -34500.0, -28125.0, -21375.0, -16125.0, -12000.0,
+             -9000.0,  -5625.0,  -3375.0,   3375.0,   6750.0,   9000.0,
+             13125.0,  16875.0,  21375.0,  25500.0,  30000.0,  34500.0,
+             39375.0,  43125.0
+        };
+        static const double am_lle[20] = {
+              900.0,   2600.0,    700.0,   3000.0,   1200.0,    500.0,
+             2800.0,    800.0,   1500.0,    600.0,   1100.0,    900.0,
+              400.0,   2000.0,   1900.0,    700.0,   1300.0,    500.0,
+              600.0,    800.0
+        };
+
+        struct { const char *n; const double *fp; const double *am; int nc; }
+        es[3] = {
+            { "dos emisoras, una enfrente de otra", fp_par, am_par,  2 },
+            { "una banda a medias (una pareja)",    fp_med, am_med,  8 },
+            { "la banda llena (tres parejas)",      fp_lle, am_lle, 20 }
+        };
+        int e, c;
+
+        g_fir_fondo = 1;   /* el tono de prueba, encima de la banda */
+
+        for (e = 0; e < 3; e++) {
+            double crudo, plano, confir;
+            char det[120];
+
+            g_fir_nc = es[e].nc;
+            for (c = 0; c < g_fir_nc; c++) {
+                g_fir_fp[c] = es[e].fp[c];
+                g_fir_am[c] = es[e].am[c];
+            }
+
+            /* El testigo: la misma escena con el corrector APAGADO. Sin el,
+             * las otras dos cifras no se pueden leer. */
+            fir_escena_init(1.0, 0.0, 0.93, 0.115);
+            iqbal_set_on(0U);
+            crudo = fir_peor();
+
+            fir_escena_init(1.0, 0.0, 0.93, 0.115);
+            plano  = fir_asienta_y_mide();
+            confir = fir_calibra_y_mide();
+
+            snprintf(det, sizeof det,
+                     "apagado %5.1f | plano %5.1f | con FIR %5.1f dB", 
+                     crudo, plano, confir);
+            printf("    %-36s %s\n", es[e].n, det);
+            di("    corregir no deja el espejo peor que no corregir",
+               plano > crudo - 3.0 && confir > crudo - 3.0, 0);
+        }
+
+        g_fir_fondo = 0;
+        g_fir_nc = 0;
+        fir_escena_cinco();
     }
 
     printf("\n  %s\n\n", fallos ? "*** HAY FALLOS ***" : "todo bien");

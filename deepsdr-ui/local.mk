@@ -302,7 +302,9 @@ comprueba: lo5351
 # -87 horas de audio- en tres minutos, y salio limpio. Para repetirlo:
 #     make basura FIRMWARE=... SEMILLAS=500
 BASURA_SAN := -fsanitize=address,undefined -fno-omit-frame-pointer
-BASURA_FW  := ecualiz cw rtty rtty_auto rtty_scope navtex dsc psk31 ais_rx ale_rx \
+# fft entra desde el 24/10/2026: rtty_scope.c ya no lleva su propia FFT
+# duplicada, usa fft_potencias(). Ver el bloque del principio de ese fichero.
+BASURA_FW  := ecualiz cw rtty rtty_auto rtty_scope fft navtex dsc psk31 ais_rx ale_rx \
               ale_golay s4415 stanag_rx wspr_rx wspr_msg wspr_fano jtty_rx \
               jtty_fec jtty_msg ax25 sstv wefax hell nco nco_tabla hfdl_ram \
               hfdl_viterbi disc_fm \
@@ -628,7 +630,7 @@ DEMOD_REALES = $(FIRMWARE)/User/rapido.c $(FIRMWARE)/User/nco.c \
                $(FIRMWARE)/User/nco_tabla.c $(FIRMWARE)/User/agc.c \
                $(FIRMWARE)/User/nb.c $(FIRMWARE)/User/audiofil.c \
                $(FIRMWARE)/User/anotch.c $(FIRMWARE)/User/nr_ss.c \
-               $(FIRMWARE)/User/sam.c
+               $(FIRMWARE)/User/sam.c $(FIRMWARE)/User/semibanda.c
 
 out/demodtest: sim/demodtest.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c \
                $(DEMOD_REALES)
@@ -683,6 +685,45 @@ copiaschk: raizchk ; python3 tools/copias_check.py $(FIRMWARE)
 
 comprueba: copiaschk
 
+# ---------------------------------------------------------------------
+# EL BANCO DE MEMORIAS (26/10/2026)
+#
+# Compila el User/banco.c de verdad, con tapones en lugar de la flash. Lo
+# que vigila: que los seis campos de una memoria vayan y vuelvan por el
+# CSV sin perder nada con las sesenta llenas, que un fichero EDITADO EN UN
+# PC -finales de linea de Windows, cabecera, renglones sueltos, campos a
+# medias- se lea quedandose con lo que vale y tirando lo que no, que la
+# basura no desborde ni invente memorias en bancos que no existen, y que
+# el barrido recorra las usadas y de la vuelta. Ver sim/banco_test.c.
+out/bancotest: sim/banco_test.c $(FIRMWARE)/User/banco.c $(FIRMWARE)/User/banco.h
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -I$(FIRMWARE)/Ft8Lib -o $@ \
+	    sim/banco_test.c $(FIRMWARE)/User/banco.c $(LDLIBS)
+
+.PHONY: banco
+banco: out/bancotest ; ./out/bancotest
+
+comprueba: banco
+
+# ---------------------------------------------------------------------
+# LA PANTALLA DEL BANCO (26/10/2026)
+#
+# El motor y el fichero los vigila `banco` de aqui arriba; esto vigila la
+# PANTALLA: que los cuatro bancos quepan en la columna de la izquierda,
+# que las dieciseis celdas de un banco se dibujen todas, que ningun rotulo
+# se salga con su peor caso y que el dibujo y el reparto del toque corten
+# por el mismo sitio. Ver la cabecera de sim/banco_pant.c, que lleva
+# ademas por que esta pantalla se dibujo dos veces.
+out/bancopant: sim/banco_pant.c sim/lcd_sim.c gfx2/gfx2.c gfx2/fonts_data.c \
+               $(FIRMWARE)/User/ui_cfg.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) $(GFX2) -I$(FIRMWARE)/User -o $@ $(filter %.c,$^) $(LDLIBS)
+
+.PHONY: bancopant
+bancopant: out/bancopant ; ./out/bancopant
+
+comprueba: bancopant
+
 # EL ORDEN DE LAS EMISORAS Y EL MEGA DE BD.BIN - 05/10/2026.
 #
 # Es un banco de Python sobre tools/emisoras_pack.py y tools/datos_pack.py,
@@ -710,6 +751,19 @@ comprueba: emispack
 # Ver la cabecera de tools/sitios_check.py para las dos cribas.
 .PHONY: sitios
 sitios: ; python3 $(FIRMWARE)/tools/sitios_check.py
+
+# Y LA TERCERA CRIBA, QUE NO EXISTIA HASTA QUE HUBO CON QUE - 26/10/2026.
+#
+# sitios_check.py valida lo que dijo un geocodificador contra el pais de la
+# emisora. Esto compara esa misma tabla con la posicion que la PROPIA
+# EMISORA registro, que llego con HFCC y con el Aoki ancho. Informa y no
+# falla: la decision de mover una coordenada no la toma un Makefile, se
+# mira y se escribe con --arregla. Ver la cabecera de sitios_registro.py,
+# que cuenta como la primera version de esto mando Karatsu a China.
+.PHONY: sitiosreg
+sitiosreg: ; python3 $(FIRMWARE)/tools/sitios_registro.py
+
+comprueba: sitiosreg
 
 comprueba: sitios
 
@@ -882,7 +936,64 @@ out/splashfuente: sim/splash_fuente_test.c $(FIRMWARE)/User/splash_fuente.c \
 splashfuente: out/splashfuente out/BD_fuente.bin
 	./out/splashfuente out/BD_fuente.bin
 comprueba: splashfuente
+
+# Y ESTE SOLO SI vendor/ ESTA, QUE ES LA MITAD QUE FALTABA - 22/10/2026.
+#
+# out/espectrotema usa vendor/gfx.c, y esta linea era la UNICA de las
+# catorce que lo hacen que se habia quedado fuera de la guarda. O sea que
+# "make comprueba" en un clon recien hecho moria aqui, justo donde el
+# mensaje de mas abajo promete que "los otros 205 se corren igual".
+#
+# Lo encontro clonar el repositorio y lanzar la tanda, que es lo que hace
+# quien llega nuevo y lo que aqui no se hacia nunca porque vendor/ siempre
+# estaba. tools/vendor_check.py existe desde hoy para que no haga falta
+# acordarse.
+ifneq ($(wildcard vendor/gfx.c),)
 comprueba: espectrotema
+endif
+
+# ---------------------------------------------------------------------
+# Y QUE ESA GUARDA NO SE OLVIDE OTRA VEZ (22/10/2026)
+#
+# La de arriba faltaba desde que se escribio el banco, y lo que la
+# encontro fue clonar el repositorio y lanzar la tanda. Esto lo mira
+# leyendo el grafo, que es lo que local.mk:4340 llevaba prometiendo sin
+# que el fichero existiera. Probado roto: ver la cabecera del guion.
+# ---------------------------------------------------------------------
+.PHONY: vendorchk
+vendorchk:
+	python3 tools/vendor_check.py
+
+comprueba: vendorchk
+
+# ---------------------------------------------------------------------
+# QUE EL BOTON FUNC TENGA SALIDA EN SUS TRES ESTADOS (23/10/2026)
+#
+# Avisado por un usuario: entrar en Func sin querer te dejaba dentro,
+# porque el estado de en medio -esperando a que elijas- no tenia salida.
+# Los otros dos son simetricos y por eso parecia completo. Ver la cabecera
+# del guion; probado roto.
+# ---------------------------------------------------------------------
+.PHONY: funcchk
+funcchk:
+	python3 tools/func_check.py $(FIRMWARE)/User/main.c
+
+comprueba: funcchk
+
+# ---------------------------------------------------------------------
+# QUE EL TACTIL SE MIRE ANTES DE DECIDIR QUE SE DIBUJA (23/10/2026)
+#
+# Avisado por un probador: saliendo del decodificador de CW con el boton
+# Modo salia media pantalla de cada una, y se quedaba asi. La mirada al
+# tactil estaba DEBAJO del calculo de active_now/drawing_now, asi que el
+# dibujo de esa misma vuelta usaba una foto de antes del toque. Ver la
+# cabecera del guion; probado roto.
+# ---------------------------------------------------------------------
+.PHONY: ordenchk
+ordenchk:
+	python3 tools/orden_check.py $(FIRMWARE)/User/main.c
+
+comprueba: ordenchk
 
 # Que el update4.bin que se entrega sea el firmware que hay compilado, byte
 # a byte. Ver la cabecera del script: se entrego uno viejo que tenia el
@@ -1134,6 +1245,22 @@ out/rdstest: sim/rdstest.c $(FIRMWARE)/User/rds.c $(FIRMWARE)/User/nco.c $(FIRMW
 rds: out/rdstest ; ./out/rdstest
 
 comprueba: rds
+
+# LO QUE CUESTA el RDS dentro de la interrupcion de WFM, que es otra pregunta
+# que la de si decodifica. Mismo codigo del firmware, mismos ficheros que
+# out/rdstest: ver la cabecera de sim/rds_coste.c para el metodo, y para por
+# que la cola del reloj del PC se mide con callgrind y no con clock_gettime.
+#
+#   ./out/rds_coste          los cinco escenarios y el veredicto
+#   valgrind --tool=callgrind --collect-atstart=no --toggle-collect=rds_feed \
+#            ./out/rds_coste A          instrucciones DENTRO de rds_feed
+out/rds_coste: sim/rds_coste.c $(FIRMWARE)/User/rds.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ sim/rds_coste.c $(FIRMWARE)/User/rds.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c $(LDLIBS)
+
+rdscoste: out/rds_coste ; ./out/rds_coste
+
+comprueba: rdscoste
 
 # Aritmetica del reloj (User/reloj.c). Compila el fichero del firmware, no una
 # copia: ver el comentario de cabecera de User/reloj.h.
@@ -1395,6 +1522,24 @@ out/fat12_16m.img:
 	@mkdir -p out
 	dd if=/dev/zero of=$@ bs=512 count=30720 status=none
 	mkfs.fat -F 12 -R 6 -f 2 -r 512 -s 8 -S 512 -n DEEPSDR16 $@ >/dev/null
+
+# ---------------------------------------------------------------------
+# EL NOMBRE Y LA FECHA DE LAS CARTAS DE FAX (22/10/2026)
+#
+# Pedido por un usuario: la frecuencia y la hora en el nombre. La hora no
+# cabe en un 8.3 pero tiene su sitio en la entrada de directorio, que este
+# driver rellenaba con una constante. Mide las dos cosas LEYENDO EL
+# VOLUMEN, que es lo que vera el ordenador. Ver la cabecera del banco.
+# ---------------------------------------------------------------------
+out/faxnombre: sim/fax_nombre.c sim/w25q_sim.c sim/gd32_pines.c \
+               $(FIRMWARE)/User/spi_flash.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -Ihostinc -Isim -o $@ $^ $(LDLIBS)
+
+.PHONY: faxnombre
+faxnombre: out/faxnombre out/fat12_vacio.img ; ./out/faxnombre out/fat12_vacio.img
+
+comprueba: faxnombre
 
 out/fatanade: sim/fatanade.c sim/wfx_tabla.h sim/w25q_sim.c sim/gd32_pines.c $(FIRMWARE)/User/spi_flash.c $(FIRMWARE)/User/bmp.c
 	@mkdir -p out
@@ -2462,6 +2607,116 @@ ft8lista: out/ft8lista ; ./out/ft8lista
 comprueba: ft8lista
 
 # ---------------------------------------------------------------------
+# EL DIEZMADOR DE MEDIO BANDA 192 -> 96 kHz (23/10/2026)
+# ---------------------------------------------------------------------
+#
+# La prueba que de verdad importa es la 2, y no la respuesta del filtro:
+# se mete un tono a 72 kHz y se mira cuanto sale a 24, que es donde vive
+# la señal. Medir la respuesta del filtro por separado daria por bueno un
+# diezmador que doblase la banda del lado que no se mira.
+out/semibanda: sim/semibanda.c $(FIRMWARE)/User/semibanda.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I $(FIRMWARE)/User -o $@ $^ $(LDLIBS) -lm
+
+.PHONY: semibanda
+semibanda: out/semibanda ; ./out/semibanda
+
+comprueba: semibanda
+
+# ---------------------------------------------------------------------
+# EL REDUCTOR DE RUIDO A LAS DOS TASAS (24/10/2026)
+# ---------------------------------------------------------------------
+#
+# Nacio de una pregunta del usuario -"a 192 parece reducir menos"- y se
+# queda porque la respuesta no se puede razonar, hay que medirla: lo que
+# vigila es que el camino de 192 kHz no le cambie la entrada al reductor.
+out/nrtasa: sim/nr_tasa.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c \
+            $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $^ $(LDLIBS)
+
+.PHONY: nrtasa
+nrtasa: out/nrtasa ; ./out/nrtasa
+
+comprueba: nrtasa
+
+# ---------------------------------------------------------------------
+# LA MEDIDA CON LA QUE EL BARRIDO DECIDE (26/10/2026)
+#
+# El barrido se entrego dos veces mal y las dos por no medir esto: la
+# segunda, porque la metrica del silenciador NO SE CALCULA en banda
+# lateral y preguntarle devolvia siempre lo mismo. Ver la cabecera de
+# sim/scan_nivel.c.
+out/scannivel: sim/scan_nivel.c sim/barrido_consts.h sim/demod_stubs.c \
+               $(FIRMWARE)/User/demod_am.c $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ \
+	      $(filter %.c,$^) $(LDLIBS)
+
+.PHONY: scannivel
+scannivel: out/scannivel ; ./out/scannivel
+
+comprueba: scannivel
+
+# ---------------------------------------------------------------------
+# LA MAQUINA DEL BARRIDO DE MEMORIAS (27/10/2026)
+#
+# scan_nivel mide LA LECTURA; esto corre LA MAQUINA. El barrido se ha
+# entregado mal cuatro veces y las cuatro eran de logica. Las funciones
+# salen de User/main.c tal cual, con barrido_dump.py, para que la prueba
+# no pueda quedarse probando una copia vieja.
+sim/barrido_maquina.h sim/barrido_consts.h &: tools/barrido_dump.py \
+                                              $(FIRMWARE)/User/main.c
+	python3 $< $(FIRMWARE)/User/main.c sim/barrido_maquina.h
+
+out/barrido: sim/barrido.c sim/barrido_maquina.h
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $< $(LDLIBS)
+
+.PHONY: barrido
+barrido: out/barrido ; ./out/barrido
+
+comprueba: barrido
+
+# ---------------------------------------------------------------------
+# EL NCO DE SINTONIA A LAS DOS TASAS (24/10/2026)
+# ---------------------------------------------------------------------
+#
+# Pedido por el usuario. El NCO mezcla a 96 kHz, detras del diezmador, asi
+# que su alcance no lo decide la ventana que se ve sino el filtro que hay
+# delante. Esto comprueba que los 40 kHz de NCO_OFF_MAX_96K siguen siendo
+# alcanzables a 192 kHz - y que pasado ese tope se nota, que es lo que
+# hace que el verde signifique algo.
+out/ncotasa: sim/nco_tasa.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c \
+             $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $^ $(LDLIBS)
+
+.PHONY: ncotasa
+ncotasa: out/ncotasa ; ./out/ncotasa
+
+comprueba: ncotasa
+
+# ---------------------------------------------------------------------
+# TODOS LOS MODOS A TODAS LAS TASAS (24/10/2026)
+# ---------------------------------------------------------------------
+#
+# La red que faltaba. Los cuatro fallos de estos dos dias tenian la misma
+# forma: probar la pieza recien escrita en vez del sistema donde se mete.
+# Esto no mira ninguna pieza - coge cada modo, lo corre a cada tasa, y
+# exige lo minimo: que entregue audio, que entregue las tramas que el
+# conversor pide, y que no sea silencio.
+out/modostasa: sim/modos_tasa.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c \
+               $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $^ $(LDLIBS)
+
+.PHONY: modostasa
+modostasa: out/modostasa ; ./out/modostasa
+
+comprueba: modostasa
+
+# ---------------------------------------------------------------------
 # JTTY (28/09/2026)
 #
 # Pedido por el usuario.
@@ -2705,6 +2960,41 @@ out/qthcoord: sim/qthcoord.c $(FIRMWARE)/User/ft8_decoder.c $(FIRMWARE)/User/ft8
 qthcoord: out/qthcoord ; ./out/qthcoord
 
 comprueba: qthcoord
+
+# ---------------------------------------------------------------------
+# FT8 DE PUNTA A PUNTA (23/10/2026)
+#
+# Avisado: la radio decodifica menos estaciones de las que se oyen en
+# antena. Y no habia con que contestar: la cadena entera de FT8 no
+# tenia ningun banco que la recorriera -los cinco que hay miden trozos- y
+# la cabecera de ft8_decoder.h citaba uno de WAV que desaparecio con
+# test/host/.
+#
+# Este mete una ranura de FT8 sintetica de 12 kHz por un lado y cuenta los
+# mensajes que salen por el otro, compilando el codigo del firmware. Ver la
+# cabecera del banco para lo que mide y los numeros que dio.
+# ---------------------------------------------------------------------
+out/ft8banda: sim/ft8_banda.c \
+              $(FIRMWARE)/User/ft8_decimator.c \
+              $(FIRMWARE)/User/ft8_waterfall_adapter.c \
+              $(FIRMWARE)/User/ft8_fft1024.c \
+              $(FIRMWARE)/User/ft8_tablas.c \
+              $(FIRMWARE)/User/ft8_decoder.c \
+              $(FIRMWARE)/User/ft8_snr.c \
+              $(FIRMWARE)/Ft8Lib/ft8/decode.c \
+              $(FIRMWARE)/Ft8Lib/ft8/ldpc.c \
+              $(FIRMWARE)/Ft8Lib/ft8/message.c \
+              $(FIRMWARE)/Ft8Lib/ft8/crc.c \
+              $(FIRMWARE)/Ft8Lib/ft8/constants.c \
+              $(FIRMWARE)/Ft8Lib/ft8/text.c \
+              sim/waterfall_prestamo.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I $(FIRMWARE)/User -I $(FIRMWARE)/Ft8Lib -o $@ $^ $(LDLIBS)
+
+.PHONY: ft8banda
+ft8banda: out/ft8banda ; ./out/ft8banda
+
+comprueba: ft8banda
 
 # ---------------------------------------------------------------------
 # LA PANTALLA DEL QTH (29/09/2026), enchufada al fin el 30/09.
@@ -3420,8 +3710,22 @@ comprueba: espaciowin
 # ---------------------------------------------------------------------
 # EL RTTY AJUSTANDOSE SOLO (06/10/2026). Ver sim/rtty_solo.c. La muestra
 # va dentro del repo porque el banco no vale sin ella.
+# ---------------------------------------------------------------------
+# EL OSCILOSCOPIO, DE FRENTE (24/10/2026). Ver la cabecera de
+# sim/oscitest.c: lo alimentan NUEVE modos y hasta hoy solo lo tocaba el
+# banco de RTTY, de rebote.
+out/oscitest: sim/oscitest.c $(FIRMWARE)/User/rtty_scope.c \
+              $(FIRMWARE)/User/fft.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -Ihostinc -Isim -o $@ $(filter %.c,$^) $(LDLIBS)
+
+.PHONY: osci
+osci: out/oscitest ; ./out/oscitest
+
+comprueba: osci
+
 out/rttysolo: sim/rtty_solo.c $(FIRMWARE)/User/rtty.c $(FIRMWARE)/User/rtty_auto.c \
-              $(FIRMWARE)/User/rtty_scope.c
+              $(FIRMWARE)/User/rtty_scope.c $(FIRMWARE)/User/fft.c
 	@mkdir -p out
 	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -I$(FIRMWARE)/Ft8Lib -Ihostinc -Isim \
 	      -o $@ $(filter %.c,$^) $(LDLIBS)
@@ -3511,6 +3815,52 @@ out/ffttest: sim/ffttest.c $(FIRMWARE)/User/fft.c $(FIRMWARE)/User/fft.h
 .PHONY: fftbit
 fftbit: out/ffttest ; ./out/ffttest
 comprueba: fftbit
+
+# EL TAMAÑO EN CALIENTE DE LA TRANSFORMADA DEL PANADAPTADOR - 24/10/2026.
+#
+# La ventana del panadaptador vale lo que el bloque de la captura: 512 a
+# 192 kHz y 256 a 96 y a 48, y las de 256 salen de las TABLAS de 512
+# -giros tal cual, Hann las pares, inversion de bits desplazada uno-. Son
+# tres afirmaciones sobre indices. Esto las compara contra User/fft.c
+# compilado nativo a 256 con sus propias tablas, que es el unico patron
+# que no puede equivocarse en lo mismo. Ver sim/fft_tam.c.
+out/fft_tam: sim/fft_tam.c sim/fft_ref256.c $(FIRMWARE)/User/fft.c \
+             $(FIRMWARE)/User/fft.h
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ sim/fft_tam.c sim/fft_ref256.c \
+	      $(FIRMWARE)/User/fft.c $(LDLIBS)
+
+.PHONY: ffttam
+ffttam: out/fft_tam ; ./out/fft_tam
+comprueba: ffttam
+
+# LA MEMORIA DE LA PAGINA DEL CODEC - 24/10/2026.
+#
+# aic3204_write_reg() seleccionaba la pagina ANTES DE CADA REGISTRO, o sea
+# dos transacciones de I2C por escritura sobre un bus bitbang de 70 kHz:
+# unos 134 ms cada vez que cambia la tasa. Acordarse de cual esta puesta
+# quita 145 de las 334. Esto comprueba que el codec acaba EXACTAMENTE con
+# los mismos registros y en el mismo orden, incluida la trampa de que el
+# registro 0 ES el de pagina. Ver tools/aic_pagina_check.py.
+.PHONY: aicpag
+aicpag: ; python3 $(FIRMWARE)/tools/aic_pagina_check.py
+comprueba: aicpag
+
+# EL RENGLON DE LAS FUENTES - 24/10/2026.
+#
+# gfx2_text_in() se salta las bandas que no tocan su renglon, y eso da por
+# hecho que ningun glifo pinta mas de dos pixeles fuera de [y, y+line_h).
+# Hoy lo mas que se sale uno es UNO, por arriba. Si entra una fuente con un
+# descendente mas largo, la guarda cortaria letras en el borde de banda y no
+# se notaria. Esto lo mide sobre las fuentes de verdad. Ver
+# sim/fuente_renglon.c.
+out/fuenterenglon: sim/fuente_renglon.c gfx2/fonts_data.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) $(GFX2) -I$(FIRMWARE)/User -o $@ $(filter %.c,$^) $(LDLIBS)
+
+.PHONY: fuenterenglon
+fuenterenglon: out/fuenterenglon ; ./out/fuenterenglon
+comprueba: fuenterenglon
 
 # LA MISMA PREGUNTA PARA LA TRANSFORMADA DEL DETECTOR - 21/10/2026.
 #
@@ -3700,19 +4050,22 @@ endif
 #                "comprueba" porque pide un fichero por la linea de ordenes.
 out/dsctest: sim/dsctest.c $(FIRMWARE)/User/dsc.c $(FIRMWARE)/User/dsc.h \
              $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c \
-             $(FIRMWARE)/User/rtty_scope.c
+             $(FIRMWARE)/User/rtty_scope.c $(FIRMWARE)/User/fft.c
 	@mkdir -p out
 	$(CC) $(CFLAGS) $(GFX2) -I$(FIRMWARE)/User -o $@ sim/dsctest.c \
 	      $(FIRMWARE)/User/dsc.c $(FIRMWARE)/User/nco.c \
 	      $(FIRMWARE)/User/nco_tabla.c $(FIRMWARE)/User/rtty_scope.c \
+	      $(FIRMWARE)/User/fft.c \
 	      $(LDLIBS)
 
 out/dscaire: sim/dscaire.c $(FIRMWARE)/User/dsc.c $(FIRMWARE)/User/nco.c \
-             $(FIRMWARE)/User/nco_tabla.c $(FIRMWARE)/User/rtty_scope.c
+             $(FIRMWARE)/User/nco_tabla.c $(FIRMWARE)/User/rtty_scope.c \
+             $(FIRMWARE)/User/fft.c
 	@mkdir -p out
 	$(CC) $(CFLAGS) $(GFX2) -I$(FIRMWARE)/User -o $@ sim/dscaire.c \
 	      $(FIRMWARE)/User/dsc.c $(FIRMWARE)/User/nco.c \
 	      $(FIRMWARE)/User/nco_tabla.c $(FIRMWARE)/User/rtty_scope.c \
+	      $(FIRMWARE)/User/fft.c \
 	      $(LDLIBS)
 
 dsc: out/dsctest ; ./out/dsctest
@@ -3786,6 +4139,19 @@ out/armonicotest: sim/armonicotest.c $(FIRMWARE)/User/armonico.c \
 armonico: out/armonicotest ; ./out/armonicotest
 
 comprueba: armonico
+
+# POR DONDE SE METE UNA BANDA EN OTRA. Ver la cabecera de sim/qsd_armonico.c.
+# No enlaza nada del firmware a proposito: lo que mide es el MEZCLADOR, que
+# es hardware, y la conclusion -par = pareja simetrica, impar = copia unica
+# e invertida- es la que armonico.h tiene que contar bien.
+out/qsdarm: sim/qsd_armonico.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -o $@ sim/qsd_armonico.c -lm
+
+.PHONY: qsdarm
+qsdarm: out/qsdarm ; ./out/qsdarm
+
+comprueba: qsdarm
 
 # ---------------------------------------------------------------------
 # LO QUE CUESTA LA INTERRUPCION DEL ADC (08/10/2026).
@@ -4212,6 +4578,22 @@ wfmdc: out/wfmdc ; ./out/wfmdc
 
 comprueba: wfmdc
 
+# LA FUGA DEL OSCILADOR EN LOS PASOS PEGADOS AL CENTRO - 25/10/2026.
+#
+# El piso de abajo de wfmdc: la misma continua encima de la I y la Q, pero
+# en la cadena de AM / banda lateral / NFM, que SI lleva mezclador. Mete
+# muestras crudas por demod_am_process_raw() con una fuga conocida y mide
+# lo que sale por el audio de verdad. Ver sim/rf_dc.c.
+out/rfdc: sim/rf_dc.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c \
+          $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $(FUENTES) $(LDLIBS)
+
+.PHONY: rfdc
+rfdc: out/rfdc ; ./out/rfdc
+
+comprueba: rfdc
+
 # ---------------------------------------------------------------------
 # LA REDUCCION DE RUIDO EN SAM (11/10/2026)
 #
@@ -4255,6 +4637,42 @@ out/sambanda: sim/sam_banda.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c \
 sambanda: out/sambanda ; ./out/sambanda
 
 comprueba: sambanda
+
+# ---------------------------------------------------------------------
+# Y QUE PASA CUANDO ESE SAM DE UNA BANDA PIERDE EL ENGANCHE (22/10/2026)
+#
+# El aviso de un usuario del repositorio: perder el enganche devuelve a AM,
+# y en SAM de una sola banda eso trae de vuelta entera la emisora de la que
+# se estaba huyendo. El porque y como se mide, en la cabecera del banco.
+# ---------------------------------------------------------------------
+out/samsineng: sim/sam_sin_eng.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c \
+              $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $(FUENTES) $(LDLIBS)
+
+.PHONY: samsineng
+samsineng: out/samsineng ; ./out/samsineng
+
+comprueba: samsineng
+
+# ---------------------------------------------------------------------
+# Y POR QUE NO ENGANCHA UNA EMISORA FLOJA (22/10/2026)
+#
+# Avisado por un usuario del repositorio con un video: una emisora debil
+# que no engancha y la sospecha de que el lazo filtra mal. No filtra mal
+# -engancha con la portadora por debajo del ruido- y lo que decide es el
+# DESVIO. El banco lo mide por los dos lados y ademas exige que la radio
+# sepa decir que la portadora esta fuera de alcance. Ver su cabecera.
+# ---------------------------------------------------------------------
+out/samdebil: sim/sam_debil.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c \
+              $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $(FUENTES) $(LDLIBS)
+
+.PHONY: samdebil
+samdebil: out/samdebil ; ./out/samdebil
+
+comprueba: samdebil
 
 # ---------------------------------------------------------------------
 # EL MARGEN DE ENGANCHE DEL SAM (12/10/2026)
@@ -5189,3 +5607,202 @@ out/wefaxfuzz: sim/wefaxfuzz.c $(FIRMWARE)/User/wefax.c $(FIRMWARE)/User/disc_fm
 wefaxfuzz: out/wefaxfuzz ; ./out/wefaxfuzz
 
 comprueba: wefaxfuzz
+
+# ---------------------------------------------------------------------
+# EL PING-PONG DE SALIDA, MEDIDO - 26/10/2026.
+#
+# Ver la cabecera de sim/pingpong.c. La eleccion de mitad de
+# gd32_i2s_stream_write_half() se hace con UNA FOTO del contador del DMA,
+# sin memoria, y el comentario de esa funcion sospecha que puede dejar de
+# alternar y soltar un peine a 375 Hz. Es una sospecha que no se puede
+# confirmar ni descartar leyendo: depende de dos canales de DMA colgados del
+# mismo reloj y del tiempo -variable- del procesado.
+#
+# Aqui se reproduce esa aritmetica con los dos canales y se barre el punto
+# de trabajo y el jitter hasta romperlo. Lo primero que contesto es que el
+# margen es EL BLOQUE ENTERO: hasta el 85 % +-10 del presupuesto no falla
+# ni una vez en cien mil bloques, y para romperlo hace falta que la
+# interrupcion se pase de plazo, que es otro fallo y tiene otro contador.
+out/pingpong: sim/pingpong.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ $(FUENTES) $(LDLIBS)
+
+.PHONY: pingpong
+pingpong: out/pingpong ; ./out/pingpong
+
+comprueba: pingpong
+
+# =====================================================================
+# LA CADENA DE FM ANCHA, DE PUNTA A PUNTA - 26/10/2026
+# =====================================================================
+#
+# Cinco bancos de la revision del "zumbido aspero" de WFM. Los cinco meten
+# muestras crudas de 16 bits I/Q por demod_wfm_process_raw() -la entrada de
+# verdad, la misma que el codec- y leen por donde sale el audio de verdad
+# (gd32_i2s_stream_write_half). Ninguno mira una etapa suelta.
+#
+#   wfmzumb   el espectro de la salida con una emisora comercial completa
+#             -audio, piloto de 19 kHz, estereo en 38, RDS en 57- a varios
+#             niveles, anchos, perfiles de AGC, errores de sintonia y con
+#             el convertidor recortando.
+#   wfmcost   las COSTURAS de bloque: |2a diferencia| media separada por
+#             posicion dentro del bloque. Si la cadena fuese discontinua a
+#             ritmo de bloque -que es lo que suena a 375 Hz- se veria aqui.
+#   wfmvent   la VENTANA: la emisora se genera a 1,536 MHz, se le pasa un
+#             paso bajo complejo con el codo que se quiera, se diezma a 192
+#             kHz y ESO entra. Mide lo que cuesta cada kilohercio de
+#             ventana, que es la pregunta de Carson.
+#   wfmtope   el TOPE del quitador de continua (WFM_DC_TOPE = 512) mas alla
+#             de donde lo mide sim/wfm_dc.c, que no pasa de 300.
+#   wfmagc    el automatico de ganancia de dentro: cuantas divisiones de
+#             coma flotante por bloque y cuanto bombea la envolvente.
+#   wfmesp    el espejo de I/Q, que en WFM cae ENCIMA de la emisora porque
+#             no hay mezclador.
+#   wfmvec    el margen de vuelta del atan2 y la emisora de al lado.
+#   wfmman    tocar los mandos en marcha: el estado rancio de los biquads
+#             que entran.
+#   wfmsil    la emisora que SE CALLA: el hueco de programa, que es cuando
+#             su portadora es continua pura y el quitador se la puede comer.
+WFM_BANCOS = wfmzumb wfmcost wfmvent wfmtope wfmagc wfmesp wfmvec wfmman wfmsil wfmsql wfmiqb
+
+out/wfmzumb: sim/wfm_zumbido.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $(FUENTES) $(LDLIBS)
+out/wfmcost: sim/wfm_costura.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $(FUENTES) $(LDLIBS)
+out/wfmvent: sim/wfm_ventana.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $(FUENTES) $(LDLIBS)
+out/wfmtope: sim/wfm_tope.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $(FUENTES) $(LDLIBS)
+out/wfmsil: sim/wfm_silencio.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $(FUENTES) $(LDLIBS)
+#   wfmsql    el silenciador de FM ancha: que el ruido de ARRIBA del
+#             multiplex separa emisora de canal vacio, y que lo hace SIN
+#             depender de lo fuerte que llegue la emisora - que es la razon
+#             entera de no medir por nivel. Ver WFM_SQL_B0 en demod_am.c.
+out/wfmsql: sim/wfm_squelch.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $(FUENTES) $(LDLIBS)
+#   wfmiqb    el corrector de espejo en FM ancha: que NO aprende ahi -no
+#             puede, la portadora vive en continua- y que lo aprendido en
+#             onda corta sobrevive a un paseo por la FM comercial. Sin
+#             esto se perdian 60 dB de rechazo de imagen en HF, y ningun
+#             banco lo miraba: wfm_espejo.c mide el hardware y no llama al
+#             corrector, e iqbaltest.c no tiene ni un caso de FM ancha.
+out/wfmiqb: sim/wfm_iqbal.c $(FIRMWARE)/User/iqbal.c $(FIRMWARE)/User/fft.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $(FUENTES) $(LDLIBS)
+out/wfmagc: sim/wfm_agc.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $(FUENTES) $(LDLIBS)
+out/wfmesp: sim/wfm_espejo.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $(FUENTES) $(LDLIBS)
+out/wfmvec: sim/wfm_vecina.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $(FUENTES) $(LDLIBS)
+out/wfmman: sim/wfm_mandos.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $(FUENTES) $(LDLIBS)
+
+.PHONY: wfmzumb wfmcost wfmvent wfmtope wfmagc wfmesp wfmvec wfmman wfmsil wfmsql wfmiqb wfmtodo
+wfmzumb: out/wfmzumb ; ./out/wfmzumb
+wfmcost: out/wfmcost ; ./out/wfmcost
+wfmvent: out/wfmvent ; ./out/wfmvent
+wfmtope: out/wfmtope ; ./out/wfmtope
+wfmagc:  out/wfmagc  ; ./out/wfmagc
+wfmesp:  out/wfmesp  ; ./out/wfmesp
+wfmvec:  out/wfmvec  ; ./out/wfmvec
+wfmman:  out/wfmman  ; ./out/wfmman
+wfmsil:  out/wfmsil  ; ./out/wfmsil
+wfmsql:  out/wfmsql  ; ./out/wfmsql
+wfmiqb:  out/wfmiqb  ; ./out/wfmiqb
+
+comprueba: wfmsil
+comprueba: wfmsql
+comprueba: wfmiqb
+wfmtodo: $(WFM_BANCOS)
+
+# ---------------------------------------------------------------------
+# EL BUS DEL PANEL EN WFM, POR CUADRO Y POR SEGUNDO (26/10/2026).
+#
+# No es una comprobacion: es una MEDIDA, y por eso no cuelga de
+# `comprueba`. Cuenta accesos al bus EXMC -con lcd_sim- de cada pieza
+# del repintado llamando a las mismas funciones del firmware que llama
+# main.c, y reparte el resultado entre lo que se apaga al abrir el menu
+# de ajustes y lo que no. Ver la cabecera del .c.
+#
+# Enlaza vendor/gfx.c y no $(FIRMWARE)/User/gfx.c a proposito: gfx.c
+# incluye "rm68120_exmc.h" entre comillas, asi que compilado desde
+# User/ se trae el de VERDAD -que escribe en 0x60020000- en vez del de
+# hostinc. Son copia bit a bit (lo vigila copiaschk).
+out/wfmbus: sim/wfm_bus.c sim/lcd_sim.c sim/ipa_sim.c vendor/gfx.c \
+            $(FIRMWARE)/User/spectrum.c $(FIRMWARE)/User/waterfall.c \
+            gfx2/gfx2.c gfx2/spec_chrome.c gfx2/ui_top.c gfx2/fonts_data.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) $(GFX2) $(VENDOR) -I $(FIRMWARE)/User -I $(FIRMWARE)/Ft8Lib -o $@ $^ $(LDLIBS)
+
+.PHONY: wfmbus
+wfmbus: out/wfmbus ; ./out/wfmbus
+
+# ======================================================================
+# LOS TRES QUE SALIERON DE REVISAR LA PROPIA REVISION - 26/10/2026.
+# ======================================================================
+#
+# El 26/10 se subio WFM_DC_TOPE de 512 a 2.048 midiendo los dos bancos
+# que habia... y los dos se paran en beta = 0,2. Con beta = 0 -portadora
+# QUIETA, que es el silencio entre canciones- el tope nuevo borraba la
+# emisora entera. Estos tres son los huecos que dejo aquel barrido.
+#
+#   wfmrev     que demod_wfm_get_dc_crudo() mida la fuga DE VERDAD, y la
+#              portadora sin modular con el tope barrido.
+#   wfmcal     a que velocidad se come el quitador una portadora quieta,
+#              con y sin el reinicio de demod_wfm_reset_diag().
+#   infoancho  el renglon del VALOR de la celda de Informacion. sim/
+#              pie_ancho.c mide el PIE y solo el pie; por ese hueco
+#              entraron dos renglones nuevos que no cabian.
+out/wfmrev: sim/wfm_revision.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c \
+            $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $(FUENTES) $(LDLIBS)
+
+out/wfmcal: sim/wfm_calienta.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c \
+            $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $(FUENTES) $(LDLIBS)
+
+out/infoancho: sim/info_ancho.c sim/lcd_sim.c vendor/gfx.c gfx2/gfx2.c \
+               gfx2/fonts_data.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I gfx2 -D_GNU_SOURCE -o $@ $(FUENTES) $(LDLIBS)
+
+# ---------------------------------------------------------------------
+# LA CADENCIA DE LA MARQUESINA, MEDIDA - 26/10/2026 (cuarta revision).
+#
+# El vaiven de rds_marq_poll() se entrego con un argumento sin medir
+# ("40 ms son QUINCE BLOQUES EXACTOS"). Esto lo mide con el metodo de
+# tools/vaiven_check.py y teniendo en cuenta quien dispara de verdad la
+# marquesina, que es el BUCLE PRINCIPAL y no la llegada de un bloque.
+# Ver la cabecera del .c.
+out/wfmmarq: sim/wfm_marquesina.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -o $@ sim/wfm_marquesina.c -lm
+
+.PHONY: wfmmarq
+wfmmarq: out/wfmmarq ; ./out/wfmmarq
+
+.PHONY: wfmrev wfmcal infoancho
+wfmrev: out/wfmrev ; ./out/wfmrev
+wfmcal: out/wfmcal ; ./out/wfmcal
+infoancho: out/infoancho ; ./out/infoancho
+
+comprueba: wfmrev wfmcal
+# infoancho necesita vendor/gfx.c, que no esta en un clon limpio: ver
+# vendorchk. Se engancha solo si esta.
+ifneq ($(wildcard vendor/gfx.c),)
+comprueba: infoancho
+endif

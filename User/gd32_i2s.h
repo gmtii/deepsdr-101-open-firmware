@@ -115,7 +115,11 @@ void gd32_i2s_dma_start_test_tone(void);
  * a real out-of-bounds read bug - see STREAM_FRAMES_PER_HALF's
  * comment in gd32_i2s.c for the full story), replacing the silence/
  * test-tone feed. This is the DAC-side transport for demodulated
- * audio. Call after the codec is fully configured (phase 2).
+ * audio. Llamar ANTES de que el codec empiece a dar reloj, no despues: ver el
+ * comentario largo del arranque en main.c. Si se arma este canal con
+ * BCLK/WCLK ya corriendo, el desfase del ping-pong contra el canal de
+ * entrada sale de lo que tarde el I2C y se sortea en cada encendido
+ * (medido en el apartado 7 de deepsdr-ui/sim/pingpong.c).
  */
 void gd32_i2s_dma_start_stream(void);
 
@@ -158,12 +162,41 @@ void gd32_i2s_stream_arm(uint32_t frames_per_half);
  * since gd32_i2s_stream_reconfigure() above keeps this function's own
  * idea of "one half" in sync with whichever rate is actually active.
  */
-void gd32_i2s_stream_write_half(const int16_t *stereo_frames);
+/*
+ * `n_frames` ES NUEVO - 24/10/2026, Y ES EL ARREGLO DE UN FALLO REAL.
+ *
+ * Esta funcion no llevaba longitud: copiaba lo que ELLA creia que medía
+ * media -s_stream_frames_per_half, puesto por gd32_i2s_stream_arm()- del
+ * buffer que le dieran. Mientras las dos cuentas coincidieran, bien. Han
+ * dejado de coincidir DOS VECES:
+ *
+ *   04/08/2026  el buffer se encogio y la cuenta de aqui no. Contado
+ *               entero mas arriba, en el comentario de STREAM_FRAMES_*.
+ *   23/10/2026  la cuenta de aqui subio a 512 -radiofrecuencia a
+ *               192 kHz- y el buffer del demodulador se quedo en 256,
+ *               porque detras del diezmador de medio banda el audio
+ *               sigue a 96. Media pantalla de audio salio del DAC leida
+ *               de mas alla del array.
+ *
+ * Dos veces el mismo fallo por el mismo motivo: un contrato de longitud
+ * que no estaba escrito en ningun sitio donde el compilador o un banco
+ * pudieran mirarlo. Ahora el que llama DICE cuantas tramas trae, y si no
+ * son las que espera el I2S esto suelta silencio y lo grita por el puerto
+ * serie, en vez de leer lo que haya detras.
+ */
+void gd32_i2s_stream_write_half(const int16_t *stereo_frames, uint32_t n_frames);
 
 /* TX-side FERR diagnostics (see gd32_i2s.c's own comments) - was
  * missing from this header (implicit-declaration warning fixed
  * 05/08/2026 alongside the R27/R30 clock-start reordering). */
 uint32_t gd32_i2s_get_tx_ferr_count(void);
+
+/* Cuantas veces el I2S de salida se ha quedado SIN PALABRA que mandar:
+ * TXURERR, que es una averia DISTINTA de FERR y que hasta el 26/10/2026 no
+ * miraba nadie. Es la que sube si algo le roba acceso a la SRAM al DMA del
+ * audio - el blit de la pantalla, el IPA - y la que tiene que quedarse a
+ * cero. Ver gd32_i2s_stream_write_half(). */
+uint32_t gd32_i2s_get_tx_under_count(void);
 
 /*
  * EL MARGEN DE FASE DEL PING-PONG DE SALIDA - 06/10/2026.
@@ -186,6 +219,17 @@ uint32_t gd32_i2s_get_half_min(void);
 uint32_t gd32_i2s_get_half_max(void);
 uint32_t gd32_i2s_get_half_palabras(void);
 void     gd32_i2s_reset_half_diag(void);
+/* Solo olvida QUE MITAD toco la vez pasada, sin tirar lo acumulado: es lo
+ * unico que hace falta despues de una ventana con el gancho suelto, y
+ * borrar los tres contadores ahi dejaba medio renglon de Informacion
+ * midiendo otra cosa. Ver su comentario en gd32_i2s.c. */
+void     gd32_i2s_olvida_media(void);
 void gd32_i2s_reset_tx_ferr_count(void);
+
+/* Los cuatro contadores de este modulo a cero de una vez: los dos de averia
+ * -FERR de trama y TXURERR de vacio- y el margen del ping-pong. Lo llama el
+ * toque sobre el renglon de audio de la ventana de Informacion. Ver alli y
+ * en gd32_i2s.c por que se borran a mano y no solos. */
+void gd32_i2s_cuentas_cero(void);
 
 #endif /* GD32_I2S_H */

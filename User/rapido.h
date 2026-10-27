@@ -29,15 +29,23 @@
 /*
  * Arcotangente de dos argumentos, cuatro cuadrantes.
  *
- * Error maximo medido en 100.000 puntos repartidos por los cuatro
- * cuadrantes: 0,0102 radianes, o sea seis decimas de grado. Cuesta una
- * division, tres multiplicaciones y dos sumas, frente a los ~200 ciclos de
- * atan2f().
+ * Error maximo medido sobre 2.000.001 puntos repartidos por los cuatro
+ * cuadrantes: **0,00062 radianes, o sea 0,036 grados**, con pendiente en
+ * cero 0,995355 y una distorsion del discriminador del 0,037 % con una
+ * desviacion de +-5 kHz. Cuesta una division, tres multiplicaciones y dos
+ * sumas, frente a los ~200 ciclos de atan2f().
+ *
+ * (Aqui ponia "0,0102 radianes, seis decimas de grado". Ese era el error
+ * del estimador ANTERIOR, el que se sustituyo el 06/10/2026, y es
+ * DIECISEIS VECES peor que el que hay. Lo malo de un numero viejo en una
+ * cabecera no es que este mal: es que quien la lea para decidir si el
+ * atajo vale en un sitio nuevo lo va a descartar teniendo margen de
+ * sobra. Corregido el 27/10/2026, remedido.)
  *
  * DONDE VALE Y DONDE NO. Vale para alimentar lazos y discriminadores, que es
- * donde se usa: un PLL se come un sesgo de seis decimas de grado en el
- * integrador, y un discriminador de FM lo convierte en una distorsion muy
- * por debajo del ruido del canal. NO vale para dar un angulo que alguien vaya
+ * donde se usa: un PLL se come ese sesgo en el integrador sin enterarse, y
+ * un discriminador de FM lo convierte en una distorsion muy por debajo del
+ * ruido del canal. NO vale para dar un angulo que alguien vaya
  * a leer o a comparar contra una norma; para eso esta atan2f() y no pasa nada
  * por llamarla una vez.
  */

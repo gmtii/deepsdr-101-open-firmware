@@ -36,6 +36,8 @@ void spi_flash_read(uint32_t addr, uint8_t *buf, uint32_t len)
     }
 }
 spi_flash_async_status_t spi_flash_async_save_poll(void) { return SPI_FLASH_ASYNC_IDLE; }
+/* Solo mirar, sin avanzar la maquina de estados. Ver spi_flash.c. */
+uint8_t spi_flash_async_save_en_vuelo(void) { return 0U; }
 
 /* Desde el 02/10/2026 zona_alta.c saca de aqui donde empieza la zona alta.
  * Se contesta 2 MB, el chip de la radio, que es lo que hace que este banco

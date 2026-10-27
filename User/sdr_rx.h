@@ -110,7 +110,21 @@ uint32_t sdr_rx_get_block_samples(void);
  * since sdr_rx_get_block_samples() tells you how much of that was
  * actually written this call.
  */
-uint32_t sdr_rx_poll_block_iq(int16_t *i_out, int16_t *q_out);
+/*
+ * `max_n` ES NUEVO - 24/10/2026, revision de los 192 kHz.
+ *
+ * Esto desentrelaza el bloque entero EN EL BUCLE PRINCIPAL, y a 192 kHz el
+ * bloque son 512 muestras. Pero quien lo pide para el panadaptador solo
+ * lee FFT_SIZE de ellas -256-, asi que la mitad del trabajo y de los dos
+ * kilobytes de trasiego se tiraban: 384.000 iteraciones por segundo para
+ * usar la mitad.
+ *
+ * Con `max_n` cada uno pide lo que va a leer. El que comprueba si la
+ * captura viene limpia sigue pidiendolo todo, que ahi mas muestras es
+ * mejor dictamen. Devuelve 0 si no hay bloque nuevo; si lo hay, copia
+ * hasta `max_n` muestras y deja el resto del array sin tocar.
+ */
+uint32_t sdr_rx_poll_block_iq(int16_t *i_out, int16_t *q_out, uint32_t max_n);
 
 /*
  * Registers a hook called from the RX DMA interrupt for EVERY
@@ -123,12 +137,44 @@ uint32_t sdr_rx_poll_block_iq(int16_t *i_out, int16_t *q_out);
  */
 void sdr_rx_set_block_hook(void (*hook)(const int16_t *raw_interleaved));
 
+/*
+ * EL QUE ESTE PUESTO AHORA - 24/10/2026.
+ *
+ * Para poder SOLTARLO un momento y volver a poner el mismo sin tener que
+ * saber cual era. Lo pide main.c al reconfigurar los decodificadores
+ * cuando cambia la tasa: esa reconfiguracion escribe estructuras que la
+ * interrupcion lee, y hacerlo con el gancho puesto es la clase de carrera
+ * que este fichero ya documenta una capa mas adentro.
+ */
+void (*sdr_rx_get_block_hook(void))(const int16_t *);
+
 /* FERR diagnostics (see sdr_rx.c's own comments for each) - added
  * 05/08/2026 during the WFM FERR investigation, previously missing
  * from this header (called from main.c with no prototype visible -
  * fixed alongside the R27/R30 clock-start reordering). */
 uint32_t sdr_rx_get_ferr_count(void);
 void sdr_rx_reset_ferr_count(void);
+
+/* Cuantas VECES el periferico de entrada se ha quedado sin sitio para la
+ * palabra que llegaba (RXORERR), o sea cuantas veces se ha perdido al menos
+ * una muestra. Se cuentan FLANCOS de la bandera, no bloques con la bandera
+ * puesta: la bandera es pegajosa y esta por confirmar si la lectura que el
+ * DMA hace de SPI_DATA la borra; contando flancos el numero vale en los dos
+ * casos. Una cuenta puede ser por tanto una palabra o mil. No es lo mismo
+ * que FERR: ver el comentario de la interrupcion en sdr_rx.c, que ademas
+ * dice como confirmarlo con la placa delante. Acumulativo desde el
+ * arranque; lo borra sdr_rx_cuentas_cero(). */
+uint32_t sdr_rx_get_over_count(void);
+
+/* Los CUATRO contadores de diagnostico de este modulo a cero de una vez:
+ * FERR, desbordes del SPI (RXORERR, la celda "rf"), bloques descartados por
+ * corruptos y bloques que llegaron tarde. Lo llama el toque sobre el
+ * renglon de audio de la ventana de Informacion, junto con
+ * gd32_i2s_cuentas_cero(). Ver alli.
+ *
+ * Decia "los tres" y se dejaba fuera justamente el de la celda "rf", que es
+ * el que mas se mira; corregido el 26/10/2026, duodecima vuelta. */
+void sdr_rx_cuentas_cero(void);
 uint8_t sdr_rx_last_block_corrupted(void);
 
 /*
@@ -161,10 +207,21 @@ uint8_t sdr_rx_bloque_corrupto(const int16_t *iq, uint32_t n_muestras);
 uint8_t sdr_rx_get_ferr_snapshot(int16_t *i_out, int16_t *q_out, uint32_t n);
 
 /*
- * El chequeo de bloque corrupto, encendido o apagado. Se APAGA en WFM: ahi
- * la I/Q va sin mezclar a 192 kHz y los saltos grandes entre muestras son
- * lo NORMAL, no una anomalia - ver la cuenta en sdr_rx.c. Encendido en
- * AM/SSB, donde la senal si va mezclada a banda base y es estrecha.
+ * El chequeo de bloque corrupto, encendido o apagado.
+ *
+ * HOY ESTA APAGADO EN LOS CUATRO MODOS, y conviene decirlo aqui porque
+ * sdr_rx_get_descartes() es por tanto cero estructural: el detector no esta
+ * corriendo. s_chequeo_corrupcion arranca a cero y el unico sitio del arbol
+ * que llama a esta funcion le pasa cero (main.c, apply_demod_mode()). El
+ * porque esta en sdr_rx.c, delante de sdr_rx_bloque_corrupto(): el detector
+ * tira los bloques de ruido solo, que es lo que suena en una frecuencia
+ * vacia, asi que no esta listo.
+ *
+ * Aqui ponia que se apagaba en WFM y seguia "encendido en AM/SSB, donde la
+ * senal si va mezclada a banda base", y las dos mitades eran falsas: ni
+ * esta encendido en ningun modo, ni la I/Q de AM va mezclada cuando pasa
+ * por aqui -nco_mezcla() corre DESPUES, ya en demod_am.c-. Corregido el
+ * 26/10/2026, duodecima vuelta de la revision a fondo.
  */
 void sdr_rx_set_chequeo_corrupcion(uint8_t on);
 

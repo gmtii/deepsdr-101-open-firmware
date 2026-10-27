@@ -117,8 +117,9 @@ static void sdr_rx_arm_dma(void)
     dma_flag_clear(DMA0, DMA_CH3, DMA_FLAG_FTF);
 
     /* Half/full-transfer interrupts drive block delivery (see the
-     * ISR-model comment at the top of this file). NVIC preemption
-     * priority 6: below nothing critical, above the main loop. */
+     * ISR-model comment at the top of this file). La prioridad real esta
+     * dos lineas mas abajo y es 1, no 6: aqui ponia el numero del reparto
+     * viejo y se corrige el 26/10/2026. */
     dma_interrupt_enable(DMA0, DMA_CH3, DMA_CHXCTL_HTFIE | DMA_CHXCTL_FTFIE);
     /* Prioridad 1: por debajo del reloj y por encima del tactil. El numero
      * sale de irq_prio.h, que es donde esta escrito el plan entero y por que.
@@ -164,6 +165,20 @@ static void sdr_rx_arm_dma(void)
  * whatever the clock is doing NOW - so this always happens now,
  * without waiting to see if the cheaper option "worked" first (it can
  * look like it worked and still be wrong).
+ *
+ * *** Y SIGUE LEYENDO ANTES DE CREERTE ESTO ***, 26/10/2026. El bloque de
+ * justo debajo cuenta que ese disable/re-enable se QUITO el mismo dia que
+ * se escribio lo de aqui arriba, y por que. Esto se queda como historia
+ * porque explica el sintoma; el codigo de hoy solo borra por lectura.
+ *
+ * Y de paso, lo que ninguno de los dos dice: esto solo corre en el
+ * arranque y en un cambio de tasa. Un FERR que aparezca A MITAD DE SESION
+ * no tiene ninguna via de recuperacion - la interrupcion lo cuenta y
+ * sigue-. Es deliberado: el 70 % de bloques con FERR que se vio en
+ * hardware vino acompañado de muestras que el diagnostico de correlacion
+ * daba por buenas, asi que resincronizar el periferico en caliente por
+ * cada uno seria cortar el audio constantemente por una bandera que casi
+ * nunca significa lo que parece.
  */
 /*
  * *** 05/08/2026, SIMPLIFIED for the "full reinit instead of live
@@ -223,6 +238,25 @@ static void sdr_rx_resync_spi(void)
  */
 void sdr_rx_bringup(uint32_t block_samples)
 {
+    /*
+     * Y SE RECORTA CONTRA EL BUFFER, QUE ES LO QUE SU GEMELA YA HACE
+     * 26/10/2026, tercera vuelta de la revision a fondo.
+     *
+     * s_raw_buf mide RAW_TOTAL_WORDS_MAX y es fijo; esto fija el `number`
+     * del DMA de recepcion a partir de lo que le pasen. Con un bloque mayor
+     * que SDR_RX_BLOCK_SAMPLES_MAX el DMA se pone a escribir en la memoria
+     * de al lado, que en el mapa de hoy es semibanda.o.
+     *
+     * El lado de transmision ya se cerro el 08/10/2026 y su comentario
+     * cuenta el sintoma -"ruido con un patron repetido"- y por que un
+     * recorte es mejor que confiar en quien llama. Este lado se quedo sin
+     * cerrar. Hoy los dos unicos llamantes pasan 256 o 512, asi que no
+     * tiene sintoma; se cierra por lo mismo que se cerro aquel.
+     */
+    if (block_samples > (uint32_t)SDR_RX_BLOCK_SAMPLES_MAX) {
+        block_samples = (uint32_t)SDR_RX_BLOCK_SAMPLES_MAX;
+    }
+
     s_last_half_delivered = 0U;
     s_block_samples   = block_samples;
     s_raw_half_words  = block_samples * 2U;
@@ -250,6 +284,29 @@ void sdr_rx_bringup(uint32_t block_samples)
      * that matters: if this whole rewrite worked, FERR should read 0
      * here just like it always has at cold boot.
      */
+    /*
+     * ======================================================================
+     * Y EL DIAGNOSTICO ENTERO, DETRAS DEL INTERRUPTOR - 24/10/2026.
+     * ======================================================================
+     *
+     * Encontrado en la revision a fondo pedida por el usuario, y es de los
+     * que no se ven leyendo: los debug_print de aqui dentro se evaporan solos
+     * cuando DEBUG_UART_ENABLED vale 0 -que es lo de serie-, pero LA ESPERA
+     * NO. El bucle es de dos millones de vueltas y su contador es volatile,
+     * asi que el compilador no puede tocarlo: se compila entero en la version
+     * de produccion y son SIETE instrucciones por vuelta, catorce millones de
+     * ciclos, unos SETENTA MILISEGUNDOS con el bucle principal parado.
+     *
+     * Y no es solo el arranque: sdr_rx_bringup() corre en CADA cambio de tasa
+     * desde el 05/08/2026, que es justo lo que ese cambio buscaba. O sea que
+     * cada vez que se toca la casilla de la tasa -o que la red de los 192 kHz
+     * vuelve sola a 96- la radio se queda setenta milisegundos sin atender al
+     * bucle principal, para rellenar dos variables que nadie imprime.
+     *
+     * La medida de verdad -que el contador del DMA se mueve- sigue intacta
+     * cuando el UART esta encendido, que es cuando alguien la va a leer.
+     */
+#if DEBUG_UART_ENABLED
     {
         uint32_t cnt_a, cnt_b;
         volatile uint32_t d;
@@ -297,6 +354,7 @@ void sdr_rx_bringup(uint32_t block_samples)
             }
         }
     }
+#endif /* DEBUG_UART_ENABLED */
 }
 
 void sdr_rx_init(void)
@@ -378,6 +436,11 @@ uint32_t sdr_rx_get_block_samples(void)
     return s_block_samples;
 }
 
+void (*sdr_rx_get_block_hook(void))(const int16_t *)
+{
+    return s_block_hook;
+}
+
 void sdr_rx_set_block_hook(void (*hook)(const int16_t *raw_interleaved))
 {
     s_block_hook = hook;
@@ -389,11 +452,13 @@ void sdr_rx_set_block_hook(void (*hook)(const int16_t *raw_interleaved))
  * complete). While this handler processes half N, the DMA is filling
  * the OTHER half, so the data is stable for the duration.
  *
- * Priority note: enabled at NVIC preemption priority 6 (see
- * sdr_rx_init()) - the demod hook costs on the order of 100us per
- * block, so even where it delays the 1kHz SysTick encoder sampling,
- * the quadrature transition-table decoder tolerates that jitter by
- * construction.
+ * Priority note: enabled at NVIC preemption priority IRQ_PRIO_AUDIO,
+ * que hoy es 1 y no 6 -lo de "6" era el reparto viejo y se corrige el
+ * 26/10/2026; el plan entero esta en irq_prio.h-. El gancho del
+ * demodulador cuesta del orden de 100 us por bloque, asi que aunque
+ * retrase el muestreo del mando que hace SysTick a 1 kHz, el decodificador
+ * de cuadratura por tabla de transiciones aguanta ese temblor por
+ * construccion.
  */
 /*
  * *** 05/08/2026, added for WFM FERR frequency diagnostics *** - the
@@ -404,13 +469,24 @@ void sdr_rx_set_block_hook(void (*hook)(const int16_t *raw_interleaved))
  * continuous noise - which is what's actually reported, but we've had
  * no way to tell them apart. This counts every real occurrence, right
  * here in the ISR that already runs every RX block (~2.667ms either
- * rate), with a read-based clear (STAT then DATA, same sequence
- * sdr_rx_resync_spi() already uses) so each block sees a fresh flag,
- * not one still latched from a prior block. No debug_print anywhere
- * near this - cheap on purpose, same reasoning as demod_am.c's own
- * ISR timing instrumentation.
+ * rate). No debug_print anywhere near this - cheap on purpose, same
+ * reasoning as demod_am.c's own ISR timing instrumentation.
+ *
+ * ESTE PARRAFO DECIA ALGO QUE DEJO DE SER CIERTO - corregido el
+ * 26/10/2026, duodecima vuelta. Decia que la ISR borraba la bandera
+ * leyendo "STAT y despues DATA, la misma secuencia que sdr_rx_resync_spi()",
+ * y la lectura de DATA se quito de aqui el 05/08/2026 por la regresion que
+ * cuenta el comentario de la propia ISR. Para el FERR da igual, porque esa
+ * bandera si se borra leyendo STAT. Para el RXORERR es justo la mitad que
+ * falta, y por eso ese contador cuenta FLANCOS: ver la ISR.
  */
 static volatile uint32_t s_rx_ferr_count = 0U;
+static volatile uint32_t s_rx_over_count = 0U; /* RXORERR: ver la ISR */
+/* Como estaba la bandera el bloque anterior, para contar FLANCOS y no
+ * bloques. Ver la ISR, que cuenta por que importa. NO lo borra
+ * sdr_rx_cuentas_cero(): si la bandera esta pegada, ponerlo a cero
+ * volveria a contar un flanco por bloque, que es justo lo que se evita. */
+static volatile uint8_t  s_rx_over_ant   = 0U;
 
 uint32_t sdr_rx_get_ferr_count(void)
 {
@@ -422,11 +498,17 @@ void sdr_rx_reset_ferr_count(void)
     s_rx_ferr_count = 0U;
 }
 
-static volatile uint8_t s_last_block_had_ferr = 0U;
+/* El de desbordamiento, por separado: ver donde se cuenta. */
+uint32_t sdr_rx_get_over_count(void)
+{
+    return s_rx_over_count;
+}
+
+static volatile uint8_t s_bloque_parecio_roto = 0U;
 
 uint8_t sdr_rx_last_block_corrupted(void)
 {
-    return s_last_block_had_ferr;
+    return s_bloque_parecio_roto;
 }
 
 /*
@@ -571,6 +653,40 @@ uint32_t sdr_rx_get_descartes(void)
     return s_rx_descartes;
 }
 
+/*
+ * LOS TRES DE GOLPE, PARA EL DEDO - 26/10/2026, revision a fondo.
+ *
+ * Mismo motivo que gd32_i2s_cuentas_cero(), y van siempre juntos con
+ * aquella: el renglon de audio de la ventana de Informacion enseña los de
+ * los dos modulos en la misma linea, asi que ponerlos a cero por separado
+ * seria comparar un numero de hoy con otro de hace tres horas.
+ */
+void sdr_rx_cuentas_cero(void)
+{
+    s_rx_ferr_count = 0U;
+    /*
+     * Y EL DE RXORERR NO SE VA A CERO SI LA BANDERA SIGUE PUESTA -
+     * 26/10/2026, decimotercera vuelta de la revision a fondo.
+     *
+     * Este contador cuenta flancos (ver la ISR). Si la bandera resulta
+     * estar PEGADA -el caso que la ISR deja por confirmar-, ponerlo a cero
+     * aqui lo dejaba en cero PARA SIEMPRE, porque ya no puede haber otro
+     * flanco. Y las instrucciones del renglon de Informacion dicen "tocar,
+     * mirar un rato, volver; la diferencia ES el dato": el usuario tocaba,
+     * y a partir de ahi la celda leia 0 mientras el audio seguia saliendo
+     * torcido. O sea, la averia leyendose como "todo bien", que es la
+     * direccion peor para un diagnostico.
+     *
+     * Dejandolo en 1 cuando la bandera esta puesta, el numero sigue
+     * diciendo la verdad despues del toque: "hay un desbordamiento vivo que
+     * no se ha limpiado". Y si la bandera se borra sola -el otro caso-,
+     * s_rx_over_ant vale 0 y esto es el cero de siempre.
+     */
+    s_rx_over_count = (uint32_t)(s_rx_over_ant ? 1U : 0U);
+    s_rx_descartes  = 0U;
+    s_rx_tarde      = 0U;
+}
+
 /* La regla del bloque corrupto vive en User/rx_corrupto.c, fuera de esta
  * interrupcion, para que el simulador pueda medirla. Ver alla el porque. */
 static int16_t s_ferr_snapshot[SDR_RX_FERR_SNAPSHOT_FRAMES * 2U];
@@ -612,9 +728,28 @@ void DMA0_Channel3_IRQHandler(void)
         s_pending_half = 1U;
         ftf = 1U;
     }
-    /* Las dos a la vez = hemos llegado tarde y se pierde la mitad vieja.
+    /*
+     * Las dos a la vez = hemos llegado tarde y se pierde la mitad vieja.
      * Ver el comentario de s_rx_tarde: no se puede recuperar, pero se
-     * cuenta. */
+     * cuenta.
+     *
+     * Y CON LA MITAD QUE SE ESCOGE HAY UNA LETRA PEQUEÑA - 26/10/2026,
+     * tercera vuelta de la revision a fondo. Con las dos banderas puestas
+     * `half` acaba apuntando a la SEGUNDA, sin condicion. Eso es correcto
+     * si el retraso cayo entre media vuelta y una vuelta enteras -orden
+     * HTF, FTF: la nueva es la segunda-. Si el retraso paso de UNA VUELTA
+     * -HTF, FTF, HTF- la nueva es la PRIMERA y la segunda es justo la que
+     * el DMA esta pisando ahora mismo: se le entrega al discriminador medio
+     * bloque viejo pegado a medio bloque que se esta sobreescribiendo, que
+     * no suena a repeticion sino a chasquido fuerte.
+     *
+     * Las banderas son pegajosas y no cuentan cuantas vueltas, asi que
+     * desde aqui no se puede distinguir; haria falta mirar
+     * dma_transfer_number_get(). No se hace porque para llegar ahi hacen
+     * falta 5,33 ms sin atender esta linea y la unica interrupcion por
+     * encima son dos instrucciones. Queda escrito para que el dia que
+     * s_rx_tarde se mueva nadie busque el sintoma equivocado.
+     */
     if (htf && ftf) { s_rx_tarde++; }
 
     {
@@ -637,6 +772,80 @@ void DMA0_Channel3_IRQHandler(void)
         if ((stat & SPI_STAT_FERR) != 0U) {
             s_rx_ferr_count++;
             ferr_this_block = 1U;
+        }
+        /*
+         * Y EL DESBORDAMIENTO, QUE ES LA OTRA AVERIA Y LA UNICA QUE PIERDE
+         * MUESTRAS - 26/10/2026, sexta vuelta de la revision a fondo.
+         *
+         * La palabra de estado ya esta en el registro y lleva dentro
+         * RXORERR, y no la miraba nadie. Fuera de aqui, RXORERR solo se
+         * toca en sdr_rx_resync_spi(), que por su propio comentario "solo
+         * corre en el arranque y en un cambio de tasa", y en trazas que la
+         * compilacion de serie no incluye.
+         *
+         * Y NO ES LO MISMO QUE FERR. FERR dice que el sincronismo de trama
+         * se torcio; RXORERR dice que llego una palabra y el DMA todavia no
+         * se habia llevado la anterior, o sea UNA PALABRA PERDIDA. Si se
+         * pierde un numero impar, todas las muestras siguientes entran con
+         * la trama corrida: lo que se lee como I es Q. Para el espectro eso
+         * casi no se ve -es una potencia-; para el discriminador de FM, que
+         * vive de la fase, cambiar I por Q es conjugar la señal, y eso es
+         * audio torcido y aspero de forma CONTINUA hasta que el usuario
+         * cruce un cambio de tasa. O sea la averia que se cura sola al
+         * tocar algo que no tiene nada que ver, que es la peor de encontrar.
+         *
+         * Es ademas el gemelo de entrada del TXURERR que se añadio el mismo
+         * dia en gd32_i2s.c, y por el mismo motivo: el blit de la pantalla y
+         * el IPA son maestros del bus y pueden robarle acceso a la SRAM al
+         * DMA del audio.
+         *
+         * Es EL numero del renglon "rf" de la ventana de Informacion, y el
+         * FERR ya no esta ahi: ver el comentario de ese renglon en main.c,
+         * que cuenta por que meter el FERR en esa celda la saturaba en tres
+         * segundos. El FERR se sigue contando y se lee con
+         * sdr_rx_get_ferr_count().
+         *
+         * Y LO QUE CUENTA SON FLANCOS, NO BLOQUES CON LA BANDERA PUESTA -
+         * 26/10/2026, duodecima vuelta de la revision a fondo. Aqui ponia
+         * un "if (bandera) contador++" a secas, y eso podia dejar el
+         * instrumento inservible.
+         *
+         * El motivo: la secuencia que borra RXORERR en este silicio es
+         * leer SPI_DATA y DESPUES SPI_STAT - esta escrito arriba en este
+         * mismo fichero y es lo que hace sdr_rx_resync_spi()-. Esta
+         * interrupcion lee SOLO STAT, y a proposito: la lectura de DATA se
+         * quito el 05/08/2026 por la regresion que cuenta el comentario de
+         * aqui arriba, y no va a volver.
+         *
+         * QUEDA POR CONFIRMAR si la lectura continua que el DMA hace de
+         * SPI_DATA vale como primera mitad de esa secuencia -el periferico
+         * no puede distinguir un acceso del DMA de uno de la CPU-. Si
+         * vale, la bandera se borra cada bloque. Si no vale, se queda
+         * puesta PARA SIEMPRE desde el primer desbordamiento.
+         *
+         * Con el "if" a secas, el segundo caso contaba 375 veces por
+         * segundo: la celda "rf" llegaba a su tope de 999 en DOS SEGUNDOS Y
+         * MEDIO y ya no volvia a decir nada, ni despues de tocar el
+         * renglon. O sea exactamente la averia por la que el FERR se saco
+         * de esa celda (ver su comentario en main.c).
+         *
+         * Contando flancos vale en los dos casos: si la bandera se borra
+         * sola, cada bloque con desbordamiento es un flanco y el numero es
+         * el mismo que antes; si se queda pegada, cuenta 1 y se queda en 1,
+         * que dice la verdad -"ha pasado"- sin destrozar el instrumento.
+         *
+         * COMO SE CONFIRMA, cuando haya placa delante: entrar en FM ancha
+         * con el espectro pintando, tocar el renglon de audio, y mirar
+         * "rf". Si sube de uno en uno y se queda quieto, la bandera se
+         * borra sola. Si se queda clavado en 1 mientras el audio suena
+         * torcido, esta pegada, y entonces el unico que la limpia es cruzar
+         * un cambio de tasa, que es quien llama a sdr_rx_resync_spi().
+         */
+        if ((stat & SPI_STAT_RXORERR) != 0U) {
+            if (s_rx_over_ant == 0U) { s_rx_over_count++; }
+            s_rx_over_ant = 1U;
+        } else {
+            s_rx_over_ant = 0U;
         }
     }
 
@@ -681,7 +890,7 @@ void DMA0_Channel3_IRQHandler(void)
             corrupted = sdr_rx_bloque_corrupto(half, s_raw_half_words / 2U);
         }
         if (corrupted != 0U) { s_rx_descartes++; }
-        s_last_block_had_ferr = corrupted;
+        s_bloque_parecio_roto = corrupted;
     }
 
     /*
@@ -700,16 +909,37 @@ void DMA0_Channel3_IRQHandler(void)
      * la que se oye.
      *
      * Y va DESPUES del chequeo de corrupcion, para no meter un bloque de
-     * basura en el promedio: con un FERR las muestras pueden venir con los
-     * canales cambiados, que es exactamente lo que este corrector mide.
+     * basura en el promedio: en un bloque roto las muestras pueden venir con
+     * los canales cambiados, que es exactamente lo que este corrector mide.
+     *
+     * PERO QUE NADIE LO LEA COMO "NO ENTRAN LOS BLOQUES CON FERR"
+     * 26/10/2026, segunda vuelta de la revision a fondo. Aqui ponia eso, y
+     * no es verdad: la bandera que se mira es la del chequeo por SALTOS
+     * -sdr_rx_bloque_corrupto()-, no la de FERR. La de FERR se calcula unas
+     * lineas mas arriba, en ferr_this_block, y solo alimenta la foto de
+     * diagnostico.
+     *
+     * Y es a proposito, por lo que cuenta el bloque grande de arriba: el
+     * FERR de este hardware se dispara en el 70 % de los bloques de algunas
+     * sesiones de FM ancha mientras las muestras de esos mismos bloques
+     * salen bien en el diagnostico de correlacion. Cerrarle la puerta al
+     * corrector por FERR seria tirar siete de cada diez medidas por una
+     * bandera que no dice lo que parece decir.
+     *
+     * Lo que SI conviene saber es que s_chequeo_corrupcion arranca apagado
+     * -y main.c lo deja apagado-, asi que hoy esta guarda no excluye nada.
+     * Es el canje que esta escrito en la cabecera de ese interruptor: en FM
+     * ancha descartar bloques salia mas caro que el ruido que evitaba.
      */
-    if ((half != 0) && (s_last_block_had_ferr == 0U)) {
+    if ((half != 0) && (s_bloque_parecio_roto == 0U)) {
         /* half apunta dentro de s_raw_buf, que no es const; el const de la
          * variable local es para el gancho, que no debe escribir. */
         int16_t *b = &s_raw_buf[(half == &s_raw_buf[0]) ? 0U : s_raw_half_words];
         /*
          * Los dos, y EN ESTE ORDEN. El plano se come la parte constante del
-         * desequilibrio -que es la grande y converge en un segundo- y el de
+         * desequilibrio -que es la grande; su constante de tiempo son 10,9 s a
+         * 96 kHz, no "un segundo" como ponia aqui: mide uno de cada ocho
+         * bloques. Corregido el 27/10/2026- y el de
          * banda ancha se queda con lo que depende de la frecuencia, que es
          * poco y tarda cuatro. Al reves, el de banda ancha tendria que
          * cargar tambien con la parte plana y los dos lazos se pelearian por
@@ -780,7 +1010,7 @@ void DMA0_Channel3_IRQHandler(void)
     }
 }
 
-uint32_t sdr_rx_poll_block_iq(int16_t *i_out, int16_t *q_out)
+uint32_t sdr_rx_poll_block_iq(int16_t *i_out, int16_t *q_out, uint32_t max_n)
 {
     uint32_t n;
     uint8_t half;
@@ -805,10 +1035,16 @@ uint32_t sdr_rx_poll_block_iq(int16_t *i_out, int16_t *q_out)
      * a DISPLAY consumer a rare torn spectrum frame is acceptable;
      * the audio path (the hook, in ISR context) is never affected. */
     base = (half == 0U) ? 0U : s_raw_half_words;
-    for (n = 0; n < s_block_samples; n++) {
+    {
+        /* Lo que pide el que llama, sin pasarse de lo que hay. Ver el
+         * comentario de esta funcion en sdr_rx.h. */
+        uint32_t tope = (max_n < s_block_samples) ? max_n : s_block_samples;
+
+        for (n = 0; n < tope; n++) {
         /* de-interleave: even=left ADC channel, odd=right ADC channel */
-        i_out[n] = s_raw_buf[base + 2U * n];
-        q_out[n] = s_raw_buf[base + 2U * n + 1U];
+            i_out[n] = s_raw_buf[base + 2U * n];
+            q_out[n] = s_raw_buf[base + 2U * n + 1U];
+        }
     }
     (void)s_last_half_delivered; /* superseded by the ISR model */
     return 1U;

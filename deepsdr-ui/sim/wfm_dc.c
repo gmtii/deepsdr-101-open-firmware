@@ -182,23 +182,50 @@ int main(void)
      * otra cosa dejaria los dos bancos de arriba en verde mientras se come
      * la senal por otro lado.
      */
+    /*
+     * (3) QUE CORRIJA LA QUE IMPORTA Y DEJE EN PAZ LA QUE NO - 26/10/2026.
+     *
+     * Aqui se comprobaba que lo restado converge SIEMPRE al offset que se
+     * metio, con cualquier portadora. Eso dejo de ser el contrato el dia
+     * que se midio lo que cuesta corregir de mas: el numero que sale de la
+     * señal no es limpio -el ruido de recepcion tambien mueve la
+     * envolvente- y restar de mas distorsiona la emisora de forma
+     * permanente. Asi que la radio solo corrige cuando la continua es lo
+     * bastante grande como para hacer daño, y el apartado (1) de aqui
+     * arriba mide que por debajo de ahi NO HACE FALTA: con 300 cuentas de
+     * offset sobre una portadora de 4.000 -un 8 %- el tono sale identico
+     * con offset y sin el, y la basura es 0,0 %.
+     *
+     * Asi que lo que se comprueba es el contrato nuevo, que son dos cosas:
+     * que corrija cuando la continua pesa, y que NO toque cuando no pesa.
+     */
     printf("\n  -- (3) lo que el firmware dice que esta restando --\n");
     {
-        static const double k_dc[] = { 0.0, 120.0, 300.0 };
-        for (k = 0; k < (int)(sizeof k_dc / sizeof k_dc[0]); k++) {
+        static const double k_amp[] = { 600.0, 600.0, 12000.0 };
+        static const double k_dc[]  = {   0.0, 300.0,   300.0 };
+        for (k = 0; k < 3; k++) {
             float di = 0.0f, dq = 0.0f;
-            double t, b;
-            mide(2000.0, k_dc[k], DESV, &t, &b);
+            double t, b, m;
+            mide(k_amp[k], k_dc[k], DESV, &t, &b);
             demod_wfm_get_dc(&di, &dq);
-            printf("     se le metio %5.0f  ->  dice %7.1f (I)  %7.1f (Q)\n",
-                   k_dc[k], (double)di, (double)dq);
-            if (fabs((double)di - k_dc[k]) > 0.15 * k_dc[k] + 160.0) {
-                mal("la estimacion no converge al offset que se le metio");
+            m = sqrt((double)di*di + (double)dq*dq);
+            printf("     portadora %6.0f, offset %5.0f  ->  resta %7.1f\n",
+                   k_amp[k], k_dc[k], m);
+            if (k_dc[k] > 0.3 * k_amp[k]) {
+                /* pesa: tiene que quitarla */
+                if (fabs(m - k_dc[k]) > 0.25 * k_dc[k] + 40.0) {
+                    mal("no corrige la continua que SI hace daño");
+                }
+            } else {
+                /* no pesa: no tiene que tocar nada */
+                if (m > 0.05 * k_amp[k] + 20.0) {
+                    mal("corrige una continua que no hacia falta corregir");
+                }
             }
         }
-        printf("\n     El resto hasta el valor exacto es el termino J0 de la\n"
-               "     propia FM -la portadora residual, que tambien vive en\n"
-               "     continua-. Por eso la correccion lleva tope.\n");
+        printf("\n     El contrato es ese: la continua grande se quita y la\n"
+               "     pequeña se deja. Ver el comentario de WFM_DC_PUERTA en\n"
+               "     demod_am.c, que lleva las dos medidas.\n");
     }
 
     printf("\n%s (%d fallos)\n\n", fallos ? "HAY FALLOS" : "TODO CORRECTO", fallos);

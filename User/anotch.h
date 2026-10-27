@@ -66,6 +66,11 @@ void anotch_init(float fs_hz);
 /* Encendido/apagado. Apagado no gasta ni un ciclo: process() sale sin
  * tocar el audio. Al encenderlo se empieza de cero, porque unos pesos de
  * hace media hora no dicen nada de la señal de ahora. */
+/* Olvida la linea de retardo y los pesos. Hay que llamarlo cuando cambia de
+ * golpe lo que entra -de modo, de tasa, de atenuador-, por lo mismo que
+ * nb_reset(); al encenderlo lo hace el solo. Ver anotch.c. */
+void    anotch_reset(void);
+
 void    anotch_set_activo(uint8_t on);
 uint8_t anotch_activo(void);
 

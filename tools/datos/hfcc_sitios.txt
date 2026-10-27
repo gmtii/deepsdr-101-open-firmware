@@ -1,0 +1,707 @@
+;          5-Aug-2026 SITE.TXT REFERENCE TABLE
+;
+;--+------------------------------+---+-----+------
+;Co Site Name                      ADM Lati  Longi
+;de                                    tude  tude
+;--+------------------------------+---+-----+------
+A-A Alma Ata                       KAZ 43N17 077E00
+AAR Alphen aan den Rijn            HOL 52N08 004E38
+ABG Abu Ghraib (Bagdadh)           IRQ 33N19 044E15
+ABH Abu Hayan                      BHR 26N02 050E37
+ABJ Abidjan                        CTI 05N21 003W57
+ABS Abis                           EGY 31N10 030E05
+ABU Abu Dhabi                      UAE 24N23 054E17
+ABZ Abu zaabal                     EGY 30N16 031E22
+ACC Accra                          GHA 05N31 000W10
+ACH Achkabad                       TKM 37N57 058E23
+ADD Addis Ababa                    ETH 08N58 038E43
+ADH Alpes d Huez                   F   45N09 006E01
+ADR Adra                           SYR 33N27 036E30
+AGT Agat, Guam                     USA 13N20 144E39
+AHW Ahwaz                          IRN 31N20 048E40
+AIA Anguilla                       G   18N13 063W01
+AIJ Denton, TX                     USA 33N13 096W52
+AIZ Aizawl                         IND 23N43 092E43
+AKA Al Karanah                     JOR 31N44 036E26
+ALF Al-Fatihab                     SDN 15N30 032E28
+ALG Aligarh                        IND 28N00 078E06
+ALH Al Hiswah                      YEM 12N50 045E02
+ALI Alice Springs                  AUS 23S42 133E53
+ALK Al khaisah                     QAT 25N25 051E25
+ALO Alotau                         PNG 10S18 150E28
+AMB Ambon                          INS 03S42 128E05
+AMM Amman                          JOR 31N57 035E56
+ANK Ankum                          HOL 52N32 06E15
+APA Aparecida                      B   23S00 045W00
+ARA Arauca                         CLM 07N04 070W41
+ARM Armavir                        RUS 45N00 040E49
+ARQ Arequipa                       PRU 16S25 071W32
+ASC Ascension                      G   07S54 014W23
+ASU Asuncion                       PRG 25S19 057W29
+ATG Antigua                        ATG 17N06 061W48
+AUR Auros                          F   44N30 000W09
+AVL Avlis                          GRC 38N23 023E36
+AVO Avoriaz Morzine                F   46N11 006E46
+B-A Banda Aceh                     INS 05N30 095E22
+BAB Babel                          IRQ 32N30 044E30
+BAC Babice                         POL 52N15 020E50
+BAF Bafoussam                      CME 05N28 010E24
+BAI Bairiki                        KIR 01N21 172E56
+BAK Baku                           AZE 40N24 049E45
+BAN Bangkok                        THA 13N47 100E30
+BAO Baoding                        CHN 38N39 115E44
+BAT Bata                           GNE 01N48 009E46
+BAY Bayenhaote                     CHN 38N58 105E35
+BBY Bombay                         IND 19N11 072E49
+BCL Borculo                        HOL 52N06 006E32
+BCQ Monticello, ME                 USA 46N20 067W50
+BDD Bandundu                       COD 03S18 017E21
+BDG Bandung                        INS 06S53 107E37
+BDN Bandjarmasin                   INS 03S22 114E40
+BEC Bechar                         ALG 31N34 002W21
+BEI Beijing                        CHN 39N57 116E27
+BEL Belo Horizonte                 B   19S54 043W54
+BEN Benkule                        INS 02S44 102E18
+BEO Beograd                        SRB 44N34 020E09
+BER Bertoua                        CME 04N34 013E43
+BGA Benguela                       AGL 12S35 013E25
+BGL Bangalore                      IND 13N14 077E13
+BGZ Benghazi                       LBY 32N08 020E04
+BHO Bhopal                         IND 23N10 077E38
+BI  Bichkek                        KGZ 42N54 074E37
+BIA Biak                           INS 01S00 135E30
+BIB Biblis                         D   49N41 008E29
+BIJ Bijeljina                      BIH 44N41 019E09
+BJI Baoji                          CHN 34N30 107E10
+BKA Buka                           PNG 05S25 154E40
+BKO Bamako                         MLI 12N39 008W01
+BLA Blantyre                       MWI 15S42 035E02
+BLG Blagovechtchen                 RUS 50N16 127E30
+BLN Berlin (Deutschlandradio)      D   52N30 013E20
+BNA Baarle-Nassau                  HOL 51N26 004E56
+BNG Bangui                         CAF 04N21 018E35
+BOA Boa Vista                      B   02N51 060W43
+BOC Bocaue                         PHL 14N48 120E55
+BOG Bogota                         CLM 04N36 074W04
+BOH Newport                        USA 34N47 076W56
+BON Bonaire                        HOL 12N12 068W18
+BOT Moepeng Hill                   BOT 21S57 027E39
+BOU Bouchaoui                      ALG 36N44 002E53
+BR  Brest                          BLR 52N20 023E35
+BRA Brasilia                       B   15S51 047W56
+BRE Bremen (RB/SFB)                D   53N05 008E50
+BRG Bramming                       DNK 55N29 008E39
+BRI Brisbane                       AUS 27S19 153E01
+BRN Brandon                        AUS 19S31 147E20
+BRT Beirut                         LBN 33N53 035E30
+BRZ Brazzaville                    COG 04S15 015E18
+BUD Budapest                       HNG 47N28 019E03
+BUE Buenos Aires                   ARG 34S36 058W22
+BUK Bukittinggi                    INS 00S18 100E22
+BWW Lebanon, TN                    USA 36N17 086W06
+BY  Bethany, OH                    USA 39N21 084W21
+CAB Camboriu                       B   27S02 048W39
+CAC Cachoeira Paulista             B   22S39 045W01
+CAH Changchun                      CHN 43N48 125E23
+CAK Cakirlar                       TUR 39N58 032E40
+CAL Calcutta                       IND 22N27 088E18
+CAM Campo Grande                   B   20S24 054W35
+CAN Cantho                         VTN 10N05 105E46
+CAR Carnarvon                      AUS 24S54 113E43
+CCH Chile Chico                    CHL 46S33 071W42
+CDA Cape Daguliar                  CHN 22N13 114E15
+CDM Cd. Mante                      MEX 22N44 098W56
+CDU Chengdu                        CHN 30N42 104E00
+CER Cerrik                         ALB 41N00 020E00
+CGY Calgary, AB                    CAN 50N54 113W52
+CHA Cahuita, Costa Rica            CTR 09N45 082W54
+CHC ChunCheon                      KOR 37N56 127E46
+CHE Chengde                        CHN 40N58 117E35
+CHI Chihuahua                      MEX 28N34 106W02
+CHT Chatel                         F   46N14 006E50
+CK2 Xuanmai                        VTN 20N43 105E33
+CLM Calama                         CHL 22S30 068W55
+CLS Caltanissetta                  I   37N30 014E04
+CLZ Calabozo                       VEN 10N30 066W52
+CNI Chennai                        IND 13N08 080E07
+COA Cochabamba                     BOL 17S20 066W20
+COC Concepcion CHL                 CHL 37S03 073W10
+COI Coihaique                      CHL 45S30 072W06
+COL Colombo                        CLN 06N54 079E48
+COM Comores                        COM 11S42 043E15
+CON Conakry                        GUI 09N32 013W40
+COP Concepcion PRG                 PRG 23S24 057W27
+COT Cotonou                        BEN 06N21 002E25
+COY Coyhaique                      CHL 45S24 072W43
+CRI Cariari                        CTR 10N00 083W30
+CUR Curitiba                       B   25S23 049W10
+CUZ Cuzco                          PRU 13S30 072W00
+CYP Limassol                       CYP 34N43 033E19
+CZB Clusaz Balme                   F   45N53 006E24
+CZJ Clusaz Jument                  F   45N54 006E28
+DAK Dakar                          SEN 14N39 017W26
+DAL Daclac                         VTN 12N41 108E03
+DAR Darwin                         AUS 12S25 136E37
+DAT Datteln                        D   51N39 007E20
+DB  Duchanbe                       TJK 38N40 068E50
+DBA Dubai                          UAE 25N14 055E16
+DEA Deanovec                       HRV 45N41 016E27
+DEL Delhi                          IND 28N43 077E12
+DEN Denpasar                       INS 08S45 115E15
+DES Dar-es-Salaam                  TZA 06S50 039E14
+DHA Dhabayya                       UAE 24N11 054E14
+DIL Dili                           POR 08S33 125E35
+DIO Diosd                          HNG 47N25 018E57
+DIR Diriyya                        ARS 24N39 046E37
+DJI Djibouti                       DJI 11N35 043E05
+DKA Dhaka                          BGD 23N43 090E26
+DL  Delano, CA                     USA 35N45 119W10
+DOF Dongfang                       CHN 18N54 108E39
+DOL Dole                           TZA 06S05 039E14
+DON Dondo                          MOZ 18S49 034E52
+DOU Douala                         CME 04N04 009E41
+DOV Doves                          LBN 33N20 035E30
+DRU Daru                           PNG 09S05 143E10
+DRW Darwin, NT                     AUS 12S25 130E38
+DUB Dublin, Ireland                IRL 53N21 006W16
+EEE Maple Park, IL                 USA 41N51 088W32
+EJU Ejura                          GHA 07N23 001W22
+EKA Ekala                          CLN 07N06 079E54
+EKB Ekaterinburg                   RUS 56N50 060E36
+ELB Elburg                         HOL 52N26 005E52
+EMR Emirler                        TUR 39N29 032E51
+ENN Encarnacion                    PRG 27S21 055W52
+ERL Erlangen                       D   49N33 011E01
+ERV Erevan                         ARM 40N10 044E30
+EWN Vandiver, AL                   USA 33N30 086W28
+FAK Fakfak                         INS 02S55 132E17
+FBS Marpi, Saipan                  USA 15N16 145E48
+FIG Foz do Iguacu                  B   25S31 054W30
+FIL Filadelfia                     PRG 22S18 060W10
+FLE Flevo                          HOL 52N21 005E27
+FLI Forli, Italy                   I   44N13 012E03
+FLO Florianopolis                  B   27S35 048W31
+FOR Fortaleza                      B   03S46 038W41
+FRE Frederikstad                   NOR 59N11 010E58
+FUK Fukuoka                        J   33N33 130E27
+FUZ Fuzhou                         CHN 26N06 119E24
+GA  Greenville, NC (Site A)        USA 35N42 077W09
+GAB Moyabi                         GAB 01S40 013E31
+GAL Galbeni                        ROU 46N44 026E50
+GAR Garoua                         CME 09N18 013E25
+GAU Gauhati                        IND 26N11 091E50
+GB  Greenville, NC (Site B)        USA 35N28 077W12
+GBN Gaborone                       BOT 24S34 025E58
+GDB Gd. Bornand                    F   45N56 006E26
+GDR Gedja Dera                     ETH 08N46 038E40
+GEI Redwood City, CA               USA 37N33 122W14
+GEM Geermu                         CHN 36N24 094E59
+GIT Gitega                         BDI 03S29 029E56
+GIY Guiyang                        CHN 26N25 106E36
+GJA Guarujá                        B   23S59 046W15
+GJW Gedja Jewe                     ETH 08N47 038E39
+GKP Gorakhpur                      IND 23N52 083E28
+GOD Goderich                       SRL 08N30 013W14
+GOH Goehren                        D   53N32 011E36
+GOI Goiania                        B   16S43 049W18
+GR  Greenville, NC                 USA 35N35 077W22
+GRA Granja Pavon                   GTM 14N34 090W31
+GRW Garowe                         SOM 08N24 048E28
+GTG McCaysville, GA                USA 34N58 084W22
+GTK Gangtok                        IND 27N22 088E37
+GUA Guatemala                      GTM 14N30 090W20
+GUF Montsinery                     F   04N54 052W36
+GUW Guwahati                       IND 26N11 091E50
+GWE Gweru                          ZWE 19S26 029E51
+GYM Guayaramerin                   BOL 10S49 065W21
+HAB La Habana                      CUB 23N00 082W30
+HAN Hanoi                          VTN 20N59 105E52
+HAR Hargeysa                       SOM 09N33 044E03
+HB  Horby                          S   55N49 013E44
+HBA Ha Bac                         VTN 21N16 106E12
+HBN Rep. of Palau                  USA 07N21 134E31
+HCN Ho Chi Minh V                  VTN 10N51 106E38
+HEE Heerde                         HOL 52N40 006E03
+HER Hermosillo                     MEX 29N04 110W55
+HEZ Hezuo                          CHN 35N06 102E54
+HFX Halifax, NS                    CAN 44N41 063W40
+HIL Hilleroed                      DNK 55N53 012E16
+HIR Heroshima                      J   34N22 132E26
+HLR Hailar                         CHN 49N02 119E45
+HOL Holzkirchen                    D   47N52 011E44
+HON Honiara                        SLM 09S25 160E03
+HRA Greenbush, ME                  USA 45N08 068W34
+HRB Harbin                         CHN 45N49 126E52
+HRI Furman, SC                     USA 32N41 081W08
+HSB Ha Son Binh                    VTN 21N20 105E45
+HST Hartenstein Saxony             D   50N40 012E41
+HSW Noblesville, IN                USA 40N01 085W57
+HUA Huancayo                       PRU 12S05 075W10
+HUE Hue                            VTN 16N25 107E40
+HUH Huhhot                         CHN 41N12 111E30
+HUN Huanuni                        BOL 18S47 066W48
+HVI Hvidovre                       DNK 55N36 012E28
+HWA HwaSung                        KOR 37N13 126E47
+HYD Hyderabad                      IND 17N20 078E33
+IAB IABLUNIV                       UKR 48N24 024E56
+IAK Iakutsk                        RUS 62N01 129E48
+IBA Iba                            PHL 15N20 119E58
+IBI Ibitinga                       B   21S43 048W47
+IBN Ibadan                         NIG 07N23 003E54
+ICN Overslag                       HOL 51N12 003E53
+IKO Ikorodu                        NIG 07N23 003E56
+IMF Beowawe, NV                    USA 40N36 116W36
+IMP Imphal                         IND 24N37 093E54
+INB Red Lion, PA                   USA 39N54 076W35
+IPE Alpine, NJ                     USA 40N52 073W55
+IQI Iquitos                        PRU 03S45 073W12
+IRA Iranawila                      CLN 07N32 079E30
+IRK Irkutsk                        RUS 52N18 104E18
+ISH Ishoej                         DNK 55N36 012E21
+ISL Islamabad                      PAK 33N27 073E12
+ISM Ismaning (BR)                  D   48N15 011E45
+ISR Jerusalem                      ISR 32N04 034E47
+ISS Issoudun                       F   46N57 001E59
+ITA Itanagar                       IND 27N04 093E36
+IUJ Iujnsakhalinsry                RUS 46N55 143E10
+IVF Ivanofrankovsk                 UKR 48N56 024E48
+JAA JangAn                         KOR 37N02 126E51
+JAI Jaipur                         IND 26N54 075E45
+JAK Djakarta                       INS 06S12 106E51
+JAM Jammu                          IND 32N45 075E00
+JAR Jarji                          NIG 10N45 007E33
+JAY Jayapura                       INS 02S35 140E40
+JBR Jaszbereny                     HNG 47N35 019E52
+JCR Millerstown, KY                USA 37N26 086W02
+JED Jeddah                         ARS 21N32 039E10
+JES Vado, NM                       USA 32N08 106W35
+JEY Jeypore                        IND 18N55 082E34
+JHR Milton, FL                     USA 30N39 087W05
+JIE Millerstown, KY                USA 37N26 086W02
+JIG Jigulevsk                      RUS 53N26 049E30
+JIN Jinhua                         CHN 28N07 119E39
+JMB Jambi                          INS 01S38 103E34
+JUL Juelich                        D   50N57 006E22
+JUN Junglinster                    LUX 49N40 006E19
+K/A Komsomolsk Amur                RUS 50N30 137E05
+KAB Kabul                          AFG 35N00 069E00
+KAC Karachi                        PAK 24N55 067E00
+KAJ Kajang                         MLA 03N01 101E46
+KAL Kalatch                        RUS 50N26 040E40
+KAM Kamalabad                      IRN 35N46 051E27
+KAR Kara                           TGO 09N35 001E09
+KAS Kashi                          CHN 39N30 076E00
+KAT Kathmandu                      NPL 27N42 085E12
+KAV Kavalla                        GRC 40N52 024E50
+KAW Tokyo Kawagu                   J   35N50 139E43
+KAZ Kazan                          RUS 55N47 049E08
+KBD KABD                           KWT 29N16 047E53
+KCH Kichinev                       MDA 47N00 028E30
+KDI Kendari                        INS 03S38 125E26
+KEN Kenga                          RUS 57N25 080E56
+KGA Kananga                        COD 05S53 022E25
+KGS Kinghisepp                     RUS 59N27 028E43
+KHB Khabarovsk                     RUS 48N33 135E15
+KHR Kharkov                        UKR 50N00 036E17
+KIG Kigali                         RRW 01S53 030E04
+KIM Kimjae                         KOR 35N50 126E50
+KIN Kinshasa                       COD 04S23 015E23
+KIS Kisangani                      COD 00N30 025E11
+KKT Kolkata                        IND 22N27 088E18
+KLG Kaliningrad                    RUS 54N42 020E30
+KLL Kall                           D   50N28 006E31
+KLZ Klazienaveen                   HOL 52N44 006E59
+KMO Kamo                           ARM 40N21 045E07
+KMP Kampala                        UGA 00N20 032E36
+KNG Kanggye                        KRE 40N58 126E36
+KNX Kununurra WA                   AUS 15S48 128E41
+KOH Kohima                         IND 25N39 094E06
+KOM Koma Rock                      KEN 01S16 037E09
+KON Konevo                         RUS 60N12 036E53
+KRA Kranji (SIMCOM)                SNG 01N25 103E43
+KRP Karup                          DNK 56N15 009E04
+KRS Krasnoiarsk                    RUS 56N01 092E54
+KS  Kaunas                         LTU 54N55 024E00
+K-S Kyung San                      KOR 35N54 128E49
+KSG Kurseong                       IND 26N55 088E19
+KTH Katherine                      AUS 14S28 132E16
+KUJ Kujang                         KRE 40N05 125E05
+KUM Kumamoto                       J   32N15 130E44
+KUN Kunming                        CHN 25N10 102E50
+KUP Kupang                         INS 10S10 123E30
+KUR Kursk                          RUS 51N46 036E12
+KV  Kiev                           UKR 50N27 030E13
+KVG Kavieng                        PNG 02S34 150E47
+KVI Kvitsoy                        NOR 59N04 005E27
+KWH Konigs Wusterhausen            D   52N18 013E37
+KWT Kuwait                         KWT 29N31 047E41
+LAG Lagos                          NIG 06N34 003E21
+LAI Laitse                         EST 59N11 024E23
+LAM Lampertheim                    D   49N36 008E33
+LAN Lanzhou                        CHN 36N02 103E50
+LAR Les Arcs                       F   45N33 006E30
+LAW Lae                            PNG 06S40 146E54
+LDA Les Deux Alpes                 F   44N59 006E10
+LDR Lodwar                         KEN 03N07 035E36
+LEH Leh                            IND 34N08 077E29
+LGS Les Gets                       F   46N10 006E40
+LHA Lhasa                          CHN 29N30 090E59
+LIB Libreville                     GAB 00N25 009E26
+LIM Lima                           PRU 12S06 077W03
+LIN Lingshi                        CHN 36N52 111E40
+LIS Lisbon-Sao Gabriel             POR 38N45 008W40
+LIT Litomysl                       CZE 49N48 016E10
+LKW Lucknow                        IND 26N53 081E03
+LLA Llallangua                     BOL 18S37 067W34
+LMS Les Menuires                   F   45N18 006E31
+LNR Linares                        MEX 24N50 099W34
+LOB Lobito                         AGL 12S18 013E36
+LOJ Loja                           EQA 03S59 079W12
+LON Londrina                       B   23S18 051W13
+LOR La Oroya                       PRU 11S30 075W56
+LPC La Plagne Cham                 F   45N27 006E41
+LPL La Plagne Lac                  F   45N33 006E43
+LPR La Plagne Roch                 F   45N33 006E40
+LPZ La Paz                         BOL 16S20 068W07
+LRG Lorengau                       PNG 02S02 143E17
+LSO Lancers Gap                    LSO 29S19 027E32
+LUB Lubumbashi                     COD 11S41 027E32
+LUS Lusaka                         ZMB 15S30 028E15
+LUV Lusaka (Voice of Hope)         ZMB 15S32 028E00
+LV  Lvov                           UKR 49N50 024E00
+MAA Marslet                        DNK 56N06 010E12
+MAC Macas                          EQA 02S20 078W12
+MAD Madras                         IND 13N08 080E07
+MAG Magwa                          KWT 29N10 048E02
+MAH Mahina                         F   17S00 149W00
+MAK Makta                          UAE 24N21 054E34
+MAL Malolos                        PHL 14N52 120E48
+MAN Manzini                        SWZ 26S34 031E59
+MAP Maputo                         MOZ 25S57 032E28
+MAR Marulas                        PHL 14N41 120E59
+MAS Mashhad                        IRN 36N15 059E33
+MAT Mataram                        INS 08S09 115E30
+MAU Mauritius                      MAU 20S19 057E31
+MAX Maxoqueira                     POR 38N57 008W46
+MBA Mbandaka                       COD 00N04 018E17
+MBO Malabo                         GNE 03N45 008E47
+MBU Mbujimayi                      COD 06S09 023E35
+MC  Monte Carlo                    MCO 43N44 007E26
+MDC Madagascar                     MDG 18S48 047E36
+MDG Madang                         PNG 05S12 145E46
+MDO Manado                         INS 01N12 125E26
+MED Medan                          INS 03N35 098E41
+MEK Mekele                         ETH 13N32 039E33
+MEL Melo                           URG 32S26 054W13
+MEN Mendi                          PNG 06S08 143E39
+MER Merauke                        INS 08S33 140E27
+MET Metri                          VTN 20N58 105E39
+MEX Mexico City                    MEX 19N16 099W03
+MEY Meyerton                       AFS 26S35 028E08
+MGV Megeve                         F   45N51 006E39
+MIL Milano, Italy                  I   45N27 009E11
+MIN Minhsiung                      CHN 23N29 120E27
+MIR Miri                           MLA 04N23 113E39
+MIT Mitchurinsk                    RUS 52N54 040E11
+MKI Manokwari                      INS 00S48 134E00
+MLA Muehlacker (SDR)               D   48N57 008E51
+MLK Bethel, PA                     USA 40N29 076W17
+MLT Malta                          MLT 35N50 014E34
+MNA Manaus                         B   03S04 060W00
+MNG Managua                        NCG 12N09 086W26
+MNS Minsk                          BLR 53N53 027E31
+MOG Mogadishu                      SOM 02N02 045E21
+MOK Mokattam                       EGY 30N03 031E15
+MON Monrovia                       LBR 06N18 010W40
+MOR Morocco                        MRC 35N34 005W58
+MOS Moosbrunn                      AUT 48N00 016E28
+MRD Merida                         MEX 20N58 089W30
+MRJ Marjayoun                      LBN 33N22 035E34
+MRL Meribel                        F   45N22 006E33
+MRT Margraten                      HOL 50N48 005E48
+MSK Moskva                         RUS 55N45 037E18
+MTL Montreal, QU                   CAN 45N24 073W42
+MUA Matsuyama                      J   33N49 132E45
+MUG Muge                           POR 39N05 008W41
+MUL Mulenvos                       AGL 08S53 013E20
+MUM Mumbai                         IND 19N11 072E49
+MUN Munich                         D   48N06 011E36
+MUR Murmansk                       RUS 68N58 032E46
+MVD Montevideo                     URG 34S47 056W08
+MWV Madagascar World Voice         MDG 15S43 046E26
+N.N Nishii Novgorod                RUS 56N17 044E00
+N/A Nikolaevsk Amur                RUS 53N10 140E47
+NAB Nabire                         INS 03S15 135E36
+NAD Nador                          MRC 35N03 002W55
+NAG Tokyo Nagara                   J   35N28 140E13
+NAI Nairobi                        KEN 01S21 036E45
+NAK Nakhon Sawan                   THA 15N49 100E04
+NAM Namibe                         AGL 15S11 012E05
+NAN Nanchang                       CHN 28N38 115E56
+NAU Nauen                          D   52N38 012E54
+NAY Nagoya                         J   35N03 136E58
+NDJ Ndjamena                       TCD 12N08 015E03
+NIA Niamey                         NGR 13N30 002E06
+NIJ Nijmegen                       HOL 51N51 005E50
+NJG Nanjing                        CHN 32N02 118E44
+NLS Anchor Pt, Alaska              USA 59N45 151W44
+NNN Nanning                        CHN 22N47 108E11
+NOB Noblejas                       E   39N57 003W26
+NOU Nouakchott                     MTN 18N14 016W00
+NVS Novosibirsk                    RUS 55N04 082E58
+OKH Okhotsk                        RUS 59N30 143E00
+OM  Omsk                           RUS 54N59 073E23
+OMA Masirah                        OMA 20N36 058E53
+OR  Orcha                          BLR 54N31 030E27
+ORB Orenburg                       RUS 51N46 054E47
+ORG Ourgla                         ALG 31N55 005E04
+ORU Oruro                          BOL 17S55 067W19
+OSA Osaka                          J   34N33 135E31
+OSC Osasco                         B   23S32 046W47
+OTT Ottawa                         CAN 45N18 075W45
+OUA Ouagadougou                    BFA 12N22 001W31
+OUL Ouled Fayet                    ALG 36N43 002E57
+OYA Tokyo Oyama                    J   36N17 139E48
+P.K Petropavlo Kam.                RUS 52N59 158E39
+PAD Padang                         INS 00S06 100E21
+PAK Pakanbaru                      INS 00N15 101E30
+PAL Playa de Pals                  E   41N59 003E12
+PAN Panaji                         IND 15N28 073E51
+PAR Parakou                        BEN 09N20 002E38
+PAY Pt Aysen                       CHL 45S22 072W41
+PBH Batavia, IL                    USA 41N50 088W24
+PBL Port Blair                     IND 11N37 092E45
+P-C Padang Cermin                  INS 03N34 098E26
+PEK Beijing                        CHN 39N55 116E25
+PEN Penang                         MLA 05N25 100E19
+PES Peshawar                       PAK 34N00 071E30
+PGA Palangkaraya                   INS 00S27 117E10
+PHN Phnom-penh                     CBG 11N34 104E51
+PHP Poro                           PHL 16N26 120E17
+PHT Tinang 1                       PHL 15N21 120E37
+PHX Tinang 2                       PHL 15N21 120E38
+PIN Pinneberg                      D   53N40 009E48
+PJC P J Caballero                  PRG 22S33 055W45
+PLD Plovdiv                        BUL 42N04 024E41
+PLI Pali                           CHN 25N05 121E27
+PLU Palu                           INS 00S36 129E36
+PMB Paramaribo                     SUR 05N49 055W12
+PMG Palembang                      INS 00S18 104E22
+PMR Pt. Moresby                    PNG 09S27 147E11
+POD Podebrady                      CZE 50N09 015E09
+PON Pontianak                      INS 00S05 109E16
+POP Popondetta                     PNG 08S45 148E14
+POR Pori                           FIN 61N28 021E35
+POT Potosi                         BOL 19S30 065W50
+PPR Pt au Prince                   HTI 18N34 072W20
+PTA Porto Alegre                   B   30S03 051W10
+PTN Putten                         HOL 52N14 005E37
+PTR Putre                          CHL 18S20 069W36
+PTV Porto Velho                    B   08S45 063W54
+PUG Palauig                        PHL 15N28 119E50
+PUT Puttalam                       CLN 07N58 079E47
+PVL Port Vila                      VUT 17S44 168E33
+PYO Pyongyang                      KRE 39N05 125E23
+PZV Petrozavodsk                   RUS 61N48 034E20
+QIQ Qiqihar                        CHN 47N02 124E03
+QTA Quetta                         PAK 30N15 067E00
+QUI Quito                          EQA 00S14 078W20
+RAB Rabaul                         PNG 04S13 152E12
+RAC Ranchi                         IND 23N24 085E22
+RAN Rangitaiki                     NZL 38S50 176E25
+RAS RAS Hayyan                     BHR 26N02 050E37
+RAV Ravenna, Italy                 I   44N25 012E11
+RAW Rawalpindi                     PAK 33N30 073E00
+REY Reykjavik                      ISL 64N05 021W50
+RHO Rhodes                         GRC 36N18 028E00
+RIA Riazan                         RUS 54N37 039E41
+RIG Riga                           LVA 56N58 024E07
+RIO Rio de Janeiro                 B   22S57 043W13
+RIY Riyadh                         ARS 24N30 046E23
+RME Riga 2 (Radio Merkurs)         LVA 57N02 024E01
+RMI Okeechobee, FL                 USA 27N28 080W56
+RMP Rampisham                      G   50N48 002W38
+RND Randers                        DNK 56N31 009E55
+RNO New Orleans, LA                USA 29N50 090W07
+ROB Rohrbach                       D   48N36 011E33
+ROH Rohrdorf (BR)                  D   48N01 009E07
+ROM Roma                           I   41N48 012E31
+RPR Ribeirao Preto                 B   21S08 047W52
+RSO Rimavska Sobota                SVK 48N23 020E00
+RUF Rufisque                       SEN 14N08 017W05
+S.P Sanct-Peterburg                RUS 59N57 030E01
+SA1 Sao Paulo 1                    B   23S40 046W45
+SA2 Sao Paulo 2                    B   23S33 046W38
+SA3 Sao Paulo 3                    B   23S31 046W34
+SA4 Sao Paulo 4                    B   23S39 046W36
+SA5 Sao Paulo 5                    B   23S33 046W38
+SAB Sabrata                        LBY 32N47 012E29
+SAC Sackville                      CAN 45N53 064W19
+SAI Agingan Pt, Saipan             USA 15N07 145E42
+SAL Salman Pack                    IRQ 33N09 044E35
+SAM Samara                         RUS 53N20 050E10
+SAN Sanaa                          YEM 15N22 044E11
+SAO Sao Tome                       STP 00N18 006E42
+SAP Sapporo                        J   43N05 141E36
+SBH Sebha                          LBY 25N52 014E50
+SCR Sucre                          BOL 19S02 065W17
+SCV S Gervais                      F   45N51 006E40
+SCZ S Cruz                         BOL 17S46 063W11
+SDA Agat, Guam                     USA 13N20 144E39
+SEB Seeb                           OMA 23N40 058E13
+SED Salah El Deel                  IRQ 33N58 044E10
+SEM Semarang                       INS 06S59 110E23
+SER Serui                          INS 01S48 136E26
+SEY Mahe, Seychelles               SEY 04S36 055E28
+SFA Sfax                           TUN 34N48 010E53
+SGH Shanghai                       CHN 31N15 121E29
+SGO Santiago                       CHL 33S27 070W41
+SGP Singapore                      SNG 01N24 103E51
+SHB Furman, SC                     USA 32N41 081W08
+SHG Shillong                       IND 25N26 091E49
+SHI Shijak                         ALB 41N21 019E35
+SHO Tokyo Shobu                    J   36N04 139E38
+SHP Shepperton                     AUS 36S20 145E25
+SIB Sibu                           MLA 02N18 111E49
+SIM Shimla                         IND 31N00 077E05
+SIN Sines                          POR 37N57 008W45
+SIR Sirjan                         IRN 29N27 055E41
+SIS Sisoguichi                     MEX 27N48 107W35
+SIT Sitkunai                       LTU 55N02 023E49
+SJG San Jose del Guaviare          CLM 02N34 072W38
+SJS S Johns, NF                    CAN 47N34 052W49
+SJV Sarajevo                       BIH 43N55 018E20
+SKA Surakarta                      INS 07S33 110E48
+SKN Skelton                        G   54N44 002W54
+SLA A'Seela                        OMA 21N58 059E27
+SLD Selae Daro                     ERI 15N32 038E55
+SLP S Luis Potosi                  MEX 22N01 100W59
+SLU Sao Luis                       B   02S32 044W03
+SLV Salvador                       B   12S58 038W29
+SMD Samarinda                      INS 00S28 117E11
+SMF Simferopol                     UKR 44N56 034E06
+SMG S. Maria di Galeria            CVA 42N03 012E19
+SMR Santa Maria                    B   29S44 053W33
+SNG Kranji (Merlin)                SNG 01N25 103E44
+SOF Sofia                          BUL 42N40 023E20
+SON Sonsonate                      SLV 13N45 089W45
+SOR Sorong                         INS 00S52 131E25
+SOT Sottens                        SUI 46N39 006E44
+SRI Srinagar                       IND 34N00 074E50
+SRN Saransk                        RUS 54N12 045E06
+SRP Serpukhov                      RUS 54N54 037E25
+SSV S Salvador                     SLV 13N44 089W09
+STA Stapok                         MLA 01N33 110E20
+STD Santo Domingo                  DOM 18N30 069W57
+STM Santarem                       B   02S26 054W41
+STR Starobelsk                     UKR 49N13 037E57
+SUC Sucua                          EQA 02S00 078W00
+SUL Sulaibiyah                     KWT 29N10 047E45
+SUM Sumbre                         AGL 11S07 013E54
+SUR Surabaja                       INS 07S13 112E43
+SUW Suwon                          KOR 37N16 127E01
+SVE Sveio                          NOR 59N37 005E19
+SVK Syktyvkar                      RUS 61N41 050E31
+SXX Centro Minero Siglo XX         BOL 18S25 066W35
+SZG Shijiazhuang                   CHN 38N04 114E28
+SZV Szekesfehervar                 HNG 47N10 018E24
+TAC Tashkent                       UZB 41N19 069E17
+TAI Taipei                         CHN 25N09 121E24
+TAL Tallinn                        EST 59N27 024E47
+TAN Tangier                        MRC 35N48 005W55
+TAP Tapachula                      MEX 14N57 092W08
+TAR Tarapoto                       PRU 06S28 076W27
+TBL Tbilisi                        GEO 41N40 044E45
+TBN Salt Lake City, UT             USA 40N39 112W03
+TBO Turbo                          CLM 08N05 076W43
+TCG Tchoelinograd                  KAZ 51N22 071E03
+TCH Tchita                         RUS 52N05 113E20
+TCN Tacna                          PRU 18S00 070W13
+TCO Tumaco                         CLM 01N47 078W48
+TEM Temuco                         CHL 38S41 072W35
+TEN Tennant Greek                  AUS 19S40 134E10
+TGG Tegucigalpa                    HND 14N04 087W14
+TGN Tignes                         F   45N27 006E54
+THE Thessaloniki                   GRC 40N50 023E00
+THI Thimphu                        BTN 27N28 089E39
+THU Thumrayt                       OMA 17N38 053E56
+TIA Tianshui                       CHN 34N33 105E42
+TIG Tiganesti                      ROU 44N42 026E06
+TIN Tinian Islands                 MRA 15N03 145E36
+TJC Newport,NC                     USA 34N47 076W53
+TJK Tanjungkarang                  INS 05S24 105E15
+TLX Tlaxiaco                       MEX 17N15 097W40
+TMI Lebanon,OR                     USA 44N34 122W50
+TOG Togblekope                     TGO 06N16 001E12
+TOK Tokyo                          J   35N55 139E45
+TOM Tomsk                          RUS 56N30 085E02
+TOR Toronto                        CAN 43N20 079W38
+TRI Tripoli                        LBY 32N54 013E11
+TRJ Tarija                         BOL 21S32 064W45
+TRM Trincomalee (Perkara)          CLN 08N44 081E10
+TSH Tanshui                        CHN 25N13 121E29
+TUA Tuaran                         MLA 06N11 116E12
+TUL Tula                           RUS 54N12 037E48
+TUM Tumbes                         PRU 03S32 080W30
+TV  Tver                           RUS 56N52 035E35
+TVD Trivandrum                     IND 08N29 076E59
+TWR Agana, Guam                    USA 13N17 144E40
+TWW Lebanon, TN                    USA 36N17 086W06
+TXM Texmelucan                     MEX 19N17 098W26
+U-B Ulan Bator                     MNG 47N55 107E00
+UDO Udorn                          THA 17N25 102E48
+UJU Ujungpandang                   INS 05S10 119E25
+ULB Ulbroka                        LVA 56N57 024E16
+URU Urumqi                         CHN 43N35 087E30
+VAI Vanimo                         PNG 02S42 141E18
+VAL The Valley                     G   18N13 063W01
+VAN Vancouver, BC                  CAN 49N08 123W12
+VAT Vatican City                   CVA 41N54 012E27
+VDN Vidin                          BUL 43N39 022E40
+VIB Val Iseres Bell                F   45N26 006E58
+VIE Vientiane                      LAO 17N58 102E33
+VIF Val Isere Form                 F   45N26 007E01
+VIL Villarrica                     PRG 25S45 056W26
+VIN Vinnitsa                       UKR 49N13 028E26
+VKO Velke Kostolany                SVK 48N31 017E44
+VLD Vladivostok                    RUS 43N12 131E51
+VLG Volgograd                      RUS 48N42 044E28
+VLL Villars Lans                   F   45N02 005E33
+VLR Valloire                       F   45N09 006E25
+VN1 Sontay                         VTN 21N12 105E22
+VNI Sontay                         VTN 21N12 105E22
+VOH Rancho Simi, CA                USA 34N15 118W38
+VOL Vologda                        RUS 59N12 040E06
+VOR Voronej                        RUS 51N38 039E14
+VRN Varna                          BUL 43N03 027E40
+VRX Veracruz                       MEX 19N10 096W07
+VVC Villavicencio                  CLM 04N09 073W38
+WAL Waldheim                       D   51N04 12E59
+WAM Wamena                         INS 03S48 139E53
+WAV Wavre                          BEL 50N44 004E34
+WBS Macon, GA                      USA 32N50 083W38
+WCR Nashville, TN                  USA 36N13 086W54
+WEL Wellington                     NZL 41S05 174E50
+WER Wertachtal                     D   48N05 010E41
+WEW Wewak                          PNG 03S35 143E40
+WHR Naalehu, Hawaii                USA 19N02 155W40
+WIN Windhoek                       NMB 22S33 017E13
+WIS Winsen                         D   52N40 009E46
+WIW Winterswijk                    HOL 51N57 06E40
+WNM Weenermoor                     D   53N12 007E19
+WOF Woofferton                     G   52N19 002W43
+WRB Morrison, TN                   USA 35N37 086W01
+WUH Wuhan                          CHN 30N36 114E20
+WWA Warszawa                       POL 52N04 020E52
+XIA Xian                           CHN 34N12 108E54
+XIC Xichang                        CHN 27N49 102E14
+XIN Xining                         CHN 36N38 101E36
+XIY Xingyang                       CHN 34N49 113E23
+YAM Tokyo Yamata                   J   36N10 139E50
+YAN Yangoon                        BRM 16N52 096E10
+YAO Yaounde                        CME 03N51 011E32
+YFR Obsolete, changed to RMI       USA 27N28 080W56
+YIN Yinchuan                       CHN 38N30 106E12
+YOG Yogyakarta                     INS 07S47 110E26
+ZAH Zahedan                        IRN 29N28 060E53
+ZWO Zwolle                         HOL 52N29 006E06

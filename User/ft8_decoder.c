@@ -301,6 +301,17 @@ void ft8_decoder_init(void)
     s_queue_tail = 0U;
     s_queue_count = 0U;
     s_total_decoded_count = 0U;
+    /*
+     * Y LA CUENTA DE CANDIDATOS TAMBIEN - 23/10/2026.
+     *
+     * Es una estatica de fichero y esto corre en CADA entrada a FT8, asi
+     * que sin ponerla a cero la chapa enseña durante los primeros quince
+     * segundos los candidatos de la ULTIMA ranura de la sesion anterior:
+     * de otra banda, de otra hora o de otro dia. Y ese numero esta ahi para
+     * contestar "¿esta llegando algo con forma de FT8 AHORA?" - leerlo de
+     * antes es la unica forma de que conteste que si cuando no.
+     */
+    s_last_num_candidates = 0;
 
     /*
      * EL LOCALIZADOR SOLO SI NO HAY NINGUNO. 29/09/2026.
@@ -619,20 +630,56 @@ uint8_t ft8_decoder_slot_paso(void)
             s_cand_i++; return mas();
         }
 
-        /* Simple within-this-slot duplicate suppression by message
-         * hash - NOT ft8_lib's own hash table (see this file's header
-         * comment on why that's skipped for now). A real transmission
-         * decoded from more than one nearby candidate (common - sync
-         * search often finds several close time/freq offsets for the
-         * same signal, exactly as seen clustered in this session's own
-         * WAV test) would otherwise show up as repeated lines. */
-        dup = 0;
-        for (j = 0; j < s_num_seen; j++)
+        /* Simple within-this-slot duplicate suppression - NOT ft8_lib's
+         * own hash table (see this file's header comment on why that's
+         * skipped for now). A real transmission decoded from more than
+         * one nearby candidate (common - sync search often finds several
+         * close time/freq offsets for the same signal) would otherwise
+         * show up as repeated lines. */
+        /*
+         * ==============================================================
+         * Y LA HUELLA SALE DE LOS 77 BITS, NO DEL CRC - 23/10/2026
+         * ==============================================================
+         *
+         * Aqui se comparaba `message.hash`, que viene de Ft8Lib. Y ese
+         * campo NO es una huella del mensaje: es el CRC de CATORCE BITS
+         * reaprovechado, y el propio decode.c lo dice en la linea donde
+         * lo asigna - "Reuse CRC value as a hash for the message (TODO:
+         * 14 bits only...)".
+         *
+         * Catorce bits son 16.384 valores. Con veinte mensajes distintos
+         * en una ranura, la probabilidad de que DOS caigan en el mismo
+         * valor es del orden del 1 %: no es raro, es una de cada cien
+         * ranuras. Y cuando pasa, el segundo mensaje -uno bueno, con su
+         * CRC comprobado- se tira creyendo que es un repetido. En una
+         * banda abierta eso es una estacion perdida cada pocos minutos,
+         * sin que nada lo diga.
+         *
+         * Aqui se hace la huella sobre los 77 bits de la carga, que es
+         * EL MENSAJE: dos mensajes distintos tienen cargas distintas por
+         * definicion. FNV-1a de 32 bits sobre los diez bytes; no cuesta
+         * memoria -el array ya era de uint32- y las colisiones pasan de
+         * una de cada cien ranuras a ninguna.
+         *
+         * No se toca Ft8Lib, que es codigo de otro: el campo sigue donde
+         * estaba y quien lo quiera lo tiene. Lo que cambia es de donde
+         * sacamos NOSOTROS la huella.
+         */
         {
-            if (seen_hash[j] == message.hash) { dup = 1; break; }
+            uint32_t h = 2166136261UL;
+            int b;
+            for (b = 0; b < FTX_PAYLOAD_LENGTH_BYTES; b++) {
+                h ^= (uint32_t)message.payload[b];
+                h *= 16777619UL;
+            }
+            dup = 0;
+            for (j = 0; j < s_num_seen; j++)
+            {
+                if (seen_hash[j] == h) { dup = 1; break; }
+            }
+            if (dup) { s_cand_i++; return mas(); }
+            if (s_num_seen < FT8_DECODER_MAX_CANDIDATES) { seen_hash[s_num_seen++] = h; }
         }
-        if (dup) { s_cand_i++; return mas(); }
-        if (s_num_seen < FT8_DECODER_MAX_CANDIDATES) { seen_hash[s_num_seen++] = (uint32_t)message.hash; }
 
         /* Format: "08:14 0169Hz -05dB CQ IU8DMZ JN70 1234km" - HH:MM
          * timestamp (UTC, from the RTC - see rtc_hw.h) first, per the
@@ -652,7 +699,25 @@ uint8_t ft8_decoder_slot_paso(void)
          * actually contains a grid square (see the FTX_FIELD_GRID scan
          * below) - see grid_to_latlon()/haversine_km()/FT8_GRID_POR_DEFECTO
          * above. */
-        freq_hz_i = (int)((FT8_ADAPTER_MIN_RAW_BIN + cand->freq_offset + (float)cand->freq_sub / wf->freq_osr) / FT8_SYMBOL_PERIOD + 0.5f);
+        /*
+         * LA ESQUINA DE LA VENTANA VA EN BINS CRUDOS Y EL CANDIDATO EN
+         * BINS DE FT8 - 23/10/2026.
+         *
+         * Aqui se sumaban los dos a pelo y se multiplicaba todo por 6,25
+         * Hz. Hoy no se nota porque FT8_ADAPTER_MIN_RAW_BIN vale 0 y cero
+         * mide lo mismo en las dos unidades. El dia que la ventana deje
+         * de empezar en continua -que es justo lo que habria que tocar
+         * para subirla de sitio- todas las frecuencias saldrian corridas,
+         * y el doble de lo que toca, sin que nada avise.
+         *
+         * Un bin crudo mide SAMPLE_RATE/NFFT y uno de FT8 mide
+         * RAW_BIN_STEP de esos, asi que la esquina se divide antes de
+         * sumarla. Es la misma cuenta que ya hace ft8_modo_ventana_hz().
+         */
+        freq_hz_i = (int)(((float)FT8_ADAPTER_MIN_RAW_BIN / (float)FT8_ADAPTER_RAW_BIN_STEP
+                           + (float)cand->freq_offset
+                           + (float)cand->freq_sub / (float)wf->freq_osr)
+                          / FT8_SYMBOL_PERIOD + 0.5f);
         /*
          * EL SNR DE VERDAD, NO LA PUNTUACION DE SINCRONISMO - 13/10/2026.
          *

@@ -423,6 +423,13 @@ float demod_am_get_sam_carrier_hz(void);
  * arriba no significa nada (0), y la medida continua 0..1 de la que sale.
  * Ver demod_am_sam_enganchado() en demod_am.c. */
 uint8_t demod_am_sam_enganchado(void);
+/*
+ * Y si el lazo se ha quedado CLAVADO contra el tope del margen: 0 no,
+ * +1 por arriba, -1 por abajo. Con portadora fuera de alcance se queda
+ * pegado; con solo ruido se pasea. Medido en sim/sam_debil.c, y el
+ * porque entero esta encima de sam_tope() en sam.h.
+ */
+int8_t demod_am_sam_tope(void);
 float demod_am_sam_enganche(void);
 
 /*
@@ -790,6 +797,32 @@ float demod_am_get_squelch_db(void);
  * con algun criterio. */
 float demod_am_get_squelch_level_db(void);
 
+/*
+ * LA POTENCIA DEL CANAL EN dB, PARA EL BARRIDO DE MEMORIAS - 26/10/2026.
+ *
+ * Y es OTRA COSA que la de aqui arriba, a proposito:
+ *
+ *   - la del silenciador solo se calcula en AM y en FM estrecha, que es
+ *     donde hay silenciador. En banda lateral -que es donde esta casi todo
+ *     lo que se barre en onda corta- se queda CONGELADA en la ultima
+ *     lectura que tomo, y preguntarle devuelve siempre lo mismo. Eso hacia
+ *     que el barrido se parase en la segunda memoria con solo ruido;
+ *
+ *   - esta se calcula en todos los modos que pasan por el mezclador y no
+ *     cuesta ni una raiz: es la suma de I²+Q² que el medidor de señal ya
+ *     hace, en decibelios.
+ *
+ * Es POTENCIA, o sea otra escala que la del silenciador. Sirve para
+ * comparar una frecuencia con otra, no contra un numero absoluto. Lo mide
+ * sim/scan_nivel.c.
+ */
+/* Enciende o apaga la medida de demod_am_get_nivel_db(). Apagada de
+ * fabrica: cuesta 256 multiplicaciones y un logaritmo por bloque y solo la
+ * usa el barrido de memorias, que la enciende mientras corre. Ver el
+ * comentario de s_nivel_on en demod_am.c. */
+void demod_am_set_nivel_medir(uint8_t on);
+float demod_am_get_nivel_db(void);
+
 /* Query whether the squelch is currently PASSING audio (1) or MUTING
  * it (0). Only meaningful in AM/NFM mode - see demod_am_set_mode(). */
 uint8_t demod_am_get_squelch_open(void);
@@ -1024,6 +1057,32 @@ float demod_am_get_mix_hz(void);
  * entre los juegos de coeficientes de AM, USB, LSB y NFM que usa
  * demod_am_process_raw().
  */
+/*
+ * LA RADIOFRECUENCIA AL DOBLE: 192 kHz en vez de 96 - 23/10/2026.
+ *
+ * Pedido por el usuario: ver el doble de espectro. El panadaptador enseña
+ * EXACTAMENTE la tasa a la que se muestrea -el ancho es la tasa, no el
+ * tamaño de la FFT-, asi que para ver 192 kHz hay que muestrear a 192.
+ *
+ * Con esto a 1 el DMA entrega 512 muestras por bloque en vez de 256, en el
+ * mismo tiempo de siempre (2,667 ms). Lo que llega a ESTA cadena no cambia:
+ * un diezmador de medio banda (User/semibanda.h) las deja en 256 a 96 kHz
+ * justo detras del quitapulsos, antes de la bajada en frecuencia. De ahi en
+ * adelante no hay ni una constante distinta.
+ *
+ * O SEA QUE NO VA CON demod_am_set_active_rate(): esa dice a que tasa
+ * TRABAJA la cadena -48 o 96- y con esto puesto sigue siendo 96. Las dos
+ * conviven, y hay que llamar a las dos.
+ *
+ * SE VE EL DOBLE Y SE SINTONIZA EN TODO LO QUE SE VE -tocar el espectro
+ * mueve el oscilador local-, pero el ancho INSTANTANEO que llega al
+ * demodulador sigue siendo de 96 kHz. Para un modo que decodifica una sola
+ * señal da igual; no daria igual el dia que algo quisiera mirar dos trozos
+ * lejanos a la vez.
+ */
+void demod_am_set_rf_doble(uint8_t doble);
+uint8_t demod_am_get_rf_doble(void);
+
 void demod_am_set_active_rate(uint8_t is_48k);
 uint8_t demod_am_get_active_rate_is_48k(void);
 
@@ -1043,6 +1102,14 @@ uint8_t demod_am_get_active_rate_is_48k(void);
  * ha cambiado ni un coeficiente.
  */
 void demod_am_chf_ancho(uint8_t si);
+
+/*
+ * El SEMIANCHO en hercios de lo que deja pasar el filtro de canal de FM
+ * estrecha: 6.250 el de siempre, 9.000 el ancho que se carga con AIS y con
+ * la SSTV en FM. Lo usa el espectro para sombrear la banda de paso, que en
+ * este modo no la pone el filtro de audio. Ver demod_am.c.
+ */
+uint16_t demod_am_nfm_ancho_hz(void);
 
 /* Procesa una mitad de recepcion en crudo: SDR_RX_BLOCK_SAMPLES tramas de
  * izquierda y derecha -o sea I y Q- intercaladas, las demodula y empuja
@@ -1075,6 +1142,34 @@ void demod_wfm_process_raw(const int16_t *raw_interleaved);
  * than main.c needing to know about two separate counters. */
 void demod_wfm_reset_diag(void);
 
+/* Lo mismo, pero con el silencio corto de AM_SETTLE_MUTE_BLOCKS en vez de
+ * los 200 bloques de la entrada en el modo. Para los escalones de
+ * ganancia del AGC de radiofrecuencia, que no cambian la tasa del codec y
+ * no necesitan medio segundo. Ver demod_am.c. */
+void demod_wfm_mute_tras_ganancia(void);
+
+/* Y solo el silencio, sin el olvido: para el hueco de los pocos bloques en
+ * que el gancho esta suelto cuando una orden de modo redundante barre las
+ * colas de la cadena estando ya en FM ancha. No acorta un silencio ya
+ * armado. Ver demod_am.c. */
+void demod_wfm_mute_corto(void);
+
+/* La fuga de continua que la cadena de FM ancha se ha medido a si misma,
+ * en cuentas del convertidor. Es el SUELO del recorte del quitador: ver
+ * demod_am.c. Cero = este aparato no tiene fuga y el suelo no hace nada. */
+float demod_wfm_get_fuga(void);
+/* El silenciador de FM ancha: cuanto ruido de ARRIBA hay en el multiplex,
+ * en decibelios, y si esta abierto. Ver WFM_SQL_B0 en demod_am.c. */
+float   demod_wfm_get_sql_db(void);
+uint8_t demod_wfm_get_sql_abierto(void);
+/* Y SU UMBRAL, que NO es el de AM: ver s_wfm_sql_umbral en demod_am.c, que
+ * lleva la tabla de por que compartirlo dejaba la FM comercial muda. El
+ * suelo es "apagado". */
+void    demod_am_set_wfm_sql_db(float db);
+float   demod_am_get_wfm_sql_db(void);
+float   demod_am_wfm_sql_min(void);
+float   demod_am_wfm_sql_max(void);
+
 /*
  * La continua que el quitador de I/Q esta restando ahora mismo, en cuentas
  * del convertidor (ver su comentario largo en demod_am.c, delante de
@@ -1086,6 +1181,22 @@ void demod_wfm_reset_diag(void);
  * corte era total -medido en sim/wfm_dc.c-, no una degradacion suave.
  */
 void demod_wfm_get_dc(float *dc_i, float *dc_q);
+
+/* Lo mismo SIN el tope de WFM_DC_TOPE: lo que el lazo mide de verdad. Si
+ * las dos coinciden, el tope no esta actuando; si no, la diferencia es la
+ * fuga que se queda sin corregir. Ver demod_am.c. */
+void demod_wfm_get_dc_crudo(float *dc_i, float *dc_q);
+
+/* Multiplica la estimacion de continua de FM ancha por `g`. La llama
+ * rf_agc_apply_pga() cuando cambia la ganancia de entrada: la fuga escala
+ * con la ganancia, asi que escalar la estimacion es exacto y evita el
+ * transitorio de volver a converger. Ver demod_am.c. */
+void demod_wfm_dc_escala(float g);
+
+/* La continua que la cadena de AM/banda lateral/NFM le esta quitando a la I
+ * y a la Q antes de la bajada en frecuencia: la fuga del oscilador local.
+ * Ver s_rf_dc_i en demod_am.c y el banco sim/rf_dc.c. */
+void demod_am_get_rf_dc(float *dc_i, float *dc_q);
 
 /* Diagnostic-only: resets the call counter that gates
  * demod_am_process_raw()'s per-block debug logging - call this right

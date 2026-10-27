@@ -270,8 +270,21 @@ static void arco_calcula(uint8_t slot, int32_t lon_c, int32_t lat_c)
 
     if (cosd >  1.0f) { cosd =  1.0f; }
     if (cosd < -1.0f) { cosd = -1.0f; }
-    d = acosf(cosd);
-    sind = sinf(d);
+    /*
+     * CON atan2f Y NO CON acosf - 26/10/2026, haciendo hueco en la flash
+     * interna. acosf era la unica llamada de todo el firmware y el
+     * enlazador metia __ieee754_acosf entero por ella: 580 bytes. atan2f
+     * y sqrtf ya estaban -y sqrtf en un Cortex-M4 con FPU es UNA
+     * instruccion-, asi que esto sale gratis.
+     *
+     * Y de paso se ahorra el sinf: el arco va de 0 a pi, donde el seno no
+     * es negativo, asi que sin(d) es exactamente la raiz de 1-cos^2 que
+     * ya hay que calcular para el atan2. Cerca de los extremos -dos
+     * puntos casi iguales, o antipodas- esta forma es ademas mas estable
+     * que acosf, que es donde acosf pierde cifras.
+     */
+    sind = sqrtf(1.0f - cosd * cosd);
+    d = atan2f(sind, cosd);
 
     for (k = 0U; k < (uint8_t)MAPA_ETI_PTS; k++) {
         float f = (float)k / (float)(MAPA_ETI_PTS - 1U);

@@ -119,6 +119,28 @@ static void limpia(void)
     s_arranque = (uint16_t)(s_retardo + s_tomas);
 }
 
+/*
+ * OLVIDA LA LINEA Y LOS PESOS - 24/10/2026.
+ *
+ * Encontrado en la revision a fondo pedida por el usuario: limpia() solo se
+ * alcanzaba desde anotch_init() -una vez, en el arranque-, desde encender el
+ * notch y desde cambiar su fuerza. Un cambio de MODO no lo tocaba, y este
+ * modulo es uno solo para dos caminos distintos: en banda lateral trabaja
+ * sobre la salida del diezmador y en AM/SAM sobre el buffer del reductor de
+ * ruido. Pasar de banda lateral a AM con el notch puesto dejaba la linea de
+ * retardo llena de audio de banda lateral y los pesos ajustados al
+ * heterodino que habia alli: el predictor arranca restando una prediccion
+ * que no tiene nada que ver con lo que entra.
+ *
+ * El lazo vuelve a converger en decenas de milisegundos, asi que lo que se
+ * oye es un remate sucio y no una averia; pero el mecanismo para evitarlo ya
+ * estaba escrito aqui dentro y solo le faltaba quien lo llamara.
+ */
+void anotch_reset(void)
+{
+    limpia();
+}
+
 void anotch_init(float fs_hz)
 {
     if (fs_hz > 0.0f) { s_fs = fs_hz; }

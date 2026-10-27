@@ -486,12 +486,16 @@ comprueba-fw:
 	 done
 	@python3 tools/interruptores_check.py .
 	@python3 tools/prestamo_check.py .
+	@python3 tools/claves_check.py
+	@python3 tools/gancho_check.py
 	@python3 tools/copias_bin_check.py
+	@python3 tools/fft_coste_check.py
 	@python3 tools/novedades_check.py User/config.h NOVEDADES.md
 	@python3 tools/md_enlaces_check.py .
 	@python3 tools/tope_check.py
 	@python3 tools/isr_coste_check.py
 	@python3 tools/espectro_coste_check.py
+	@python3 tools/rds_coste_check.py
 	@python3 tools/mapa.py
 	@python3 tools/mando_check.py User/main.c
 	@python3 tools/panel_check.py

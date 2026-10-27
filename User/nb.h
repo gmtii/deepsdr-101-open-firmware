@@ -58,9 +58,35 @@ void    nb_reset(void);
  * blanker encendido significa que no hay pulsos, no que este roto).
  *
  * n como mucho NB_MAX_BLOQUE. Con el nivel a 0 devuelve 0 sin tocar nada.
+ *
+ * Y PASARSE DE NB_MAX_BLOQUE NO ES UN FALLO RUIDOSO: devuelve 0 y no toca
+ * el bloque, o sea que el quitapulsos se apaga SOLO y en silencio. Ver
+ * por que eso importa en el comentario de aqui abajo.
  */
 uint32_t nb_process(float *i_buf, float *q_buf, uint32_t n);
 
-#define NB_MAX_BLOQUE 256U
+/*
+ * QUINIENTAS DOCE Y NO DOSCIENTAS CINCUENTA Y SEIS - 23/10/2026.
+ *
+ * Eran 256, "el bloque de audio", y lo era mientras la radiofrecuencia
+ * fueron 48 o 96 kHz. Con la tercera tasa -192 kHz, ver User/semibanda.h-
+ * el DMA entrega 512 muestras por bloque y el quitapulsos va DELANTE del
+ * diezmador, asi que las ve todas.
+ *
+ * Con el tope en 256 esto no reventaba: nb_process() comprueba `n` y se
+ * va por la puerta devolviendo 0. O sea que al poner 192 kHz el
+ * quitapulsos se habria apagado solo, sin un aviso, y el usuario habria
+ * visto "el quitapulsos ya no hace nada a 192" sin ninguna pista de por
+ * que. Un apagado silencioso es peor que un fallo.
+ *
+ * Y VA DELANTE DEL DIEZMADOR A PROPOSITO: el diezmador es un FIR de 35
+ * tomas, o sea que reparte un pulso de dos muestras entre treinta y
+ * cinco. Despues de pasar por el ya no destaca sobre nada, que es
+ * exactamente la razon por la que el quitapulsos vive donde vive.
+ *
+ * Cuesta 1.280 bytes mas de .bss (512 flotantes y 512 bytes de marcas en
+ * vez de 256 de cada).
+ */
+#define NB_MAX_BLOQUE 512U
 
 #endif /* NB_H */

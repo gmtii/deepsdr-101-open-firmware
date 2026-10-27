@@ -135,11 +135,12 @@ hora_emisora_t dcf77_emisora(void) { return (hora_emisora_t)0; }
 /*
  * EL SUMIDERO DE AUDIO, QUE ES EL PUNTO DE OBSERVACION BUENO.
  *
- * gd32_i2s_stream_write_half() NO lleva longitud: el modulo del I2S tiene
- * su propia idea de cuantas tramas es "media" y se la pone
- * gd32_i2s_stream_reconfigure(). Eso ya se rompio una vez -04/08/2026,
- * dicho en gd32_i2s.h- cuando la cuenta de aquel fichero no se movio con
- * el tamaño del buffer.
+ * gd32_i2s_stream_write_half() YA LLEVA LONGITUD, desde el 24/10/2026, y
+ * precisamente porque lo que decia aqui se cumplio por segunda vez: la
+ * cuenta del I2S y el tamaño del buffer del demodulador se desalinearon
+ * -04/08/2026 y 23/10/2026, las dos contadas en gd32_i2s.h-. Lo que el
+ * que llama DICE traer se guarda en g_i2s_tramas, y el banco lo compara
+ * con lo que de verdad produce cada tasa.
  *
  * Aqui solo se guarda EL PUNTERO. Y con el puntero basta para mirar la
  * union s_via desde fuera: el camino ancho entrega &s_via.wfm.audio_out y
@@ -156,8 +157,11 @@ void cons_captura_tramas(uint32_t tramas) { s_cap_n = tramas; }
 void cons_paso_ciclos(uint32_t c) { s_paso_ciclos = c; }
 const int16_t *cons_audio(void) { return s_cap; }
 
-void gd32_i2s_stream_write_half(const int16_t *stereo_frames)
+uint32_t g_i2s_tramas;    /* las que ha DICHO el que llama, para el banco */
+
+void gd32_i2s_stream_write_half(const int16_t *stereo_frames, uint32_t n_frames)
 {
+    g_i2s_tramas = n_frames;
     anota(CONS_I2S, stereo_frames, s_cap_n);
     /*
      * Se copia lo que el banco DIGA que mide media, no lo que adivine este

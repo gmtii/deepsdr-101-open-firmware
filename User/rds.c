@@ -84,7 +84,7 @@ uint8_t rds_corrige(uint32_t *bloque26, uint16_t off, uint8_t max_raf)
 /* ==========================================================================
  * ESTADO
  * ========================================================================== */
-static uint8_t s_on = 0U;
+static volatile uint8_t s_on = 0U;
 static float   s_fs = 192000.0f;
 
 /* --- 1. mezcla y diezmado --- */
@@ -162,6 +162,10 @@ static uint16_t s_blq[4];
 static uint8_t  s_blq_ok[4];
 static uint8_t  s_blq_corr[4];
 static uint16_t s_pi_ant;
+/* El tipo de programa anterior y si ya se ha visto alguno: se publica cuando
+ * llegan DOS iguales seguidos. Ver grupo_decodifica(). */
+static uint8_t  s_pty_ant;
+static uint8_t  s_pty_visto;
 static uint8_t  s_pi_visto;   /* 1 = ese bloque llego roto y se arreglo */
 
 /* --- 6. lo decodificado --- */
@@ -200,6 +204,28 @@ static void limpia_cadena(char *s, uint16_t n)
 
 void rds_start(float fs_hz)
 {
+    /*
+     * LO PRIMERO, APAGARSE - 26/10/2026, revision a fondo de WFM.
+     *
+     * s_on se ponia a 1 al FINAL de esta funcion, y si ya valia 1 nunca
+     * se bajaba. O sea que durante el kilobyte de memset de aqui abajo
+     * -los dos anillos de 512 bytes y la ficha de informacion- la
+     * interrupcion de audio podia estar dentro de rds_feed() usando ese
+     * mismo estado a medio borrar.
+     *
+     * Y no es teorico: la pantalla de hora por RDS llama a rds_start() y
+     * acto seguido a rds_reinicia(), que vuelve a llamar a rds_start().
+     * La segunda llamada corre SIEMPRE con s_on valiendo 1. Lo mismo cada
+     * vez que se cambia de emisora con el mando.
+     *
+     * No ensucia el audio -esto no esta en el camino del sonido- pero
+     * deja el decodificador arrancando con el historial mezclado, que es
+     * una pantalla que puede mentir. Es la misma precaucion que bip.c
+     * tiene escrita para su cola.
+     */
+    s_on = 0U;
+    __asm volatile ("" ::: "memory");
+
     float fs_bb;
 
     if (fs_hz <= 0.0f) { return; }
@@ -252,6 +278,8 @@ void rds_start(float fs_hz)
     memset(s_blq_corr, 0, sizeof s_blq_corr);
     s_pi_ant = 0U;
     s_pi_visto = 0U;
+    s_pty_ant = 0U;
+    s_pty_visto = 0U;
 
     s_on = 1U;
 }
@@ -338,9 +366,53 @@ static void grupo_decodifica(void)
     tipo = (uint8_t)((s_blq[1] >> 12) & 0x0FU);
     version = (uint8_t)((s_blq[1] >> 11) & 0x01U);
 
+    /*
+     * ======================================================================
+     * EL TIPO DE PROGRAMA Y EL TRAFICO - 25/10/2026.
+     * ======================================================================
+     *
+     * Pedido por el usuario. Estos tres campos ya venian en CADA grupo, en
+     * el mismo bloque B del que sale el numero de grupo, y no se miraban:
+     *
+     *     bit  10     TP    esta emisora DA informacion de trafico
+     *     bits 9..5   PTY   que tipo de programa es
+     *     bit  4      TA    la esta dando ahora (solo en los grupos 0)
+     *
+     * O sea que no cuestan ni una muestra mas de proceso: el bloque ya esta
+     * aqui, comprobado, y lo unico que faltaba eran tres desplazamientos.
+     *
+     * EL TIPO, CONFIRMADO DOS VECES, por lo mismo que el identificador de
+     * programa de veinte lineas mas arriba: un bloque con un fallo no
+     * detectado pondria un tipo inventado, y en pantalla eso se lee como
+     * que la emisora ha cambiado de programa. Llegan once grupos por
+     * segundo, asi que esperar al segundo cuesta noventa milisegundos.
+     *
+     * TP Y TA NO. Son un bit, y TA cambia de verdad: se enciende justo
+     * cuando empieza el aviso de trafico y se apaga al acabar. Esperar
+     * confirmacion ahi seria llegar tarde a lo unico de todo el RDS que
+     * tiene prisa de verdad.
+     */
+    {
+        uint8_t pty = (uint8_t)((s_blq[1] >> 5) & 0x1FU);
+
+        if (s_pty_visto && s_pty_ant == pty) {
+            s_info.pty = pty;
+            s_info.tiene_pty = 1U;
+        }
+        s_pty_ant = pty;
+        s_pty_visto = 1U;
+
+        s_info.tp = (uint8_t)((s_blq[1] >> 10) & 0x01U);
+    }
+
     /* --- 0A / 0B: el nombre de la emisora, de dos en dos caracteres --- */
     if (tipo == 0U) {
         uint8_t seg = (uint8_t)(s_blq[1] & 0x03U);
+
+        /* El aviso de trafico EN CURSO solo viaja en los grupos 0. Ver el
+         * bloque de arriba para por que este no espera confirmacion. */
+        s_info.ta = (uint8_t)((s_blq[1] >> 4) & 0x01U);
+
         if (s_blq_ok[3]) {
             s_info.ps[seg * 2U]      = rds_car((uint8_t)(s_blq[3] >> 8));
             s_info.ps[seg * 2U + 1U] = rds_car((uint8_t)(s_blq[3] & 0xFFU));

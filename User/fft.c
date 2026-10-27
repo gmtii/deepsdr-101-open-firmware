@@ -31,6 +31,79 @@ static float s_twiddle_sin[FFT_SIZE / 2U] TCMRAM_BSS;
 static float s_hann[FFT_SIZE] TCMRAM_BSS;
 static uint16_t s_bitrev[FFT_SIZE] TCMRAM_BSS;
 
+/*
+ * ======================================================================
+ * EL TAMAÑO DE LA TRANSFORMADA DEL PANADAPTADOR, EN CALIENTE - 24/10/2026
+ * ======================================================================
+ *
+ * Avisado por el usuario: con la version anterior el espectro iba muy
+ * lento a 96 y a 48 kHz, y la radio tardaba mucho en arrancar.
+ *
+ * LO QUE ESTABA MAL, y era mio. Se puso la FFT en 512 PARA TODOS para
+ * devolver los 375 Hz por bin a 192 kHz. Pero a 96 y a 48 el bloque de la
+ * captura son 256 muestras, asi que el panadaptador tenia que JUNTAR DOS
+ * bloques por ventana, y eso traia dos averias de una vez:
+ *
+ *   - el tick del espectro volvia a la mitad de las pasadas sin llegar a
+ *     la puerta que decide si toca dibujar, o sea que la cadencia de
+ *     cuadros se partia por dos;
+ *   - y los dos bloques NO SON SEGUIDOS. sdr_rx_poll_block_iq() guarda un
+ *     bloque y el que llega lo pisa; entre dos pasadas del bucle principal
+ *     pasan entre 10 y 35 ms. O sea que la ventana de 512 se montaba con
+ *     dos trozos separados unos 20 ms: un salto de fase justo en medio, y
+ *     lo que salia no era mas resolucion sino una traza emborronada.
+ *
+ * LO QUE SE HACE AHORA: la ventana es UN BLOQUE, siempre, y la
+ * transformada se adapta a el. 512 puntos a 192 kHz y 256 a 96 y a 48.
+ *
+ *      192 kHz / 512 = 375,0 Hz por bin
+ *       96 kHz / 256 = 375,0 Hz por bin
+ *       48 kHz / 256 = 187,5 Hz por bin
+ *
+ * O sea que los 375 Hz de 192 kHz -que es de donde salio todo esto- se
+ * quedan, y a 96 y 48 se vuelve exactamente a lo de antes, sin juntar
+ * nada y sin pagar la transformada doble.
+ *
+ * Y NO HACEN FALTA DOS JUEGOS DE TABLAS. Las de 512 sirven para 256:
+ *
+ *   - LOS GIROS, gratis. El indice de giro de la columna (half_size, j)
+ *     es j * (TABLA/2) / half_size, que no depende del tamaño de la
+ *     transformada sino del de la TABLA. El bucle ya lo calculaba asi.
+ *   - LA VENTANA DE HANN, las muestras pares. Hann de 256 es Hann de 512
+ *     cogiendo una de cada dos.
+ *   - LA TABLA DE BITS, desplazada uno. La inversion de 9 bits de un
+ *     numero menor que 256 tiene el bit de arriba a cero, asi que sale
+ *     SIEMPRE PAR y vale exactamente el doble de la inversion de 8 bits.
+ *     De ahi los dos usos de abajo: el indice de la muestra es
+ *     s_bitrev[k] >> desp, y el de la ventana es s_bitrev[k] tal cual,
+ *     que es justo la muestra par que toca.
+ *
+ * El osciloscopio de los nueve modos -fft_potencias()- NO se toca: sigue
+ * siendo de 512 siempre, que es lo que pide su eje de frecuencias.
+ */
+static uint32_t s_iq_n = FFT_SIZE;   /* puntos de la FFT del panadaptador */
+static uint32_t s_iq_desp = 0U;      /* FFT_SIZE / s_iq_n, en desplazamientos */
+
+void fft_tam_iq(uint32_t n)
+{
+    uint32_t t = FFT_SIZE;
+    uint32_t d = 0U;
+
+    /* Potencia de dos, y de 64 a FFT_SIZE. Lo que no lo sea se ignora: es
+     * preferible seguir con el tamaño de antes que transformar basura. */
+    if (n == 0U || (n & (n - 1U)) != 0U || n > FFT_SIZE || n < 64U) {
+        return;
+    }
+    while (t > n) { t >>= 1U; d++; }
+    s_iq_n = n;
+    s_iq_desp = d;
+}
+
+uint32_t fft_tam_iq_actual(void)
+{
+    return s_iq_n;
+}
+
 /* Quien quiera los bins complejos. Ver fft_set_bins_hook() en fft.h. */
 static void (*s_bins_hook)(const float *re, const float *im, uint32_t n);
 
@@ -114,7 +187,7 @@ void fft_init(void)
 /* The iterative radix-2 DIT butterfly pass, in-place over s_re/s_im.
  * Shared by the real and the complex (I/Q) entry points - the core
  * was always complex, only the load stage differs. */
-static void fft_run(void)
+static void fft_run(uint32_t n)
 {
     uint32_t i, j;
     uint32_t half_size, step;
@@ -159,7 +232,7 @@ static void fft_run(void)
      * El mismo cambio, por el mismo motivo, esta en la transformada de
      * stanag_det.c.
      */
-    for (i = 0; i < FFT_SIZE; i += 2U) {
+    for (i = 0; i < n; i += 2U) {
         float br = s_re[i + 1U], bi = s_im[i + 1U];
         s_re[i + 1U] = s_re[i] - br;
         s_im[i + 1U] = s_im[i] - bi;
@@ -167,7 +240,9 @@ static void fft_run(void)
         s_im[i]      = s_im[i] + bi;
     }
 
-    for (half_size = 2U, step = FFT_SIZE / 4U; half_size < FFT_SIZE;
+    /* `step` sale del tamaño de la TABLA y no del de la transformada: ver
+     * el bloque de fft_tam_iq(). Por eso esta linea no lleva `n`. */
+    for (half_size = 2U, step = FFT_SIZE / 4U; half_size < n;
          half_size <<= 1U, step >>= 1U) {
         uint32_t tw_idx = 0U;
 
@@ -175,7 +250,7 @@ static void fft_run(void)
             float tre = s_twiddle_cos[tw_idx];
             float tim = s_twiddle_sin[tw_idx];
 
-            for (i = 0; i < FFT_SIZE; i += (half_size << 1U)) {
+            for (i = 0; i < n; i += (half_size << 1U)) {
                 uint32_t a = i + j;
                 uint32_t b = a + half_size;
                 float br = s_re[b] * tre - s_im[b] * tim;
@@ -208,7 +283,7 @@ void fft_compute_db(const int16_t *samples, float *db_out)
         s_im[n] = 0.0f;
     }
 
-    fft_run();
+    fft_run(FFT_SIZE);
 
     /* Power -> "dB" (10*log10(x) = 3.0103*log2(x)), only the useful
      * bins 0..N/2-1 (the rest is the mirror image of a real input) */
@@ -218,22 +293,96 @@ void fft_compute_db(const int16_t *samples, float *db_out)
     }
 }
 
+/*
+ * ======================================================================
+ * LA MISMA, PARA EL OSCILOSCOPIO DE RTTY - 24/10/2026.
+ * ======================================================================
+ *
+ * *** Pedido por el usuario, que hizo la pregunta buena: "de hecho no
+ * entiendo porque estan los tres en memoria a la vez" y "que mas cosas hay
+ * en memoria mientras no se estan usando?". ***
+ *
+ * Y la respuesta en rtty_scope.c era peor de lo que parecia: no es que
+ * tuviera un buffer de sobra, es que tenia UNA FFT ENTERA DUPLICADA. Sus
+ * propias s_re, s_im, tablas de giro, ventana de Hann y tabla de inversion
+ * de bits, 9.216 bytes de TCM, para hacer exactamente lo mismo que este
+ * fichero. Su cabecera lo decia y lo justificaba: "deliberately duplicated
+ * rather than shared (different size, different input type, different
+ * consumer)".
+ *
+ * Las tres razones se han caido:
+ *
+ *   - DISTINTO TAMAÑO: el suyo eran 512 y el de aqui 256. Ahora los dos son
+ *     512, y no por hacerle sitio a el: porque a 192 kHz el panadaptador
+ *     necesita 512 para no enseñar las emisoras con la punta plana, que es
+ *     de donde salio todo esto.
+ *   - DISTINTO TIPO DE ENTRADA: el suyo entra en float y el de aqui en
+ *     int16. Eso es una funcion de carga, no una FFT.
+ *   - DISTINTO CONSUMIDOR: el suyo quiere POTENCIA por bin y el de aqui
+ *     decibelios. Tambien es una linea, no una transformada.
+ *
+ * Asi que lo que de verdad habia era una funcion de carga y una de salida
+ * distintas sobre la MISMA transformada. Esto es esa funcion.
+ *
+ * Y NO SOLO AHORRA MEMORIA. La mariposa de rtty_scope.c era la version
+ * VIEJA: calculaba el giro dentro del bucle mas interno, que es justo lo
+ * que se arreglo aqui el 19/10/2026 por "cuatro veces menos". Al juntarlas
+ * se lleva la buena.
+ *
+ * LOS DOS CORREN EN EL BUCLE PRINCIPAL, nunca en la interrupcion, y cada
+ * uno llena s_re/s_im, transforma y saca su resultado antes de volver. Por
+ * eso pueden compartir los buffers de trabajo y no solo las tablas. Lo que
+ * NO se puede es llamar a esto desde una interrupcion mientras el otro
+ * esta a medias, y por eso se dice aqui en vez de confiar en que se note.
+ *
+ * `muestras` son FFT_SIZE reales; `pot_out`, FFT_BINS_USEFUL potencias.
+ */
+void fft_potencias(const float *muestras, float *pot_out)
+{
+    uint32_t n;
+
+    for (n = 0; n < FFT_SIZE; n++) {
+        uint16_t src = s_bitrev[n];
+        s_re[n] = muestras[src] * s_hann[src];
+        s_im[n] = 0.0f;
+    }
+
+    fft_run(FFT_SIZE);
+
+    for (n = 0; n < FFT_BINS_USEFUL; n++) {
+        pot_out[n] = s_re[n] * s_re[n] + s_im[n] * s_im[n];
+    }
+}
+
 void fft_compute_db_iq(const int16_t *i_samples, const int16_t *q_samples,
                         float *db_out)
 {
+    fft_compute_db_iq_ex(i_samples, q_samples, db_out, 1U);
+}
+
+void fft_compute_db_iq_ex(const int16_t *i_samples, const int16_t *q_samples,
+                          float *db_out, uint8_t crudo)
+{
     uint32_t n;
+    uint32_t tam  = s_iq_n;
+    uint32_t desp = s_iq_desp;
 
     /* Complex load: I -> real, Q -> imaginary. With a complex input
      * the transform distinguishes +f from -f, which is the whole
      * point: signals above the LO land on the right half of the
      * display, below the LO on the left. */
-    for (n = 0; n < FFT_SIZE; n++) {
-        uint16_t src = s_bitrev[n];
-        s_re[n] = (float)i_samples[src] * s_hann[src];
-        s_im[n] = (float)q_samples[src] * s_hann[src];
+    /* Los dos indices salen de la MISMA tabla de bits; por que vale, en el
+     * bloque de fft_tam_iq(). Con 512 puntos desp es 0 y esto es, linea
+     * por linea, lo que habia. */
+    for (n = 0; n < tam; n++) {
+        uint32_t br  = (uint32_t)s_bitrev[n];
+        uint32_t src = br >> desp;
+        float    w   = s_hann[br];
+        s_re[n] = (float)i_samples[src] * w;
+        s_im[n] = (float)q_samples[src] * w;
     }
 
-    fft_run();
+    fft_run(tam);
 
     /*
      * EL GANCHO DE LOS BINS COMPLEJOS - 19/10/2026. Ver fft_set_bins_hook().
@@ -249,14 +398,17 @@ void fft_compute_db_iq(const int16_t *i_samples, const int16_t *q_samples,
      * iqbal_calibra() por su nombre, y con eso media docena de bancos que
      * enlazan fft.c a solas dejaron de enlazar.
      */
-    if (s_bins_hook != 0) { s_bins_hook(s_re, s_im, (uint32_t)FFT_SIZE); }
+    /* Solo con el bloque CRUDO: ver fft_compute_db_iq_ex() en fft.h. */
+    if (crudo != 0U && s_bins_hook != 0) {
+        s_bins_hook(s_re, s_im, tam);
+    }
 
     /* All FFT_SIZE bins are meaningful now. Output in fftshift order:
      * db_out[0] = -Fs/2 ... db_out[N/2] = DC (the VFO) ...
      * db_out[N-1] = +Fs/2 - 1 bin. Natural bin k maps to output index
      * (k + N/2) mod N. */
-    for (n = 0; n < FFT_SIZE; n++) {
-        uint32_t out = (n + FFT_SIZE / 2U) & (FFT_SIZE - 1U);
+    for (n = 0; n < tam; n++) {
+        uint32_t out = (n + tam / 2U) & (tam - 1U);
         float power = s_re[n] * s_re[n] + s_im[n] * s_im[n];
         db_out[out] = 3.0103f * log2_approx(power);
     }
@@ -267,8 +419,33 @@ void fft_compute_db_iq(const int16_t *i_samples, const int16_t *q_samples,
      * real signals visually. Replace DC and its two Hann-spread
      * neighbors with the average of the adjacent clean bins - purely
      * cosmetic, the underlying data is not used for demodulation. */
-    {
-        uint32_t c = FFT_SIZE / 2U;
+    /*
+     * Y SOLO CON EL BLOQUE CRUDO - 24/10/2026.
+     *
+     * *** Encontrado revisando el aviso del usuario sobre señales donde no
+     * toca. ***
+     *
+     * Esto tapa el centro del array dando por hecho que ahi esta la
+     * CONTINUA, que es donde se automezcla la fuga del oscilador. Con el
+     * camino del zoom eso es falso: zoom_process_block() remezcla al dial
+     * antes de diezmar, asi que el centro de esa ventana es la frecuencia
+     * SINTONIZADA.
+     *
+     * O sea que con zoom pasaban las dos cosas a la vez, y las dos malas:
+     *
+     *   - la fuga del oscilador dejaba de estar tapada y aparecia como una
+     *     portadora fija que no es ninguna emisora, a la distancia del NCO
+     *     por debajo del dial;
+     *   - y lo que SI se borraba era la señal que estas escuchando. A 8x
+     *     son cinco bins de 46,9 Hz, o sea 234 Hz justo encima del punto de
+     *     demodulacion: la portadora de AM o el tono de CW al que estas
+     *     sintonizado, achatado o desaparecido.
+     *
+     * El parametro que dice cual de los dos casos es ya existe. Solo habia
+     * que mirarlo.
+     */
+    if (crudo != 0U) {
+        uint32_t c = tam / 2U;
         float fill = 0.5f * (db_out[c - 4U] + db_out[c + 4U]);
         /* +/-2 bins: Hann leakage from a strong DC component reaches
          * measurably beyond the immediate neighbors (verified with a

@@ -156,6 +156,54 @@ int main(void)
         ft8_waterfall_reintegra();
     }
 
+    /* --- salir de FT8 A MEDIO DECODIFICAR y volver a entrar ----------- */
+    /*
+     * ==================================================================
+     * EL DESVIO SOBREVIVE A SALIRSE DEL MODO - 23/10/2026
+     * ==================================================================
+     *
+     * Decodificar se lleva entre uno y cinco segundos de cada quince, o sea
+     * que una de cada tres o cuatro veces que alguien cambia de modo lo hace
+     * CON LA CAPTURA DESVIADA. Y ni s_desviada ni s_lado_n viven en la union
+     * que ft8_modo_stop() borra: son estaticas normales de
+     * ft8_waterfall_adapter.c, asi que sobreviven.
+     *
+     * Al volver a entrar, ft8_modo_start() llama a ft8_waterfall_reset()...
+     * que estando desviada reinicia EL DESVIO y deja num_blocks como estaba.
+     * Y is_full() devuelve false mientras este desviada. O sea:
+     *
+     *   is_full() nunca es verdad  ->  nadie empieza a decodificar
+     *   nadie decodifica           ->  nadie llama a reintegra()
+     *   nadie reintegra            ->  sigue desviada
+     *
+     * Un circulo cerrado: FT8 no vuelve a decodificar hasta reiniciar la
+     * radio, y desde fuera eso se ve como "a veces FT8 deja de sacar nada".
+     *
+     * Lo que lo rompe es que ARRANCAR no es lo mismo que empezar una ranura:
+     * arrancar tiene que dejar el adaptador como recien encendido. Eso es
+     * ft8_waterfall_arranca().
+     */
+    printf("\n  SALIR DEL MODO A MEDIO DECODIFICAR Y VOLVER\n");
+    {
+        ft8_waterfall_cierra_ranura();          /* la ranura se cerro */
+        for (i = 0; i < 3; i++) { mete(60 + i); }   /* y se decodifica... */
+        /* ...y aqui el usuario cambia de modo. ft8_modo_stop() no toca el
+         * adaptador; ft8_modo_start() hace esto al volver: */
+        ft8_waterfall_arranca();
+        ft8_waterfall_reset();
+
+        pasa("volver a entrar deja la captura SIN desviar",
+             ft8_waterfall_desviada() == 0U);
+        pasa("y con la ranura a cero, no a 93",
+             ft8_waterfall_get()->num_blocks == 0);
+
+        /* Y la prueba de verdad: que una ranura entera vuelva a llenarse. */
+        for (i = 0; i < FT8_ADAPTER_MAX_BLOCKS; i++) { mete(70 + (i & 7)); }
+        pasa("una ranura entera vuelve a llenarse", ft8_waterfall_is_full());
+        ft8_waterfall_cierra_ranura();
+        ft8_waterfall_reintegra();
+    }
+
     printf("\n  %s\n", fallos ? "HAY FALLOS" : "TODO CORRECTO (0 fallos)");
     return fallos ? 1 : 0;
 }

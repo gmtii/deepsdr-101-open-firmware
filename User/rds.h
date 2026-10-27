@@ -76,6 +76,30 @@ typedef struct {
     uint8_t  tiene_rt;
     char     rt[65];        /* radiotexto, 64 caracteres */
 
+    /*
+     * --- EL TIPO DE PROGRAMA, Y EL TRAFICO - 25/10/2026 ---
+     *
+     * Los tres viajan en el bloque B de los grupos, asi que llegan once
+     * veces por segundo y no hay que esperar a nada:
+     *
+     *     bits 10       TP   esta emisora DA informacion de trafico
+     *     bits 9..5     PTY  que tipo de programa es (0..31)
+     *     bit  4        TA   la esta dando AHORA (solo en los grupos 0)
+     *
+     * El tipo se publica cuando han llegado DOS iguales seguidos, igual que
+     * el identificador de programa y por el mismo motivo: un bloque con un
+     * fallo no detectado pondria un tipo inventado, y aqui eso se leeria
+     * como que la emisora ha cambiado de programa. Cuesta 90 ms.
+     *
+     * TP y TA se publican a la primera: son UN bit, cambian de verdad a lo
+     * largo del dia -TA se enciende justo cuando empieza el aviso- y
+     * esperar confirmacion seria llegar tarde a lo unico que tiene prisa.
+     */
+    uint8_t  tiene_pty;
+    uint8_t  pty;           /* 0..31; el nombre, en rds_pty_txt() */
+    uint8_t  tp;            /* 1 = la emisora da informacion de trafico */
+    uint8_t  ta;            /* 1 = la esta dando ahora mismo */
+
     /* --- la hora (grupo 4A) --- */
     uint8_t  tiene_hora;
     /* Sube uno cada vez que llega un grupo 4A que pasa TODAS las
@@ -110,6 +134,14 @@ void rds_feed(const float *mpx, uint32_t n);
 
 /* Lo que se sepa hasta ahora. */
 void rds_info(rds_info_t *out);
+
+/*
+ * El NOMBRE del tipo de programa no vive aqui: este fichero es el
+ * decodificador y no sabe de idiomas ni de pantalla, igual que nb.c o
+ * dcf77.c -por eso se pueden medir en el PC sin arrastrar medio firmware-.
+ * La tabla de los treinta y dos nombres esta en main.c, que es quien tiene
+ * tr(). Aqui solo sale el numero.
+ */
 
 /*
  * EL SEGUNDO, NO SOLO EL MINUTO. 24/09/2026.

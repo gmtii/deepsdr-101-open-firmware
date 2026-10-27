@@ -65,7 +65,10 @@
                                   TCMRAM_BSS comment) to make room for this
                                   buffer's own ~18KB main-RAM growth. */
 #define WATERFALL_ROWS   72    /* filas visibles simultaneamente, ver presupuesto de RAM arriba
-                                  (672*72*2 = ~97KB - same budget as the old 800*60*2) */
+                                  (756*72*1 = 54.432 B: un byte por pixel, indice de paleta.
+                                   Aqui ponia 672*72*2 = ~97KB, que es la cuenta
+                                   de cuando llevaba 16 bits por pixel y 672 de
+                                   ancho. Corregido el 27/10/2026.) */
 
 /* Reserva el buffer (en .bss, RAM principal) y lo pone a negro. Llamar
  * una vez al arrancar, antes del primer waterfall_push_line(). */

@@ -401,8 +401,7 @@ static void pinta_barra(gfx2_surf_t *s, const ui_digi_state_t *st)
                          (int16_t)(btn_y(st) + 4), w2,
                          st->barra_txt_dcha, &font_ui_14b,
                          gfx2_rgb(PAL_INK), GFX2_ALIGN_L);
-            hueco = (int16_t)(hueco - w2 - UDG_BAR_AIRE);
-            if (hueco < 0) { hueco = 0; }
+            hueco = ui_digi_barra_hueco_dbg(st);
         }
 
         if (st->barra_txt && hueco > 0) {
@@ -621,6 +620,26 @@ static void solo_barra(gfx2_surf_t *s, void *ctx)
  * fuera de ui_digi_draw_barra() para que el banco pueda medirla sin
  * dibujar: ver ui_digi_barra_ventana_dbg() y sim/digi.c.
  */
+/*
+ * EL HUECO QUE LE QUEDA AL ROTULO DE LA IZQUIERDA, en px.
+ *
+ * Vive aqui -y no repartido entre el dibujo y quien quiera medirlo- porque
+ * es una resta con TRES terminos (el punto, el rotulo de la derecha y el
+ * aire entre los dos) y copiarla fuera es tener dos repartos que hay que
+ * mantener iguales a mano. El dibujo llama a esto y el banco tambien:
+ * sim/ft8_panel.c mide con el mismo numero con el que se pinta.
+ */
+int16_t ui_digi_barra_hueco_dbg(const ui_digi_state_t *st)
+{
+    int16_t h = (int16_t)(bar_w(st) - (st->barra_dcha ? 20 : 0));
+
+    if (st->barra_txt_dcha && st->barra_dcha) {
+        h = (int16_t)(h - gfx2_text_w(st->barra_txt_dcha, &font_ui_14b)
+                        - UDG_BAR_AIRE);
+    }
+    return (h < 0) ? (int16_t)0 : h;
+}
+
 static int16_t barra_ventana_w(const ui_digi_state_t *st)
 {
     /*

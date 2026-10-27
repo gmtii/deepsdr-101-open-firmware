@@ -237,17 +237,39 @@ def main():
         print('  (sin usar, no estorban: %s)'
               % ', '.join(sorted(sin_usar)[:8]))
 
+    # --- 1-bis. LAS QUE YA NO SON UNA ADIVINANZA - 26/10/2026 ---
+    #
+    # Las dos cribas de abajo existen para validar lo que dijo un
+    # GEOCODIFICADOR al 70 % de confianza. El 26/10/2026 entraron en el
+    # repositorio las tablas de emplazamientos de HFCC (site.txt) y del Aoki
+    # ancho (xta26.txt), que traen la posicion que la propia emisora
+    # REGISTRO. Comparadas con esta tabla, 32 filas se iban mas de 150 km y
+    # alguna mas de mil -"Colorado De" en Texas en vez de Colorado,
+    # "Al-Maqwa" de Kuwait en el Yemen, "Start Point" en las Orcadas en vez
+    # de en Devon-. Se corrigieron con el registro y llevan la marca.
+    #
+    # Esas filas NO pasan por las cribas, y no es por comodidad: la criba
+    # del pais lee el pais que escribio el geocodificador al final del
+    # nombre, y en una fila corregida ese texto ya no existe. Validar la
+    # coordenada del operador contra la suposicion que vino a sustituir
+    # seria validar al reves.
+    oficiales = set(k for k in sitios if '[registro' in (sitios[k][2] or ''))
+    if oficiales:
+        print('  %d sitios con la posicion del registro (HFCC/Aoki): '
+              'no pasan por las cribas, ya no son una suposicion'
+              % len(oficiales))
+
     # --- 2. CRIBA DEL PAIS: cada sitio contra los demas de su mismo ITU ---
     por_itu = collections.defaultdict(collections.Counter)
     for k in sitios:
-        if k in itu_de:
+        if k in itu_de and k not in oficiales:
             p = pais_del_nombre(sitios[k][2])
             if p:
                 por_itu[itu_de[k].most_common(1)[0][0]][p] += 1
 
     raros = []
     for k in orden:
-        if k not in itu_de:
+        if k not in itu_de or k in oficiales:
             continue
         itu = itu_de[k].most_common(1)[0][0]
         p = pais_del_nombre(sitios[k][2])

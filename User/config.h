@@ -96,8 +96,15 @@
 #define CONFIG_RF_CLIP_MIN_COUNT   3U
 
 /* Cuanto baja el PGA de una vez -2,0 dB, en pasos de 0,5- y hasta donde
- * puede bajar: 30,0 dB por debajo de CONFIG_PGA_START_DB_X2, Y ESO PARA EL
- * Rin QUE HAYA PUESTO. Ver rf_agc_poll() en main.c. */
+ * puede bajar: 30,0 dB, Y ESO PARA EL Rin QUE HAYA PUESTO. Ver
+ * rf_agc_poll() en main.c.
+ *
+ * ESTO ES UN TOPE, NO EL ALCANCE - 24/10/2026. Decia "30,0 dB por debajo
+ * de CONFIG_PGA_START_DB_X2" y eso no existe: el techo son 20,0 dB y por
+ * debajo de cero el codec no baja. El alcance de verdad es el MENOR de los
+ * dos y lo calcula rf_agc_backoff_max() en main.c, porque el techo lo
+ * mueve el usuario desde la casilla PGA. Mientras aqui ponia 30 y el techo
+ * eran 20, el lazo se pasaba cinco pasos de 50 ms creyendo que actuaba. */
 #define CONFIG_RF_AGC_STEP_X2         4U
 #define CONFIG_RF_AGC_BACKOFF_MAX_X2  60U
 
@@ -216,8 +223,8 @@
  * son octal valido, o sea que dos de cada diez versiones no compilarian-.
  * El _Static_assert de abajo es el que obliga a que el menor lleve
  * siempre sus dos cifras: "5" no pasa, "05" si. */
-#define CONFIG_FW_MAYOR    "5"
-#define CONFIG_FW_MENOR "75"   /* SIEMPRE dos cifras: 00..99 */
+#define CONFIG_FW_MAYOR    "6"
+#define CONFIG_FW_MENOR "06"   /* SIEMPRE dos cifras: 00..99 */
 #define CONFIG_FW_VERSION  "V" CONFIG_FW_MAYOR "." CONFIG_FW_MENOR
 
 _Static_assert(sizeof(CONFIG_FW_MENOR) == 3,

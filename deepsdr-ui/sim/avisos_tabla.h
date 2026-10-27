@@ -3,6 +3,8 @@
 #define AVISOS_TABLA_H
 
 static const char *const k_avisos[] = {
+    "192 kHz no cabe: vuelvo a 96",
+    "192 kHz does not fit: back to 96",
     "GUARDANDO OTRA FOTO",
     "SAVING ANOTHER PICTURE",
     "EL FAX YA SE GUARDA SOLO",

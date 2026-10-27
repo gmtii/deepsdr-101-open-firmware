@@ -38,7 +38,10 @@
  * frecuencia que sale de aqui NO es la que se pide: el periodo del
  * temporizador es un numero ENTERO de cuentas, asi que lo que sale es
  * TIMERCLK/(2*(ARR+1)) y lo pedido se redondea a eso. Es un escalon de
- * f^2*2/TIMERCLK: 58 Hz a 54 kHz, 1,2 Hz a 8 kHz, 230 Hz a 108 kHz. Nada de
+ * f^2*4/TIMERCLK: 117 Hz a 54 kHz, 2,6 Hz a 8 kHz, 468 Hz a 108 kHz -el
+ * periodo va forzado a PAR para que el cuarto de periodo de la cuadratura
+ * salga exacto, y eso DOBLA el escalon; aqui estaba la cuenta de un paso de
+ * una sola cuenta. Corregido el 27/10/2026-. Nada de
  * eso se veia en ningun sitio -la fila "Cuadratura I/Q" de Informacion
  * ponia "GD32, PA6/PA7" y se acababa ahi-, asi que por debajo de 300 kHz la
  * radio no decia donde esta su oscilador.

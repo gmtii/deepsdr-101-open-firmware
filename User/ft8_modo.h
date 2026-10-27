@@ -34,7 +34,29 @@
  * segundos, que es justo lo que no se puede hacer.
  */
 
-#define FT8_MODO_LINEAS   16   /* mensajes que se guardan: los que caben en el panel entero, ver FT8_PANEL_FILAS en main.c */
+/*
+ * CUARENTA Y OCHO, Y NO LOS QUINCE QUE CABEN EN EL PANEL - 23/10/2026.
+ *
+ * Ponia 16 "los que caben en el panel entero", y mientras el panel fue una
+ * ventana fija eso era verdad: pinta quince renglones y el decimosexto no
+ * se veia nunca.
+ *
+ * Dos cosas lo cambiaron el mismo dia. La primera es que esta lista no la
+ * lee solo el panel: la lee EL MAPA. Los puntos y las etiquetas de FT8
+ * salen de recorrer estos mismos renglones (ver mapa_pinta() y mapa_eti_*
+ * en main.c), asi que el mapa no podia tener mas de dieciseis estaciones
+ * por llena que estuviera la banda -y con el filtro de CQ puesto, muchas
+ * menos-. La segunda es que el panel YA NO es una ventana fija: el dedo lo
+ * sube (ver `subidos` en ft8_lista.h), y una lista que se puede subir y se
+ * acaba a los dieciseis no merece el gesto.
+ *
+ * CUARENTA Y OCHO Y NO MAS, que es lo unico que hay que justificar: son
+ * 3,2 pantallas de historial -de unos cuarenta segundos con la banda
+ * abierta a dos minutos y medio con la banda floja-, y cuestan 4.224 bytes
+ * de la union, que dejan todavia 2.700 libres. Mas renglones no darian
+ * mas informacion util: lo que entro hace cinco minutos ya no se contesta.
+ */
+#define FT8_MODO_LINEAS   48
 #define FT8_MODO_LARGO    88   /* ver FT8_DECODER_LINE_LEN - tiene que ser >= */
 
 /* Arranca FT8. `fs_hz` es la tasa del audio que se le va a dar (12000 en el
@@ -79,11 +101,6 @@ int16_t ft8_modo_dt_ms(void);
 /* Mensajes decodificados, del mas nuevo al mas viejo. `i` de 0 a
  * FT8_MODO_LINEAS-1; devuelve cadena vacia si ahi no hay nada todavia. */
 const char *ft8_modo_linea(uint8_t i);
-
-/* Cuantas ranuras se han perdido por estar todavia decodificando la
- * anterior. Si esto sube, la decodificacion no cabe en los 15 segundos:
- * ver el comentario de FT8_PASO_MS en ft8_modo.c. */
-uint16_t ft8_modo_perdidas(void);
 
 /* Vacia la lista de mensajes. No toca la captura en curso: lo que se este
  * oyendo ahora sigue su camino y saldra al cerrarse la ranura. */

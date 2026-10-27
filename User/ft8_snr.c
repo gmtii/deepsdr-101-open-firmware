@@ -7,7 +7,11 @@
  * desplazamiento se cancela en el cociente, que es justo lo que se hace. */
 static float lineal(float db)
 {
-    return powf(10.0f, db * 0.1f);
+    /* exp(db*ln10/10) y no powf(10, db/10) - 26/10/2026: powf costaba
+     * 1.856 bytes de flash interna y era la unica funcion de la biblioteca
+     * que no usaba nadie mas. El resultado se usa en un COCIENTE de dos
+     * de estos, asi que la diferencia -1e-7 relativo- se cancela ademas. */
+    return expf(db * 0.230258509f);
 }
 
 /*

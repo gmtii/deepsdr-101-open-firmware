@@ -77,7 +77,30 @@ void rm68120_exmc_gpio_init(void)
  * para el tiempo de dato que haya puesto, lo que se ve es basura en la
  * pantalla - no se rompe nada, y se deshace solo.
  */
-static uint8_t s_pendiente = 2U;   /* GPIO_OSPEED_50MHZ, el de arranque */
+/*
+ * Y ESTO NO SE SUPONE, SE LEE - 26/10/2026, decimotercera vuelta de la
+ * revision a fondo. Aqui habia una COPIA EN MEMORIA puesta a 2 "porque es
+ * el de arranque", y no hay quien lo sepa.
+ *
+ * El motivo es el mismo que este fichero ya tiene escrito para el tiempo
+ * de dato, treinta lineas mas abajo: **main.c NO llama a rm68120_init()**
+ * desde el 30/07/2026, asi que rm68120_exmc_gpio_init() -la que pone los
+ * pines a GPIO_OSPEED_50MHZ- TAMPOCO SE EJECUTA NUNCA. Lo que hay en los
+ * pines es lo que dejo el gestor de arranque, y no sabemos que es.
+ *
+ * O sea que la fila "Pendiente" de la ventana de Informacion podia estar
+ * diciendo "2, 50 MHz" con los pines en MAX. Y esa fila existe justamente
+ * para perseguir el ruido que el propio usuario midio -catorce decibelios
+ * con la radio SIN ANTENA entre dibujar y no dibujar-, asi que un
+ * instrumento que miente ahi es peor que no tenerlo.
+ *
+ * Se lee del registro, como el tiempo de dato. Se mira un pin de datos
+ * -PD14, que es D0- porque los dieciseis se ponen siempre a la vez.
+ */
+static uint8_t pendiente_real(void)
+{
+    return (uint8_t)((GPIO_OSPD(GPIOD) >> (2U * 14U)) & 0x3U);
+}
 
 static uint32_t pines_d(void)
 {
@@ -93,7 +116,7 @@ static uint32_t pines_e(void)
            GPIO_PIN_15;
 }
 
-uint8_t rm68120_bus_pendiente(void) { return s_pendiente; }
+uint8_t rm68120_bus_pendiente(void) { return pendiente_real(); }
 
 void rm68120_bus_pendiente_pon(uint8_t nivel)
 {
@@ -108,7 +131,6 @@ void rm68120_bus_pendiente_pon(uint8_t nivel)
     }
     gpio_output_options_set(GPIOD, GPIO_OTYPE_PP, osp, pines_d());
     gpio_output_options_set(GPIOE, GPIO_OTYPE_PP, osp, pines_e());
-    s_pendiente = nivel;
 }
 
 /* ---------------------------------------------------------------------

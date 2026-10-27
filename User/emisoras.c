@@ -658,3 +658,40 @@ uint8_t emisoras_salto(uint32_t desde, int8_t dir, uint16_t minuto, uint8_t dia,
          * borde de la tabla no lo borra. */
     }
 }
+
+uint8_t emisoras_rango_repartido(uint32_t hz0, uint32_t hz1,
+                                 uint16_t minuto, uint8_t dia,
+                                 emisoras_rango_r_t *out, uint8_t max,
+                                 uint16_t *hubo)
+{
+    uint16_t h = 0U;
+    uint8_t  n;
+
+    if (out == 0 || max == 0U || hz1 < hz0) {
+        if (hubo != 0) { *hubo = 0U; }
+        return 0U;
+    }
+
+    n = emisoras_rango(hz0, hz1, minuto, dia, out, max, &h);
+    if (hubo != 0) { *hubo = h; }
+    if (h <= (uint16_t)max) { return n; }   /* cabia todo: nada que repartir */
+
+    /*
+     * No cabe. Se pregunta por mitades, y la izquierda se lleva la mitad
+     * del sitio: lo que no gaste se lo queda la derecha, asi que una
+     * banda llena solo por un lado no sale peor que antes.
+     */
+    {
+        uint32_t medio = hz0 + (hz1 - hz0) / 2UL;
+        uint16_t h1 = 0U, h2 = 0U;
+        uint8_t  n1, n2;
+
+        n1 = emisoras_rango(hz0, medio, minuto, dia, out,
+                            (uint8_t)(max / 2U), &h1);
+        n2 = emisoras_rango(medio + 1UL, hz1, minuto, dia, out + n1,
+                            (uint8_t)(max - n1), &h2);
+        /* Siguen en orden de frecuencia: primero la mitad baja, despues
+         * la alta, y cada una ya venia ordenada. */
+        return (uint8_t)(n1 + n2);
+    }
+}

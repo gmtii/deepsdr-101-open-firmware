@@ -71,7 +71,30 @@ static uint8_t relleno(uint32_t k)
  * Escriben directamente en g_chip y no por el bus a proposito: no son
  * parte de lo que se mide, son el escenario.
  */
-static uint32_t bps(void)   { return (uint32_t)(g_chip[11] | (g_chip[12] << 8)); }
+/*
+ * Y SI NO HAY VOLUMEN, QUE LO DIGA EN VEZ DE MATARSE - 22/10/2026.
+ *
+ * Con una imagen a ceros -lo que deja un `dd` cuyo `mkfs.fat` luego no
+ * existe, y make la da por hecha- bytes/sector vale 0, clus_tam() vale 0 y
+ * el banco se iba en SIGFPE: "Floating point exception" y ni una palabra
+ * sobre que el fichero no era un FAT. Costo media hora de depurador
+ * averiguar que el culpable no era el firmware sino el escenario.
+ *
+ * spc(), tres lineas mas abajo, ya se guardaba del cero desde el 20/10.
+ * Esta no, y es la que multiplica.
+ */
+static uint32_t bps(void)
+{
+    uint32_t v = (uint32_t)(g_chip[11] | (g_chip[12] << 8));
+    if (v == 0U) {
+        fprintf(stderr,
+                "\n  la imagen no es un volumen FAT: bytes por sector = 0.\n"
+                "  (una imagen a ceros da esto; comprueba que mkfs.fat existe\n"
+                "   y borra out/*.img para que se rehagan)\n\n");
+        exit(2);
+    }
+    return v;
+}
 static uint32_t fat1(void)  { return (uint32_t)(g_chip[14] | (g_chip[15] << 8)) * bps(); }
 static uint32_t fatsz(void) { return (uint32_t)(g_chip[22] | (g_chip[23] << 8)) * bps(); }
 static uint32_t raiz(void)  { return fat1() + (uint32_t)g_chip[16] * fatsz(); }

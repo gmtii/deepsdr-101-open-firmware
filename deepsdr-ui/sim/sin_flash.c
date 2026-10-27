@@ -50,6 +50,8 @@ void spi_flash_read(uint32_t addr, uint8_t *buf, uint32_t len)
  * SPI_FLASH_ASYNC_IDLE; no se incluye spi_flash.h para no arrastrar el
  * controlador entero. */
 int spi_flash_async_save_poll(void) { return 0; }
+/* Solo mirar, sin avanzar la maquina de estados. Ver spi_flash.c. */
+unsigned char spi_flash_async_save_en_vuelo(void) { return 0; }
 
 /* --- la tabla de paises --- */
 const char *dxcc_pais(const char *indicativo) { (void)indicativo; return 0; }

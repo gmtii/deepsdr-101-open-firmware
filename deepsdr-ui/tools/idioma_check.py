@@ -76,6 +76,13 @@ BLANCA = {
     # y no llega a ninguna pantalla: es la misma razon que la de arriba.
     ('hfdl_payload_decode.c', '  SPDU (squitter) de la estacion'):
         'texto de depuracion por serie, no es interfaz',
+    # El renglon de cabecera de BANCO.CSV. No sale en la pantalla: sale en
+    # la hoja de calculo de quien abra el fichero en el PC, y ademas son
+    # los NOMBRES DE LAS COLUMNAS, o sea que traducirlos partiria en dos el
+    # formato del fichero -un BANCO.CSV escrito en ingles no se leeria en
+    # castellano-. Misma razon que las claves de CONFIG.CSV: es un dato.
+    ('banco.c', r'banco,memoria,hz,modo,paso_hz,fil_lo,fil_hi,cw\n'):
+        'cabecera de columnas de BANCO.CSV, no es interfaz',
 }
 
 ACENTO = r"[áéíóúñÁÉÍÓÚÑ¿¡]"

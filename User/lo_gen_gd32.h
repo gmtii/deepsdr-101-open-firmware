@@ -86,10 +86,13 @@ static inline uint32_t lo_gen_gd32_cuentas(uint32_t freq_hz)
  *
  * WHY ONLY A NARROW LOW SLICE, NOT THE WHOLE <5MHz RANGE: a plain
  * hardware-timer square wave has a frequency-dependent tuning
- * resolution of roughly f^2/TIMERCLK per LSB of the timer's period
- * register - at TIMERCLK=99.84MHz this is already ~900Hz right at
- * LO_GEN_CROSSOVER_HZ (300kHz) and gets rapidly worse above that
- * (~5kHz at 500kHz, hundreds of kHz by 5MHz) - nowhere near usable for
+ * resolution of roughly 4*f^2/TIMERCLK per usable step of the timer's
+ * period register - the toggle halves it and forcing the period EVEN
+ * (see lo_gen_gd32_cuentas) doubles it twice over. At TIMERCLK=99.84MHz
+ * that is already ~3.6kHz right at LO_GEN_CROSSOVER_HZ (300kHz) and gets
+ * rapidly worse above that (~10kHz at 500kHz, hundreds of kHz by 5MHz).
+ * (This paragraph said f^2/TIMERCLK, ~900Hz and ~5kHz - a factor of four
+ * out; corrected 27/10/2026.) - nowhere near usable for
  * tuning. A true DDS (fine-grained phase accumulator via a fast
  * interrupt) would need an interrupt rate many times the output
  * frequency - completely infeasible up toward 5MHz on this MCU, and a
@@ -160,9 +163,12 @@ static inline uint32_t lo_gen_gd32_cuentas(uint32_t freq_hz)
 /* Anything below this tunes via this module; anything at or above it
  * keeps using ms5351_set_lo_freq() exactly as before - a single,
  * easily-adjusted crossover point. 300kHz chosen as the point where a
- * plain timer's resolution (~900Hz/LSB here) is still broadly usable
- * (fine for LW/lower MW - AM channels are 9/10kHz apart - not
- * intended for SSB work). Revisit after bench-testing both the
+ * plain timer's resolution (~3.6kHz/step here - see above; this said
+ * ~900Hz, which is the number this choice was argued on) is still
+ * workable for LW/lower MW once the NCO absorbs the rounding (since
+ * V4.10 the digital offset is computed against the REAL frequency, so
+ * the dial does not inherit the step) - but on its own 3.6kHz is over a
+ * third of a 9kHz AM channel, not a tenth. Not intended for SSB work. Revisit after bench-testing both the
  * generator's actual resolution/cleanliness and how far up the
  * MS5351's own low-band trick can be trusted on this board. */
 #define LO_GEN_CROSSOVER_HZ 300000UL
@@ -204,7 +210,9 @@ uint8_t lo_gen_gd32_set_freq(uint32_t freq_hz);
 /*
  * QUE SALE DE VERDAD, Y QUE SE PIDIO. El periodo del temporizador es un
  * numero entero de cuentas, asi que lo que sale es TIMERCLK/(2*(ARR+1)) y
- * lo pedido se redondea a ese escalon -58 Hz a 54 kHz-. Los dos numeros
+ * lo pedido se redondea a ese escalon -117 Hz a 54 kHz; el periodo va
+ * forzado a par y eso dobla el escalon, aqui ponia la mitad. 27/10/2026-.
+ * Los dos numeros
  * salen en la fila "Cuadratura I/Q" de Informacion cuando manda este
  * generador, o sea por debajo de 300 kHz: antes ahi solo ponia "GD32,
  * PA6/PA7" y la radio no decia donde tiene el oscilador. Devuelven 0 con el

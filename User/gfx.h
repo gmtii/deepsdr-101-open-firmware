@@ -81,6 +81,14 @@ void gfx_fill_screen(uint16_t color); /* wrapper de rm68120_fill_screen, mismo f
 void     gfx_vigila(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
 uint32_t gfx_vigilancia(void);
 
+/*
+ * Apuntar un rectangulo que se va a pintar, para quien NO pase por las
+ * cinco funciones de gfx.c. Hoy solo lo necesita gfx2.c, que empuja al
+ * panel por su cuenta; si algun dia aparece otro camino directo al driver,
+ * tiene que llamar a esto. El porque, en gfx.c. 24/10/2026.
+ */
+void     gfx_chiva(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
+
 /* Linea generica (Bresenham). Para pendientes arbitrarias hace falta
  * reabrir ventana pixel a pixel (mas lenta que gfx_hline/vline) - la usa
  * internamente cuando detecta que la linea no es horizontal ni vertical. */

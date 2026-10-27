@@ -31,6 +31,12 @@ spi_flash_async_status_t spi_flash_async_save_poll(void)
     return SPI_FLASH_ASYNC_IDLE;
 }
 
+/* Solo mirar, sin avanzar la maquina de estados. Ver spi_flash.c. */
+uint8_t spi_flash_async_save_en_vuelo(void)
+{
+    return 0U;
+}
+
 /*
  * LA CAPACIDAD, DESDE EL 02/10/2026.
  *

@@ -33,6 +33,7 @@ hay que hacer al cambiar algo: no tocarlo a mano otra vez.
 """
 
 import os
+import struct
 import re
 import subprocess
 import sys
@@ -42,6 +43,40 @@ RAIZ = os.path.dirname(AQUI)
 sys.path.insert(0, AQUI)
 
 import ram_mapa                                     # noqa: E402
+
+
+def secciones_bd(ruta):
+    """Las secciones de BD.BIN y lo que mide cada una, de su directorio.
+
+    Devuelve [(tipo, bytes)] en el orden en que estan. El formato esta
+    contado en tools/datos_pack.py; aqui solo se lee la cabecera.
+    """
+    # Contra RAIZ y no contra el directorio actual: este guion lo llama el
+    # Makefile del simulador desde deepsdr-ui/, igual que a tam().
+    try:
+        d = open(os.path.join(RAIZ, ruta), 'rb').read(4096)
+    except IOError:
+        return []
+    if len(d) < 16 or d[0:4] != b'DSDR':
+        return []
+    n = d[5]
+    fuera = []
+    for i in range(n):
+        if 16 + 16 * i + 16 > len(d):
+            break
+        t, _off, ln, _s = struct.unpack_from('<4I', d, 16 + 16 * i)
+        fuera.append((struct.pack('<I', t).decode('ascii', 'replace'), ln))
+    return fuera
+
+
+K_BD_NOMBRE = {'I24B': 'aviones', 'EMIS': 'emisoras',
+               'SPLF': 'la fuente de la lluvia'}
+
+
+def desglose_bd(secs):
+    """ "294.909 aviones, 220.736 emisoras, 5.592 la fuente de la lluvia" """
+    return ', '.join('%s %s' % (mil(n), K_BD_NOMBRE.get(t, t))
+                     for t, n in secs)
 
 
 def mil(n):
@@ -157,6 +192,15 @@ def calcula():
 
     d['bd'] = tam('BD.BIN')
     d['bd_tope'] = 847872                 # el techo de la zona alta
+    # LO QUE MIDE CADA SECCION, LEIDO DEL PROPIO BD.BIN - 26/10/2026.
+    #
+    # Estos tres numeros estaban ESCRITOS A MANO aqui abajo ("294.909
+    # aviones, 211.387 emisoras, 5.592 la fuente"), que es exactamente lo
+    # que este guion existe para impedir en todos los demas renglones. Se
+    # noto al rehacer la base con HFCC: el total cambio, --arregla lo puso
+    # al dia, y el desglose se quedo diciendo el de antes - o sea, un
+    # renglon donde las partes no suman el total y nadie se entera.
+    d['bd_secciones'] = secciones_bd('BD.BIN')
 
     d['fw'] = tam('update.bin')
     d['fw_tope'] = tope_ld('GD32F450VE_FLASH.ld', 'FLASH') or 491520
@@ -184,11 +228,16 @@ def lineas_buenas(d, viejas):
     for ln in viejas:
         c = ln.strip()
         if c.startswith('ZONA ALTA'):
-            fuera.append('  ZONA ALTA  %s de  %s   libre %s  (294.909 aviones,'
+            fuera.append('  ZONA ALTA  %s de  %s   libre %s  (%s,'
                          % (mil(d['bd']), mil(d['bd_tope']),
-                            mil(d['bd_tope'] - d['bd'])))
-        elif c.startswith('211.387 emisoras'):
-            fuera.append(ln)
+                            mil(d['bd_tope'] - d['bd']),
+                            desglose_bd(d['bd_secciones'])
+                            .split(', ')[0]))
+        elif ' emisoras, ' in c and c.endswith('la fuente)'):
+            fuera.append('                                     %s)'
+                         % ', '.join(desglose_bd(d['bd_secciones'])
+                                     .split(', ')[1:]).replace(
+                             ' la fuente de la lluvia', ' la fuente'))
         elif c.startswith('FLASH 470'):
             fuera.append('  FLASH 470  %s de %s libre %s <- el mismo codigo, otro .ld'
                          % (mil(d['fw470']), mil(d['fw470_tope']),
@@ -239,8 +288,10 @@ def lineas_cuaderno(d, viejas):
     for ln in viejas:
         c = ln.strip()
         if c.startswith('ZONA ALTA'):
-            fuera.append('  ZONA ALTA  %s de %s    libre %s  <- 294.909 aviones, 211.387 emisoras, 5.592 la fuente de la lluvia'
-                         % (mil(d['bd']), mil(d['bd_tope']), mil(d['bd_tope'] - d['bd'])))
+            fuera.append('  ZONA ALTA  %s de %s    libre %s  <- %s'
+                         % (mil(d['bd']), mil(d['bd_tope']),
+                            mil(d['bd_tope'] - d['bd']),
+                            desglose_bd(d['bd_secciones'])))
         elif c.startswith('FLASH 470'):
             fuera.append('  FLASH 470  %s de %s libre  %s   <- el mismo codigo enlazado con GD32F470VG_FLASH.ld'
                          % (mil(d['fw470']), mil(d['fw470_tope']),

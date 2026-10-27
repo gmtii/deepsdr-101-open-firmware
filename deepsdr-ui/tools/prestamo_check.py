@@ -113,7 +113,14 @@ def arranques(src, dircab):
         if os.path.basename(h) in ('ft8_modo.h', 'ft8_shared_ram.h'):
             continue   # el envoltorio y la union no arrancan nada
         texto = open(h, encoding='utf-8').read()
-        for m in re.finditer(r'\bvoid\s+(ft8_\w+_(?:init|reset))\s*\(\s*void\s*\)',
+        # *_init, *_reset y *_arranca: los tres nombres con los que este
+        # arbol llama a "deja esto como recien encendido". El tercero entro
+        # el 23/10/2026 con ft8_waterfall_arranca(), que es justo la llamada
+        # cuya ausencia dejaba FT8 sin decodificar al volver a entrar; sin
+        # anadirlo aqui, esta comprobacion habria mirado para otro lado
+        # exactamente en el caso para el que existe.
+        for m in re.finditer(r'\bvoid\s+(ft8_\w+_(?:init|reset)|ft8_\w+_arranca)'
+                             r'\s*\(\s*void\s*\)',
                              texto):
             quiere.add(m.group(1))
 

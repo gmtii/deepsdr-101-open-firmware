@@ -133,6 +133,14 @@ typedef struct {
      * Esto es solo lo que la radio DICE de si misma.
      */
     uint8_t   eng;               /* 0/1 con histeresis; ver sam_enganchado() */
+    /*
+     * CONTRA EL TOPE: 0 no, 1 por arriba, 2 por abajo. Ver sam_tope().
+     * uint8_t y no int8_t por lo mismo que `eng`: el resto del struct ya
+     * lo es y asi no se paga relleno.
+     */
+    uint8_t   tope;              /* lo ya confirmado: 0 no, 1 arriba, 2 abajo */
+    uint8_t   tope_lado;         /* el lado que se esta viendo ahora mismo */
+    float32_t tope_prom;         /* 0..1, la parte del tiempo pegado a el */
 
     /* fade leveler */
     float32_t tauR;
@@ -174,8 +182,11 @@ typedef struct {
 
 /* sample_rate_hz: the rate sam_step() is actually called at (this
  * project's s_i_buf/s_q_buf, 96000.0f).
- * pll_fmax_hz/omega_n_hz/zeta: same meaning and same WDSP defaults as
- * the original (4000.0f / 200.0f / 65.0f/75.0f). */
+ * pll_fmax_hz/omega_n_hz/zeta: same meaning as the original. WDSP's own
+ * defaults are 4000.0f / 200.0f / 65.0f/75.0f; this project calls it with
+ * omega_n = 100.0f instead, measured - see demod_am.c's sam_init() call for
+ * the table of opposite-sideband rejection against loop width and why 50
+ * was too narrow. 27/10/2026. */
 void sam_init(sam_t *s, float32_t sample_rate_hz, float32_t pll_fmax_hz,
         float32_t omega_n_hz, float32_t zeta);
 
@@ -294,6 +305,96 @@ void sam_bloque(sam_t *s, const float32_t *i_in, const float32_t *q_in,
 void sam_bloque_cuad(sam_t *s, const float32_t *i_in, const float32_t *q_in,
                      float32_t *audio, float32_t *cuad, uint32_t n,
                      float32_t sample_rate_hz);
+
+/*
+ * ======================================================================
+ * Y LA MISMA, CRUZANDO HACIA LA SENAL SIN DESROTAR - 22/10/2026
+ * ======================================================================
+ *
+ * Avisado por un usuario del repositorio: "could the detector switch to
+ * fixed-frequency SSB instead of AM if synchronization is lost in
+ * single-sideband AM sync mode?".
+ *
+ * Tenia razon, y el numero es peor de lo que el aviso supone. Sin
+ * enganche, lo que salia era la ENVOLVENTE -ver el bloque de s_sam_mezcla
+ * en demod_am.c-, o sea las dos bandas sumadas, o sea exactamente aquello
+ * de lo que se huye al pedir una sola. Medido en sim/sam_sin_eng.c con la
+ * portadora a 900 Hz de la sintonia y una intrusa en la banda rechazada
+ * tan fuerte como la buena:
+ *
+ *   SAM con las dos bandas   tono bueno 4.791   intrusa 11.637
+ *   SAM superior             tono bueno 4.791   intrusa 11.637
+ *
+ * El MISMO numero hasta la unidad: sin enganche, elegir banda no hacia
+ * nada. La intrusa salia 7,7 dB POR ENCIMA de lo que se queria oir.
+ *
+ * `mez` = 1 es lo de siempre -la senal desrotada por la portadora que el
+ * lazo ha recuperado-. `mez` = 0 saca la entrada TAL CUAL, que detras del
+ * metodo de fases es banda lateral de frecuencia fija: el mismo rechazo de
+ * la otra banda que da el modo USB/LSB, porque es literalmente la misma
+ * cadena.
+ *
+ * LO QUE CUESTA, dicho aqui y no escondido: con el oscilador quieto, la
+ * portadora de la emisora no cae en el cero del audio sino donde este, y
+ * se oye como un tono. Eso no es un fallo nuevo: es lo que significa
+ * escuchar en banda lateral algo que lleva portadora, y se quita girando
+ * el mando -que es justo lo que no servia de nada cuando lo que sonaba era
+ * la intrusa-.
+ *
+ * NO CAMBIA NADA DE SAM CON LAS DOS BANDAS. Ahi la vuelta a la envolvente
+ * sigue siendo lo correcto, por lo que dice su propio comentario en
+ * demod_am.c, y sim/sam_sin_eng.c lo exige para que nadie lo "arregle" de
+ * paso.
+ *
+ * Y NO ES LO MISMO QUE MOVER LA SELECCION DE BANDA DELANTE DEL LAZO, que
+ * es lo que queda apuntado mas arriba, encima de sam_margen_pon(). Aquello
+ * haria que el LAZO no viera la banda rechazada; esto solo decide que se
+ * oye cuando el lazo NO PUEDE enganchar. Son dos cosas distintas y esta no
+ * cierra aquella.
+ */
+void sam_bloque_cuad_mez(sam_t *s, const float32_t *i_in, const float32_t *q_in,
+                         float32_t *audio, float32_t *cuad, uint32_t n,
+                         float32_t sample_rate_hz, float32_t mez);
+
+/*
+ * ======================================================================
+ * CONTRA EL TOPE: LA DIFERENCIA ENTRE "NO HAY NADA" Y "NO LLEGO"
+ * ======================================================================
+ *
+ * *** Avisado por un usuario del repositorio, con video: una emisora
+ * floja que no engancha, con la radio diciendo "+- 250 Hz - no lock", y
+ * la pregunta razonable de si el lazo filtra mal. ***
+ *
+ * NO FILTRA MAL. Medido en sim/sam_debil.c, por la cadena entera y con
+ * AM modulada mas ruido:
+ *
+ *     desvio    C/N 20 dB  C/N 10 dB  C/N 3 dB  C/N 0 dB  C/N -6 dB
+ *        0 Hz      si         si         si        si        si
+ *      120 Hz      si         si         si        si        si
+ *      240 Hz      si         si         si        si        si
+ *      300 Hz      NO         NO         NO        NO        NO
+ *      500 Hz      NO         NO         NO        NO        NO
+ *
+ * El lazo engancha con la portadora POR DEBAJO DEL RUIDO si esta dentro
+ * del margen, y no engancha nunca si esta fuera, ni con 40 dB. Lo que
+ * decide no es el nivel: es el desvio. Y estrechar el lazo lo EMPEORA -con
+ * omega_n = 20 Hz no engancha ni con portadora limpia a 120 Hz, porque se
+ * queda sin alcance de captura-.
+ *
+ * LO QUE FALTABA ERA DECIRLO. Con la portadora fuera de alcance, el
+ * integrador se queda CLAVADO contra omega_min/omega_max; con solo ruido
+ * se pasea -medido: entre -126 y -74 Hz, lejos del tope de 250-. O sea
+ * que los dos casos se distinguen, y la radio sabia la diferencia y se la
+ * callaba.
+ *
+ * Devuelve 0 si no, +1 contra el tope de arriba, -1 contra el de abajo. El
+ * signo es la mitad util: dice HACIA DONDE hay que girar el mando.
+ *
+ * Pide medio segundo seguido pegado al tope antes de decirlo: tocarlo de
+ * pasada mientras el lazo busca es normal y no significa nada.
+ */
+int8_t sam_tope(const sam_t *s);
+
 
 /*
  * CUANTO SE FIA UNO DE carrier_hz: 0 nada, 1 del todo.

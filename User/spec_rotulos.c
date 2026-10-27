@@ -552,6 +552,36 @@ uint8_t spec_rotulos_draw(gfx2_surf_t *s, const spec_rotulos_t *rr,
     if (s == 0 || rr == 0 || txt == 0 || ancho <= 0 || alto <= 0) { return 0U; }
 
     /*
+     * ======================================================================
+     * Y SI ESTA BANDA NO TOCA LA FRANJA, NO HAY NADA QUE HACER - 24/10/2026.
+     * ======================================================================
+     *
+     * Encontrado en la revision a fondo pedida por el usuario.
+     *
+     * Esto corre UNA VEZ POR BANDA del espectro, que con bandas de ocho
+     * filas y un panel de 208 son veintiseis. La franja de carteles ocupa
+     * las primeras 42 filas, o sea cinco bandas: en las otras veintiuna no
+     * se pinta ni un pixel... pero se recorria la lista entera igual, y cada
+     * cartel cuesta una DIVISION DE 64 BITS -spec_rotulos_x()- y un recorrido
+     * del UTF-8 buscando glifos -gfx2_text_w()-.
+     *
+     * Y no lo tapaba el salto de bandas: las que se saltan por no haber
+     * cambiado son justo las de arriba, donde no hay traza, que son las que
+     * SI llevan carteles. Las que se montan son las de abajo, donde esto no
+     * pinta nada.
+     *
+     * gfx2_band_hits() ya existia y lo usan las primitivas de gfx2 por este
+     * mismo motivo, escrito en su propio comentario: "el callback de dibujo
+     * se ejecuta una vez POR BANDA, asi que todo lo que no se corte pronto
+     * se paga veinte veces". Aqui faltaba.
+     *
+     * Las cuatro filas de aire son por los glifos: el texto del ultimo
+     * renglon puede bajar un pixel o dos por debajo de `alto` segun la
+     * fuente, y cortar por lo justo seria cambiar lo que se ve.
+     */
+    if (!gfx2_band_hits(s, y, (int16_t)(alto + 4))) { return 0U; }
+
+    /*
      * LOS RENGLONES SE REPARTEN EL ALTO QUE HAY, no al reves.
      *
      * Antes la altura de renglon era la de la fuente y el que llamaba

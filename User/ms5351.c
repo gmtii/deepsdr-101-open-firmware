@@ -415,6 +415,54 @@ _Static_assert(LOWF_FLOOR_HZ == MS5351_LOWBAND_FLOOR_HZ,
 #define LOWF_ZONE_03_MULT      874UL
 #define LOWF_ZONE_04_MULT      578UL
 #define LOWF_ZONE_05_MULT      382UL
+/*
+ * ======================================================================
+ * *** LA ZONA 6 ES LA UNICA CON MULTIPLICADOR IMPAR, Y ESO TIENE PRECIO.
+ * Anotado el 27/10/2026, revision a fondo de espejos y armonicos. ***
+ * ======================================================================
+ *
+ * En banda baja el divisor de salida que se escribe ES este multiplicador
+ * (frac_divide con fvco = freq*mult da a = mult, b = 0). El multisynth
+ * solo garantiza el 50 % de ciclo de trabajo con divisores enteros PARES;
+ * con N impar la relacion queda (N+1)/(2N), aqui 50,1976 %.
+ *
+ * Y un ciclo desviado es exactamente lo que crea ARMONICOS PARES, que una
+ * cuadrada perfecta no tiene. Con 50,1976 % el 2.o armonico sale a -44,1
+ * dBc; las otras seis zonas lo tienen NULO.
+ *
+ *     zona  LO (MHz)        mult   paridad  ciclo      2.o     2*LO (MHz)
+ *       1   0,300-0,454     2000   par      50,0000 %  nulo    0,600-0,908
+ *       2   0,454-0,687     1322   par      50,0000 %  nulo    0,908-1,374
+ *       3   0,687-1,039      874   par      50,0000 %  nulo    1,374-2,078
+ *       4   1,039-1,571      578   par      50,0000 %  nulo    2,078-3,142
+ *       5   1,571-2,377      382   par      50,0000 %  nulo    3,142-4,754
+ *       6   2,377-3,589      253   IMPAR    50,1976 %  -44 dB  4,754-7,178
+ *       7   3,589-4,800      178   par      50,0000 %  nulo    7,178-9,600
+ *
+ * DONDE SE OYE: el 2*LO de la zona 6 cae en 4,754-7,178 MHz, o sea los
+ * tropicales, el 49 m, el 41 m y los 40 METROS. Y el dial de 80 metros
+ * -3,5 MHz, oscilador 3,476- esta DENTRO de la zona 6: la banda que mas
+ * falta hace que rechace 40 m es justo la del unico divisor impar.
+ *
+ * POR QUE NO SE CAMBIA AQUI. No se puede con esta tabla: las zonas estan
+ * empaquetadas a la relacion exacta del VCO (908/600 = 1,5133), asi que en
+ * cada zona solo CABE un multiplicador entero. Para la 6, 600e6/2.376.963
+ * pide >= 253 y 908e6/3.589.xxx pide <= 253: es 253 o no hay zona. Ponerle
+ * 252 obliga a subir la frontera con la zona 5, y entonces la 5 se sale
+ * del techo del VCO. Arreglarlo de verdad es rehacer la tabla de zonas
+ * entera, y eso se prueba con la radio delante, no a ciegas.
+ *
+ * Y HAY UNA PREMISA SIN MEDIR: que este clon se comporte como el original
+ * con divisor impar es lo que dice la hoja de Silicon Labs, no algo
+ * comprobado en esta placa. Se comprueba escuchando: con el dial en 80
+ * metros, un fantasma de 40 metros que se mueva al DOBLE de rapido que el
+ * mando lo confirma.
+ *
+ * (La red de asertos de abajo, LOWF_CHK, comprueba el tope del multisynth,
+ * los 18 bits de P1 y el fVCO en los dos extremos. NO comprueba la
+ * paridad, y es el unico criterio de la tabla que falta; no se añade el
+ * aserto porque hoy no compilaria.)
+ */
 #define LOWF_ZONE_06_MULT      253UL
 #define LOWF_ZONE_07_MULT      178UL   /* medido, ver el barrido de abajo */
 
@@ -689,21 +737,74 @@ static uint32_t s_lowf_z7_mult = LOWF_ZONE_07_MULT;
  * guess, which would be a poor way to hit a specific 62.5ms window.
  * Blocking - see this section's BLOCKING DELAY note above for why
  * that's acceptable here. */
-static void delay_us_dwt(uint32_t us)
+/* El reloj de ciclos, listo para usar. Lo comparten delay_us_dwt() y
+ * delay_us_dwt_desde(); ver alli por que hacen falta las dos. */
+static uint32_t dwt_ahora(void)
 {
-    uint32_t start;
-    uint32_t cycles = us * (SystemCoreClock / 1000000UL);
-
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
     if ((DWT->CTRL & DWT_CTRL_CYCCNTENA_Msk) == 0U) {
         DWT->CYCCNT = 0U;
         DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
     }
-    start = DWT->CYCCNT;
+    return DWT->CYCCNT;
+}
+
+/*
+ * ======================================================================
+ * *** ESPERAR DESDE UN INSTANTE DADO, Y NO DESDE "AHORA" - 27/10/2026,
+ * cuarta pasada de la revision de espejos y armonicos. ***
+ * ======================================================================
+ *
+ * La maniobra de 90 grados de la banda baja es una CARRERA: se sube MS1 a
+ * la frecuencia buena, se deja que MS0 se quede atras, y se sube MS0
+ * cuando ha acumulado un cuarto de vuelta. O sea que lo que hay que medir
+ * es el tiempo entre que CAMBIA el divisor de MS1 y que CAMBIA el de MS0.
+ *
+ * Y lo que se media era otra cosa: la espera arrancaba DESPUES de que la
+ * transaccion de MS1 hubiera terminado entera, y la de MS0 empezaba
+ * DESPUES de la espera. O sea que al cuarto de vuelta se le sumaba una
+ * transaccion de I2C COMPLETA -diez bytes a pedal, del orden de uno a dos
+ * milisegundos-, y siempre con el mismo signo: el angulo salia SIEMPRE
+ * mayor de 90 grados, nunca menor.
+ *
+ * Con el propio numero de este fichero -4 Hz de diferencia son 1,44 grados
+ * por milisegundo- eso son de uno a tres grados de sesgo, que por la
+ * formula de aqui arriba pone el techo del rechazo de imagen entre 32 y 38
+ * dB en TODA la banda de 300 kHz a 4,8 MHz. Y no era la "incertidumbre
+ * irreducible" que se daba por supuesta: es un sesgo determinista.
+ *
+ * El arreglo no necesita medir cuanto tarda el I2C ni meter ningun numero
+ * nuevo: basta con arrancar el cronometro ANTES de escribir MS1 y esperar
+ * a que el cuarto de vuelta se cumpla CONTADO DESDE AHI. Como las dos
+ * transacciones son el mismo codigo y los mismos nueve registros, el
+ * instante en que cada una cambia su divisor cae a la misma distancia de
+ * su propio comienzo, y esa distancia se cancela sola.
+ *
+ * ----------------------------------------------------------------------
+ * Y LA CONVERSION DE MICROSEGUNDOS A CICLOS, QUE TAMBIEN ESTABA SESGADA.
+ *
+ * Ponia `us * (SystemCoreClock / 1000000UL)`, con la division entera
+ * PRIMERA: esta radio corre a 199.680.000 Hz -HXTAL de 12,288 MHz, ver
+ * reglas.mk-, asi que eso daba **199** y no 199,68. Un 0,34 % de menos,
+ * tambien siempre hacia el mismo lado: los 62,5 ms salian 62,2872 y el
+ * angulo quedaba en 89,6936 grados. Por si solo, un techo de 51,5 dB.
+ *
+ * Multiplicando primero en 64 bits no se pierde nada y no cuesta nada:
+ * esto corre dos veces por reenganche, no por bloque. El bloque largo de
+ * mas arriba argumenta que "el reloj de espera es el DWT y es exacto"; el
+ * DWT lo es, la conversion a ciclos que lo alimentaba no.
+ */
+static void delay_us_dwt_desde(uint32_t start, uint32_t us)
+{
+    uint32_t cycles = (uint32_t)(((uint64_t)us * (uint64_t)SystemCoreClock)
+                                 / 1000000ULL);
+
+    (void)dwt_ahora();
     while ((DWT->CYCCNT - start) < cycles) {
         /* busy-wait */
     }
 }
+
 
 /* Shared fractional-divider math (a + b/c encoded as P1/P2, c=FRAC_C
  * fixed) - factored out here since the low-band maneuver needs it
@@ -773,6 +874,7 @@ static uint8_t ms5351_set_lo_freq_lowband(uint32_t freq_hz)
          * comment above this function for the full derivation --- */
         uint32_t freq_minus_df = freq_hz - (uint32_t)LOWF_PHASE_DF_HZ;
         uint32_t ms_p1, ms_p2;
+        uint32_t t_ms1;
 
         ok &= wr_reg(REG_CLK0_CTRL, CLKCTRL_QUAD_PLLB, "reg16 CLK0 on/PLLB (low-band)");
         ok &= wr_reg(REG_CLK0_CTRL + 1U, CLKCTRL_QUAD_PLLB, "reg17 CLK1 on/PLLB (low-band)");
@@ -831,10 +933,14 @@ static uint8_t ms5351_set_lo_freq_lowband(uint32_t freq_hz)
          * own notes elsewhere, or ask before assuming this phase
          * relationship explains that too). */
         frac_divide(fvco, freq_hz, &ms_p1, &ms_p2);
+        /* El cronometro arranca ANTES de escribir MS1, no despues: ver
+         * delay_us_dwt_desde(), que cuenta por que esa diferencia valia
+         * hasta tres grados de sesgo siempre hacia el mismo lado. */
+        t_ms1 = dwt_ahora();
         ok &= wr_ms(REG_MS1_BASE, ms_p1, ms_p2, FRAC_C, "MS1 -> freq (low-band align)");
 
         /* Step 4: wait for exactly 90 degrees of accumulated lag. */
-        delay_us_dwt(LOWF_PHASE_SHIFT_US);
+        delay_us_dwt_desde(t_ms1, LOWF_PHASE_SHIFT_US);
 
         /* Step 5: MS0 (CLK0) catches up to the real freq too - now
          * carrying the 90-degree lag forward (see step 3's comment

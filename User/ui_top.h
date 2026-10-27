@@ -105,6 +105,22 @@ typedef struct {
     const char *clock;       /* "HH:MM" */
     uint8_t     batt_pct;    /* 0..100; se pinta DENTRO del dibujo */
     const char *sam_ppm;     /* error de PLL en SAM, "+1,4 PPM"; 0 = no mostrar */
+    /*
+     * EL BARRIDO, EN EL BOTON DEL BANCO - 26/10/2026.
+     *
+     * Tocar SCAN cierra la ventana del banco y vuelve a la principal, que
+     * es donde se quiere estar mientras busca: el espectro y la cascada
+     * delante. Pero entonces el dial se mueve solo cada segundo, y hace
+     * falta decir por que y por donde va.
+     *
+     * Lo dice el MISMO boton MEM, sin que aparezca nada nuevo: se
+     * enciende y, en vez de "MEM", pone el numero de la memoria que esta
+     * escuchando -"01", "02"...-, que cambia en cada salto. Tocarlo
+     * entonces PARA el barrido y vuelve a poner "MEM".
+     *
+     * 0 = no hay barrido, pone "MEM". Si no, apunta al numero.
+     */
+    const char *mem_scan;
 
     /* --- barra de estado --- */
     uint8_t     s_units;     /* 0..9 = S1..S9; >9 = por encima de S9 */
@@ -228,7 +244,7 @@ typedef struct {
  * SAM, que se ha mudado aqui al lado, no empiece dentro de la franja. Ver
  * UI_TOP_SAM_X justo debajo.
  */
-#define UI_TOP_RDS_X2  620   /* hasta aqui: despues viene el PPM y el reloj */
+#define UI_TOP_RDS_X2  620   /* hasta aqui: despues el boton MEM y el reloj */
 
 /*
  * EL HUECO DE LA LECTURA DE PPM DE SAM - 05/10/2026.
@@ -254,15 +270,36 @@ typedef struct {
  * sim/top_franjas.c comprueba que la huella de esto y la de la marquesina no
  * comparten NI UN pixel, y que el ancho del peor texto cabe en el hueco.
  */
+/*
+ * Y BAJA AL RENGLON DE ABAJO - 26/10/2026, al subir el boton MEM.
+ *
+ * El usuario pidio que MEM quedara al mismo nivel que las pastillas de modo
+ * y de banda, o sea en y 14..45. En ese renglon, a la derecha de la
+ * marquesina, solo hay 106 px libres (620..725, que es donde empieza la
+ * tinta del reloj), y el PPM se llevaba 630..710 de ellos: los dos no
+ * caben. Asi que se cambian el sitio, el boton arriba y la lectura abajo.
+ *
+ * Las cajas de tinta estan MEDIDAS pintando cada cosa sola sobre el fondo y
+ * leyendo los pixeles, no deducidas de la fuente:
+ *
+ *     reloj (font_num_20, las 1.440 horas)   x 726..788   y 11..25
+ *     PPM   (font_ui_14, el peor texto)      x 630..710   y 14..27
+ *     bateria                                x 740..790   y 34..53
+ *
+ * O sea que la tinta del PPM va de Y+2 a Y+15. Con Y = 46 cae en 48..61 y
+ * la ventana recortada 46..63 la coge con dos pixeles de aire arriba y dos
+ * abajo, sin pasarse de la cabecera (que acaba en 63) y sin tocar el boton
+ * (que acaba en 45).
+ */
 #define UI_TOP_SAM_X   622
-#define UI_TOP_SAM_Y   12
+#define UI_TOP_SAM_Y   46
 #define UI_TOP_SAM_W   90
 /* Lo que hay que repintar para refrescar solo este numero. Un poco mas
  * ancho y alto que el texto, para coger el degradado de alrededor. */
 #define UI_TOP_SAM_RX  620
-#define UI_TOP_SAM_RY  6
+#define UI_TOP_SAM_RY  46
 #define UI_TOP_SAM_RW  94
-#define UI_TOP_SAM_RH  24
+#define UI_TOP_SAM_RH  18
 
 /*
  * LA ESQUINA DEL RELOJ Y LA BATERIA - 20/10/2026.
@@ -283,7 +320,8 @@ typedef struct {
  * lo deciden estan medidos, no supuestos:
  *
  *   - el PPM del SAM ocupa de 620 a 714 (UI_TOP_SAM_RX + UI_TOP_SAM_RW),
- *     asi que 716 lo deja fuera y esta ventana no lo repinta;
+ *     asi que 716 lo deja fuera y esta ventana no lo repinta (desde el
+ *     26/10/2026 vive un renglon mas abajo, pero en las mismas columnas);
  *   - el reloj va alineado a la DERECHA en una caja que acaba en 790, y
  *     "13:40" mide 65 px en font_num_20 -medido en el simulador-, o sea
  *     que empieza en 725;
@@ -294,6 +332,58 @@ typedef struct {
  * esquina sola y compara los 384.000 pixeles: si algun dia el reloj crece
  * o se mueve, la comparacion salta.
  */
+/*
+ * ======================================================================
+ * EL BOTON DEL BANCO DE MEMORIAS - 26/10/2026, pedido por el usuario
+ * ======================================================================
+ *
+ * VA EN EL RENGLON DE LAS PASTILLAS DE MODO Y DE BANDA, que es donde el
+ * usuario lo pidio: al mismo nivel que ellas. O sea y 14..45, los mismos
+ * 32 px de alto y el mismo radio, relleno y borde que las dos.
+ *
+ * DONDE CABE, Y ESTA MEDIDO CON PIXELES, no supuesto. Se pinto cada cosa
+ * de la esquina sola sobre el fondo y se leyo su caja de tinta de verdad,
+ * con el reloj recorrido en sus 1.440 horas y la bateria del 7 al 100 %:
+ *
+ *     reloj (font_num_20)    x 726..788   y 11..25
+ *     PPM del SAM            x 630..710   y 14..27
+ *     bateria                x 740..790   y 34..53
+ *
+ * La marquesina acaba en 619 (UI_TOP_RDS_X2) y la tinta del reloj empieza
+ * en 726, asi que en ese renglon hay 106 px libres: 620..725. El boton se
+ * lleva 72 y la lectura de PPM se llevaba 81, o sea que LOS DOS NO CABEN.
+ * Por eso el PPM baja al renglon de abajo -ver UI_TOP_SAM_Y- y el boton se
+ * queda con el de arriba. No se borra nada de lo que salia por pantalla:
+ * solo se cambian de sitio.
+ *
+ * El boton se alinea por la DERECHA con la caja del PPM (712), que es lo
+ * que deja los dos uno encima del otro en vez de escalonados: 640..711.
+ * Quedan 21 px de aire hasta el texto que corre y 15 hasta la tinta del
+ * reloj. Y por la derecha no llega a 716, que es donde empieza la zona de
+ * toque del reloj (ui_top_clock_hit) y tambien la ventana recortada de la
+ * esquina (UI_TOP_HORA_RX): ni se pisan al dibujar ni al tocar.
+ *
+ * Se llama MEM -no MEMORIAS- para que quepa, y de alto son 5,7 mm, del
+ * mismo orden que las chapas de la franja de estado -AGC, BW, ATT, NCO-
+ * que ya se tocan, asi que no se le pide nada nuevo al dedo.
+ *
+ * sim/top_franjas.c comprueba que la huella del boton no comparte NI UN
+ * pixel con la marquesina, el PPM, el reloj ni la bateria, y que esta a la
+ * misma altura que la pastilla del modo.
+ */
+#define UI_TOP_MEM_X   640
+#define UI_TOP_MEM_Y    14
+#define UI_TOP_MEM_W    72
+#define UI_TOP_MEM_H    32
+
+/* Si un toque cae en el boton del banco. */
+uint8_t ui_top_mem_hit(uint16_t x, uint16_t y);
+
+/* Solo el boton del banco, para encender y apagar el rotulo del barrido
+ * sin repintar la cabecera entera. Ver ui_top_draw_sam(), que es el mismo
+ * patron y lleva el por que. */
+void ui_top_draw_mem(const ui_top_state_t *st);
+
 #define UI_TOP_HORA_RX 716
 #define UI_TOP_HORA_RY 0
 #define UI_TOP_HORA_RW (800 - UI_TOP_HORA_RX)
@@ -331,6 +421,12 @@ void ui_top_pinta_en(gfx2_surf_t *s, const ui_top_state_t *st);
 
 /* Solo la barra de estado, para los refrescos periodicos del S-meter. */
 void ui_top_draw_status(const ui_top_state_t *st);
+
+/* 1 cuando la franja de estado YA tiene pintada la chapa del NCO que dice
+ * `st`, o sea cuando no hay nada nuevo que enseñar. Lo pregunta el camino
+ * de "ha cambiado la frecuencia", que no repinta esta franja: ver
+ * s_nco_pintado en ui_top.c para por que el apunte vive ahi y no en main.c. */
+uint8_t ui_top_nco_al_dia(const ui_top_state_t *st);
 /* Solo la parte de la franja de estado que se mueve con la señal: la barra
  * de S, las unidades, el dBm y la sobrecarga. Ver su comentario en ui_top.c:
  * repintar la franja entera cada vez que la barra se mueve era el 21 % de

@@ -1,4 +1,6 @@
+#include <string.h>  /* memset(): ver demod_am_set_wfm_ifbw() */
 #include "demod_am.h"
+#include "semibanda.h"
 #include "agc.h"
 #include "nco.h"
 #include "rds.h"
@@ -67,11 +69,10 @@
  *
  *   CHF_COEFFS:  -3 dB a unos 4 kHz. El filtro de canal, aplicado a I y
  *                a Q.
- *   ALPF_COEFFS: -3 dB a unos 6 kHz. El paso bajo de audio, aplicado
- *                despues del bloqueador de continua; sustituye a la
- *                cascada vieja de dos secciones de un polo -unos 12 dB
- *                por octava- por una caida mas empinada de unos 24, con
- *                el mismo codo.
+ *   ALPF_COEFFS: QUITADO EL 24/10/2026. Era el paso bajo de audio de
+ *                -3 dB a unos 6 kHz. Lo sustituyo el filtro de dos
+ *                cortes de audiofil.c y se quedo sin usar; ver el
+ *                bloque "AQUI VIVIAN CUATRO FILTROS" mas abajo.
  *
  * El orden de los coeficientes es el convenio DF1 de CMSIS:
  * {b0,b1,b2,a1,a2}, con
@@ -84,15 +85,14 @@
  * valores entero: no se editan coeficientes sueltos a mano, porque los
  * cinco de cada etapa van juntos.
  *
- * ALPF_COEFFS es SOLO DEL NFM desde el 02/08/2026: AM, USB y LSB se
- * pasaron a su propio selector de tres posiciones -ALPF_4K0/2K3/1K8_COEFFS,
- * mas abajo- en vez de compartir este, asi que retocar ESTE array solo
- * afecta al NFM. Por que se mantienen separados en vez de añadir este
- * mismo codo de 6 kHz como cuarta opcion elegible esta en el comentario
- * de AUDIO_BW_4K0 en demod_am.h.
+ * Lo de arriba vale hoy para CHF_COEFFS. ALPF_COEFFS fue del NFM desde el
+ * 02/08/2026 -AM, USB y LSB se pasaron a su propio selector de tres
+ * posiciones- y los cuatro acabaron sin usar cuando llego el filtro de dos
+ * cortes; ver mas abajo.
  *
  * *** 01/09/2026: se añadieron los equivalentes de 48 kHz
- * -CHF_48K_COEFFS y ALPF_48K_COEFFS- al lado de estos de 96, pedido por
+ * -CHF_48K_COEFFS y el ALPF_48K_COEFFS de entonces- al lado de estos de
+ * 96, pedido por
  * el usuario; la historia entera de "la opcion de 48 kHz para mejor
  * relacion señal a ruido y mas holgura de procesador" esta en el
  * comentario de demod_am_set_active_rate() en demod_am.h. Esos valores de
@@ -119,92 +119,43 @@ static const float32_t CHF_48K_COEFFS[CHF_STAGES * 5U] = {
     0.0562284500f, 0.1124569000f, 0.0562284500f,  1.4538656576f, -0.6787794575f
 };
 
-#define ALPF_STAGES 2U
-static const float32_t ALPF_96K_COEFFS[ALPF_STAGES * 5U] = {
-    0.0281188f, 0.0562375f, 0.0281188f,  1.3651172f, -0.4775923f,
-    0.0331984f, 0.0663969f, 0.0331984f,  1.6117271f, -0.7445208f
-};
-static const float32_t ALPF_48K_COEFFS[ALPF_STAGES * 5U] = {
-    0.0885793562f, 0.1771587125f, 0.0885793562f,  0.8553979328f, -0.2097153578f,
-    0.1152580152f, 0.2305160305f, 0.1152580152f,  1.1130298542f, -0.5740619151f
-};
-
 /*
- * EL JUEGO DE FILTROS DE AUDIO DE AM Y BANDA LATERAL: tres anchos
- * elegibles, añadidos el 02/08/2026 -primero el de 2,3 kHz y ese mismo
- * dia ampliado a tres, pedido por el usuario; ver el comentario de
- * AUDIO_BW_4K0 en demod_am.h-. El metodo de diseño es el mismo en los
- * tres: Butterworth de cuarto orden, dos biquads DF1 de CMSIS en
- * cascada, transformada bilineal con scipy.signal.butter a fs = 96 kHz
- * (eran 48, y 192 antes de eso, ver el comentario de
- * SDR_RX_BLOCK_SAMPLES en sdr_rx.h), y el mismo b0 para las dos etapas
- * -la media geometrica de lo que seria el b0 de ganancia unidad en
- * continua de cada etapa POR SEPARADO-, que es el estilo que ya tenia
- * este trio, al contrario que el reparto independiente por etapa de
- * CHF_COEFFS y ALPF_COEFFS de mas arriba. Dos etapas en cascada dan la
- * misma respuesta total de las dos maneras: esto es solo coherencia
- * estetica y de precision numerica, y se reprodujo exactamente contra
- * los valores de 48 kHz -que a su vez ya estaban comprobados contra los
- * originales de 192- antes de fiarse de el para estos.
+ * ======================================================================
+ * AQUI VIVIAN CUATRO FILTROS DE AUDIO QUE YA NO USABA NADIE - 24/10/2026.
+ * ======================================================================
  *
- * Solo paso bajo, sin paso alto ni corte de graves: la misma forma que
- * ALPF_COEFFS, no un filtro de paso de banda de verdad para banda
- * lateral. Un corte de graves por los 300 Hz se podria añadir igual mas
- * adelante si se quiere.
+ * Quitado en la revision a fondo pedida por el usuario.
  *
- * Que ALPF_4K0_COEFFS caiga en el mismo codo de -3 dB que CHF_COEFFS de
- * arriba es pura casualidad -CHF_COEFFS corre sobre el I/Q complejo de
- * radiofrecuencia antes de demodular y este sobre el audio real despues:
- * mismo codo, etapa y proposito completamente distintos-, no un diseño
- * compartido ni una errata. Comprobado con numeros, todo a fs = 96 kHz:
- *   ALPF_4K0: plano hasta 1,5 kHz, -3,02 dB a 4,0 kHz, -18,86 dB a 6,8
- *             kHz, -34,37 dB a 10,4 kHz
- *   ALPF_2K3: plano hasta 1 kHz, -3,00 dB a 2,3 kHz, -19,43 dB a 4,0
- *             kHz, -33,70 dB a 6,0 kHz, -52,28 dB a 10 kHz
- *   ALPF_1K8: plano hasta 1 kHz, -3,01 dB a 1,8 kHz, -18,57 dB a 3,06
- *             kHz, -33,43 dB a 4,68 kHz, -60,82 dB a 10 kHz
- * (Que los numeros de la banda eliminada salgan un poco MENOS empinados
- * que en el diseño de 48 kHz a los mismos desplazamientos relativos es lo
- * esperado y no hace daño: es la MISMA respuesta analogica de
- * Butterworth, solo que menos deformada por la transformada bilineal
- * ahora que el codo queda mas cerca de continua respecto al Nyquist
- * nuevo, mas alto. La precision en la banda de paso y en el codo sigue
- * siendo exacta de las dos maneras.)
+ * Eran ALPF_COEFFS -el paso bajo de ~6 kHz que en su dia corria para FM
+ * estrecha- y el trio de anchos elegibles de AM y banda lateral
+ * -ALPF_4K0/2K3/1K8, uno por cada posicion del selector-, cada uno con sus
+ * dos juegos de coeficientes para 48 y 96 kHz, sus cuatro cascadas de CMSIS
+ * y sus cuatro vectores de estado.
+ *
+ * El ancho de audio paso al filtro de DOS CORTES -alto y bajo a la vez- de
+ * audiofil.c, y desde entonces el que corre de verdad es ese y nada mas:
+ * `s_fil_inst[s_fil_act]`, o el de CW cuando la telegrafia esta puesta. Las
+ * cuatro cascadas se quedaron declaradas y, peor, INICIALIZADAS en cada
+ * cambio de tasa, sin que ninguna pasara por
+ * arm_biquad_cascade_df1_f32() ni una sola vez.
+ *
+ * Lo que costaban eran unos 176 bytes de RAM y unos 320 de flash. Lo que
+ * costaban DE VERDAD era el comentario del paso 3 de
+ * demod_am_process_raw(), que seguia describiendo con detalle un reparto
+ * -"NFM: unconditionally s_alpf_inst ... AM/USB/LSB: whichever of the three
+ * s_audio_bw picked"- que llevaba meses sin existir. Ese es el tipo de
+ * comentario que le hace perder una tarde al siguiente que venga a tocar el
+ * ancho de banda.
+ *
+ * El diseño de aquellos filtros -Butterworth de cuarto orden, dos biquads
+ * en cascada, bilineal con scipy a 96 kHz- esta contado en docs/CAMBIOS.md,
+ * por si algun dia hiciera falta volver a ellos.
  */
-#define ALPF_4K0_STAGES 2U
-static const float32_t ALPF_4K0_96K_COEFFS[ALPF_4K0_STAGES * 5U] = {
-    0.0145993f, 0.0291985f, 0.0145993f,  1.5590543f, -0.6140518f,
-    0.0145993f, 0.0291985f, 0.0145993f,  1.7577536f, -0.8197604f
-};
-static const float32_t ALPF_4K0_48K_COEFFS[ALPF_4K0_STAGES * 5U] = {
-    0.0507585897f, 0.1015171793f, 0.0507585897f,  1.1847620863f, -0.3680454189f,
-    0.0507585897f, 0.1015171793f, 0.0507585897f,  1.4538656576f, -0.6787794575f
-};
-
-#define ALPF_2K3_STAGES 2U
-static const float32_t ALPF_2K3_96K_COEFFS[ALPF_2K3_STAGES * 5U] = {
-    0.0051535f, 0.0103069f, 0.0051535f,  1.7367529f, -0.7566184f,
-    0.0051535f, 0.0103069f, 0.0051535f,  1.8700597f, -0.8914501f
-};
-static const float32_t ALPF_2K3_48K_COEFFS[ALPF_2K3_STAGES * 5U] = {
-    0.0188829178f, 0.0377658355f, 0.0188829178f,  1.4992832253f, -0.5698972927f,
-    0.0188829178f, 0.0377658355f, 0.0188829178f,  1.7153763282f, -0.7961680677f
-};
-
-#define ALPF_1K8_STAGES 2U
-static const float32_t ALPF_1K8_96K_COEFFS[ALPF_1K8_STAGES * 5U] = {
-    0.0032200f, 0.0064401f, 0.0032200f,  1.7915877f, -0.8040928f,
-    0.0032200f, 0.0064401f, 0.0032200f,  1.9006466f, -0.9139129f
-};
-static const float32_t ALPF_1K8_48K_COEFFS[ALPF_1K8_STAGES * 5U] = {
-    0.0120050083f, 0.0240100166f, 0.0120050083f,  1.5997196711f, -0.6451760153f,
-    0.0120050083f, 0.0240100166f, 0.0120050083f,  1.7852530573f, -0.8359813686f
-};
 
 /*
  * EL PASO BAJO DE AUDIO DEL WFM: Butterworth de cuarto orden -dos
  * biquads DF1 de CMSIS en cascada, la misma forma y el mismo convenio
- * que CHF_COEFFS y ALPF_COEFFS de mas arriba-, -3 dB a unos 15 kHz con
+ * que CHF_COEFFS de mas arriba-, -3 dB a unos 15 kHz con
  * fs = 192 kHz. Diseñado aparte con scipy.signal.butter -bilineal, el
  * metodo de diseño de filtros que ya usa el proyecto- y comprobado con
  * numeros en los puntos que importan para la FM comercial:
@@ -226,11 +177,10 @@ static const float32_t ALPF_1K8_48K_COEFFS[ALPF_1K8_STAGES * 5U] = {
  * asi que este filtro -que usa SOLO esa funcion- vuelve a su diseño
  * original, igual que estaba antes del 04/08/2026.
  *
- * Esta es una instancia y un estado APARTE de ALPF_COEFFS -unos 6 kHz,
- * el de AM y banda lateral-. El codo mas estrecho de voz de AM y banda
- * lateral se llevaria por delante casi todo lo que hace que merezca la
- * pena escuchar FM comercial, asi que el WFM tiene su propio filtro mas
- * ancho en vez de retocar el compartido. Por que el objetivo son 15 kHz
+ * Esta es una instancia y un estado APARTE del filtro de audio de AM y
+ * banda lateral. El codo mas estrecho de voz se llevaria por delante casi
+ * todo lo que hace que merezca la pena escuchar FM comercial, asi que el
+ * WFM tiene su propio filtro mas ancho en vez de compartirlo. Por que el objetivo son 15 kHz
  * y no 53 o mas esta en la nota del WFM de demod_am.h: recepcion solo en
  * mono, sin decodificar la subportadora de estereo.
  */
@@ -394,6 +344,143 @@ static const float32_t WFM_ALPF_NARROW_COEFFS[WFM_ALPF_STAGES * 5U] = {
  * esta en el comentario de WFM_ALPF_COEFFS, justo encima.
  */
 #define WFM_DEEMPH_ALPHA 0.9010751057f
+
+/*
+ * ======================================================================
+ * EL SILENCIADOR DE FM ANCHA, POR RUIDO DE ALTA FRECUENCIA
+ * 26/10/2026, decimotercera vuelta de la revision a fondo. Pedido por el
+ * usuario despues de acotar entre los dos de donde venia el siseo.
+ * ======================================================================
+ *
+ * POR QUE NO LO HABIA. La cabecera de demod_wfm_process_raw() lo dice con
+ * todas las letras desde que se partio la funcion: "no squelch, no NR ...
+ * squelch/NR were never wired up for WFM either". Y se nota: en FM ancha
+ * el firmware clava el PGA en el tope, asi que entre emisoras -o sin
+ * antena- el discriminador recibe RUIDO, la fase da vueltas al azar y sale
+ * ruido a todo trapo. Eso no es una averia, es lo que hace cualquier
+ * receptor de FM; lo que falta es lo que lo tapa.
+ *
+ * POR QUE NO SE MIDE EL NIVEL, QUE ES LO QUE HACE EL DE AM. Porque en FM
+ * el nivel no dice si hay emisora: el discriminador sale de un atan2, o
+ * sea que NO depende de la amplitud. Una emisora floja y una local dan la
+ * misma salida. Medir el nivel obligaria a reajustar el mando cada vez que
+ * cambias de emisora, que es justo lo que los receptores de FM NO hacen.
+ *
+ * LO QUE SI LO DICE: EL RUIDO DE ARRIBA. La señal multiplex de una emisora
+ * ocupa hasta los 57 kHz de la subportadora de datos, con sus bandas
+ * laterales, o sea unos 60 kHz. Por encima de eso una emisora NO PONE
+ * NADA. Y el ruido de un canal vacio, en cambio, llena todo el margen
+ * hasta los 96 kHz de Nyquist. Asi que la energia entre 70 y 96 kHz es un
+ * interruptor limpio: casi nada con portadora, mucho sin ella, y lo mismo
+ * con emisora fuerte que con floja. Es el silenciador clasico de las
+ * radios comerciales.
+ *
+ * DONDE SE PINCHA: en el mismo sitio que el RDS, o sea con el multiplex
+ * ENTERO, antes de la deenfasis. Dos lineas mas abajo la deenfasis ya es
+ * un paso bajo y se come lo que hay que medir.
+ *
+ * LO QUE CUESTA: un biquad y un valor absoluto por muestra, sin buffer
+ * ninguno -se acumula al vuelo, que ademas ahorra 2 kB de pila y el ir y
+ * venir a memoria-. Contado en el desensamblado de verdad, no estimado:
+ * GCC saca **14 instrucciones por muestra** para este bucle (dos vfma, dos
+ * vfms, un vmul, un vabs, un vadd, tres vmov de arrastre, la carga, la
+ * comparacion y el salto). Son 7.168 por bloque de los 533.333 ciclos que
+ * hay: el **1,34 %**.
+ *
+ * El paso alto es un Butterworth de segundo orden con el codo en 70 kHz a
+ * 192 kHz de muestreo. K = tan(pi*70/192) = 2,1930; de ahi salen los cinco
+ * numeros. Comprobado: la ganancia en continua es exactamente cero
+ * (b0+b1+b2 = 0) y en Nyquist 0,9999.
+ */
+#define WFM_SQL_B0   0.1122250f
+#define WFM_SQL_B1  (-0.2244500f)
+#define WFM_SQL_B2   0.1122250f
+#define WFM_SQL_A1   0.8549250f
+#define WFM_SQL_A2   0.3038650f
+
+/*
+ * CUANTO RUIDO DE ARRIBA HAY EN UN CANAL VACIO, en decibelios sobre la
+ * misma escala que usa el silenciador de AM (20*log10(media + 1)). De aqui
+ * sale la raya: el ajuste del usuario la BAJA desde este numero, asi que
+ * con el mando en su suelo -que es el "apagado" de siempre- la raya queda
+ * por encima del canal vacio y el silenciador no cierra nunca.
+ *
+ * El numero sale medido en sim/wfm_squelch.c, no supuesto. Lo que mide ese
+ * banco, con el mando en el suelo para que no corte:
+ *
+ *     emisora, portadora de 500 a 30.000 cuentas    47,3 dB   <- IDENTICO
+ *     la misma con un 5 % de ruido de recepcion     51,5 dB
+ *     la misma con un 10 %                          56,1 dB
+ *     canal vacio, sigma de 200 a 3.000             75,1 dB   <- IDENTICO
+ *
+ * Las dos columnas que importan son las dos que NO se mueven: ni la
+ * emisora depende de lo fuerte que llegue, ni el canal vacio de lo ruidoso
+ * que sea. Entre una y otra hay 19 dB de margen limpio donde poner la raya,
+ * y por eso el mando no hay que reajustarlo al cambiar de emisora.
+ *
+ * (El composite de la emisora lleva piloto, estereo y RDS, o sea energia
+ * hasta los 60 kHz: aun asi se queda 28 dB por debajo del canal vacio,
+ * que es la prueba de que el codo en 70 kHz esta donde tiene que estar.)
+ */
+#define WFM_SQL_REF_DB   75.0f
+/* La media que corre, para que un pico de ruido de un bloque no abra ni
+ * cierre. Un bloque son 2,67 ms; con 0,75 la constante son unos 9 ms, que
+ * es mas rapido que el oido y mas lento que un chasquido. */
+#define WFM_SQL_ALFA     0.75f
+/* La zona muerta, repartida a cada lado, para que una emisora justo en la
+ * raya no castanetee. La misma idea que SQUELCH_HYSTERESIS_DB. */
+#define WFM_SQL_HIST_DB  4.0f
+
+static float   s_wfm_sql_x1, s_wfm_sql_x2, s_wfm_sql_y1, s_wfm_sql_y2;
+static float   s_wfm_sql_db = 0.0f;
+static uint8_t s_wfm_sql_abierto = 1U;   /* arranca abierto, como el de AM */
+/*
+ * Y SU PROPIO UMBRAL, QUE NO ES EL DE AM - 26/10/2026, decimocuarta vuelta.
+ *
+ * Al meter esto por la tarde se colgo del mismo s_squelch_threshold_db que
+ * usan AM y NFM, y fue un fallo gordo: los dos miden cosas distintas en
+ * escalas que no se solapan. El de AM mide el NIVEL de la señal y pide de
+ * 35 a 60 dB para hacer algo util; este mide el RUIDO de arriba, que sube
+ * cuando la señal baja, y con 36 o mas CIERRA HASTA UNA LOCAL.
+ *
+ * Medido, con la raya puesta por el mando compartido:
+ *
+ *     mando   raya   emisora local (46,9 dB)   canal vacio (75,4 dB)
+ *      -10     85    abierta                   abierto     <- no silencia
+ *        0     75    abierta                   abierto     <- no silencia
+ *     4..30  71..45  abierta                   callado     <- correcto
+ *    36..60  39..15  CALLADA                   callado     <- MUDA
+ *
+ * Y como el ajuste va a CONFIG.CSV, poner el silenciador en onda media,
+ * apagar y encender en FM dejaba la radio muerta sin explicacion, con el
+ * medidor de S lleno y el RDS decodificando.
+ *
+ * Dos numeros, entonces. El rango util de este es de 0 a 30 dB, que es
+ * justo lo que separa la peor emisora del canal vacio; fuera de ahi no
+ * tiene sentido, asi que se recorta en demod_am_set_wfm_sql_db() en vez de
+ * dejarselo al mando.
+ */
+#define WFM_SQL_UMBRAL_MIN  0.0f    /* apagado: la raya queda sobre el vacio */
+#define WFM_SQL_UMBRAL_MAX  30.0f   /* lo mas que tiene sentido apretar */
+static float   s_wfm_sql_umbral = WFM_SQL_UMBRAL_MIN;
+
+void demod_am_set_wfm_sql_db(float db)
+{
+    if (db < WFM_SQL_UMBRAL_MIN) { db = WFM_SQL_UMBRAL_MIN; }
+    if (db > WFM_SQL_UMBRAL_MAX) { db = WFM_SQL_UMBRAL_MAX; }
+    s_wfm_sql_umbral = db;
+}
+
+float demod_am_get_wfm_sql_db(void) { return s_wfm_sql_umbral; }
+/* Los dos topes, para que el mando no tenga que saberselos. */
+float demod_am_wfm_sql_min(void) { return WFM_SQL_UMBRAL_MIN; }
+float demod_am_wfm_sql_max(void) { return WFM_SQL_UMBRAL_MAX; }
+
+/* Los dos, para el banco y para el renglon de diagnostico: sin esto no hay
+ * forma de ver por que se abre o se cierra. Mismo motivo que
+ * demod_wfm_get_fuga(). */
+float   demod_wfm_get_sql_db(void)   { return s_wfm_sql_db; }
+uint8_t demod_wfm_get_sql_abierto(void) { return s_wfm_sql_abierto; }
 
 /*
  * LA GANANCIA DEL DISCRIMINADOR DE WFM: escala la salida en radianes
@@ -982,10 +1069,10 @@ static const float32_t INTERP_COEFFS_48K[INTERP_COEFFS_48K_TAPS] = {
  * I and Q are independent signals through the same filter shape. */
 static arm_biquad_casd_df1_inst_f32 s_chf_i_inst;
 static arm_biquad_casd_df1_inst_f32 s_chf_q_inst;
-static arm_biquad_casd_df1_inst_f32 s_alpf_inst; /* NFM-only as of 02/08/2026 - see ALPF_COEFFS' comment */
+
 static float32_t s_chf_i_state[CHF_STAGES * 4U];
 static float32_t s_chf_q_state[CHF_STAGES * 4U];
-static float32_t s_alpf_state[ALPF_STAGES * 4U];
+
 
 /* Las instancias y el estado del filtro de audio de AM y banda lateral:
  * TRES por separado -4K0, 2K3 y 1K8-. El juego de diseño esta en el
@@ -1004,12 +1091,9 @@ static float32_t s_alpf_state[ALPF_STAGES * 4U];
  * usa la SALIDA. El mismo razonamiento en el que ya se apoyan las
  * instancias aparte del WFM y el NFM, solo que aplicado a un selector en
  * ejecucion y no a un cambio de modo. */
-static arm_biquad_casd_df1_inst_f32 s_alpf_4k0_inst;
-static arm_biquad_casd_df1_inst_f32 s_alpf_2k3_inst;
-static arm_biquad_casd_df1_inst_f32 s_alpf_1k8_inst;
-static float32_t s_alpf_4k0_state[ALPF_4K0_STAGES * 4U];
-static float32_t s_alpf_2k3_state[ALPF_2K3_STAGES * 4U];
-static float32_t s_alpf_1k8_state[ALPF_1K8_STAGES * 4U];
+/* Las cuatro cascadas de audio de antes del filtro de dos cortes se
+ * quitaron el 24/10/2026: estaban declaradas e inicializadas y no las usaba
+ * nadie. Ver el comentario del paso 3 de demod_am_process_raw(). */
 
 /*
  * EL FILTRO DE DOS CORTES - etapa 34, 24/09/2026.
@@ -1055,8 +1139,39 @@ static volatile uint8_t s_fil_act;    /* cual usa la interrupcion */
  * abajo, que es exactamente lo que hacia AUDIO_BW_4K0- para que quien no
  * toque esto no note ningun cambio. NFM se queda con sus 6 kHz de
  * siempre, ahora ajustables.
+ *
+ * ======================================================================
+ * *** MENOS EL CORTE BAJO DE BANDA LATERAL, QUE PASA A 300 Hz.
+ * 27/10/2026, revision a fondo de espejos y armonicos. ***
+ * ======================================================================
+ *
+ * Estaba en CERO, y eso dejaba dentro del paso de banda justo la zona
+ * donde el metodo de fases NO rechaza la banda contraria. Medido extremo
+ * a extremo sobre las 63 tomas de HILBERT_COEFFS:
+ *
+ *     100 Hz   -7,7 dB      400 Hz  -41,6 dB
+ *     150 Hz  -11,8         500 Hz  -66,1
+ *     200 Hz  -16,2         700 Hz a 5 kHz: cancelacion EXACTA
+ *     300 Hz  -26,9
+ *
+ * O sea que por debajo de 400 Hz la banda que se supone rechazada entra
+ * casi entera: una emisora pegada al dial POR EL LADO MALO se cuela como
+ * retumbe a menos de 20 dB. Y eso no es un fallo del filtro, es lo que da
+ * de si un transformador de Hilbert de 63 tomas; lo que estaba mal era no
+ * acotarlo por ningun sitio.
+ *
+ * 300 Hz es ademas el corte bajo de toda la vida en banda lateral -la
+ * voz empieza ahi- asi que no se pierde nada que se quiera oir, y se
+ * gana no oir lo que no esta.
+ *
+ * SIGUE SIENDO AJUSTABLE: quien quiera los graves se baja el mando y ya.
+ * Lo que cambia es de donde parte.
+ *
+ * AM, SAM y FM estrecha se quedan en cero: alli no hay banda lateral
+ * contraria que rechazar, asi que el corte bajo no compra nada y quitar
+ * graves en AM si se nota.
  */
-static uint16_t s_fil_lo[FIL_FAM_N] = {    0U,    0U,    0U,    0U };
+static uint16_t s_fil_lo[FIL_FAM_N] = {  300U,    0U,    0U,    0U };
 static uint16_t s_fil_hi[FIL_FAM_N] = { 4000U, 4000U, 4000U, 6000U };
 static uint8_t  s_fil_fam_puesta = 0xFFU;   /* la que hay construida */
 
@@ -1212,6 +1327,46 @@ void demod_am_chf_ancho(uint8_t si)
     s_ais_chf_pide = si ? 1U : 2U;   /* 1 = ancho de AIS, 2 = el de NFM */
 }
 
+/*
+ * ======================================================================
+ * CUANTO PASA EL FILTRO DE CANAL DE FM ESTRECHA - 25/10/2026.
+ * ======================================================================
+ *
+ * Avisado por quien la prueba: en AM y en banda lateral la banda sombreada
+ * del espectro tiene el ancho de la modulacion, y en FM estrecha solo se ve
+ * una raya fina.
+ *
+ * Y es verdad, y la razon es que main.c no tenia a quien preguntarle. En
+ * AM y banda lateral el ancho lo pone el filtro de AUDIO -los dos cortes de
+ * audiofil.c- y eso se consulta con fil_cortes(). En FM estrecha ese filtro
+ * no dice nada del sitio que ocupa la señal en la antena: lo que lo decide
+ * es el filtro de CANAL, que corre sobre el I/Q complejo ANTES del
+ * discriminador y vive aqui dentro.
+ *
+ * Asi que se pregunta aqui. Devuelve el semiancho en hercios, que es lo que
+ * se sombrea a cada lado de la marca:
+ *
+ *     6.250 Hz   el de siempre, el codo de NFM_CHF_COEFFS -canal de voz de
+ *                12,5 kHz, que es el reparto europeo-
+ *     9.000 Hz   el ancho, el codo de AIS_CHF_COEFFS, que es el que se carga
+ *                con AIS y con la SSTV en FM
+ *
+ * Los dos numeros son los CODOS DE DISEÑO de esos dos filtros, medidos y
+ * escritos en el comentario de cada tabla de coeficientes. No son una
+ * estimacion y no hay que ajustarlos a ojo: el dia que se rediseñe uno de
+ * los dos filtros, este numero se cambia con el.
+ *
+ * Mira la peticion y no el estado aplicado -s_ais_chf_pide, no lo que la
+ * interrupcion haya cargado ya- a proposito: la nota la deja el bucle
+ * principal y la aplica la interrupcion al principio del bloque siguiente,
+ * y lo que se dibuja tiene que ser lo que se acaba de pedir y no lo de hace
+ * dos milisegundos.
+ */
+uint16_t demod_am_nfm_ancho_hz(void)
+{
+    return (s_ais_chf_pide == 1U) ? 9000U : 6250U;
+}
+
 /* FM discriminator state: previous block's last complex sample,
  * carried across blocks so the delay-and-conjugate-multiply (see
  * demod_am.h's WFM note) has a valid z[n-1] for n=0 of every new
@@ -1261,12 +1416,147 @@ static float s_wfm_deemph_y1;
  * 512 cuentas salieron del barrido de arriba: es el mayor que sigue
  * dejando el caso malo igual que estaba (0,1 % contra 0,0 %), y cubre de
  * sobra el offset de un codec. Con 1.024 ya se nota (0,3 %).
+ *
+ * =====================================================================
+ * Y 512 SE QUEDO CORTO - 26/10/2026, revision a fondo de WFM.
+ * =====================================================================
+ *
+ * El barrido de arriba midio una sola cara: cuanto DAÑA el tope al caso
+ * protegido. La otra cara -que pasa cuando la fuga de verdad es MAYOR que
+ * el tope- no la midio nadie, porque el banco de entonces solo probaba
+ * offsets de 0, 120 y 300 cuentas y los tres caben dentro.
+ *
+ * sim/wfm_tope.c los pasa de ahi. Con una emisora mediana (portadora de
+ * 4.000 cuentas) y el tope en 512:
+ *
+ *     fuga   residuo   residuo/portadora    THD    basura audible
+ *     1.000      488                 12%   0,49%           0,03%
+ *     2.000    1.488                 37%   1,17%           0,04%
+ *     3.000    2.488                 62%   2,59%           0,41%
+ *     5.000    4.488                112%    645%          97,51%
+ *
+ * El acantilado esta clavado en residuo = portadora, que es lo que ya
+ * predice el comentario de fm_discriminate(): el vector deja de dar la
+ * vuelta al origen. Lo que el tope garantiza es que ese acantilado EXISTA
+ * para cualquier fuga mayor que el. Y esto es FM ancha, donde el firmware
+ * pone el PGA al tope -47,5 dB- al entrar en el modo, que es justo lo que
+ * amplifica la fuga.
+ *
+ * El numero nuevo sale de correr LOS DOS BANCOS con el tope barrido, que
+ * es lo que no se hizo la primera vez:
+ *
+ *     tope    caso protegido (wfm_dc)       fuga de 2.000 con portadora
+ *             beta 0,8 / 0,4 / 0,2          de 4.000: residuo y THD
+ *      512       0,0 / 0,0 / 0,0 %            1.488 (37%)   1,17%
+ *    1.024       0,0 / 0,0 / 0,0 %              488 (12%)   0,49%
+ *    2.048       0,3 / 0,4 / 0,1 %              152 ( 4%)   0,32%
+ *    4.096       7,3 / 3,1 / 0,3 %   <- MAL     152 ( 4%)   0,32%
+ *
+ * 2.048 es el mayor que deja el caso protegido por debajo del 1 % -la
+ * raya roja del banco es el 2 %- y cuadruplica la fuga que se puede
+ * corregir. Con 4.096 el quitador ya se come una portadora poco modulada,
+ * que es exactamente lo que el tope viene a impedir.
+ *
+ * Y para saber si incluso 2.048 se queda corto en una radio concreta no
+ * hay que adivinar: demod_wfm_get_dc_crudo() devuelve lo que el lazo mide
+ * SIN topar, y la ventana de Informacion enseña los dos numeros.
  */
 #ifndef WFM_DC_TOPE
-#define WFM_DC_TOPE 512
+#define WFM_DC_TOPE 2048
 #endif
+/*
+ * ======================================================================
+ * Y EL TOPE DE VERDAD ES UNA FRACCION DE LA PORTADORA, NO UN NUMERO.
+ * 26/10/2026, al revisar la subida de arriba.
+ * ======================================================================
+ *
+ * Subir el tope de 512 a 2.048 a secas ROMPIA un caso que ninguno de los
+ * dos bancos pisaba: beta = 0, o sea portadora QUIETA. Los dos barren la
+ * modulacion hasta beta = 0,2 y se paran ahi. Medido despues, con 1,5 s de
+ * portadora sin modular y el tono volviendo luego:
+ *
+ *     portadora   con tope 512          con tope 2048
+ *         800     resta 512 (64%)  ok   resta 800 (100%)  44,8 % de basura
+ *       1.000     resta 512 (51%)  ok   resta 1000 (100%) 44,8 %
+ *       2.000     resta 512 (26%)  ok   resta 2000 (100%) 44,8 %
+ *       3.000     resta 512 (17%)  ok   resta 2048 (68%)  ok
+ *
+ * Cualquier portadora entre el tope viejo y el nuevo se BORRA ENTERA
+ * mientras no haya modulacion -el silencio entre canciones, el mono sin
+ * piloto, una portadora de prueba- y al volver la modulacion salen 44,8 %
+ * de basura durante medio segundo. Ese 44,8 % es, cifra por cifra, el que
+ * la tabla "sin tope" de aqui arriba da para beta = 0,2: subir el tope
+ * reintroducia exactamente la averia que el tope existe para impedir.
+ *
+ * LA LECCION: el peligro nunca fue el numero de cuentas, es LA RAZON
+ * entre lo que se resta y la portadora. 512 sobre 4.000 es seguro; 512
+ * sobre 800 ya es el 64 %, y 2.000 sobre 2.000 es el 100 % y borra la
+ * emisora. Un tope fijo es seguro para las emisoras fuertes y peligroso
+ * para las flojas, que es al reves de lo que hace falta.
+ *
+ * Asi que el tope es ahora el MENOR de dos cosas: el absoluto de arriba y
+ * una fraccion de la portadora medida, que esta cadena ya calcula para el
+ * medidor de S (s_sig_peak, el pico con caida). Medido en el mismo banco:
+ * el 51 % y el 68 % de la portadora se portan bien y el 100 % la borra,
+ * asi que 0,40 deja un margen de sobra y sigue cuadruplicando lo que se
+ * podia corregir en una emisora fuerte.
+ */
+#ifndef WFM_DC_FRAC
+#define WFM_DC_FRAC 0.40f
+#endif
+/*
+ * ======================================================================
+ * Y EL SUELO SE MIDE, NO SE INVENTA - 26/10/2026, segunda vuelta de la
+ * revision a fondo de FM ancha.
+ * ======================================================================
+ *
+ * Aqui habia un suelo absoluto de 512 cuentas, puesto el mismo dia que la
+ * fraccion de arriba y por un motivo correcto: con 120 cuentas de
+ * portadora la fraccion sale a 48 y una fuga de 300 no se puede quitar.
+ *
+ * Pero el suelo se aplicaba SIN CONDICION, o sea tambien en una radio sin
+ * fuga ninguna. Y entonces hace exactamente lo que el comentario de la
+ * fraccion acaba de explicar que no hay que hacer: para cualquier
+ * portadora por debajo de 512/0,286 = 1.792 cuentas, el tope deja de
+ * morder y el estimador se come la portadora entera. Medido en
+ * sim/wfm_silencio.c, radio sin fuga, 5 s de portadora quieta:
+ *
+ *     portadora   quita   % de la portadora   tono al volver   basura
+ *           300   291,7         97,2 %              -5,8 dB     29,3 %
+ *           500   486,2         97,2 %              -5,7 dB     29,0 %
+ *           800   512,0         64,0 %               limpio      0,1 %
+ *         4.000  1142,9         28,6 %               limpio      0,0 %
+ *
+ * 500 cuentas no son una emisora al borde del ruido: con la escala del
+ * medidor de S de este firmware son siete segmentos de doce, media
+ * escala. O sea que el suelo rompia casi todo lo que no fuera una local
+ * en cada hueco de programa, y la aspereza de vuelta duraba el segundo y
+ * medio que tarda el estimador en soltarla.
+ *
+ * LO QUE EL SUELO DEBERIA VALER es la fuga de continua DE ESTA RADIO, que
+ * es el unico numero que justifica restar mas de lo que la fraccion deja.
+ * Y ese numero NO hay que adivinarlo: se mide, aqui mismo, aprovechando
+ * que la ambiguedad que da nombre a todo esto solo existe con la
+ * portadora QUIETA. Una portadora de FM MODULADA gira, y la media de su
+ * giro -el termino J0 de Bessel- es pequeña: medido en sim/wfm_tope.c,
+ * con el composite entero y sin fuga ninguna, el lazo sin topar se queda
+ * en el 3,8 % de la portadora. O sea que mientras hay modulacion, lo que
+ * mide el lazo ES la fuga.
+ *
+ * Asi que el suelo es s_rf_fuga, que se sigue en el propio bloqueador de
+ * continua de demod_wfm_process_raw() -ver alli, que lo cuenta entero- y
+ * escala con la ganancia de entrada igual que la estimacion de WFM. En
+ * una radio sin fuga se queda en ese 4 % y nunca llega a morder, porque
+ * la fraccion deja un 28,6 %. En una radio con fuga vale la fuga, que es
+ * lo que el suelo queria decir. Y en el primer medio segundo de cada
+ * entrada en el modo vale cero, que cae dentro del silencio de entrada.
+ */
 static float s_wfm_dc_i;
 static float s_wfm_dc_q;
+/* Lo mismo, SIN el tope: lo que el lazo cree de verdad. Ver donde se
+ * escribe, en demod_wfm_process_raw(), y demod_wfm_get_dc_crudo(). */
+static float s_wfm_dc_crudo_i;
+static float s_wfm_dc_crudo_q;
 /* Bloques vistos desde el ultimo arranque, topado. Sirve para que al
  * principio el filtro sea una MEDIA CORRIENTE -alfa = 1/n, que es la
  * convergencia mas rapida que existe sin sesgo- y solo despues se quede en
@@ -1274,6 +1564,172 @@ static float s_wfm_dc_q;
  * y medio de emisora debil sin aparecer; con esto aparece en cuanto hay
  * audio. Es el mismo truco de arranque que usa el AGC de este fichero. */
 static uint16_t s_wfm_dc_n;
+/* Declaraciones tentativas: las de verdad viven mas abajo en el fichero -el
+ * pico con el resto de lo del medidor de S, la fuga con los numeros de la
+ * entrada- y wfm_olvida_continua() las necesita antes. El compilador funde
+ * cada par. */
+static float s_sig_peak;
+static uint16_t s_rf_fuga_n;
+/* "Hay continua encima de la portadora, y cuanta": salen de la envolvente
+ * del bloque. Ver donde se calculan, detras del desentrelazado. */
+static uint8_t  s_wfm_hay_dc;
+static float    s_wfm_dc_est;
+static float    s_wfm_p_ant;     /* la media de |v|^2 del bloque anterior */
+/*
+ * ======================================================================
+ * CUANTO RIZADO HACE FALTA PARA TOCAR NADA: Q/P - 26/10/2026, septima
+ * vuelta. Este numero es el que decide si la radio corrige o no corrige,
+ * y conviene dejar escrito por que es ALTO y no bajo.
+ * ======================================================================
+ *
+ * Q/P vale A*D/(A^2+D^2), o sea que depende solo de la RAZON entre la
+ * continua y la portadora: 0,08 con una continua del 8 % de la portadora,
+ * 0,28 con el 30 %, 0,4 con el 50 %, 0,5 con las dos iguales.
+ *
+ * Y UNA CONTINUA PEQUEÑA NO HACE DAÑO. Medido en sim/wfm_dc.c, radio con
+ * un offset de 300 cuentas: con la portadora en 4.000 -o sea un 8 %- el
+ * tono sale identico con offset y sin el, y la basura es 0,0 %. Lo que
+ * rompe la emisora es la continua GRANDE, la que se acerca a la portadora
+ * o la pasa. Asi que corregir por debajo de ahi es meterse a arreglar lo
+ * que no esta roto.
+ *
+ * Y meterse sale caro, porque el numero que sale del rizado NO ES LIMPIO:
+ * el ruido de recepcion tambien mueve la envolvente y aporta Q = 1,25*
+ * sigma*A, o sea Q/P = 1,25*sigma/A. Con la puerta en el 3 % se abria con
+ * un ruido del 2,4 % de la portadora -34 dB de relacion señal/ruido en
+ * los 192 kHz, o sea CUALQUIER emisora que no sea local- y entonces la
+ * radio se ponia a restarle a la emisora 1,13 veces el ruido. Medido:
+ * 1,7 % de distorsion con un 5 % de ruido, 7 % con un 20 %, y el tercer
+ * armonico de -58 a -23 dBc.
+ *
+ * Con la puerta en 0,15 hace falta un ruido del 12 % de la portadora para
+ * abrirla por error, y se abre con cualquier continua por encima del 15 %
+ * de la portadora, que es muy por debajo de donde empieza a oirse. Entre
+ * las dos cosas queda sitio de sobra.
+ *
+ * PERO EL 12 % NO ES "UNA EMISORA QUE YA NO SE ESCUCHA", que es lo que
+ * decia aqui hasta el 26/10/2026 (duodecima vuelta). Un 12 % de amplitud
+ * son 18,4 dB de relacion portadora/ruido en los 192 kHz, que despues de
+ * la ganancia de FM y del filtro de 15 kHz es una emisora perfectamente
+ * escuchable. Asi que la puerta SI se abre sola en recepcion real, y lo
+ * que se resta entonces es el residuo J0 de la propia emisora topado en
+ * WFM_DC_TOPE. Medido contra una copia con la puerta clavada cerrada,
+ * portadora de 12.000 cuentas sin fuga ninguna, +-5 kHz de desviacion:
+ *
+ *     ruido    resta    basura con puerta    basura sin puerta
+ *      10 %      0,0         0,06 %               0,06 %
+ *      12 %  1.826,3         0,56 %               0,08 %
+ *      20 %  2.048,0         0,79 %               0,18 %
+ *      35 %  2.048,0         3,04 %               2,45 %
+ *
+ * Lo mismo pasa con el convertidor RECORTANDO, que deforma la envolvente y
+ * la puerta lo lee como rizado: con la portadora al 183 % del fondo de
+ * escala la basura pasa de 0,2 a 0,44 %, y al 366 % a 1,85 %.
+ *
+ * QUE SE DEJA ASI Y POR QUE. El daño esta acotado por el tope -nunca pasa
+ * de WFM_DC_TOPE- y queda por debajo del ruido que la emisora ya trae a
+ * esa relacion. Subir la puerta lo alejaria, pero a cambio de dejar de
+ * corregir continuas de verdad en ese mismo tramo, que es el caso para el
+ * que existe todo esto. El que venga a tocarlo que lo mida contra esta
+ * tabla, no contra la frase de antes.
+ */
+#define WFM_DC_PUERTA 0.15f
+/*
+ * LA MISMA PUERTA, VISTA DESDE UN SALTO DE NIVEL - 26/10/2026, duodecima
+ * vuelta de la revision a fondo.
+ *
+ * Aqui habia un 0,25 a ojo, y era MAS FLOJO que la puerta, asi que dejaba
+ * un hueco por el que se colaba justo lo que venia a tapar.
+ *
+ * La cuenta. La desviacion se acumula contra la media del bloque
+ * ANTERIOR, asi que en un escalon de nivel limpio TODAS las muestras del
+ * bloque se desvian lo mismo: MAD = |salto| exacto, sin rizado ninguno. Y
+ * entonces Q = (pi/4)*|salto|. La puerta pide Q > 0,15*P, o sea
+ *
+ *     |salto|/P  >  0,15 * 4/pi  =  0,1910
+ *
+ * mientras que la guarda pedia |salto|/P < 0,25. Entre 0,1910 y 0,25 el
+ * escalon abria la puerta el solo. En amplitud eso es de +0,92 a +1,25 dB
+ * subiendo y de -0,76 a -0,97 dB bajando: un desvanecimiento cualquiera.
+ *
+ * Medido con el 0,25, emisora LIMPIA y radio SIN fuga ninguna, lo que se
+ * restaba despues del escalon:
+ *
+ *     x1,11  +0,91 dB      0,0      x0,92  -0,72 dB      0,0
+ *     x1,12  +0,98 dB   2.048,0     x0,91  -0,82 dB   1.805,2
+ *     x1,15  +1,21 dB   2.048,0     x0,90  -0,92 dB   2.025,7
+ *     x1,16  +1,29 dB      0,0      x0,88  -1,11 dB      0,0
+ *
+ * y un minuto de desvanecimiento log-normal dejaba la fuga entre 333 y
+ * 1.385 cuentas SIN SOLTARLA, porque la puerta se reabre mas deprisa de lo
+ * que la ventana de 512 bloques la limpia. Lo que se resta es el residuo
+ * J0 de la propia emisora topado en WFM_DC_TOPE, o sea exactamente lo que
+ * el tope esta puesto para que no pase.
+ *
+ * Atado a la puerta, el hueco no existe: lo que abre la puerta por el
+ * salto, la guarda ya lo rechaza.
+ */
+#define WFM_DC_SALTO  (WFM_DC_PUERTA * (4.0f / 3.1415927f))
+/* El menor valor visto en la ventana que corre, y cuantos bloques lleva. */
+static float    s_wfm_fuga_cand = 3.4e38f;
+static uint16_t s_wfm_fuga_vent;
+/* Si en la ventana que corre ha habido audio de verdad. Ver donde se usa. */
+static uint8_t  s_wfm_hubo_audio;
+/*
+ * CUANDO CUENTA QUE "HA HABIDO AUDIO" - 26/10/2026, duodecima vuelta de la
+ * revision a fondo. Aqui habia un umbral sobre el pico del automatico de
+ * ganancia, y tenia dos averias.
+ *
+ * La primera, el umbral: 2.000 cuentas de pico son unos 8,4 kHz de
+ * desviacion, o sea que un pasaje de +-5 kHz -musica tranquila, voz- NO
+ * contaba como audio. Medido: canal vacio con ruido, y despues una
+ * emisora de 2.000 cuentas con +-5 kHz. El suelo se queda en 843,6 y a las
+ * veinte ventanas -casi treinta segundos- sigue en 843,6, sin caer.
+ *
+ * La segunda, que s_wfm_agc_peak SOLO LO ESCRIBE agc_bloque(), o sea la
+ * rama no-MANUAL. Con el perfil en MANUAL se llama a agc_manual() y el
+ * pico se queda congelado en lo ultimo que dejo el automatico, asi que ahi
+ * la bandera depende de un numero que ya no se actualiza.
+ *
+ * La tercera, de fondo: medir el audio por el pico de un lazo CON MEMORIA
+ * para contestar una pregunta sobre ESTE bloque.
+ *
+ * Lo que de verdad se quiere saber es si LA FASE DE LA PORTADORA HA
+ * BARRIDO dentro del bloque, porque es lo unico que distingue las dos
+ * cosas que esta rama confunde: una emisora limpia sin continua -donde
+ * tirar el suelo es lo correcto- de una emisora CALLADA -donde tirarlo es
+ * perder la medida justo antes de necesitarla-.
+ *
+ * Y eso ya esta medido, gratis, con dos numeros que el bloque calcula de
+ * todas formas: el promedio complejo y la media del modulo al cuadrado.
+ * Con la fase barriendo, el promedio se queda en el residuo J0 de la
+ * portadora y pesa muy poco contra P; con la portadora quieta, el promedio
+ * ES la portadora y pesa P entero.
+ *
+ *     |promedio|^2 / P  =  J0(beta)^2   con la fase barriendo
+ *     |promedio|^2 / P  =  1            con la portadora quieta
+ *
+ * La mitad separa las dos con holgura: J0(2)^2 = 0,05 y J0(1,5)^2 = 0,26
+ * quedan dentro, y la portadora quieta se queda fuera por un factor dos.
+ * En desviacion la raya cae sobre +-1,5 kHz de pico con audio de 1 kHz,
+ * que es un pasaje practicamente mudo - o sea mas generoso que los 8 kHz
+ * del umbral viejo, y por tanto la caida corre mas a menudo, que es la
+ * direccion buena.
+ *
+ * Cuesta dos multiplicaciones y una comparacion POR BLOQUE, y no mira el
+ * perfil del AGC, asi que en MANUAL hace exactamente lo mismo. Medido en
+ * el mismo guion de arriba, las dos columnas iguales:
+ *
+ *     desviacion de vuelta   a las 2 ventanas   a las 6   a las 20
+ *         +-300 Hz               843,6           843,6     843,6
+ *         +-1,5 kHz              210,9             0,8       0,0
+ *         +-5 kHz                210,9             0,8       0,0
+ *
+ * La fila de +-300 Hz es la correcta: beta 0,3 es una portadora
+ * practicamente quieta, y ahi NO hay que tirar la medida.
+ */
+#define WFM_AUDIO_BARRE 0.5f
+#define WFM_FUGA_VENTANA 512U   /* la misma constante que WFM_DC_ALFA */
 
 /*
  * WFM's OWN buffers/state, at its OWN 512-sample/192kHz block size -
@@ -1332,10 +1788,38 @@ static union {
         int16_t   audio_out[SDR_RX_BLOCK_SAMPLES_WFM * 2U];
     } wfm;
     struct {
-        float32_t i_buf[SDR_RX_BLOCK_SAMPLES];
-        float32_t q_buf[SDR_RX_BLOCK_SAMPLES];
+        /*
+         * I y Q A LO ANCHO DEL BLOQUE CRUDO Y NO DEL DIEZMADO - 23/10/2026.
+         *
+         * Eran SDR_RX_BLOCK_SAMPLES (256) y ahora son 512, que es lo que
+         * entrega el DMA cuando la radiofrecuencia va a 192 kHz (ver
+         * s_rf_doble y User/semibanda.h). Las muestras crudas viven aqui
+         * desde que se desentrelazan hasta que el diezmador de medio
+         * banda las deja en 256; de ahi en adelante solo se usan las 256
+         * primeras, y `env` y `audio_out` se quedan como estaban porque
+         * son de despues.
+         *
+         * NO CUESTA RAM: la union ya medía lo que mide el juego de la FM
+         * ancha, y este sigue por debajo. Lo vigila el aserto de abajo.
+         */
+        float32_t i_buf[SDR_RX_BLOCK_SAMPLES_WFM];
+        float32_t q_buf[SDR_RX_BLOCK_SAMPLES_WFM];
         float32_t env[SDR_RX_BLOCK_SAMPLES];
-        int16_t   audio_out[SDR_RX_BLOCK_SAMPLES * 2U];
+        /*
+         * Y EL AUDIO TAMBIEN AL ANCHO DEL BLOQUE CRUDO - 24/10/2026, y
+         * esto es el arreglo de la entrega de ayer.
+         *
+         * El convertidor de entrada y el de salida cuelgan del MISMO
+         * reloj. Poniendo la entrada a 192 kHz, el DAC pide 512 tramas
+         * por bloque; el demodulador produce 256, porque detras del
+         * diezmador todo va a 96. Con este array a 256 tramas,
+         * gd32_i2s_stream_write_half() copiaba 512 de un sitio donde hay
+         * 256: media pantalla de audio era memoria de mas alla del final.
+         *
+         * Ahora el audio vuelve a subir a 192 kHz antes de entregarlo
+         * -ver semibanda_interpola()- y esto tiene sitio para las 512.
+         */
+        int16_t   audio_out[SDR_RX_BLOCK_SAMPLES_WFM * 2U];
     } est;                      /* estrecho: AM, SSB, NFM */
 } s_via;
 
@@ -1537,10 +2021,172 @@ void demod_am_reset_diag(void)
 #define WFM_SETTLE_MUTE_BLOCKS 200U
 static uint32_t s_wfm_mute_remaining;
 
+/*
+ * EL MISMO OLVIDO, PERO CON UN SILENCIO CORTO - 26/10/2026, revision a
+ * fondo de WFM.
+ *
+ * demod_wfm_reset_diag() arma WFM_SETTLE_MUTE_BLOCKS, que son 200 bloques
+ * = 533 ms. Eso esta bien para ENTRAR en el modo, que es cuando el codec
+ * cambia de tasa y los filtros arrancan de cero.
+ *
+ * Pero a esta funcion la llama tambien el escalonado automatico del AGC de
+ * radiofrecuencia, y ahi 533 ms son cuatro veces lo que se silencia en los
+ * demas modos (AM_SETTLE_MUTE_BLOCKS son 50 bloques = 133 ms). Y en FM
+ * ancha es donde mas se dispara, porque al entrar en el modo el firmware
+ * pone el PGA al tope y entonces el convertidor recorta con cualquier
+ * emisora local: con el automatico encendido salia un ciclo de silencios
+ * de medio segundo.
+ *
+ * Lo que SI hace falta en un escalon de ganancia es volver a medir la
+ * fuga de continua, porque la fuga cambia con la ganancia. Asi que se
+ * olvida igual y lo unico que se acorta es el silencio.
+ */
+static void wfm_olvida_continua(void);
+
+/*
+ * EL SILENCIO CORTO, A SECAS - 26/10/2026, revision a fondo de WFM.
+ *
+ * Lo de arriba son DOS cosas pegadas: un silencio corto y un olvido de la
+ * continua. El olvido solo tiene sentido si la ganancia ha cambiado. Hay un
+ * sitio que necesita el silencio y NO el olvido -una orden de modo
+ * redundante estando ya en FM ancha, que suelta el gancho unos bloques para
+ * barrer las colas de la cadena- y olvidar alli costaria los 130 ms de
+ * volver a converger que mide sim/wfm_calienta.c, a cambio de nada.
+ *
+ * Y NO ACORTA UN SILENCIO YA ARMADO. Esto lo llama el escalonado del
+ * automatico de radiofrecuencia, que ataca cada 50 ms; si justo acabas de
+ * entrar en el modo y hay 200 bloques puestos, una asignacion a secas los
+ * dejaria en 50 y destaparia el transitorio de entrada que esos 200 estan
+ * ahi para tapar. Se queda el mayor de los dos.
+ */
+#if defined(__arm__)
+#define WFMDC_CIERRA()  uint32_t wfmdc_pm_ = __get_PRIMASK(); __disable_irq(); \
+                        __asm volatile("" ::: "memory")
+#define WFMDC_ABRE()    do { __asm volatile("" ::: "memory"); \
+                             __set_PRIMASK(wfmdc_pm_); } while (0)
+#else
+/* En el simulador todo corre en un hilo: no hay interrupcion contra la que
+ * competir, asi que esto no simula la seccion critica, simplemente no hace
+ * falta. */
+#define WFMDC_CIERRA()  do { } while (0)
+#define WFMDC_ABRE()    do { } while (0)
+#endif
+
+/*
+ * Y CON LA INTERRUPCION CERRADA, POR LO MISMO QUE demod_wfm_dc_escala() -
+ * 26/10/2026, duodecima vuelta de la revision a fondo. El razonamiento
+ * entero esta delante de esa funcion; aqui va el caso concreto.
+ *
+ * Esto de abajo es cargar, comparar y guardar, y quien decrementa
+ * s_wfm_mute_remaining es demod_wfm_process_raw(), que corre en la
+ * interrupcion del DMA. Si la interrupcion cae entre la carga y el
+ * guardado, su decremento se pierde... o peor, al reves: la interrupcion
+ * carga 1, el bucle principal guarda 50, la interrupcion guarda 0, y el
+ * silencio de 133 ms RECIEN ARMADO desaparece. Entonces el escalon de
+ * ganancia -o el salto de fase de meter y sacar los dos biquads del filtro
+ * de FI, que el discriminador convierte en un pico de frecuencia- sale
+ * entero por el altavoz, y ademas envenena el detector de pico del
+ * automatico, que es justo lo que esos 133 ms existen para evitar.
+ *
+ * Y con el gancho PUESTO, que son dos sitios: rf_agc_mute_for_transition()
+ * -> demod_wfm_mute_tras_ganancia(), que lo llama el escalonado del
+ * automatico de radiofrecuencia cada 50 ms, y menu_tile_ifbw_callback().
+ *
+ * La ventana son tres instrucciones contra 2,67 ms de bloque, o sea del
+ * orden de 1 entre 100.000 por evento: no se va a ver. Se cierra porque el
+ * remedio son veinte ciclos y porque este fichero ya tiene la regla escrita
+ * y aplicada a dos metros de aqui.
+ */
+void demod_wfm_mute_corto(void)
+{
+    WFMDC_CIERRA();
+    if ((uint32_t)AM_SETTLE_MUTE_BLOCKS > s_wfm_mute_remaining) {
+        s_wfm_mute_remaining = AM_SETTLE_MUTE_BLOCKS;
+    }
+    WFMDC_ABRE();
+}
+
+void demod_wfm_mute_tras_ganancia(void)
+{
+    s_wfm_diag_count = 0U;
+    demod_wfm_mute_corto();
+    wfm_olvida_continua();
+}
+
+static void wfm_olvida_continua(void)
+{
+    /*
+     * CON LA INTERRUPCION CERRADA, por lo mismo que demod_wfm_mute_corto()
+     * y demod_wfm_dc_escala() - 26/10/2026, decimotercera vuelta de la
+     * revision a fondo. Era la unica de las cuatro de esta familia que
+     * quedaba abierta.
+     *
+     * Aqui se llega CON EL GANCHO PUESTO: demod_wfm_mute_tras_ganancia()
+     * la llama desde el escalonado del automatico de radiofrecuencia, que
+     * ataca cada 50 ms. Y de lo que se escribe aqui, dos son contadores que
+     * la interrupcion INCREMENTA -s_wfm_dc_n y s_wfm_fuga_vent-, o sea
+     * lectura-modificacion-escritura por el otro lado. Si la interrupcion
+     * cae entre la carga y el guardado de su "++", el cero que se escribe
+     * aqui se pierde: el estimador se queda con alfa = 1/512 -1,4 s- en vez
+     * de la media corriente, justo despues de un escalon de ganancia, que
+     * es cuando la fuga acaba de cambiar. Son del orden de 900 ms de audio
+     * con la continua a medio quitar.
+     */
+    WFMDC_CIERRA();
+    s_wfm_dc_n = 0U;
+    s_wfm_dc_i = 0.0f;
+    s_wfm_dc_q = 0.0f;
+    s_wfm_dc_crudo_i = 0.0f;
+    s_wfm_dc_crudo_q = 0.0f;
+    /*
+     * Y LA BUSQUEDA DE LA FUGA VUELVE A EMPEZAR - 26/10/2026.
+     *
+     * Aqui se llega cuando la ganancia de entrada ha cambiado, o al entrar
+     * en el modo. En los dos casos la fuga de verdad es otra: el valor
+     * medido se conserva -lo escala demod_wfm_dc_escala() con el salto de
+     * ganancia- pero deja de ser un minimo intocable, y la ventana empieza
+     * de cero para que pueda volver a subir si toca.
+     */
+    s_wfm_fuga_cand = 3.4e38f;
+    s_wfm_fuga_vent = 0U;
+    s_rf_fuga_n = 0U;
+    /*
+     * Y EL PICO, que lo escriben LAS DOS cadenas. Al entrar en FM ancha
+     * trae el nivel del modo anterior, y es un seguidor con caida lenta:
+     * tarda del orden de cinco segundos en bajar al de aqui, con el
+     * medidor de S enseñando mientras tanto una emisora que no es esta.
+     * Ponerlo a cero no pierde nada, porque el bucle del medidor se queda
+     * con el maximo del bloque y en UN bloque -2,67 ms- vuelve a valer lo
+     * que vale.
+     */
+    s_sig_peak = 0.0f;
+    WFMDC_ABRE();
+}
+
 void demod_wfm_reset_diag(void)
 {
     s_wfm_diag_count = 0U;
     s_wfm_mute_remaining = WFM_SETTLE_MUTE_BLOCKS;
+    /*
+     * Y QUE EL QUITADOR DE CONTINUA VUELVA A CALENTAR DEPRISA - 26/10/2026,
+     * revision a fondo de WFM.
+     *
+     * s_wfm_dc_n es el que hace que los primeros 512 bloques el estimador
+     * sea una MEDIA CORRIENTE (alfa = 1/n, la convergencia mas rapida que
+     * hay sin sesgo) en vez del seguimiento lento de WFM_DC_ALFA, que son
+     * 1,4 s. Lo ponia a cero demod_am_init() y nadie mas, o sea UNA VEZ POR
+     * ARRANQUE.
+     *
+     * Entonces la segunda entrada en FM ancha, y todas las siguientes,
+     * convergen con alfa = 1/512: 1,4 s. Y el silencio de entrada dura 200
+     * bloques, 533 ms. Quedan unos 900 ms de audio audible con la fuga a
+     * medio quitar, en cada entrada en WFM menos la primera - y la fuga
+     * cambia, porque al entrar en WFM el firmware pone el PGA al tope.
+     *
+     * La cadena de AM/banda lateral ya se olvidaba al apagarse el
+     * mezclador, con su razon escrita. Esta no tenia el equivalente.
+     */
+    wfm_olvida_continua();
 }
 
 /* Local signed-decimal print helper - main.c has its own
@@ -1796,6 +2442,16 @@ uint8_t demod_am_sam_enganchado(void)
     return sam_enganchado(&s_sam);
 }
 
+/*
+ * Y hacia donde se ha quedado clavado el lazo, si lo esta. Ver sam_tope()
+ * en sam.h: es lo que separa "no hay portadora" de "la hay y no llego", y
+ * el signo dice hacia donde hay que girar el mando.
+ */
+int8_t demod_am_sam_tope(void)
+{
+    return sam_tope(&s_sam);
+}
+
 float32_t demod_am_sam_enganche(void)
 {
     return sam_enganche(&s_sam);
@@ -1809,6 +2465,44 @@ static audio_bw_t s_audio_bw = AUDIO_BW_4K0;
 
 void demod_am_set_audio_bw(audio_bw_t bw)
 {
+    /*
+     * Y SE BARRE EL ESTADO DEL FILTRO QUE ENTRA - 26/10/2026, decimotercera
+     * vuelta de la revision a fondo. Es el mismo fallo, y el mismo remedio,
+     * que demod_am_set_wfm_ifbw() ya tiene unas lineas mas abajo.
+     *
+     * En FM ancha este selector elige entre TRES biquads con TRES estados
+     * separados (s_wfm_alpf_wide/norm/narrow_state). El que entra arrancaba
+     * con las x[n-1..2] e y[n-1..2] de la ultima vez que corrio, que puede
+     * ser de otra emisora, de otro nivel y de hace minutos. Y esto era una
+     * asignacion a secas.
+     *
+     * Medido: emisora de 30.000 cuentas con el composite entero en ANCHO,
+     * se pasa a NORMAL, la emisora se hace floja (1.500 cuentas, +-3 kHz),
+     * cinco segundos, y se vuelve a ANCHO:
+     *
+     *     NORMAL con la emisora floja   pico  3.064   salto   101
+     *     -> primer bloque en ANCHO     pico 18.000   salto 3.478
+     *        en regimen                 pico  1.499   salto    55
+     *
+     * O sea un golpe seco con DOCE VECES el pico de regimen, que es el
+     * residuo de la emisora fuerte de hace cinco segundos saliendo por el
+     * altavoz. Por el prefiltro de FI, que si barre, las mismas casillas
+     * dan 3.057 contra 3.057.
+     *
+     * Importa ahora mas que nunca porque este ajuste acaba de recuperar sus
+     * tres mandos en la duodecima vuelta (la chapa, la celda de Ajustes y
+     * el mando enganchado); ver wfm_alpf_khz() en main.c. Antes casi no se
+     * podia disparar.
+     *
+     * Se barren los TRES y no solo el que entra: son 96 bytes, esto se
+     * llama cuando lo pide un dedo, y asi el que se queda detras tampoco
+     * guarda nada rancio para la proxima.
+     */
+    if (bw != s_audio_bw) {
+        memset(s_wfm_alpf_wide_state,   0, sizeof s_wfm_alpf_wide_state);
+        memset(s_wfm_alpf_norm_state,   0, sizeof s_wfm_alpf_norm_state);
+        memset(s_wfm_alpf_narrow_state, 0, sizeof s_wfm_alpf_narrow_state);
+    }
     s_audio_bw = bw;
 }
 
@@ -2004,8 +2698,29 @@ uint8_t demod_am_sam_margen_idx(void)
     return (uint8_t)(SAM_MARGEN_OPCIONES - 1U);
 }
 
+/*
+ * Y CON EL ESTADO DEL FILTRO BARRIDO - 26/10/2026, segunda vuelta de la
+ * revision a fondo de FM ancha.
+ *
+ * s_wfm_ifbw_i_state/q_state se ponian a cero UNA sola vez, en
+ * demod_am_init(). No los tocaba el cambio de modo, ni el de tasa, ni
+ * cadena_olvida(). Asi que al volver a ESTRECHO el biquad arrancaba con
+ * x[n-1..2] e y[n-1..2] de la ultima vez que estuvo en estrecho -otra
+ * emisora, otra ganancia de entrada, a lo mejor de hace diez minutos-.
+ *
+ * Y aqui pesa mas que en el filtro de audio, porque esto va sobre la I/Q
+ * ANTES del discriminador: lo que sale de un estado rancio no es un
+ * escalon de amplitud, es un salto de FASE, y el discriminador lo
+ * convierte en un pico de frecuencia instantanea.
+ *
+ * Son 32 bytes de memset. Lo llama un dedo, no la interrupcion.
+ */
 void demod_am_set_wfm_ifbw(wfm_ifbw_t bw)
 {
+    if (bw != s_wfm_ifbw) {
+        memset(s_wfm_ifbw_i_state, 0, sizeof s_wfm_ifbw_i_state);
+        memset(s_wfm_ifbw_q_state, 0, sizeof s_wfm_ifbw_q_state);
+    }
     s_wfm_ifbw = bw;
 }
 
@@ -2037,6 +2752,25 @@ wfm_ifbw_t demod_am_get_wfm_ifbw(void)
  */
 /* Definicion (la declaracion esta arriba, junto al filtro de dos cortes). */
 static uint8_t s_active_rate_is_48k = 0U;
+
+/*
+ * LA RADIOFRECUENCIA AL DOBLE - 23/10/2026, pedido por el usuario: ver el
+ * doble de espectro.
+ *
+ * Con esto a 1 el bloque que entra son 512 muestras a 192 kHz en vez de
+ * 256 a 96. Lo que cambia AQUI DENTRO es poco a proposito: se
+ * desentrelaza el doble, el quitapulsos ve el doble -mejor para el, un
+ * pulso dura mas muestras- y justo despues el diezmador de medio banda
+ * (User/semibanda.h) lo deja en 256 a 96 kHz. De la bajada en frecuencia
+ * en adelante NADA se entera: mismas constantes, mismos filtros, misma
+ * cadena diezmada, mismos decodificadores.
+ *
+ * Y por eso s_active_rate_is_48k sigue valiendo 0 con esto puesto: la
+ * tasa que ve esta cadena son 96 kHz, los de siempre. Las dos variables
+ * dicen cosas distintas -una, a que velocidad entra; la otra, a que
+ * velocidad trabaja- y confundirlas seria volver a tener una sola tasa.
+ */
+static uint8_t s_rf_doble = 0U;
 
 /*
  * Rediseña el filtro de CW centrado en `centre_hz`. Se llama al cambiar
@@ -2362,6 +3096,139 @@ static volatile uint8_t s_rf_clip_flag = 0U;
  * hecha el bucle del medidor de señal, que ya calcula I²+Q² para cada
  * muestra. Ver su comentario. */
 static float s_sq_sum_mag;
+/*
+ * LA POTENCIA DEL CANAL, EN dB - 26/10/2026, para el barrido de memorias.
+ *
+ * Existe en TODOS los modos que pasan por el mezclador -AM, banda lateral,
+ * CW y FM estrecha-, que es lo que la distingue de la metrica del
+ * silenciador: esa solo se calcula en AM y en FM estrecha. Ver donde se
+ * acumula, en el bucle del medidor de señal.
+ *
+ * El suavizado es el mismo de aquella: 0,9 por bloque a 375 bloques por
+ * segundo son unos 24 ms de constante de tiempo, o sea rapido para un
+ * barrido que mira un segundo y lento para que un bloque suelto no mande.
+ */
+#define NIVEL_ALPHA  0.9f
+static float   s_nivel_db;
+/*
+ * *** Y SOLO SE MIDE MIENTRAS EL BARRIDO ESTA ANDANDO - 26/10/2026. ***
+ *
+ * Lo vio el usuario en la radio: con una señal de STANAG enganchada se
+ * ralentizaba todo. Y era esto. La medida de abajo son 256 multiplicaciones
+ * y sumas mas un log10f por bloque, 375 bloques por segundo -unas 96.000
+ * multiplicaciones y 375 logaritmos cada segundo-, y estaba corriendo
+ * SIEMPRE, en todos los modos, barriendo o sin barrer.
+ *
+ * Por si sola no es mucha cuenta. El problema es DONDE cae: los
+ * decodificadores pesados -STANAG el primero, y solo cuando de verdad
+ * esta enganchado a una señal, que es cuando el usuario lo noto- van ya
+ * justos dentro del mismo bloque, asi que lo que sobra no se reparte: se
+ * come el margen que les quedaba y empiezan a llegar tarde.
+ *
+ * Y no hacia ninguna falta: esto solo lo lee el barrido de memorias, que
+ * mira un segundo cada 1,25 s y el resto del tiempo no existe. Asi que se
+ * enciende al arrancar el barrido y se apaga al pararlo -ver
+ * mem_scan_conmuta() y mem_scan_para() en main.c-, y fuera de ahi no
+ * cuesta ni una instruccion mas que la comprobacion de la bandera.
+ */
+static uint8_t s_nivel_on;
+
+void demod_am_set_nivel_medir(uint8_t on)
+{
+    if (on && !s_nivel_on) {
+        /* Se arranca de cero: el valor de la vez anterior es de otra
+         * frecuencia y de otra hora. Con 0,9 por bloque converge en unos
+         * 24 ms, y el barrido espera 250 antes de preguntar. */
+        s_nivel_db = 0.0f;
+    }
+    s_nivel_on = (uint8_t)(on ? 1U : 0U);
+}
+
+float demod_am_get_nivel_db(void)
+{
+    return s_nivel_db;
+}
+
+/*
+ * ======================================================================
+ * *** EL NOTCH AUTOMATICO NO VA EN CW NI EN LOS DIGITALES - 27/10/2026,
+ * cuarta pasada de la revision de espejos y armonicos. ***
+ * ======================================================================
+ *
+ * anotch.h dice "en AM, SAM y banda lateral; en FM no", y eso es todo lo
+ * que miraba. Pero CW, RTTY, PSK31, NAVTEX, DSC, FT8, SSTV, WEFAX y los
+ * demas SE RECIBEN DENTRO DE USB/LSB, asi que el notch les caia encima.
+ *
+ * Y un notch automatico hace exactamente su trabajo con ellos: busca un
+ * tono sostenido y lo mata. Medido con un tono de 2.000 sobre ruido de
+ * 200, a 12 kHz:
+ *
+ *     tono continuo -portadora, raya larga, marca de RTTY o PSK-:
+ *         queda a -81,1 / -74,9 / -75,1 / -77,1 dB (fuerzas 0 a 3)
+ *     CW de verdad, con sus silencios:
+ *         la energia de la marca queda a -12,1 / -12,5 / -12,7 / -12,6 dB
+ *         a 20 ppm, y a -12,8 / -13,3 / -13,6 / -13,6 a 12 ppm
+ *
+ * Y lo que lo hace peor de lo que ya es: los decodificadores comen del
+ * audio ANTES de este punto, asi que con el notch puesto en CW LA
+ * PANTALLA SIGUE DECODIFICANDO MIENTRAS EL ALTAVOZ YA NO TIENE SEÑAL. Es
+ * el peor sitio donde dejar a quien escucha: todo dice que la señal esta
+ * ahi menos lo unico que el oye.
+ *
+ * Bastaba con dejar el notch encendido en una sesion de voz y pasar a CW.
+ * No habia ningun aviso, y la celda seguia enseñando la fuerza elegida.
+ *
+ * SE PREGUNTA A LOS DECODIFICADORES Y NO A UNA BANDERA NUEVA. Sus
+ * cabeceras ya estan incluidas aqui arriba, asi que esto no puede
+ * quedarse atras el dia que se añada un modo: lo que no se pregunte sera
+ * porque no existe. Y el ajuste del usuario NO se toca -solo se deja de
+ * aplicar-, asi que al volver a la voz el notch sigue como lo dejo.
+ */
+static uint8_t notch_permitido(void)
+{
+    if (cw_get_enabled() || rtty_get_enabled())        { return 0U; }
+    if (navtex_activo() || psk31_activo())             { return 0U; }
+    if (hell_activo()   || dsc_activo())               { return 0U; }
+    if (sstv_activo()   || wefax_activo())             { return 0U; }
+    if (ft8_modo_activo()   || wspr_modo_activo())     { return 0U; }
+    if (ais_modo_activo()   || ale_modo_activo())      { return 0U; }
+    if (jtty_modo_activo()  || stanag_modo_activo())   { return 0U; }
+    if (hfdl_modo_activo()  || ident_modo_activo())    { return 0U; }
+    if (ax25_activo())                                 { return 0U; }
+    return 1U;
+}
+
+/*
+ * ======================================================================
+ * ¿HACE FALTA CALCULAR LA METRICA DEL SILENCIADOR? - 27/10/2026, revision
+ * a fondo de espejos y armonicos.
+ * ======================================================================
+ *
+ * En FM estrecha, la metrica cuesta 256 RAICES CUADRADAS y 256 sumas por
+ * bloque -unos 3.840 ciclos, el 0,72 % del presupuesto- y se pagaban
+ * SIEMPRE, tambien con el silenciador en su suelo, que es como viene de
+ * fabrica. Es el mismo defecto que el camino de FM ancha se quito el
+ * 26/10; alli esta escrito que "el de AM tiene el mismo defecto y es
+ * anterior", y aqui esta.
+ *
+ * Y "apagado" se puede demostrar, no hay que elegir un numero: la metrica
+ * es 20*log10(media|z| + 1), que NUNCA es menor que cero, y el
+ * silenciador cierra cuando queda por debajo de umbral - 1,5. Con el
+ * umbral en cero o por debajo, ese limite es como mucho -1,5 y no se
+ * puede alcanzar: el silenciador no puede cerrar jamas. Asi que con
+ * umbral <= 0 no hay nada que calcular.
+ *
+ * LA EXCEPCION es el barrido de memorias: en AM y en FM estrecha decide
+ * con esta misma lectura -ver scan_lee() en main.c, que explica por que
+ * alli no vale el audio-. Asi que mientras el barrido anda se calcula
+ * aunque el silenciador este apagado, y para eso vale la bandera que ya
+ * existe, s_nivel_on.
+ */
+static uint8_t sql_hace_falta(void)
+{
+    return (uint8_t)((s_squelch_threshold_db > 0.0f) || s_nivel_on);
+}
+
 
 /*
  * *** ESTE BUCLE CORRIA FUERA DE LA VENTANA QUE MIDE CICLOS - 10/10/2026. ***
@@ -2430,8 +3297,181 @@ static float   s_mix_hz_puesto = 1e30f;   /* imposible: fuerza el primer calculo
 static float   s_mix_fs_puesto = 0.0f;
 static uint8_t s_mix_rapido = 0U;         /* 1 = es Fs/4 exacto */
 
+/*
+ * ======================================================================
+ * EL DESPLAZAMIENTO EN DOS TROZOS, PARA QUE EL NCO LLEGUE A TODA LA
+ * PANTALLA A 192 kHz - 24/10/2026, avisado por el usuario.
+ * ======================================================================
+ *
+ * EL FALLO. A 192 kHz el panadaptador enseña 192 kHz, pero la mezcla corre
+ * DETRAS del diezmador de medio banda, o sea a 96. Y el diezmador esta
+ * plano hasta 40 kHz: mas alla, la señal se sale por el corte. Por eso
+ * NCO_OFF_MAX valia 40.000 y por eso, al sintonizar mas alla de 40 kHz del
+ * oscilador, habia que REAPARCAR el oscilador - y al moverse el oscilador
+ * se mueve la pantalla entera.
+ *
+ * O sea que el NCO cubria 40 de los 96 kHz de cada lado. Lo que se espera
+ * de un NCO es justo lo contrario: recorrer lo que se ve sin que la imagen
+ * se mueva.
+ *
+ * LA SOLUCION, Y POR QUE NO CUESTA UNA MULTIPLICACION. El desplazamiento se
+ * parte en dos:
+ *
+ *   EL GRUESO, en saltos de Fs/4 de la tasa CRUDA -48 kHz a 192-, aplicado
+ *   ANTES del diezmador. Girar un multiplo de Fs/4 es cambiar de signo e
+ *   intercambiar I con Q: (1, -j, -1, +j). NI UNA MULTIPLICACION, igual
+ *   que el giro de siempre a 96 kHz.
+ *
+ *   EL FINO, lo que queda -nunca mas de 24 kHz-, lo hace el NCO donde
+ *   siempre, a 96 kHz y detras del diezmador.
+ *
+ * Con eso la señal llega al diezmador SIEMPRE dentro de +/-24 kHz, bien
+ * dentro de su banda plana, venga de donde venga dentro de los +/-96 kHz
+ * que captura el conversor. Y el NCO alcanza la pantalla entera.
+ *
+ * SOLO SE PARTE SI HACE FALTA: con el desplazamiento dentro de los 40 kHz
+ * de siempre, el grueso vale cero y todo esto se comporta exactamente como
+ * antes, bit a bit. Lo que no hace falta no se arriesga.
+ *
+ * Y EL GETTER SIGUE DEVOLVIENDO EL TOTAL, que es lo que main.c le dio y lo
+ * que la pantalla necesita para pintar el marcador: el reparto es cosa de
+ * aqui dentro y nadie mas tiene que saberlo.
+ */
+#define MIX_GRUESO_HZ   48000.0f   /* Fs/4 de la tasa cruda a 192 kHz */
+#define MIX_FINO_MAX_HZ 40000.0f   /* mientras quepa aqui, no se parte */
+
+/*
+ * ======================================================================
+ * LA CONTINUA DE LA I Y LA Q, O SEA LA FUGA DEL OSCILADOR - 25/10/2026.
+ * ======================================================================
+ *
+ * Reportado: "se oyen artefactos en los pasos de sintonia pegados a la
+ * frecuencia intermedia cero".
+ *
+ * Y se oian, por una cuenta que estaba escrita mal en main.c desde que
+ * nacio el NCO. El comentario de NCO_OFF_MIN_HZ dice, palabra por palabra,
+ * que "el filtro de canal es de +-4 kHz, asi que a 6 kHz la fuga ya esta
+ * fuera con holgura". Eso era cierto para AM y banda lateral el dia que se
+ * escribio. MEDIDO HOY sobre los coeficientes que hay en este fichero, con
+ * el desplazamiento en su minimo de 6 kHz:
+ *
+ *      CHF (AM y banda lateral, -3 dB a 4 kHz)    la fuga a  -14,5 dB
+ *      NFM_CHF (-3 dB a 6,25 kHz)                 la fuga a   -2,3 dB
+ *      AIS_CHF (-3 dB a 9 kHz)                    la fuga a   -0,1 dB
+ *
+ * O sea que en NFM el filtro de canal NO HACE NADA con la fuga, y en AIS
+ * ni eso. La holgura del comentario se la comieron los dos filtros anchos
+ * que llegaron despues, y nadie volvio a mirar el numero.
+ *
+ * LA FUGA ES CONTINUA, ASI QUE SE QUITA COMO UNA CONTINUA. No hace falta
+ * ensanchar el agujero del NCO hasta donde el filtro la mate: se le resta
+ * a la I y a la Q ANTES de la bajada en frecuencia, que es donde vive, y
+ * entonces deja de existir para todo lo que viene detras. La cadena de WFM
+ * ya lo hacia desde el 11/10/2026 (ver fm_discriminate()); esta no, y es
+ * la que lo tenia mas facil:
+ *
+ *   - En WFM la portadora VIVE en continua, asi que quitar continua puede
+ *     ser quitar la emisora: por eso alli la correccion lleva tope.
+ *   - Aqui hay mezclador. La señal buena esta SIEMPRE a 6 kHz o mas de la
+ *     continua -eso es lo que garantiza NCO_OFF_MIN_HZ- asi que lo que hay
+ *     en continua no es nunca la emisora. No hace falta tope ninguno.
+ *
+ * Y se hace en el bucle del desentrelazado, que ya recorre estas mismas
+ * muestras: dos restas y dos sumas por muestra, sin pasada aparte.
+ *
+ * LA CONSTANTE DE TIEMPO: alfa = 1/64 sobre la media del bloque, o sea
+ * unos 170 ms con bloques de 2,667 ms. Lo bastante lento para que el rizado
+ * no module nada y lo bastante rapido para que un cambio de ganancia de
+ * radiofrecuencia no deje la fuga puesta medio segundo. Arranca como media
+ * corriente -alfa = 1/n- durante los primeros 64 bloques, igual que la de
+ * WFM, para que no cueste un segundo de buzz al encender.
+ */
+#define RF_DC_ALFA_N  64U
+static float   s_rf_dc_i;
+static float   s_rf_dc_q;
+static uint8_t s_rf_dc_n;
+
+/*
+ * LA FUGA DE ESTA RADIO, EN CUENTAS, PARA QUE LA USE LA FM ANCHA.
+ * 26/10/2026, segunda vuelta de la revision a fondo.
+ *
+ * Lo lee el recorte del quitador de continua de WFM como SUELO: ver el
+ * comentario largo de ahi, que cuenta por que ese suelo tiene que ser un
+ * numero medido y no uno inventado.
+ *
+ * Y lo MIDE la propia cadena de FM ancha, no esta: ver el final del
+ * bloqueador de continua de demod_wfm_process_raw(). Esta de aqui tambien
+ * podria -aqui hay mezclador y la emisora nunca esta en continua- y se
+ * probo, pero no sirve: quien enciende la radio en FM ancha no pasa por
+ * esta cadena nunca, y ademas la fuga de un detector por conmutacion no
+ * tiene por que ser la misma con el oscilador en onda corta que en VHF.
+ * Vive aqui arriba porque aqui estan los demas numeros de la entrada.
+ *
+ * Lo escribe la interrupcion y lo lee la interrupcion: no hay carrera. El
+ * bucle principal solo lo escala, con la interrupcion cerrada, desde
+ * demod_wfm_dc_escala().
+ */
+static float    s_rf_fuga;
+static uint16_t s_rf_fuga_n;   /* cuantas medidas buenas lleva, topado */
+
+static int8_t s_mix_grueso;   /* cuartos de vuelta por muestra, -2..2 */
+static float  s_mix_fino;     /* lo que queda, para el NCO de 96 kHz */
+
+/*
+ * ======================================================================
+ * Y SE DERIVA EN EL BLOQUE, NO EN EL SETTER - 24/10/2026, revision de los
+ * 192 kHz.
+ * ======================================================================
+ *
+ * La primera version repartia dentro de demod_am_set_mix_hz(), o sea EN
+ * EL BUCLE PRINCIPAL, y dejaba DOS valores -el grueso y el fino- que lee
+ * la INTERRUPCION. Dos escrituras que no son atomicas juntas: un bloque
+ * podia cogerse el grueso nuevo con el fino viejo y demodular 48 kHz mas
+ * alla durante 2,67 ms. Un chasquido fuerte al cruzar la frontera, raro y
+ * por tanto de los peores de encontrar.
+ *
+ * Y el fichero YA LO DECIA tres pantallas mas arriba, encima de
+ * s_mix_nco: "la comprobacion va en el bucle de bloque, no en los
+ * setters: hay DOS entradas y dos setters, y recalcular en cada setter es
+ * la forma clasica de que un dia alguien anada un tercer camino y se
+ * olvide". Me lo salte el mismo dia que lo lei.
+ *
+ * Ahora esto lo llama process_raw() al entrar, con s_mix_hz -que SI es
+ * una escritura atomica de 32 bits- como unica entrada. Cuesta una
+ * comparacion por bloque, y una division solo cuando el dial se mueve
+ * fuera de la ventana fina.
+ */
+static void mix_reparte(void)
+{
+    float off = s_mix_hz;
+
+    s_mix_grueso = 0;
+    s_mix_fino   = off;
+
+    /*
+     * El reparto SOLO en 192 kHz y SOLO si no cabe entero en el fino. A
+     * 96 y a 48 el diezmador no existe y no hay nada que partir.
+     */
+    if (!s_rf_doble) { return; }
+    if (off <= MIX_FINO_MAX_HZ && off >= -MIX_FINO_MAX_HZ) { return; }
+
+    {
+        /* El multiplo de 48 kHz mas cercano. Con |off| <= 96 kHz esto da
+         * -2..2, y el resto nunca pasa de 24 kHz. */
+        int k = (int)((off >= 0.0f) ? (off / MIX_GRUESO_HZ + 0.5f)
+                                    : (off / MIX_GRUESO_HZ - 0.5f));
+
+        if (k >  2) { k =  2; }
+        if (k < -2) { k = -2; }
+        s_mix_grueso = (int8_t)k;
+        s_mix_fino   = off - (float)k * MIX_GRUESO_HZ;
+    }
+}
+
 void demod_am_set_mix_hz(float hz)
 {
+    /* UNA sola escritura, y de 32 bits: el reparto lo hace la
+     * interrupcion al entrar en el bloque. Ver mix_reparte(). */
     s_mix_hz = hz;
 }
 
@@ -2480,7 +3520,19 @@ void demod_am_init(void)
     s_wfm_dc_i = 0.0f;
     s_wfm_dc_q = 0.0f;
     s_wfm_dc_n = 0U;
+    s_rf_dc_i = 0.0f;
+    s_rf_dc_q = 0.0f;
+    s_rf_dc_n = 0U;
+    s_rf_fuga = 0.0f;   /* sin medir todavia: el suelo de WFM arranca en cero */
+    s_rf_fuga_n = 0U;
     s_wfm_deemph_y1 = 0.0f;
+    /* Y el silenciador de FM ancha: el biquad del paso alto y su media.
+     * Arranca ABIERTO, como el de AM, para que una entrada en el modo no
+     * empiece muda si la media todavia no vale nada. */
+    s_wfm_sql_x1 = 0.0f; s_wfm_sql_x2 = 0.0f;
+    s_wfm_sql_y1 = 0.0f; s_wfm_sql_y2 = 0.0f;
+    s_wfm_sql_db = 0.0f;
+    s_wfm_sql_abierto = 1U;
     /* WFM's own DC blocker/AGC state (05/08/2026, separate processing
      * path - see demod_wfm_process_raw()'s comment) - same
      * "not worth a mode-switch reset" reasoning as above. */
@@ -2529,6 +3581,11 @@ void demod_am_init(void)
                          * it climbs to the real level within one block of
                          * an actual signal, no benefit to a warm-started
                          * guess the way the AGC's gain-control peak wants. */
+    /* El nivel del barrido se apaga y se pone a cero al reiniciar la
+     * cadena: encenderlo es cosa del barrido, y fuera de el no se mide.
+     * Ver demod_am_set_nivel_medir(). */
+    s_nivel_on = 0U;
+    s_nivel_db = 0.0f;
     s_squelch_level_db = s_squelch_threshold_db; /* no false "signal detected" blip before the first real block */
     s_squelch_open = 1U; /* matches the OFF-by-default threshold - see demod_am.h */
 
@@ -2592,7 +3649,7 @@ float demod_am_get_active_fs_hz(void)
  * los coeficientes, con el mismo numero de ETAPAS en los dos casos, asi
  * que esos cuatro son reinicializaciones mas simples. Todos los buffers
  * de estado implicados -s_decim_i_state y s_decim_q_state,
- * s_hilbert_state, s_interp_state, s_nr_decim_state y
+ * s_hilbert_state, s_i_delay_hist, s_interp_state, s_nr_decim_state y
  * s_nr_interp_state- estan ya dimensionados a DECIM_STATE_SIZE_MAX,
  * HILBERT_STATE_SIZE_MAX e INTERP_STATE_SIZE_MAX -ver sus propios
  * comentarios-, o sea lo bastante grandes para lo que de verdad pide
@@ -2614,6 +3671,34 @@ float demod_am_get_active_fs_hz(void)
  * aparte a 192 kHz, diga lo que diga esta bandera; ver el comentario de
  * cabecera de esta funcion en demod_am.h.
  */
+static void mix_reparte(void);
+
+void demod_am_set_rf_doble(uint8_t doble)
+{
+    uint8_t nuevo = doble ? 1U : 0U;
+
+    /*
+     * SOLO SI DE VERDAD CAMBIA - 24/10/2026, revision de los 192 kHz.
+     *
+     * Esto se llama en CADA cambio de modo desde que el gancho salio del
+     * `if` de la tasa (ver apply_demod_mode()), y antes vaciaba la cola
+     * del diezmador siempre: un corte en la memoria del filtro con la
+     * interrupcion viva, por nada, cada vez que se toca el selector de
+     * modo. Lo tapaba el silenciado del cambio de modo, que es otra forma
+     * de decir que nadie lo habria notado hasta que dejara de taparlo.
+     */
+    if (nuevo == s_rf_doble) { return; }
+
+    s_rf_doble = nuevo;
+    /* La cola del diezmador es de la señal de antes, y a otra tasa. */
+    semibanda_reset();
+}
+
+uint8_t demod_am_get_rf_doble(void)
+{
+    return s_rf_doble;
+}
+
 void demod_am_set_active_rate(uint8_t is_48k)
 {
     s_active_rate_is_48k = is_48k ? 1U : 0U;
@@ -2628,10 +3713,6 @@ void demod_am_set_active_rate(uint8_t is_48k)
     if (s_active_rate_is_48k) {
         arm_biquad_cascade_df1_init_f32(&s_chf_i_inst, CHF_STAGES, CHF_48K_COEFFS, s_chf_i_state);
         arm_biquad_cascade_df1_init_f32(&s_chf_q_inst, CHF_STAGES, CHF_48K_COEFFS, s_chf_q_state);
-        arm_biquad_cascade_df1_init_f32(&s_alpf_inst, ALPF_STAGES, ALPF_48K_COEFFS, s_alpf_state);
-        arm_biquad_cascade_df1_init_f32(&s_alpf_4k0_inst, ALPF_4K0_STAGES, ALPF_4K0_48K_COEFFS, s_alpf_4k0_state);
-        arm_biquad_cascade_df1_init_f32(&s_alpf_2k3_inst, ALPF_2K3_STAGES, ALPF_2K3_48K_COEFFS, s_alpf_2k3_state);
-        arm_biquad_cascade_df1_init_f32(&s_alpf_1k8_inst, ALPF_1K8_STAGES, ALPF_1K8_48K_COEFFS, s_alpf_1k8_state);
         nfm_chf_carga(1U);
         s_dcb_r = DCB_R_48K;
         s_decim_factor = DECIM_FACTOR_48K;
@@ -2639,10 +3720,6 @@ void demod_am_set_active_rate(uint8_t is_48k)
     } else {
         arm_biquad_cascade_df1_init_f32(&s_chf_i_inst, CHF_STAGES, CHF_96K_COEFFS, s_chf_i_state);
         arm_biquad_cascade_df1_init_f32(&s_chf_q_inst, CHF_STAGES, CHF_96K_COEFFS, s_chf_q_state);
-        arm_biquad_cascade_df1_init_f32(&s_alpf_inst, ALPF_STAGES, ALPF_96K_COEFFS, s_alpf_state);
-        arm_biquad_cascade_df1_init_f32(&s_alpf_4k0_inst, ALPF_4K0_STAGES, ALPF_4K0_96K_COEFFS, s_alpf_4k0_state);
-        arm_biquad_cascade_df1_init_f32(&s_alpf_2k3_inst, ALPF_2K3_STAGES, ALPF_2K3_96K_COEFFS, s_alpf_2k3_state);
-        arm_biquad_cascade_df1_init_f32(&s_alpf_1k8_inst, ALPF_1K8_STAGES, ALPF_1K8_96K_COEFFS, s_alpf_1k8_state);
         nfm_chf_carga(0U);
         s_dcb_r = DCB_R_96K;
         s_decim_factor = DECIM_FACTOR_96K;
@@ -2717,6 +3794,37 @@ void demod_am_set_active_rate(uint8_t is_48k)
                                            INTERP_COEFFS_96K, s_nr_interp_state,
                                            s_dec_block_samples) != ARM_MATH_SUCCESS) {
             debug_print("demod_am: *** NR interpolator init FAILED (96K, numTaps %% L != 0?) ***\n");
+        }
+    }
+
+    /*
+     * ==================================================================
+     * Y EL RETARDO DE LA I, QUE FALTABA - 27/10/2026, revision a fondo de
+     * espejos y armonicos.
+     * ==================================================================
+     *
+     * Este bloque rehace TODAS las instancias de CMSIS y su comentario de
+     * cabecera enumera los buffers de estado que reinicia:
+     * s_decim_i/q_state, s_hilbert_state, s_interp_state, s_nr_*. Pero
+     * s_i_delay_hist NO estaba en la lista, y solo lo limpiaba
+     * demod_am_init().
+     *
+     * Es el retardo de grupo que compensa la rama I para que case con la
+     * salida del Hilbert: o sea, la otra mitad EXACTA de la cancelacion
+     * de banda lateral. Al cruzar de 96 a 48 kHz, el Hilbert arranca con
+     * estado cero mientras la I llega con treinta y una muestras de la
+     * tasa ANTERIOR, y durante ese bloque la cancelacion no existe: sale
+     * la banda contraria entera.
+     *
+     * Hoy no se oye porque apply_demod_mode() arma su silencio de entrada
+     * para todo modo que no sea FM ancha. O sea que estaba TAPADO, no
+     * arreglado, y la lista de arriba mentia por omision.
+     */
+    {
+        uint32_t k;
+
+        for (k = 0; k < HILBERT_GROUP_DELAY_DEC; k++) {
+            s_i_delay_hist[k] = 0.0f;
         }
     }
 
@@ -2873,6 +3981,125 @@ void demod_wfm_get_dc(float *dc_i, float *dc_q)
 {
     if (dc_i != (float *)0) { *dc_i = s_wfm_dc_i; }
     if (dc_q != (float *)0) { *dc_q = s_wfm_dc_q; }
+}
+
+/*
+ * Y LA MISMA ESTIMACION SIN TOPAR - 26/10/2026.
+ *
+ * La de arriba sale recortada a WFM_DC_TOPE, asi que cuando el tope esta
+ * actuando devuelve el tope pase lo que pase y no se distingue "la fuga son
+ * 512 cuentas" de "la fuga es mayor y no se sabe cuanto". Esta devuelve lo
+ * que el lazo mide. La diferencia entre las dos es el residuo que se queda
+ * sin corregir, y ese residuo es lo que le tuerce el angulo al
+ * discriminador muestra a muestra.
+ */
+/*
+ * ESCALAR LA ESTIMACION DE CONTINUA CUANDO CAMBIA LA GANANCIA DE ENTRADA.
+ * 26/10/2026, revision a fondo de WFM.
+ *
+ * La fuga del convertidor escala con la ganancia del PGA, y la estimacion
+ * la sigue con una constante de 1,37 s. Un escalon de 2 dB la deja
+ * equivocada un 26 % durante ese tiempo, y con el automatico de
+ * radiofrecuencia encendido hay un escalon cada tres segundos.
+ *
+ * Multiplicarla por el mismo factor es exacto y no cuesta transitorio: lo
+ * que la hace util es que NO hay que volver a converger. Olvidarla seria
+ * peor -ver sim/wfm_calienta.c, 130 ms de movimiento por escalon-.
+ *
+ * Se escala tambien el acumulador sin topar, para que el instrumento siga
+ * diciendo la verdad.
+ */
+/*
+ * Y CON LA INTERRUPCION CERRADA, que esto SI es lectura-modificacion-
+ * escritura - 26/10/2026, misma revision.
+ *
+ * El resto de los olvidos de esta cadena son escrituras sueltas, y en un
+ * solo nucleo sin sistema operativo una escritura de 32 bits del bucle
+ * principal es atomica frente a la interrupcion: no hace falta cerrar nada
+ * (ver tras_cambio_de_ganancia() en main.c, que es donde esta escrito el
+ * razonamiento entero). Estas CUATRO no: cada "*=" es cargar, multiplicar y
+ * guardar, y quien escribe los mismos cuatro flotantes es
+ * demod_wfm_process_raw(), que corre en la interrupcion del DMA. Si cae
+ * entre la carga y el guardado, su actualizacion de ese bloque se pierde.
+ *
+ * Cuatro multiplicaciones en coma flotante de precision simple son unos
+ * veinte ciclos a 200 MHz: 0,1 us, frente a los 2.667 us del bloque. No es
+ * el remedio caro contra la enfermedad barata del que habla main.c; aqui la
+ * carrera existe de verdad y el remedio no se nota.
+ */
+/* Las dos de arriba, definidas mucho antes en el fichero porque
+ * demod_wfm_mute_corto() tambien las necesita. */
+
+/*
+ * EL SUELO DEL RECORTE, O SEA LA FUGA QUE ESTA CADENA HA MEDIDO.
+ *
+ * Publicado por lo mismo que demod_wfm_get_dc_crudo(): con esto, lo que
+ * resta el quitador deja de ser una suposicion. Si sale cero, este aparato
+ * no tiene fuga de continua en VHF y el suelo no esta haciendo nada; si
+ * sale un numero, ese numero es lo que el suelo permite restar por encima
+ * de la fraccion de la portadora.
+ */
+float demod_wfm_get_fuga(void)
+{
+    return s_rf_fuga;
+}
+
+void demod_wfm_dc_escala(float g)
+{
+    if (!(g > 0.0f) || !(g < 1000.0f)) { return; }   /* ni NaN ni disparates */
+    /*
+     * Los CUATRO acumuladores de WFM, solo en FM ancha: fuera de ella no
+     * los lee nadie, y al volver a entrar en el modo wfm_olvida_continua()
+     * los pone a cero de todas formas. Escalarlos mientras tanto es cerrar
+     * la interrupcion para no hacer nada, y con el automatico atacando cada
+     * 50 ms en onda corta eso son veinte secciones criticas por segundo
+     * regaladas.
+     *
+     * LA FUGA MEDIDA, EN CAMBIO, ESCALA SIEMPRE. En FM ancha nadie la
+     * vuelve a medir mientras no haya modulacion, asi que si no se
+     * escalase, el suelo del recorte seguiria valiendo lo que valia a la
+     * ganancia de onda corta mientras el PGA esta clavado en el tope: 20 dB
+     * de diferencia, un factor diez.
+     *
+     * Y EN LOS MODOS CON MEZCLADOR NO LA MIDE NADIE, que es justo por lo
+     * que hay que escalarla tambien alli: s_rf_fuga se escribe en un solo
+     * sitio, el bloqueador de continua de demod_wfm_process_raw(). Una
+     * sesion entera de onda corta con el automatico moviendo el PGA le iria
+     * multiplicando escalones encima sin que nadie la volviera a medir, y
+     * al entrar en FM ancha entraria con el numero de la ultima vez
+     * escalado por todo lo que haya pasado. Escalar es lo que mantiene ese
+     * numero valiendo lo mismo en cuentas del convertidor.
+     */
+    {
+        WFMDC_CIERRA();
+        s_rf_fuga *= g;
+        if ((demod_mode_t)s_mode == DEMOD_MODE_WFM) {
+            s_wfm_dc_i       *= g;
+            s_wfm_dc_q       *= g;
+            s_wfm_dc_crudo_i *= g;
+            s_wfm_dc_crudo_q *= g;
+        }
+        WFMDC_ABRE();
+    }
+}
+
+void demod_wfm_get_dc_crudo(float *dc_i, float *dc_q)
+{
+    if (dc_i != (float *)0) { *dc_i = s_wfm_dc_crudo_i; }
+    if (dc_q != (float *)0) { *dc_q = s_wfm_dc_crudo_q; }
+}
+
+/*
+ * Y LO MISMO PARA LA CADENA DE AM, BANDA LATERAL Y NFM - 25/10/2026. Lo
+ * que esta restandole a la I y a la Q antes de la bajada en frecuencia, o
+ * sea la fuga del oscilador medida por la propia radio. Publicado por el
+ * mismo motivo que el de arriba: un numero se puede mirar, y lo mide
+ * sim/rf_dc.c. Ver el comentario largo de s_rf_dc_i.
+ */
+void demod_am_get_rf_dc(float *dc_i, float *dc_q)
+{
+    if (dc_i != (float *)0) { *dc_i = s_rf_dc_i; }
+    if (dc_q != (float *)0) { *dc_q = s_rf_dc_q; }
 }
 
 /*
@@ -3037,6 +4264,8 @@ void demod_wfm_process_raw(const int16_t *raw_interleaved)
         float32_t dcq = s_wfm_dc_q;
         float32_t sum_i = 0.0f;
         float32_t sum_q = 0.0f;
+        float32_t s_m2  = 0.0f;
+        float32_t s_mad = 0.0f;
 
         for (n = 0; n < SDR_RX_BLOCK_SAMPLES_WFM; n++) {
             int16_t vi = raw_interleaved[2U * n];
@@ -3050,27 +4279,380 @@ void demod_wfm_process_raw(const int16_t *raw_interleaved)
              * mirarlo seria medir el recorte de otra cosa. */
             sum_i += fi;
             sum_q += fq;
+            {
+                float32_t m2 = fi * fi + fq * fq;
+                float32_t d  = m2 - s_wfm_p_ant;
+
+                s_m2 += m2;
+                /* fabsf() y no un ternario: GCC saca una sola vabs.f32, y el
+                 * ternario saca vcmpe + vmrs APSR_nzcv + it + vnegmi, que son
+                 * cuatro instrucciones POR MUESTRA y una de ellas para el
+                 * cauce del Cortex-M4. Medido: 2.048 instrucciones de mas por
+                 * bloque, el 2,5 % del presupuesto, por escribirlo mal. */
+                s_mad += fabsf(d);
+            }
             s_wfm_i_buf[n] = fi - dci;
             s_wfm_q_buf[n] = fq - dcq;
+        }
+        /*
+         * ==============================================================
+         * CUANTA CONTINUA HAY ENCIMA, SACADA DE LA ENVOLVENTE
+         * 26/10/2026, sexta vuelta de la revision a fondo. Y esta vez el
+         * numero sale de una medida que NO comparte raiz con lo que se va
+         * a recortar, que era el fallo de las cinco anteriores.
+         * ==============================================================
+         *
+         * La FM es de envolvente constante. Si encima de la portadora A
+         * hay una continua D, el modulo al cuadrado vale
+         *
+         *     |v|^2  =  A^2 + D^2 + 2*A*D*cos(fase)
+         *
+         * y la fase barre toda la vuelta con cualquier modulacion. O sea
+         * que de ESE renglon salen dos numeros:
+         *
+         *     P = media de |v|^2            = A^2 + D^2
+         *     Q = A*D                       (de la desviacion del rizado)
+         *
+         * y con P y Q se despeja la PAREJA {A, D}: son las raices de
+         * x^4 - P*x^2 + Q^2 = 0. Cual de las dos es la continua lo dice el
+         * promedio complejo de la entrada, que vale D mas el residuo J0 de
+         * la portadora: se elige la raiz que se le parezca.
+         *
+         * POR QUE LA DESVIACION ABSOLUTA Y NO LA VARIANZA: la varianza es
+         * E[x^2] - E[x]^2, y aqui esas dos cantidades son casi iguales, asi
+         * que en coma flotante de precision simple la resta se come todas
+         * las cifras. La desviacion absoluta media no resta nada grande de
+         * nada grande. Para un coseno vale 2*A*D*(2/pi), de ahi el pi/4.
+         *
+         * Y POR QUE ESTO Y NO EL MAXIMO MENOS EL MINIMO, que era la version
+         * de la quinta vuelta: los extremos de 512 muestras los fija EL
+         * RUIDO, que los separa unas 6,6 sigmas. Con un ruido del 0,8 % de
+         * la portadora -recepcion normal con el PGA al tope- aquella puerta
+         * se abria sola y el quitador se ponia a restar el residuo de la
+         * propia emisora: medido, 8 a 21 % de distorsion. Una media sobre
+         * 512 muestras no tiene ese problema: el ruido entra como 1,13
+         * sigmas en vez de 6,6 y ademas entra EN EL NUMERO, no en la
+         * decision, asi que lo peor que hace es dejar restar un pelo de mas.
+         *
+         * La puerta de Q/P es lo unico que queda de decision, y separa las
+         * dos cosas que de verdad hay que separar: una portadora QUIETA sin
+         * continua da Q/P del orden del ruido, y una continua de verdad
+         * -aunque sea mayor que la portadora- da Q/P del orden de 0,3.
+         */
+        {
+            float32_t P = s_m2  * (1.0f / (float32_t)SDR_RX_BLOCK_SAMPLES_WFM);
+            float32_t Q = s_mad * (0.7853982f / (float32_t)SDR_RX_BLOCK_SAMPLES_WFM);
+            /*
+             * Y SOLO SI EL NIVEL NO ACABA DE CAMBIAR. La desviacion se mide
+             * contra la media del bloque ANTERIOR, asi que en cuanto el
+             * nivel da un salto -mover el dial de una local a una emisora
+             * floja- esa desviacion es el salto y no el rizado, y el numero
+             * que sale no significa nada. Un bloque de lenteja: en el
+             * siguiente la referencia ya es la buena. Medido en
+             * sim/wfm_silencio.c, que es donde se vio.
+             */
+            float32_t salto = P - s_wfm_p_ant;
+
+            if (salto < 0.0f) { salto = -salto; }
+            s_wfm_p_ant = P;
+            s_wfm_dc_est = 0.0f;
+            s_wfm_hay_dc = 0U;
+            if ((P > 1.0f) && (Q > (WFM_DC_PUERTA * P))
+                && (salto < (WFM_DC_SALTO * P))) {
+                float32_t disc = P * P - 4.0f * Q * Q;
+                float32_t r, ma, mb, mc;
+
+                if (disc < 0.0f) { disc = 0.0f; }
+                r  = sqrtf(disc);
+                ma = sqrtf(0.5f * (P + r));    /* el mayor de los dos */
+                mb = sqrtf(0.5f * (P - r));    /* y el menor */
+                mc = sqrtf(s_wfm_dc_crudo_i * s_wfm_dc_crudo_i
+                         + s_wfm_dc_crudo_q * s_wfm_dc_crudo_q);
+                /*
+                 * CUAL DE LAS DOS RAICES ES LA CONTINUA: LA QUE SE PARECE
+                 * AL PROMEDIO COMPLEJO. Y SOLO ESO.
+                 *
+                 * AQUI HABIA UN ATAJO POR TAMAÑO, Y ERA UN FALLO GORDO -
+                 * 26/10/2026, duodecima vuelta de la revision a fondo.
+                 *
+                 * Decia: "si una raiz es cuatro veces la otra, la grande es
+                 * la portadora y la pequeña la continua". Eso solo es
+                 * cierto cuando la portadora es la grande. Cuando la
+                 * CONTINUA es la grande -que es justo el caso para el que
+                 * nacio todo esto, una emisora floja encima de un
+                 * desplazamiento- la regla se cumple al reves y devuelve LA
+                 * AMPLITUD DE LA EMISORA como si fuera la fuga. Entonces el
+                 * quitador le resta a la emisora su propia portadora y la
+                 * emisora desaparece.
+                 *
+                 * Medido, continua de 1.600 cuentas, beta 10, tono de 1 kHz,
+                 * mirando el audio que sale:
+                 *
+                 *     continua/portadora   tono    basura
+                 *            4,0          12.518    0,55 %
+                 *            5,0              20   99,91 %   <- acantilado
+                 *            6,3              17   99,88 %
+                 *
+                 * No es una degradacion suave: entre 4 y 5 la emisora pasa
+                 * de oirse bien a no oirse. Quitando el atajo, las mismas
+                 * dos casillas dan 12.519 con 0,50 % y 12.518 con 0,46 %.
+                 *
+                 * Y lo que el atajo decia defender -una portadora casi sin
+                 * modular, que tambien vive en continua y por tanto se
+                 * parece al promedio complejo- ya no hace falta
+                 * defenderlo: eso lo cierra la puerta de Q/P. Comprobado
+                 * barriendo beta de 0,05 a 5 contra ruido del 0 al 10 % sin
+                 * continua ninguna: con atajo y sin el, se resta 0,0 en las
+                 * cuarenta y dos casillas. El atajo era de cuando la puerta
+                 * estaba en 0,03, y se quedo aqui cuando subio a 0,15.
+                 *
+                 * NOTA DE ALCANCE. La puerta pide Q > 0,15*P, o sea
+                 * A*D > 0,15*(A^2+D^2), que se cumple mientras las dos
+                 * esten dentro de un factor 6,7. Fuera de ahi el estimador
+                 * calla y no se resta nada, que es lo correcto: una emisora
+                 * 16 dB por debajo del desplazamiento no se saca de ningun
+                 * sitio.
+                 */
+                s_wfm_dc_est = (fabsf(ma - mc) < fabsf(mb - mc)) ? ma : mb;
+                s_wfm_hay_dc = 1U;
+            }
         }
         rf_clip_veredicto(hits);
 
         sum_i *= (1.0f / (float32_t)SDR_RX_BLOCK_SAMPLES_WFM);
         sum_q *= (1.0f / (float32_t)SDR_RX_BLOCK_SAMPLES_WFM);
+        /* Si la fase ha barrido, este bloque cuenta como audio. Ver
+         * WFM_AUDIO_BARRE, que es donde esta la cuenta. */
+        if ((sum_i * sum_i + sum_q * sum_q)
+            < (WFM_AUDIO_BARRE * s_m2 * (1.0f / (float32_t)SDR_RX_BLOCK_SAMPLES_WFM))) {
+            s_wfm_hubo_audio = 1U;
+        }
         {
             float32_t a = WFM_DC_ALFA;
-            if (s_wfm_dc_n < 512U) {
-                s_wfm_dc_n++;
-                a = 1.0f / (float32_t)s_wfm_dc_n;   /* media corriente */
+            /*
+             * Y SOLO SI LA PUERTA SE HA ABIERTO ESTE BLOQUE - 26/10/2026,
+             * duodecima vuelta de la revision a fondo.
+             *
+             * El promedio complejo de la entrada vale D mas lo que la
+             * portadora deje sin promediarse, o sea A*<e^{j fase}>. Ese
+             * segundo termino solo es pequeño si la fase BARRE LA VUELTA
+             * dentro del bloque. Cuando la emisora se calla -el hueco
+             * entre canciones, la pausa del locutor, el identificativo- la
+             * fase se queda quieta y el promedio deja de ser la continua:
+             * pasa a ser la continua MAS LA PORTADORA ENTERA.
+             *
+             * Y como el acumulador tiene 1,37 s de constante, basta un
+             * hueco de canción para que se vaya. Medido, portadora de
+             * 2.000 cuentas con una continua de verdad de 600 en la I:
+             *
+             *     hueco    |crudo|   angulo    basura al volver
+             *     0,00 s     139,8   -35,0        0,29 %
+             *     0,80 s     592,5  +138,0        1,42 %
+             *     1,49 s     957,9  +138,5        1,08 %
+             *     5,87 s   1.487,1  +138,8        0,87 %
+             *
+             * La continua de verdad esta en 0 grados. Tras seis segundos
+             * de hueco el vector que la radio cree que es la fuga apunta a
+             * 139 grados de donde deberia y pesa el doble: lo que se resta
+             * ya no es la fuga, es un trozo de la portadora girado.
+             *
+             * La puerta es justamente el certificado que falta, porque
+             * Q = A*D solo sale grande si la envolvente riza, y la
+             * envolvente solo riza si la fase barre. Con el acumulador
+             * atado a ella, el hueco no mueve nada: las mismas seis
+             * casillas dan 139,8 y -35,0 grados las seis, y la basura se
+             * queda entre 0,20 y 0,29 %.
+             *
+             * DE PASO ARREGLA UNA RADIO SIN FUGA NINGUNA. Alimentandose de
+             * todos los bloques, el acumulador acababa valiendo el residuo
+             * J0 de la propia emisora: medido en sim/wfm_tope.c, con el
+             * offset a CERO la radio decia restar 152 cuentas y la
+             * distorsion salia 0,32 %. Atado a la puerta resta 0,0 y la
+             * distorsion baja a 0,08 %.
+             */
+            /*
+             * AQUI HABIA UN SEGUNDO ACUMULADOR, Y SOBRABA - 26/10/2026,
+             * quinta vuelta de la revision a fondo.
+             *
+             * s_wfm_dc_i/q se alimentaban con el mismo paso que el crudo y
+             * despues se recortaban, o sea que eran "el crudo, pero con
+             * memoria de haber estado topado". Y esa memoria hacia daño:
+             * mientras el tope valia cero -los primeros bloques, hasta que
+             * la fuga esta medida- el acumulador se quedaba clavado en
+             * cero, y cuando el tope se abria tenia que volver a converger
+             * desde cero con la constante de 1,37 s. Medido en
+             * sim/wfm_dc.c: la emisora debil contra el offset tardaba casi
+             * cuatro segundos en limpiarse en vez de dos.
+             *
+             * Ahora lo que se resta se DERIVA del crudo en cada bloque,
+             * recortandolo. Es lo mismo que habia pero sin la memoria del
+             * recorte: el tope sigue acotando exactamente igual lo que se
+             * resta, y en cuanto se abre, lo que se resta ya esta donde
+             * tiene que estar.
+             */
+            /*
+             * EL CRUDO LLEVA SU PROPIO ACUMULADOR, Y NO ES UN DETALLE.
+             *
+             * La primera version de esto copiaba aqui s_wfm_dc_i, que es
+             * el estado PERSISTENTE y que el recorte de abajo pisa. O sea
+             * que al entrar en el bloque siguiente ya venia topado, y el
+             * "crudo" salia siendo tope mas un paso de alfa: con una fuga
+             * de verdad de 10.000 cuentas el renglon decia "mide 2065,
+             * quita 2049". El instrumento daba el veredicto AL REVES justo
+             * en el caso para el que se hizo.
+             *
+             * Con acumulador propio -que se alimenta de si mismo y no se
+             * recorta nunca- mide lo que hay.
+             */
+            if (s_wfm_hay_dc) {
+                if (s_wfm_dc_n < 512U) {
+                    s_wfm_dc_n++;
+                    a = 1.0f / (float32_t)s_wfm_dc_n;  /* media corriente */
+                }
+                s_wfm_dc_crudo_i += a * (sum_i - s_wfm_dc_crudo_i);
+                s_wfm_dc_crudo_q += a * (sum_q - s_wfm_dc_crudo_q);
             }
-            s_wfm_dc_i += a * (sum_i - s_wfm_dc_i);
-            s_wfm_dc_q += a * (sum_q - s_wfm_dc_q);
+            /*
+             * OJO AL ALCANCE DE LA GUARDA: envuelve el ACUMULADOR y nada
+             * mas. El tope de aqui abajo tiene que seguir corriendo en
+             * todos los bloques, porque lo que se resta se DERIVA del
+             * crudo en cada uno (ver el comentario de la quinta vuelta un
+             * poco mas arriba): si se parase tambien, volveria la memoria
+             * del recorte que aquella vuelta quito, y con ella los casi
+             * cuatro segundos que tardaba en limpiarse la emisora debil
+             * contra el offset.
+             */
+            /*
+             * LA ESTIMACION SIN TOPAR, QUE ES LO QUE NO SE PODIA VER -
+             * 26/10/2026, revision a fondo de WFM.
+             *
+             * El tope de abajo hace su trabajo, pero tiene un efecto
+             * secundario que deja ciego al unico instrumento que hay:
+             * demod_wfm_get_dc() devolvia el valor YA TOPADO, o sea el tope
+             * exactos tanto si la fuga son 600 cuentas como si son 8.000.
+             * Y su propio comentario dice que ese numero "ES el suelo de
+             * sensibilidad de WFM" - que es verdad justo mientras no este
+             * saturado, y no habia forma de saber si lo estaba.
+             *
+             * Asi que se guarda aparte lo que el lazo cree de verdad,
+             * ANTES de recortarlo. Si los dos coinciden, el tope no esta
+             * tocando nada; si no, la diferencia es lo que esta cadena se
+             * esta dejando sin corregir, que es exactamente el residuo que
+             * le tuerce el angulo al discriminador.
+             */
             /* EL TOPE, que es lo que hace que esto sea seguro. Ver su
              * comentario delante de fm_discriminate(). */
-            if (s_wfm_dc_i >  (float32_t)WFM_DC_TOPE) { s_wfm_dc_i =  (float32_t)WFM_DC_TOPE; }
-            if (s_wfm_dc_i < -(float32_t)WFM_DC_TOPE) { s_wfm_dc_i = -(float32_t)WFM_DC_TOPE; }
-            if (s_wfm_dc_q >  (float32_t)WFM_DC_TOPE) { s_wfm_dc_q =  (float32_t)WFM_DC_TOPE; }
-            if (s_wfm_dc_q < -(float32_t)WFM_DC_TOPE) { s_wfm_dc_q = -(float32_t)WFM_DC_TOPE; }
+            {
+                /*
+                 * EL MENOR DE LOS DOS... PERO CON SUELO, Y EL SUELO HACE
+                 * FALTA - 26/10/2026, al medirlo.
+                 *
+                 * Con el tope solo proporcional, una emisora MUY floja se
+                 * queda sin correccion ninguna: con 120 cuentas de
+                 * portadora el tope sale a 48 y la fuga de 300 no se puede
+                 * quitar. Y ese es justo el caso para el que nacio todo
+                 * esto el 11/10/2026 -"emisora debil contra un offset"-,
+                 * asi que su banco se puso rojo en cuanto se quito el
+                 * numero absoluto.
+                 *
+                 * O sea que hacen falta los tres: un SUELO, que es lo
+                 * que de verdad hay que poder restar; un TECHO absoluto,
+                 * que es lo mas que tiene sentido restarle a nada; y
+                 * entre ellos LA FRACCION de la portadora, que es la que
+                 * protege a las medianas sin atar a las fuertes.
+                 *
+                 * El suelo ya NO es un numero inventado: es s_rf_fuga,
+                 * que esta cadena se mide sola mientras hay modulacion.
+                 * Ver su comentario, que cuenta lo que costaba el 512 de
+                 * antes, y el bloqueador de continua, que es donde se
+                 * mide.
+                 *
+                 * Y UNA ADVERTENCIA PARA EL QUE VENGA A TOCAR LA
+                 * FRACCION: s_sig_peak se mide DESPUES de haber restado
+                 * la continua (ver el medidor de S, unas lineas mas
+                 * abajo), asi que esto es un lazo cerrado. El punto fijo
+                 * de t = F*(A - t) es t = A*F/(1+F), o sea que con F =
+                 * 0,40 lo que se resta de verdad es el 28,6 % de la
+                 * portadora, no el 40 %. Medido, clavado en 2/7, en
+                 * sim/wfm_revision.c y en sim/wfm_silencio.c. La tabla de
+                 * arriba -el 51 % y el 68 % se portan bien- se midio
+                 * contra la portadora de verdad, asi que el margen real
+                 * es todavia mayor que el que aquel razonamiento creia.
+                 */
+                /*
+                 * ==========================================================
+                 * SOLO SE QUITA LO QUE SE HA MEDIDO - 26/10/2026, quinta
+                 * vuelta. Esto sustituye a la fraccion de la portadora, y
+                 * hay que contar por que, porque la fraccion llevaba aqui
+                 * desde el 11/10 y parecia lo prudente.
+                 * ==========================================================
+                 *
+                 * El error de fondo era creer que el residuo de continua de
+                 * una portadora de FM modulada es pequeño. Es el termino J0
+                 * de Bessel, y J0 NO ES PEQUEÑO en el tramo de modulacion
+                 * que mas suena: vale 0,40 en beta 3,8, 0,30 en beta 7 y
+                 * 0,25 en beta 10, o sea desviaciones de 5 a 13 kHz con
+                 * audio de 1 kHz, que es un pasaje tranquilo NORMAL. Solo
+                 * es el 3,8 % con el composite entero, que es lo unico que
+                 * median los dos barridos que fijaron la fraccion.
+                 *
+                 * Asi que una fraccion del 28,6 % de la portadora le da
+                 * permiso al lazo para restar casi todo ese residuo. Y el
+                 * residuo NO ES FUGA: es la emisora. Restarselo a la
+                 * emisora es distorsionarla. Medido con el banco del propio
+                 * arbol, sim/wfm_zumbido.c, fila de +-10 kHz:
+                 *
+                 *     tope  512   THD 0,57 %   H3 -66,3 dBc
+                 *     tope 1024   THD 1,17 %   H3 -55,2 dBc
+                 *     tope 2048   THD 2,43 %   H3 -46,8 dBc
+                 *
+                 * y con portadora de 12.000 y +-5 kHz, 7,66 %. La raya roja
+                 * de ese banco es el 2 %. Aspereza permanente en voz floja
+                 * y musica suave, EN CUALQUIER EMISORA Y SIN QUE LA RADIO
+                 * TENGA FUGA NINGUNA.
+                 *
+                 * La regla nueva es la que deberia haber sido desde el
+                 * principio: se resta LA FUGA MEDIDA y nada mas. En una
+                 * radio sin fuga, s_rf_fuga vale cero y aqui no se resta
+                 * nada -que es exactamente lo correcto: no hay nada que
+                 * quitar-. En una radio con fuga vale la fuga. Y el techo
+                 * absoluto sigue siendo el ultimo seguro.
+                 *
+                 * Ver s_rf_fuga: se mide como el MINIMO de lo que da el
+                 * lazo sin topar, que es lo que separa la fuga -constante-
+                 * del residuo de la emisora -que cambia con el programa y
+                 * pasa por cero cada vez que beta cruza un cero de J0-.
+                 */
+                float32_t t = s_rf_fuga;
+
+                float32_t m;
+
+                if (t > (float32_t)WFM_DC_TOPE)  { t = (float32_t)WFM_DC_TOPE; }
+                s_wfm_dc_i = s_wfm_dc_crudo_i;
+                s_wfm_dc_q = s_wfm_dc_crudo_q;
+                /*
+                 * Y SE TOPA EL VECTOR, NO CADA EJE - 26/10/2026, tercera
+                 * vuelta de la revision a fondo.
+                 *
+                 * Topar la I y la Q por separado deja pasar hasta t*raiz(2)
+                 * en la diagonal, un 41 % mas de lo que el numero dice. Lo
+                 * que se le resta a la portadora es el MODULO, no cada eje,
+                 * asi que el tope tiene que ser del modulo o el numero no
+                 * significa lo que dice su comentario. Medido en
+                 * sim/wfm_calienta.c: con el tope por ejes, el primer bloque
+                 * tras un olvido restaba 1.193 de una portadora de 2.000
+                 * -el 60 %- cuando la fraccion decia 28,6 %.
+                 *
+                 * Una raiz y dos multiplicaciones por bloque, y solo cuando
+                 * el tope muerde.
+                 */
+                m = sqrtf(s_wfm_dc_i * s_wfm_dc_i + s_wfm_dc_q * s_wfm_dc_q);
+                if (m > t) {
+                    float32_t k = t / m;
+                    s_wfm_dc_i *= k;
+                    s_wfm_dc_q *= k;
+                }
+            }
         }
     }
 
@@ -3160,11 +4742,143 @@ void demod_wfm_process_raw(const int16_t *raw_interleaved)
      * estado interno de dos etapas mas de filtro- durante un bloque
      * entero de mas antes de que se quite, en vez de arrancarla de
      * inmediato como hace el diseño validado. */
-    for (n = 0; n < SDR_RX_BLOCK_SAMPLES_WFM; n++) {
-        float y = s_wfm_env[n] - dcb_x1 + WFM_DCB_R * dcb_y1;
-        dcb_x1 = s_wfm_env[n];
-        dcb_y1 = y;
-        s_wfm_env[n] = y;
+    {
+        for (n = 0; n < SDR_RX_BLOCK_SAMPLES_WFM; n++) {
+            float y = s_wfm_env[n] - dcb_x1 + WFM_DCB_R * dcb_y1;
+            dcb_x1 = s_wfm_env[n];
+            dcb_y1 = y;
+            s_wfm_env[n] = y;
+        }
+        /*
+         * ==============================================================
+         * Y DE AQUI SALE LA FUGA, MEDIDA EN FM ANCHA Y SIN AMBIGUEDAD
+         * 26/10/2026, quinta vuelta de la revision a fondo. Van tres
+         * intentos y los dos primeros estan contados abajo, porque los dos
+         * parecian razonables.
+         * ==============================================================
+         *
+         * El recorte de arriba resta EXACTAMENTE la fuga medida, asi que
+         * de este numero depende todo. Y medirlo en FM ancha parece
+         * imposible, porque aqui la portadora tambien vive en continua.
+         *
+         * Lo que lo hace posible son dos cosas:
+         *
+         *   1. EL RIZADO DE LA ENVOLVENTE dice si hay continua encima.
+         *      La FM es de envolvente constante; sumarle una continua la
+         *      pone a pasear. Ver s_wfm_hay_dc, que se calcula en el
+         *      medidor de S de mas arriba. Si no hay rizado no hay nada
+         *      que medir, y entonces no se mide: asi una emisora limpia
+         *      -modulada o callada- no puede ensuciar el numero.
+         *   2. EL MINIMO separa la fuga del residuo de la emisora. Lo que
+         *      da el lazo sin topar es "fuga + J0(beta) * portadora", y el
+         *      segundo termino CAMBIA con el programa: J0 pasa por cero
+         *      cada vez que beta cruza 2,4, 5,5, 8,65... En esos instantes
+         *      lo que mide el lazo ES la fuga, exacta. La fuga es lo unico
+         *      constante, asi que es el minimo.
+         *
+         * LOS DOS INTENTOS DE ANTES, para que no se repitan:
+         *
+         *   - el primero guardaba la media de lo medido. Una emisora local
+         *     dejaba el suelo en cientos de cuentas -su propio J0- y se lo
+         *     comia a la emisora floja que sintonizaras detras: medido, el
+         *     92 % de la portadora de una de 600 cuentas.
+         *   - el segundo le descontaba un 10 % del pico, creyendo que J0
+         *     valia como mucho un 3,8 %. J0 vale 0,40 en beta 3,8 y 0,25
+         *     en beta 10, que son desviaciones de 5 a 13 kHz: un pasaje
+         *     tranquilo normal. Con portadora de 12.000 el suelo se iba a
+         *     2.730 en una radio SIN FUGA NINGUNA.
+         *   - y la puerta de los dos era "hay modulacion", medida por la
+         *     desviacion que sale del discriminador. Esa puerta se cierra
+         *     justo cuando la continua es MAYOR que la portadora, porque
+         *     entonces el vector no da la vuelta al origen y la
+         *     desviacion que sale es pequeña. O sea que se cerraba en el
+         *     unico caso para el que todo esto existe.
+         */
+        /*
+         * OCHO BLOQUES, NO SESENTA Y CUATRO - 26/10/2026, quinta vuelta.
+         * El acumulador de arriba arranca con media corriente (alfa = 1/n),
+         * asi que ya vale algo desde el primer bloque; los 64 de la primera
+         * version eran prudencia de mas y costaban caro. Mientras el suelo
+         * no esta medido no se resta NADA, y con una continua del tamaño de
+         * la portadora eso significa que el vector pasa por el origen y el
+         * discriminador suelta picos enormes que le cargan el automatico de
+         * audio. Medido en sim/wfm_dc.c: con 64 bloques de espera, el
+         * automatico tardaba casi dos segundos en soltar lo que se tragaba
+         * en los primeros 170 ms.
+         */
+        if (s_wfm_dc_n >= 8U) {
+            float32_t f = s_wfm_dc_est;
+
+            /*
+             * MINIMO CON VENTANA: baja al instante y sube solo al cerrar
+             * la ventana, con el menor de lo que haya habido en ella.
+             *
+             * Bajar deprisa es seguro -restar de menos nunca rompe nada- y
+             * subir despacio es lo que impide que un transitorio, o un
+             * beta que pase cerca de un maximo de J0, deje el suelo alto.
+             * La ventana son WFM_FUGA_VENTANA bloques, la misma constante
+             * de tiempo que el estimador: cuando el uno se ha enterado de
+             * un cambio, el otro tambien.
+             *
+             * Y solo cuentan los bloques con rizado: ver s_wfm_hay_dc. Si
+             * en toda la ventana no hubo ninguno -emisora limpia, o
+             * callada- no se toca nada y se conserva lo ultimo medido.
+             */
+            if (s_wfm_hay_dc) {
+                if (f < s_wfm_fuga_cand) { s_wfm_fuga_cand = f; }
+                if ((s_rf_fuga_n == 0U) || (f < s_rf_fuga)) {
+                    s_rf_fuga_n = 1U;
+                    s_rf_fuga = f;
+                }
+            }
+            s_wfm_fuga_vent++;
+            if (s_wfm_fuga_vent >= WFM_FUGA_VENTANA) {
+                s_wfm_fuga_vent = 0U;
+                if (s_wfm_fuga_cand < 3.0e38f) {
+                    s_rf_fuga = s_wfm_fuga_cand;
+                    s_rf_fuga_n = 1U;
+                } else if (s_wfm_hubo_audio) {
+                    /*
+                     * Y SI EN TODA LA VENTANA NO HUBO NADA QUE MEDIR, EL
+                     * SUELO SE CAE - 26/10/2026, septima vuelta.
+                     *
+                     * Aqui no habia rama: el numero se conservaba. Y la
+                     * puerta no se abre nunca en una emisora limpia, asi
+                     * que lo medido en un canal ruidoso se quedaba clavado
+                     * PARA SIEMPRE y se lo restaba despues a la emisora
+                     * buena. Medido: pasar por un canal vacio con ruido y
+                     * quedarse en una local dejaba la local al 7,9 % de
+                     * distorsion indefinidamente.
+                     *
+                     * La puerta cerrada una ventana entera significa "aqui
+                     * no hay continua que merezca la pena", y eso es una
+                     * medida, no una falta de medida. A la CUARTA PARTE
+                     * cada vez: en cuatro ventanas -cinco segundos y
+                     * medio- no queda nada. (El comentario decia "a la
+                     * mitad" y el codigo dice 0,25; corregido el
+                     * 26/10/2026, duodecima vuelta, para que el siguiente
+                     * que venga a ajustar la velocidad de caida lea lo
+                     * mismo en los dos sitios.)
+                     */
+                    s_rf_fuga *= 0.25f;
+                }
+                /*
+                 * PERO SOLO SI HUBO AUDIO EN LA VENTANA. Una emisora
+                 * CALLADA no dice nada: su portadora quieta con una
+                 * continua encima da un vector estatico, sin rizado, y eso
+                 * se parece a "no hay continua" tanto como a "no se puede
+                 * saber". Tirar el numero ahi seria perderlo en cada hueco
+                 * de programa, que es justo cuando el residuo que quede sin
+                 * quitar mas se nota al volver el audio.
+                 *
+                 * El aviso de que hay audio es que la fase de la
+                 * portadora haya barrido, que se mide arriba con el
+                 * promedio complejo contra P. Ver WFM_AUDIO_BARRE.
+                 */
+                s_wfm_hubo_audio = 0U;
+                s_wfm_fuga_cand = 3.4e38f;
+            }
+        }
     }
 
     /*
@@ -3180,6 +4894,85 @@ void demod_wfm_process_raw(const int16_t *raw_interleaved)
      */
     if (rds_activo()) {
         rds_feed(s_wfm_env, SDR_RX_BLOCK_SAMPLES_WFM);
+    }
+
+    /*
+     * 2c. EL SILENCIADOR, que mide el ruido de ARRIBA del multiplex. Ver
+     * WFM_SQL_B0 y los suyos, que es donde esta contado entero. Va aqui
+     * por lo mismo que el RDS: dos lineas mas abajo la deenfasis se come
+     * lo que hay que medir.
+     */
+    if (s_wfm_sql_umbral > WFM_SQL_UMBRAL_MIN) {
+        float x1 = s_wfm_sql_x1, x2 = s_wfm_sql_x2;
+        float y1 = s_wfm_sql_y1, y2 = s_wfm_sql_y2;
+        float suma = 0.0f;
+        float db;
+
+        for (n = 0; n < SDR_RX_BLOCK_SAMPLES_WFM; n++) {
+            float x = s_wfm_env[n];
+            float y = WFM_SQL_B0 * x + WFM_SQL_B1 * x1 + WFM_SQL_B2 * x2
+                      - WFM_SQL_A1 * y1 - WFM_SQL_A2 * y2;
+            x2 = x1; x1 = x;
+            y2 = y1; y1 = y;
+            suma += fabsf(y);
+        }
+        s_wfm_sql_x1 = x1; s_wfm_sql_x2 = x2;
+        s_wfm_sql_y1 = y1; s_wfm_sql_y2 = y2;
+
+        /* El +1 antes del logaritmo: el silencio de verdad da 0 dB y no
+         * menos infinito. Mismo apaño que el silenciador de AM. */
+        db = 20.0f * log10f((suma * (1.0f / (float)SDR_RX_BLOCK_SAMPLES_WFM))
+                            + 1.0f);
+        s_wfm_sql_db = WFM_SQL_ALFA * s_wfm_sql_db
+                       + (1.0f - WFM_SQL_ALFA) * db;
+
+        /*
+         * LA RAYA, y por que se resta. El mando del usuario es el mismo
+         * que el de AM: desde su suelo -el "apagado" de toda la vida- hacia
+         * arriba. Aqui arriba significa "silencia mas", o sea tolerar menos
+         * ruido, o sea BAJAR la raya desde el canal vacio. Con el mando en
+         * el suelo la raya queda por encima de lo que da un canal vacio y
+         * esto no cierra jamas, que es exactamente lo que el suelo promete.
+         */
+        {
+            float raya = WFM_SQL_REF_DB - s_wfm_sql_umbral;
+            float media = WFM_SQL_HIST_DB * 0.5f;
+
+            if (s_wfm_sql_abierto) {
+                if (s_wfm_sql_db > raya + media) { s_wfm_sql_abierto = 0U; }
+            } else {
+                if (s_wfm_sql_db < raya - media) { s_wfm_sql_abierto = 1U; }
+            }
+        }
+
+        if (!s_wfm_sql_abierto) {
+            /* Callado: se borra el multiplex ANTES de la deenfasis, igual
+             * que hace el de AM antes de su cadena. Las etapas de abajo
+             * aguantan un bloque mudo sin enterarse -el automatico baja su
+             * pico como con cualquier pasaje flojo- y asi no hay que pasar
+             * una bandera por todas ellas. El RDS, que se pincha arriba, ya
+             * ha visto el multiplex entero: callar el altavoz no tiene por
+             * que callar el decodificador. */
+            for (n = 0; n < SDR_RX_BLOCK_SAMPLES_WFM; n++) {
+                s_wfm_env[n] = 0.0f;
+            }
+        }
+    } else {
+        /*
+         * APAGADO ES APAGADO, Y NO SE PAGA - 26/10/2026, decimocuarta
+         * vuelta. El bucle de arriba son 14 instrucciones por muestra, o
+         * sea unos 7.000 ciclos por bloque, y con el mando en su suelo
+         * -que es el valor de fabrica- no servian para nada. El de AM
+         * tiene el mismo defecto y es anterior.
+         *
+         * Se deja el estado donde pueda arrancar limpio en cuanto se
+         * encienda: el biquad converge en tres bloques y el silencio de
+         * entrada del modo son doscientos.
+         */
+        s_wfm_sql_x1 = 0.0f; s_wfm_sql_x2 = 0.0f;
+        s_wfm_sql_y1 = 0.0f; s_wfm_sql_y2 = 0.0f;
+        s_wfm_sql_db = 0.0f;
+        s_wfm_sql_abierto = 1U;
     }
 
     /* 3a. De-emphasis, single-pole LPF (see WFM_DEEMPH_ALPHA's
@@ -3289,7 +5082,7 @@ void demod_wfm_process_raw(const int16_t *raw_interleaved)
      * mezclarse con el. Ver bip.h. Apagado no cuesta nada. */
     bip_mete(s_wfm_audio_out, (uint32_t)SDR_RX_BLOCK_SAMPLES_WFM,
              192000.0f);   /* la tasa de WFM, ver SDR_RX_BLOCK_SAMPLES_WFM */
-    gd32_i2s_stream_write_half(s_wfm_audio_out);
+    gd32_i2s_stream_write_half(s_wfm_audio_out, (uint32_t)SDR_RX_BLOCK_SAMPLES_WFM);
 
     s_wfm_last_cycles = DWT->CYCCNT - cyc_start;
     }
@@ -3415,18 +5208,61 @@ static void fases_combina(const float32_t *i_dec, const float32_t *q_dec,
  * nombrarlos aqui es exactamente el "mover un trozo de proceso a una
  * funcion auxiliar" contra el que avisa su cabecera.
  */
-static void sam_banda_lateral(float32_t *ib, float32_t *qb, float32_t *salida)
+static void sam_banda_lateral(float32_t *ib, float32_t *qb, float32_t *salida,
+                              float32_t mez)
 {
     float32_t sign = (s_sam_banda == (uint8_t)SAM_BANDA_USB)
                    ? SSB_USB_SIGN : SSB_LSB_SIGN;
 
-    sam_bloque_cuad(&s_sam, ib, qb, ib, qb,
-                    (uint32_t)SDR_RX_BLOCK_SAMPLES, demod_am_active_fs_hz());
+    /*
+     * `mez` cruza entre el lazo y la senal sin desrotar; con 1 es lo de
+     * siempre. Ver sam_bloque_cuad_mez() en sam.h: con 0 esto es banda
+     * lateral de frecuencia fija, la misma cadena que USB/LSB.
+     */
+    sam_bloque_cuad_mez(&s_sam, ib, qb, ib, qb,
+                        (uint32_t)SDR_RX_BLOCK_SAMPLES,
+                        demod_am_active_fs_hz(), mez);
     arm_fir_decimate_f32(&s_decim_i_inst, ib, s_i_dec, SDR_RX_BLOCK_SAMPLES);
     arm_fir_decimate_f32(&s_decim_q_inst, qb, s_q_dec, SDR_RX_BLOCK_SAMPLES);
     fases_combina(s_i_dec, s_q_dec, sign, s_ssb_dec);
     arm_fir_interpolate_f32(&s_interp_inst, s_ssb_dec, salida,
                             s_dec_block_samples);
+}
+
+/*
+ * Gira el bloque `k` cuartos de vuelta POR MUESTRA: multiplicar por
+ * (-j)^(k*n), que para cualquier k entero sale de estos cuatro casos y no
+ * lleva ni una multiplicacion. Ver mix_reparte().
+ *
+ * El patron se repite cada cuatro muestras, asi que se resuelve el indice
+ * UNA vez para n%4 = 0..3 y el bucle va de cuatro en cuatro: dentro no
+ * queda ni un resto ni una bifurcacion.
+ */
+static void mix_grueso_aplica(float32_t *i, float32_t *q, uint32_t n, int8_t k)
+{
+    uint8_t m[4];
+    uint32_t t, j;
+
+    for (t = 0U; t < 4U; t++) {
+        int r = ((int)k * (int)t) & 3;
+
+        if (r < 0) { r += 4; }
+        m[t] = (uint8_t)r;
+    }
+
+    for (j = 0U; j + 3U < n; j += 4U) {
+        for (t = 0U; t < 4U; t++) {
+            float32_t vi = i[j + t];
+            float32_t vq = q[j + t];
+
+            switch (m[t]) {
+            case 1:  i[j + t] =  vq; q[j + t] = -vi; break;  /* x -j */
+            case 2:  i[j + t] = -vi; q[j + t] = -vq; break;  /* x -1 */
+            case 3:  i[j + t] = -vq; q[j + t] =  vi; break;  /* x +j */
+            default: break;                                  /* x +1 */
+            }
+        }
+    }
 }
 
 void demod_am_process_raw(const int16_t *raw_interleaved)
@@ -3457,6 +5293,10 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
     /* El recorte se mide dentro del deinterleave (etapa 0a), que ya carga
      * estas mismas muestras. Ver rf_clip_veredicto(). Sigue siendo sobre el
      * bloque crudo y despues de la guarda de bloque corrupto. */
+
+    /* El reparto grueso/fino del desplazamiento, derivado AQUI y no en el
+     * setter. Ver mix_reparte(). */
+    mix_reparte();
 
     dcb_x1 = s_dcb_x1;
     dcb_y1 = s_dcb_y1;
@@ -3499,25 +5339,143 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
      * rf_clip_veredicto(). */
     {
         uint32_t hits = 0U;
-        for (n = 0; n < SDR_RX_BLOCK_SAMPLES; n++) {
+        /* Las que ha traido el DMA: 512 con la radiofrecuencia al doble,
+         * 256 el resto del tiempo. Ver s_rf_doble. */
+        uint32_t n_crudo = s_rf_doble ? (uint32_t)SDR_RX_BLOCK_SAMPLES_WFM
+                                      : (uint32_t)SDR_RX_BLOCK_SAMPLES;
+
+        /*
+         * La continua que se resta es la de los bloques ANTERIORES, y lo que
+         * se acumula es lo que queda DESPUES de restarla: un lazo cerrado
+         * que converge a la fuga de verdad. Ver el comentario largo de
+         * s_rf_dc_i.
+         *
+         * El recorte de radiofrecuencia se mide sobre la muestra CRUDA, antes
+         * de tocarle nada: lo que satura es el convertidor, y restarle la
+         * continua antes de contarlo seria contar otra cosa. Es la misma
+         * regla que sigue la cadena de WFM.
+         */
+        float dci = s_rf_dc_i;
+        float dcq = s_rf_dc_q;
+        float sum_i = 0.0f;
+        float sum_q = 0.0f;
+        /*
+         * Y SOLO SI HAY MEZCLADOR. Sin desplazamiento la señal buena estaria
+         * justo en continua y esto se la comeria: es la ambiguedad que la
+         * cadena de WFM resuelve con un tope. Aqui no hace falta tope porque
+         * no hace falta la rama: con el oscilador aparcado el desplazamiento
+         * nunca es cero (NCO_OFF_MIN_HZ), y sin NCO vale Fs/4.
+         */
+        uint8_t quita_dc = (uint8_t)((s_mix_fino != 0.0f) || (s_mix_grueso != 0));
+
+        for (n = 0; n < n_crudo; n++) {
             int16_t vi = raw_interleaved[2U * n];
             int16_t vq = raw_interleaved[2U * n + 1U];
+            float   fi;
+            float   fq;
+
             hits += rf_clip_una(vi);
             hits += rf_clip_una(vq);
-            s_i_buf[n] = (float32_t)vi;
-            s_q_buf[n] = (float32_t)vq;
+            fi = (float32_t)vi - dci;
+            fq = (float32_t)vq - dcq;
+            sum_i += fi;
+            sum_q += fq;
+            s_i_buf[n] = fi;
+            s_q_buf[n] = fq;
         }
         rf_clip_veredicto(hits);
+
+        if (quita_dc && n_crudo != 0U) {
+            /* Media corriente los primeros bloques -alfa = 1/n, la
+             * convergencia mas rapida que hay sin sesgo- y seguimiento lento
+             * despues. Igual que s_wfm_dc_n. */
+            float inv = 1.0f / (float)n_crudo;
+            float alfa;
+
+            if (s_rf_dc_n < (uint8_t)RF_DC_ALFA_N) {
+                s_rf_dc_n++;
+                alfa = 1.0f / (float)s_rf_dc_n;
+            } else {
+                alfa = 1.0f / (float)RF_DC_ALFA_N;
+            }
+            s_rf_dc_i += alfa * (sum_i * inv);
+            s_rf_dc_q += alfa * (sum_q * inv);
+            /*
+             * AQUI SE PENSO EN GUARDAR ESTE NUMERO PARA LA FM ANCHA, Y SE
+             * QUITO EL MISMO DIA - 26/10/2026, tercera vuelta de la
+             * revision a fondo. Queda escrito para que nadie lo reponga.
+             *
+             * La idea era: aqui hay mezclador, asi que la emisora nunca
+             * esta en continua y este lazo converge a la fuga de verdad;
+             * pasemosle ese numero al recorte de WFM, que alli no se puede
+             * medir. Dos cosas la tumbaron:
+             *
+             *   - quien apaga la radio en FM ancha y la enciende no pasa
+             *     por esta cadena NUNCA. El suelo se quedaba a cero toda
+             *     la sesion, y eso ponia rojo a sim/wfm_dc.c.
+             *   - y la fuga de un detector por conmutacion no tiene por
+             *     que ser la misma con el oscilador en onda corta que en
+             *     VHF. "El mismo convertidor" no es "la misma fuga".
+             *
+             * La FM ancha se la mide ella sola, en su banda y a su
+             * ganancia, aprovechando que una portadora MODULADA casi no
+             * deja continua. Ver el final del bloqueador de continua de
+             * demod_wfm_process_raw().
+             */
+        } else if (!quita_dc) {
+            /* Sin mezclador no se corrige y ademas se olvida: si vuelve a
+             * haberlo, la fuga se vuelve a medir desde cero en vez de
+             * arrastrar la de hace diez minutos. */
+            s_rf_dc_i = 0.0f;
+            s_rf_dc_q = 0.0f;
+            s_rf_dc_n = 0U;
+        }
+
+        /* 0a-bis y 0a-ter, en este orden y no en el otro: ver mas abajo. */
+        (void)nb_process(s_i_buf, s_q_buf, n_crudo);
+
+        /*
+         * 0a-ter. EL DIEZMADOR DE MEDIO BANDA, 192 -> 96 kHz.
+         *
+         * Aqui se acaba la radiofrecuencia al doble: de esta linea en
+         * adelante el bloque son 256 muestras a 96 kHz pase lo que pase,
+         * que es lo que hace que ni la bajada en frecuencia, ni el filtro
+         * de canal, ni la cadena diezmada, ni los quince decodificadores
+         * tengan que enterarse de nada. Ver User/semibanda.h, y en
+         * particular por que va DELANTE de la bajada en frecuencia.
+         */
+        if (s_rf_doble) {
+            /*
+             * 0a-bis-bis. EL GIRO GRUESO, en cuartos de vuelta y SIN
+             * MULTIPLICAR. Trae la señal a menos de 24 kHz de continua
+             * ANTES del diezmador, que es lo que permite que el NCO
+             * alcance los 192 kHz enteros. Ver mix_reparte().
+             *
+             * Con el desplazamiento dentro de los 40 kHz de siempre esto
+             * no se ejecuta: s_mix_grueso vale cero.
+             */
+            if (s_mix_grueso != 0) {
+                mix_grueso_aplica(s_i_buf, s_q_buf,
+                                  (uint32_t)SDR_RX_BLOCK_SAMPLES_WFM,
+                                  s_mix_grueso);
+            }
+            semibanda_diezma(s_i_buf, s_q_buf, (uint32_t)SDR_RX_BLOCK_SAMPLES);
+        }
     }
 
-    /* 0a-bis. NOISE BLANKER (23/09/2026). Va EXACTAMENTE aqui y no una
-     * linea mas abajo: a estas alturas el bloque sigue teniendo los 96 kHz
-     * enteros, que es donde un pulso todavia dura las pocas muestras que
-     * dura. En cuanto pase por el filtro de canal de 0c, ese mismo pulso se
-     * convierte en el timbre del filtro -milisegundos, y ya sin destacar
-     * sobre nada-, y no habria forma de cazarlo. Ver nb.h. Con el nivel a 0
-     * sale por la puerta sin tocar el bloque. */
-    (void)nb_process(s_i_buf, s_q_buf, SDR_RX_BLOCK_SAMPLES);
+    /* 0a-bis. NOISE BLANKER (23/09/2026). Va EXACTAMENTE donde esta -justo
+     * detras del desentrelazado, dentro del bloque de arriba- y no una
+     * linea mas abajo: a estas alturas el bloque sigue teniendo la
+     * radiofrecuencia entera, que es donde un pulso todavia dura las pocas
+     * muestras que dura. En cuanto pase por el filtro de canal de 0c, ese
+     * mismo pulso se convierte en el timbre del filtro -milisegundos, y ya
+     * sin destacar sobre nada-, y no habria forma de cazarlo. Ver nb.h. Con
+     * el nivel a 0 sale por la puerta sin tocar el bloque.
+     *
+     * Y CON LA RADIOFRECUENCIA AL DOBLE VE EL DOBLE DE MUESTRAS, que para
+     * el es mejor: el mismo pulso de microsegundos dura el doble de
+     * muestras y destaca igual. Por eso va delante del diezmador y no
+     * detras. */
 
     /* 0b/0c: LOW-IF DOWN-MIX + CHANNEL FILTER - unconditional now
      * (05/08/2026): WFM moved to its OWN separate processing path
@@ -3541,16 +5499,21 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * en la nota de SINTONIA POR FRECUENCIA INTERMEDIA BAJA de
          * demod_am.h. Sin multiplicaciones: solo cambios de signo e
          * intercambios, y en el sitio. */
-        if (s_mix_hz != 0.0f) {
+        /*
+         * EL FINO, que con la radiofrecuencia normal ES el desplazamiento
+         * entero: mix_reparte() solo parte a 192 kHz y solo cuando no cabe.
+         * Ver su comentario.
+         */
+        if (s_mix_fino != 0.0f) {
             float fs = demod_am_active_fs_hz();
 
             /* Lo derivado, recalculado solo si alguna de sus dos entradas ha
              * cambiado - ver s_mix_nco. Dos comparaciones por bloque. */
-            if (s_mix_hz != s_mix_hz_puesto || fs != s_mix_fs_puesto) {
-                s_mix_hz_puesto = s_mix_hz;
+            if (s_mix_fino != s_mix_hz_puesto || fs != s_mix_fs_puesto) {
+                s_mix_hz_puesto = s_mix_fino;
                 s_mix_fs_puesto = fs;
-                s_mix_rapido = (s_mix_hz == fs * 0.25f) ? 1U : 0U;
-                nco_freq(&s_mix_nco, s_mix_hz, fs);
+                s_mix_rapido = (s_mix_fino == fs * 0.25f) ? 1U : 0U;
+                nco_freq(&s_mix_nco, s_mix_fino, fs);
             }
 
             if (s_mix_rapido) {
@@ -3581,14 +5544,39 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
                     s_q_buf[n + 3U] = hh2;
                 }
                 /*
-                 * Y se avanza la fase del NCO como si la hubiera generado el,
-                 * aunque no se haya usado. Cuesta una multiplicacion por
-                 * BLOQUE y evita un chasquido: con el NCO de sintonia puesto,
-                 * la distancia pasa por Fs/4 exactos al aparcar, asi que se
-                 * salta de este camino al otro y vuelta. Sin esto, cada salto
-                 * seria un corte de fase.
+                 * Y SE DEJA LA FASE DEL NCO DONDE ESTE CAMINO LA DEJA.
+                 *
+                 * Aqui habia esto:
+                 *
+                 *     s_mix_nco.fase += s_mix_nco.inc * SDR_RX_BLOCK_SAMPLES;
+                 *
+                 * con un comentario que decia que asi se evitaba un chasquido
+                 * al saltar de este camino al del NCO. LA SUMA VALE CERO.
+                 * Encontrado en la revision a fondo pedida por el usuario,
+                 * 24/10/2026: en este camino `inc` es exactamente 0x40000000
+                 * -Fs/4- y el bloque son 256 muestras, o sea 0x4000000000,
+                 * que truncado a 32 bits es cero. La linea no movia un bit y
+                 * la fase se quedaba con lo que hubiera dejado la ultima
+                 * mezcla por NCO, que es un valor cualquiera.
+                 *
+                 * Lo correcto es ponerla a CERO, y no es una eleccion: este
+                 * camino multiplica la muestra n por e^(-j2*pi*n/4) empezando
+                 * en identidad en n = 0, o sea que su referencia de fase ES
+                 * cero. Y 256 muestras a Fs/4 son 64 vueltas enteras, asi que
+                 * al acabar el bloque sigue siendo cero. Con esto, saltar de
+                 * aqui al NCO no tiene corte ninguno: nco_mezcla() con fase 0
+                 * e inc 0x40000000 da exactamente 1, -j, -1, +j, que es lo
+                 * que acaba de hacer este bucle.
+                 *
+                 * LO QUE ESTO NO ARREGLA, dicho para que no se repita el
+                 * error del comentario anterior: el salto en el otro sentido.
+                 * Al ENTRAR aqui desde el NCO, la fase que traia era
+                 * cualquiera y este camino empieza en cero igualmente. Eso
+                 * sigue siendo un escalon de hasta media vuelta, y arreglarlo
+                 * costaria multiplicaciones por muestra, que es justo lo que
+                 * este camino existe para no pagar.
                  */
-                s_mix_nco.fase += s_mix_nco.inc * (uint32_t)SDR_RX_BLOCK_SAMPLES;
+                s_mix_nco.fase = 0U;
             } else {
                 /* Cualquier otra distancia: NCO. Solo se llega aqui con el
                  * NCO de sintonia puesto. */
@@ -3686,8 +5674,23 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * pero las dos lecturas, los dos productos y la suma se ahorran. La
          * rama se predice perfecta: el modo no cambia dentro del bloque.
          */
-        const uint8_t es_nfm = (uint8_t)(s_mode == (uint8_t)DEMOD_MODE_NFM);
-
+        /* Y la suma de magnitudes solo si el silenciador la va a usar:
+         * son 256 raices por bloque. Ver sql_hace_falta(). */
+        const uint8_t es_nfm = (uint8_t)((s_mode == (uint8_t)DEMOD_MODE_NFM)
+                                         && sql_hace_falta());
+        /*
+         * AQUI SE ACUMULABA TAMBIEN LA POTENCIA DEL CANAL PARA EL BARRIDO,
+         * Y SE QUITO - 26/10/2026, el mismo dia.
+         *
+         * Salia gratis -m2 ya estaba calculado y solo se le sumaba-, pero
+         * medía el canal ENTERO: en banda lateral eso es un ancho mucho
+         * mayor que el de audio, asi que metia en la cuenta kilohercios de
+         * ruido que no se oyen y una voz quedaba a ras del margen. La
+         * medida esta ahora despues del filtro de audio, que es donde
+         * tiene sentido; ver demod_am_get_nivel_db() y el bloque de
+         * s_nivel_on, que ademas explica por que solo corre mientras el
+         * barrido anda.
+         */
         s_sq_sum_mag = 0.0f;
         for (n = 0; n < SDR_RX_BLOCK_SAMPLES; n++) {
             float m2 = s_i_buf[n] * s_i_buf[n] + s_q_buf[n] * s_q_buf[n];
@@ -3806,8 +5809,51 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
         {
         if (!s_sam_init_done) {
             s_sam_margen_puesto = s_sam_margen_hz;
+            /*
+             * ==========================================================
+             * *** EL ANCHO DEL LAZO BAJA DE 200 A 100 Hz - 27/10/2026,
+             * revision a fondo de espejos y armonicos. ***
+             * ==========================================================
+             *
+             * SAM rechazaba la banda contraria MUCHISIMO peor que USB con
+             * el mismo Hilbert detras, y el espejo nace DENTRO del PLL: una
+             * banda lateral encima de la portadora impone modulacion de
+             * fase, el lazo la sigue en parte, y el producto de esa
+             * oscilacion por la portadora reinyecta la señal en el otro
+             * lado. Por eso cae 6 dB por octava, que es la caida de un lazo
+             * de segundo orden por encima de su ancho.
+             *
+             * Medido en sim/sam_banda.c, rechazo de la banda contraria:
+             *
+             *     ancho      300 Hz    1000 Hz   3800 Hz
+             *     200 Hz    -16,4 dB   -22,0 dB  -39,9 dB   <- lo de antes
+             *     100 Hz    -20,5      -28,8     -44,6      <- esto
+             *      50 Hz    -21,9      -37,8     -48,5
+             *      25 Hz    -22,1      -53,2     -51,4
+             *
+             * Y POR QUE 100 Y NO 50, que ganaria otros nueve dB en el
+             * centro: porque a 50 el lazo DEJA DE ENGANCHAR. Medido en
+             * sim/sam_debil.c, que es el banco que existe justo para eso:
+             * con 50 Hz, una portadora a 200 o 240 Hz del centro y C/N de
+             * -6 dB ya no engancha -estando dentro del margen- y encima el
+             * aviso de "portadora fuera de alcance" deja de dispararse. Un
+             * SAM que no se agarra a una portadora que se mueve no sirve
+             * para lo que sirve un SAM.
+             *
+             * Con 100 pasan los cinco bancos de SAM -sam, sam_banda,
+             * sam_debil, sam_nr y sam_sin_eng- y se ganan de 4 a 7 dB. Es
+             * el unico punto del barrido donde se gana sin perder nada
+             * medible.
+             *
+             * (200.0f era el valor de WDSP, de donde viene este lazo.
+             * Apartarse de la referencia esta medido, no elegido.)
+             *
+             * Y en 300 Hz el rechazo se queda clavado en -22 por mucho que
+             * se estreche: alli ya no manda el lazo sino el propio Hilbert
+             * de 63 tomas, que a 300 Hz rechaza 27 dB. Ver s_fil_lo[].
+             */
             sam_init(&s_sam, demod_am_active_fs_hz(),
-                     (float32_t)s_sam_margen_puesto, 200.0f, 65.0f / 75.0f);
+                     (float32_t)s_sam_margen_puesto, 100.0f, 65.0f / 75.0f);
             s_sam_init_done = 1u;
         } else if (s_sam_margen_puesto != s_sam_margen_hz) {
             /* El ajuste se ha movido con la radio andando. Una comparacion
@@ -3920,8 +5966,45 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
                            (uint32_t)SDR_RX_BLOCK_SAMPLES,
                            demod_am_active_fs_hz());
             } else {
-                sam_banda_lateral(s_i_buf, s_q_buf, s_env);
+                sam_banda_lateral(s_i_buf, s_q_buf, s_env, 1.0f);
             }
+        } else if (s_sam_banda != (uint8_t)SAM_BANDA_AMBAS) {
+            /*
+             * ==========================================================
+             * Y CON UNA SOLA BANDA, LO QUE NO HAY ES AM - 22/10/2026
+             * ==========================================================
+             *
+             * Avisado por un usuario del repositorio.
+             *
+             * A SAM-U/SAM-L no se llega por gusto: se llega porque hay
+             * otra emisora pisando por un lado. Volver a la envolvente
+             * -que es lo que hace la rama de abajo, y para las dos bandas
+             * esta bien- devuelve ENTERA esa intrusa, porque el detector
+             * de envolvente no sabe separar bandas: es su naturaleza.
+             *
+             * Medido en sim/sam_sin_eng.c, portadora a 900 Hz de la
+             * sintonia e intrusa tan fuerte como la buena: con las dos
+             * bandas y con la superior salia EL MISMO numero hasta la
+             * unidad, con la intrusa 7,7 dB por encima del tono bueno. O
+             * sea que sin enganche elegir banda no hacia nada.
+             *
+             * Asi que aqui no se cruza hacia la envolvente: se cruza
+             * hacia BANDA LATERAL DE FRECUENCIA FIJA, o sea el mismo
+             * camino pero con el oscilador quieto en la sintonia. Es
+             * literalmente la cadena del modo USB/LSB, con su rechazo de
+             * la otra banda, y el lazo sigue corriendo por debajo para
+             * volver solo a la demodulacion sincrona en cuanto pueda.
+             *
+             * El cruce lo hace el propio nucleo del SAM sin un segundo
+             * buffer -quedan 5.676 bytes de RAM-: ver sam_bloque_cuad_mez().
+             *
+             * LO QUE CUESTA: con el oscilador quieto, la portadora se oye
+             * como un tono, porque eso es escuchar en banda lateral algo
+             * que lleva portadora. Se quita girando el mando, que es
+             * justo lo que no arreglaba nada cuando lo que sonaba era la
+             * intrusa.
+             */
+            sam_banda_lateral(s_i_buf, s_q_buf, s_env, s_sam_mezcla);
         } else {
             float32_t media = 0.0f;
             float32_t k = s_sam_mezcla;
@@ -3937,13 +6020,11 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
             }
             media /= (float32_t)SDR_RX_BLOCK_SAMPLES;
 
-            if (s_sam_banda == (uint8_t)SAM_BANDA_AMBAS) {
-                sam_bloque(&s_sam, s_i_buf, s_q_buf, s_i_buf,
-                           (uint32_t)SDR_RX_BLOCK_SAMPLES,
-                           demod_am_active_fs_hz());
-            } else {
-                sam_banda_lateral(s_i_buf, s_q_buf, s_i_buf);
-            }
+            /* Aqui ya solo se llega con las DOS bandas: el caso de una
+             * sola se va por la rama de arriba. */
+            sam_bloque(&s_sam, s_i_buf, s_q_buf, s_i_buf,
+                       (uint32_t)SDR_RX_BLOCK_SAMPLES,
+                       demod_am_active_fs_hz());
             for (m = 0U; m < (uint32_t)SDR_RX_BLOCK_SAMPLES; m++) {
                 s_env[m] = k * s_i_buf[m] + (1.0f - k) * (s_env[m] - media);
             }
@@ -4362,7 +6443,9 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
          * molesta el ruido, asi que cuanto mas limpio le llegue el audio
          * mejor predice. Apagado no cuesta ni un ciclo - ver
          * anotch_process(). */
-        anotch_process(s_ssb_dec, s_dec_block_samples);
+        if (notch_permitido()) {
+            anotch_process(s_ssb_dec, s_dec_block_samples);
+        }
 
         /* 3. Interpolar el audio de banda lateral de 12 kHz -ya con la
          * reduccion de ruido aplicada arriba, si estaba encendida- de
@@ -4400,7 +6483,23 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
      * for and isn't wired up - straightforward to add the same way if
      * it's ever wanted.
      */
-    if (s_mode == (uint8_t)DEMOD_MODE_AM || s_mode == (uint8_t)DEMOD_MODE_NFM) {
+    if (!sql_hace_falta()) {
+        /*
+         * APAGADO ES APAGADO, Y NO SE PAGA - 27/10/2026. Ver
+         * sql_hace_falta() para por que "apagado" aqui se puede demostrar
+         * y no es un numero elegido.
+         *
+         * *** Y EL SILENCIADOR SE DEJA ABIERTO, que es la unica parte de
+         * esto que puede romper algo. *** Quien silencia el audio es la
+         * bandera, no el bucle: si el usuario sube el silenciador, cierra
+         * en una frecuencia vacia y vuelve a bajarlo al suelo, el bucle
+         * deja de correr con la bandera CERRADA y la radio se queda muda
+         * para siempre. Dejandola abierta aqui, bajar el mando al suelo
+         * vuelve a abrir, que es lo que el suelo promete.
+         */
+        s_squelch_open = 1U;
+    } else if (s_mode == (uint8_t)DEMOD_MODE_AM
+               || s_mode == (uint8_t)DEMOD_MODE_NFM) {
         float32_t sum = 0.0f;
         float mag_db;
         float half_hyst = SQUELCH_HYSTERESIS_DB * 0.5f;
@@ -4490,18 +6589,22 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
      * demod_wfm_process_raw()) - the old "if WFM {...} else {...}"
      * split here collapsed to just this AM/SSB/NFM path.
      *
-     * NFM: unconditionally s_alpf_inst (ALPF_COEFFS, ~6kHz) -
-     * unaffected by the AM/SSB selector below even though it lands
-     * in this same branch. NFM's own channel filter (NFM_CHF_COEFFS)
-     * already sets its bandwidth upstream, and letting the AM/SSB
-     * selector also touch NFM's audio would narrow narrowband FM voice
-     * every time someone picks a tighter AM/SSB filter, which the
-     * project owner never asked for - see AUDIO_BW_4K0's comment
-     * in demod_am.h for why these are kept as fully separate
-     * instances instead of one shared "current audio filter".
+     * ESTE COMENTARIO DESCRIBIA UN REPARTO QUE YA NO EXISTE - corregido
+     * el 24/10/2026, en la revision a fondo pedida por el usuario.
      *
-     * AM/USB/LSB: whichever of the three s_audio_bw picked - see
-     * demod_am_set_audio_bw()'s comment in demod_am.h. */
+     * Decia que NFM pasaba por s_alpf_inst y que AM/USB/LSB elegian entre
+     * tres cascadas sueltas segun el ancho. Eso dejo de ser verdad cuando el
+     * ancho de audio paso al filtro de DOS CORTES -alto y bajo- de
+     * audiofil.c: desde entonces aqui corre `s_fil_inst[s_fil_act]` para
+     * todos los modos, o el de CW cuando la telegrafia esta puesta, y las
+     * cuatro cascadas viejas se quedaron declaradas y INICIALIZADAS pero sin
+     * que nadie las usara.
+     *
+     * Se han quitado. Lo que vale hoy es: en CW manda el filtro de CW y los
+     * dos cortes no pintan nada; en lo demas, el filtro de dos cortes de la
+     * familia que suena. El ancho de NFM lo sigue poniendo su filtro de
+     * canal aguas arriba, que es lo que el parrafo viejo defendia y sigue
+     * siendo cierto. */
     {
         if (cw_get_enabled()) {
             /* En CW manda el filtro de CW y los dos cortes no pintan
@@ -4640,7 +6743,9 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
         if (nr_ss_get_enabled()) {
             nr_ss_process_chunks(s_nr_buf, s_dec_block_samples);
         }
-        anotch_process(s_nr_buf, s_dec_block_samples);
+        if (notch_permitido()) {
+            anotch_process(s_nr_buf, s_dec_block_samples);
+        }
         arm_fir_interpolate_f32(&s_nr_interp_inst, s_nr_buf, s_env, s_dec_block_samples);
 
         {
@@ -4666,6 +6771,47 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
      */
     if (analiz_activo()) {
         analiz_feed(s_env, SDR_RX_BLOCK_SAMPLES);
+    }
+
+    /*
+     * ==================================================================
+     * EL NIVEL CON EL QUE EL BARRIDO DECIDE, Y SE MIDE AQUI.
+     * 26/10/2026, segunda colocacion: ver demod_am_get_nivel_db().
+     * ==================================================================
+     *
+     * El sitio es el mismo que el del analizador de aqui arriba y por las
+     * mismas dos razones, que aqui pesan todavia mas:
+     *
+     *   - DESPUES DEL FILTRO, o sea en el ancho que de verdad se escucha.
+     *     El primer intento lo medía sobre la I/Q del canal, antes de la
+     *     extraccion, y en banda lateral eso es un techo mucho mas ancho
+     *     que la banda de audio: metia dentro de la cuenta kilohercios de
+     *     ruido que no se oyen. Una voz que sobresale veinte decibelios en
+     *     2,4 kHz sobresale la mitad medida en veinte kilohercios, y la
+     *     mitad no llegaba al margen. Por eso el barrido pasaba de largo
+     *     por una memoria en la que se estaba hablando.
+     *
+     *   - ANTES DEL AGC. Con el AGC en medio, el nivel que se leeria seria
+     *     el que el control automatico ha decidido dejar, no el que hay:
+     *     mediria su propio AGC, que es justo lo que aplana la diferencia
+     *     entre una emisora y el ruido.
+     *
+     * Cuesta una multiplicacion y una suma por muestra sobre un bloque
+     * que ya esta en cache porque el filtro acaba de recorrerlo. Aun asi
+     * SOLO SE HACE MIENTRAS EL BARRIDO ANDA: ver s_nivel_on, y el porque,
+     * que lo encontro el usuario con una señal de STANAG puesta.
+     */
+    if (s_nivel_on) {
+        float sq2 = 0.0f;
+
+        for (n = 0; n < SDR_RX_BLOCK_SAMPLES; n++) { sq2 += s_env[n] * s_env[n]; }
+        /* Suavizado por el mismo motivo que el del silenciador: sin el,
+         * una lectura suelta salta varios decibelios de bloque a bloque y
+         * el "sobresale diez" se cumpliria por casualidad. El +1 evita el
+         * log de cero cuando de verdad no entra nada. */
+        s_nivel_db = NIVEL_ALPHA * s_nivel_db
+                     + (1.0f - NIVEL_ALPHA)
+                       * 10.0f * log10f((sq2 / (float)SDR_RX_BLOCK_SAMPLES) + 1.0f);
     }
 
     /* 4. AGC (instant attack, slow release) + 5. clamp/duplicate to
@@ -4733,7 +6879,27 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
     /* Y el pitido de los avisos, LO ULTIMO: tapa el audio en vez de
      * mezclarse con el. Ver bip.h. Apagado no cuesta nada. */
     bip_mete(s_audio_out, (uint32_t)SDR_RX_BLOCK_SAMPLES, demod_am_active_fs_hz());
-    gd32_i2s_stream_write_half(s_audio_out);
+
+    /*
+     * Y EL CAMINO DE VUELTA, 96 -> 192 kHz, LO ULTIMO DE TODO.
+     *
+     * Va detras del pitido a proposito: el pitido se genera en el mundo
+     * de 96 kHz, como todo lo demas, y sube con el audio. Generarlo
+     * despues obligaria a bip.c a saber dos tasas.
+     *
+     * Y por que hace falta: el convertidor de entrada y el de salida
+     * comparten reloj, asi que a 192 kHz de entrada el DAC pide 512
+     * tramas por bloque. Ver semibanda_interpola().
+     */
+    {
+        uint32_t tramas = (uint32_t)SDR_RX_BLOCK_SAMPLES;
+
+        if (s_rf_doble) {
+            semibanda_interpola(s_audio_out, (uint32_t)SDR_RX_BLOCK_SAMPLES);
+            tramas = (uint32_t)SDR_RX_BLOCK_SAMPLES_WFM;
+        }
+        gd32_i2s_stream_write_half(s_audio_out, tramas);
+    }
 
     s_last_cycles = DWT->CYCCNT - cyc_start;
     s_last_cycles_agc_out = resta0(s_last_cycles,

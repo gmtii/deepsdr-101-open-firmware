@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Genera User/ft8_tablas.c: las cuatro tablas de la FFT de FT8, en FLASH.
+Genera User/ft8_tablas.c: las tablas de la FFT de FT8, en FLASH.
 
 POR QUE
 -------
 Vivian dentro de g_ft8_shared_ram, la memoria que FT8 le toma prestada a la
 cascada, y ft8_fft1024_init() las reconstruia EN CADA ENTRADA a FT8 porque
-cada salida las borraba. Son 10.240 bytes:
+cada salida las borraba. Eran 10.240 bytes:
 
     seno y coseno (512 floats cada uno) ...  4.096
     ventana de Hann (1024 floats) .........  4.096
@@ -40,6 +40,27 @@ aparte y midiendolo.
 
 SE GENERA, NO SE ESCRIBE A MANO, y sim/ft8_tablas.c comprueba en cada
 `make comprueba` que lo generado es exactamente lo que producia la funcion.
+
+Y DE CUATRO TABLAS SE QUEDAN EN TRES - 26/10/2026
+-------------------------------------------------
+Haciendo hueco en la flash interna, que se habia quedado en 1.346 bytes
+libres de 491.520. La del orden de bits invertido se va, y es la unica de
+las cuatro que se puede quitar sin cambiar un solo bit del resultado:
+
+  - las otras tres son de coma flotante y salen de una aproximacion, asi
+    que recalcularlas o deducir una de otra cambia valores -medido: la
+    ventana de Hann NO es simetrica bit a bit (349 de 512 pares difieren)
+    y el seno no se saca del coseno (152 de 512)-. Tocar eso seria cambiar
+    los numeros que ve el decodificador, que es justo lo que esta cabecera
+    dice que no se hace de pasada;
+
+  - la del orden de bits es de ENTEROS, y es exactamente invertir diez
+    bits: comprobado, 0 diferencias en 1.024 valores. En un Cortex-M4 eso
+    es UNA instruccion, `rbit`, de un ciclo. O sea que la tabla costaba
+    2.048 bytes de flash por ahorrar lo que vale menos que leerla.
+
+Se calcula en ft8_bitrev10() (User/ft8_fft1024.h). 2.048 bytes de flash
+interna, sin tocar un valor.
 """
 import sys
 
@@ -76,7 +97,7 @@ def cos_bhaskara(x):
 
 
 def tablas():
-    tc, ts, hann, bitrev = [], [], [], []
+    tc, ts, hann = [], [], []
     for n in range(N // 2):
         ang = f32(f32(f32(-2.0 * f32(PI)) * f32(n)) / f32(N))
         tc.append(cos_bhaskara(ang))
@@ -84,14 +105,7 @@ def tablas():
     for n in range(N):
         ang = f32(f32(f32(2.0 * f32(PI)) * f32(n)) / f32(N - 1))
         hann.append(f32(0.5 - f32(0.5 * cos_bhaskara(ang))))
-    bits = N.bit_length() - 1
-    for n in range(N):
-        v, r = n, 0
-        for _ in range(bits):
-            r = (r << 1) | (v & 1)
-            v >>= 1
-        bitrev.append(r)
-    return tc, ts, hann, bitrev
+    return tc, ts, hann
 
 
 def flt(x):
@@ -115,14 +129,18 @@ def bloque(nombre, tipo, vals, conv, por_fila, dim):
 
 
 def texto():
-    tc, ts, hann, bitrev = tablas()
+    tc, ts, hann = tablas()
     out = ['/*',
            ' * GENERADO POR tools/gen_ft8_tablas.py - NO EDITAR A MANO.',
            ' *',
-           ' * Las cuatro tablas de la FFT de FT8, en FLASH y no dentro de la',
-           ' * memoria que FT8 le toma prestada a la cascada. Son 10.240 bytes de',
-           ' * SRAM liberados DENTRO de la union, que es donde hacian falta: ver',
-           ' * la cabecera del generador y ft8_shared_ram.h.',
+           ' * Las tres tablas de coma flotante de la FFT de FT8, en FLASH y no',
+           ' * dentro de la memoria que FT8 le toma prestada a la cascada. Eran',
+           ' * 10.240 bytes de SRAM liberados DENTRO de la union, que es donde',
+           ' * hacian falta: ver la cabecera del generador y ft8_shared_ram.h.',
+           ' *',
+           ' * La cuarta -el orden de bits invertido- se fue el 26/10/2026: es de',
+           ' * enteros, la hace `rbit` en un ciclo y costaba 2.048 bytes de flash.',
+           ' * Ver ft8_bitrev10() en ft8_fft1024.h.',
            ' *',
            ' * Los valores salen de la MISMA aproximacion de Bhaskara-I que usaba',
            ' * ft8_fft1024_init(), bit a bit, para que el decodificador vea',
@@ -135,8 +153,6 @@ def texto():
     out += bloque('k_ft8_twiddle_sin', 'float', ts, flt, 6, 'FT8_FFT_SIZE / 2U')
     out.append('')
     out += bloque('k_ft8_hann', 'float', hann, flt, 6, 'FT8_FFT_SIZE')
-    out.append('')
-    out += bloque('k_ft8_bitrev', 'uint16_t', bitrev, lambda v: '%uU' % v, 12, 'FT8_FFT_SIZE')
     return '\n'.join(out) + '\n'
 
 
@@ -144,4 +160,4 @@ if __name__ == '__main__':
     destino = sys.argv[1] if len(sys.argv) > 1 else 'User/ft8_tablas.c'
     with open(destino, 'w', encoding='utf-8') as f:
         f.write(texto())
-    print('  %s: %d+%d+%d floats y %d u16' % (destino, N // 2, N // 2, N, N))
+    print('  %s: %d+%d+%d floats' % (destino, N // 2, N // 2, N))

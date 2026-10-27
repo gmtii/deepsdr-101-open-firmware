@@ -20,7 +20,11 @@
  *
  * Ahora las genera tools/gen_ft8_tablas.py en User/ft8_tablas.c, con LA
  * MISMA aproximacion de Bhaskara-I que habia aqui: comprobado bit a bit,
- * 0 diferencias en 3.072 valores (ver sim/ft8_tablas.c).
+ * 0 diferencias en 2.048 valores (ver sim/ft8_tablas.c).
+ *
+ * Y desde el 26/10/2026 son TRES: la del orden de bits invertido se
+ * calcula con `rbit`, una instruccion de un ciclo, y eran 2.048 bytes mas
+ * de flash interna. Ver ft8_bitrev10() en ft8_fft1024.h.
  *
  * Lo que se gana con esto NO es RAM directamente -la union la fija la
  * cascada, que es el miembro mayor- sino SITIO DENTRO de la union, y ahi
@@ -29,7 +33,11 @@
 #define s_twiddle_cos  k_ft8_twiddle_cos
 #define s_twiddle_sin  k_ft8_twiddle_sin
 #define s_hann         k_ft8_hann
-#define s_bitrev       k_ft8_bitrev
+
+/* ft8_bitrev10() da por hecho que son diez bits. Si la FFT cambia de
+ * tamaño, esto no compila en vez de reordenar mal en silencio. */
+_Static_assert(FT8_FFT_SIZE == 1024U,
+               "ft8_bitrev10() invierte 10 bits: solo vale para 1024");
 
 /*
  * AQUI ESTABAN LAS DOS APROXIMACIONES DE SENO Y COSENO (Bhaskara-I).
@@ -109,12 +117,12 @@ void ft8_fft1024_compute_db(const int16_t *samples, float *db_out)
     /*
      * AQUI SE MIRABA EL SELLO, Y YA NO HACE FALTA - 10/10/2026.
      *
-     * Decia: "¿son tablas o son restos de la cascada?". s_bitrev se usa como
-     * INDICE de s_hann y de samples, y cuando vivia en la memoria prestada
-     * de la cascada contenia, sin construir, indices de paleta: s_hann[65535]
-     * cae 256 kB fuera de una tabla de 4 kB, fallo de bus, radio colgada y un
-     * pitido continuo. Paso de verdad el 25/09/2026, la primera vez que se
-     * entro en FT8.
+     * Decia: ¿son tablas o son restos de la cascada? El orden de bits se
+     * usaba como INDICE de s_hann y de samples, y cuando vivia en la memoria
+     * prestada de la cascada contenia, sin construir, indices de paleta:
+     * s_hann[65535] cae 256 kB fuera de una tabla de 4 kB, fallo de bus,
+     * radio colgada y un pitido continuo. Paso de verdad el 25/09/2026, la
+     * primera vez que se entro en FT8.
      *
      * Las tablas estan en flash: no se pueden borrar, asi que no hay nada
      * que comprobar. El cuelgue que este sello tapaba ya no existe, en vez
@@ -122,7 +130,7 @@ void ft8_fft1024_compute_db(const int16_t *samples, float *db_out)
      */
 
     for (n = 0; n < FT8_FFT_SIZE; n++) {
-        uint16_t src = s_bitrev[n];
+        uint16_t src = ft8_bitrev10(n);   /* `rbit`: antes era una tabla de 2 kB */
         s_re[n] = (float)samples[src] * s_hann[src];
         s_im[n] = 0.0f;
     }

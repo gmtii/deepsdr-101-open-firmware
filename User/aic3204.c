@@ -41,6 +41,11 @@ static void print_addr(uint8_t addr)
  * this same board - cheap extra margin while chasing an RX capture
  * bug that could plausibly be a power-up/reset sequencing issue.
  */
+/* Que pagina del codec creemos que esta puesta. -1: no se sabe. Vive aqui
+ * arriba porque el reset por patilla, que esta justo debajo, la invalida.
+ * El porque de todo esto, en aic3204_write_reg(). */
+static int16_t s_pagina = -1;
+
 static void aic3204_hw_reset(void)
 {
     rcu_periph_clock_enable(RCU_GPIOB);
@@ -51,6 +56,9 @@ static void aic3204_hw_reset(void)
     delay_ms(50);
     gpio_bit_set(AIC3204_NRST_PORT, AIC3204_NRST_PIN); /* release */
     delay_ms(50);
+    /* Reset por patilla: la pagina del chip vuelve a la 0 y lo que
+     * creyeramos saber de ella ya no vale. Ver aic3204_write_reg(). */
+    s_pagina = -1;
 
     debug_print("aic3204: nRESET (PB11) released\n");
 }
@@ -62,29 +70,76 @@ void aic3204_init(uint8_t i2c_addr)
     i2c_bitbang_init();
 }
 
+/*
+ * ======================================================================
+ * LA PAGINA NO SE REESCRIBE SI YA ES ESA - 24/10/2026.
+ * ======================================================================
+ *
+ * Encontrado en la revision a fondo pedida por el usuario, buscando por que
+ * la radio tarda tanto en cambiar de tasa.
+ *
+ * Este codec tiene los registros repartidos en PAGINAS, y para escribir uno
+ * hay que seleccionar antes su pagina escribiendo el registro 0. Esta
+ * funcion lo hacia SIEMPRE, asi que cada escritura eran DOS transacciones
+ * de I2C en vez de una.
+ *
+ * Y el bus es bitbang a unos 70 kHz: una escritura de dos bytes son
+ * veintinueve tiempos de bit, del orden de 400 microsegundos. La secuencia
+ * de aic3204_configure_rate() son 159 escrituras, o sea 318 transacciones:
+ * unos CIENTO TREINTA MILISEGUNDOS cada vez que cambia la tasa, y otro
+ * tanto en el arranque.
+ *
+ * La secuencia viene agrupada por paginas -son 22 cambios de pagina de
+ * verdad en esas 159 escrituras-, asi que acordarse de cual esta puesta
+ * quita 137 transacciones de las 318. Se queda en unos 52 ms.
+ *
+ * LO QUE HAY QUE TENER EN CUENTA, Y ES LO UNICO DELICADO: el registro 0 ES
+ * el registro de pagina. Una escritura a reg 0 cambia la pagina al valor
+ * escrito, no a la pagina que se pidio. Hay veinticuatro lineas asi en la
+ * secuencia -wr(8, 0x00, 0x08) y parecidas-, heredadas de la captura del
+ * aparato original, y con esto siguen valiendo exactamente igual: lo que
+ * manda despues es el VALOR escrito.
+ *
+ * Y si una transaccion falla, o si el chip se resetea, la memoria se tira:
+ * mejor una pagina de mas que una escritura en la pagina equivocada.
+ */
 uint8_t aic3204_write_reg(uint8_t page, uint8_t reg, uint8_t value)
 {
     uint8_t buf[2];
 
-    buf[0] = 0x00; /* Page Control Register, always 0x00 on every page */
-    buf[1] = page;
-    if (!i2c_write(s_addr, buf, 2)) {
-        return 0;
+    if ((int16_t)page != s_pagina) {
+        buf[0] = 0x00; /* Page Control Register, always 0x00 on every page */
+        buf[1] = page;
+        if (!i2c_write(s_addr, buf, 2)) {
+            s_pagina = -1;
+            return 0;
+        }
+        s_pagina = (int16_t)page;
     }
 
     buf[0] = reg;
     buf[1] = value;
-    return i2c_write(s_addr, buf, 2);
+    if (!i2c_write(s_addr, buf, 2)) {
+        s_pagina = -1;
+        return 0;
+    }
+    /* El registro 0 es el de pagina: escribirlo cambia la pagina. */
+    if (reg == 0x00U) { s_pagina = (int16_t)value; }
+    return 1;
 }
 
 uint8_t aic3204_read_reg(uint8_t page, uint8_t reg, uint8_t *value)
 {
     uint8_t buf[2];
 
-    buf[0] = 0x00;
-    buf[1] = page;
-    if (!i2c_write(s_addr, buf, 2)) {
-        return 0;
+    if ((int16_t)page != s_pagina) {
+        buf[0] = 0x00;
+        buf[1] = page;
+        if (!i2c_write(s_addr, buf, 2)) {
+            s_pagina = -1;
+            return 0;
+        }
+        s_pagina = (int16_t)page;
     }
 
     /* "Register to read" write with no real repeated-start in
@@ -120,6 +175,11 @@ uint8_t aic3204_probe_and_reset(void)
     uint8_t buf[2];
     uint8_t readback;
     uint8_t ok = 1;
+
+    /* Esta funcion escribe el registro de pagina A MANO, sin pasar por
+     * aic3204_write_reg(), asi que lo que aquella recuerde deja de valer.
+     * Ver su comentario. */
+    s_pagina = -1;
 
     debug_print("aic3204: Page Control Register closed-loop test...\n");
 
@@ -201,7 +261,8 @@ void aic3204_scan_bus(void)
  * decodes as PLL_ON=1, P=1 (bits 6:4=001), R=4 (bits 3:0=0100) using
  * the same bit layout confirmed against a real working AIC3204 config
  * (P0R5=0x91 documented there as "P=1 and R=1"). With PLL_CLKIN=MCLK=
- * 1.536MHz (this project's own TIMER2_CH0/PC6 signal - see
+ * 1.536MHz (this project's own TIMER7_CH0/PC6 signal - said TIMER2 here;
+ * corrected 27/10/2026, see gd32_i2s.c - see
  * gd32_i2s_mclk_timer_start()) and R=4, J=14, D=0, P=1: CODEC_CLKIN =
  * MCLK x R x J / P = 1.536MHz x 4 x 14 / 1 = 86.016MHz exactly -
  * matches independently, with no need to invoke BCLK at all. This is
@@ -365,7 +426,7 @@ void aic3204_configure_rate(aic3204_rate_t rate)
      * corrected 01/09/2026 decode; NOT from BCLK, the earlier
      * comment here was wrong), PLL ON, P=1/R=4/J=14/D=0, giving
      * CODEC_CLKIN=86.016MHz from MCLK=1.536MHz (this project's own
-     * TIMER2_CH0/PC6 signal) --- */
+     * TIMER7_CH0/PC6 signal; said TIMER2, corrected 27/10/2026) --- */
 #if AIC3204_TEST_LOOPBACK
     wr(0, 0x04, 0x43, "R4 CODEC_CLKIN mux (captured)");
     wr(0, 0x05, 0x94, "R5 PLL on + P/R (captured)");
@@ -528,7 +589,13 @@ void aic3204_configure_rate(aic3204_rate_t rate)
     Canal Derecho (Right ADC):
     0x37 = 0x04 → IN3R entra al terminal positivo del MICPGA derecho con 10 kΩ 
     0x39 = 0x04 → IN3R entra al terminal negativo del MICPGA derecho con 10 kΩ 
-    Esto conecta IN3R a ambos terminales (+ y −) del PGA derecho, lo cual anularía la señal (ganancia diferencial ≈ 0). 
+    OJO CON ESTA CONCLUSION, QUE ES FALSA - 27/10/2026. Los registros 0x37 y
+    0x39 son dos tablas de encaminamiento DISTINTAS -terminal + y terminal -,
+    cada una con sus propias fuentes-, asi que el mismo valor 0x04 no
+    significa la misma fuente en las dos. Y la prueba esta en que la radio
+    RECIBE por el canal derecho: si esto anulase la señal no habria I/Q.
+    Se deja escrito porque un comentario que dice que un canal esta muerto es
+    una invitacion a "arreglarlo" rompiendo lo que funciona. 
 
     Ganancia y Mute:
     0x3B = 0x00 y 0x3C = 0x00 → Ambos MICPGA están desmuteados con ganancia de 0 dB 
@@ -590,6 +657,72 @@ void aic3204_configure_rate(aic3204_rate_t rate)
     wr(1, 0x3B, 0x28, "P1R59 (captured, repeated)");
     wr(1, 0x3C, 0x28, "P1R60 (captured, repeated)");
     wr(0, 0x00, 0x00, "select page 0");
+
+    /*
+     * ======================================================================
+     * QUE SON ESTOS COEFICIENTES, Y POR QUE NO ESTAN EN EL CAMINO DEL AUDIO.
+     * 27/10/2026, revision a fondo de espejos y armonicos.
+     * ======================================================================
+     *
+     * Decodificados como 24 bits en complemento a dos (los tres bytes mas el
+     * relleno), con el convenio de TI y = N0*x + N1*x1 + D1*y1:
+     *
+     *   paginas 8/9  (lado ADC):  N0 = +0,999843  N1 = -0,999843
+     *                             D1 = +0,999686
+     *       -> ganancia 0 en continua y 1 en Nyquist: un BLOQUEADOR DE
+     *          CONTINUA de un polo, con el codo en 5,0e-5 * fs.
+     *
+     *   paginas 44/46 (lado DAC): N0 = N1 = +0,031699  D1 = +0,936602
+     *       -> ganancia 1 en continua y 0 en Nyquist: un PASO BAJO de un
+     *          polo, con el codo en 1,0424e-2 * fs.
+     *
+     * Y LOS BYTES SON LOS MISMOS PARA LAS TRES TASAS -el switch(rate) de
+     * arriba solo toca DOSR/MADC/PRB/BCLK-, asi que esos codos estan
+     * NORMALIZADOS A fs y se mueven una octava en cada cambio de tasa:
+     *
+     *       paso bajo del DAC:  500 Hz a 48k, 1.000 a 96k, 2.000 a 192k
+     *
+     * ----------------------------------------------------------------------
+     * *** PERO ESE PASO BAJO NO PUEDE ESTAR EN EL CAMINO, Y SE DEMUESTRA SIN
+     * MEDIR NADA EN LA PLACA. ***
+     *
+     * Si lo estuviera, a 96 kHz el audio saldria a -3,0 dB en 1 kHz y a
+     * -12,4 dB en 4 kHz, o sea sonando a telefono. Tres cosas que SI constan
+     * lo hacen imposible:
+     *
+     *   1. ESTOS REGISTROS SON UNA CAPTURA DEL FIRMWARE DE ORIGEN -lo dice
+     *      cada linea de aqui abajo, "(captured)"-, y aquella radio no suena
+     *      a telefono.
+     *
+     *   2. FM ANCHA CORRE A 192 kHz, donde el codo caeria en 2 kHz. Y el
+     *      ancho de audio de FM -15, 8 o 4 kHz- se distingue de sobra: el
+     *      diario recoge como averia que un CONFIG.CSV viejo dejara "la FM
+     *      comercial cortada en 8 o en 4 kHz para siempre", y antes otra en
+     *      la que la pantalla de la hora dejaba la FM "sin agudos". Con un
+     *      polo en 2 kHz detras, 15 contra 4 no se distinguiria y ninguna de
+     *      las dos averias se habria notado.
+     *
+     *   3. El mismo razonamiento vale para el filtro de audio de banda
+     *      lateral, que se ajusta de 50 en 50 Hz hasta 6 kHz y cuyo efecto
+     *      se oye.
+     *
+     * O sea que el bloque de proceso que se selecciona -PRB_P1 a 48/96 kHz,
+     * PRB_P17 a 192- no encamina el audio por estos biquads, por mucho que
+     * el bit D2 de P8R1/P44R1 pida "adaptive filtering". Ver tambien el
+     * comentario de PRB_P17 mas arriba: "bare pass-through, no on-chip
+     * biquads".
+     *
+     * LO QUE SI QUEDA, y se deja escrito para que nadie lo persiga otra vez:
+     * son unas noventa escrituras por I2C en cada cambio de tasa que no
+     * hacen nada. No se quitan porque vienen de la captura del original y
+     * porque el cambio de tasa ya paga un reset por patilla con 100 ms de
+     * espera, al lado del cual esto no se nota.
+     *
+     * (Y si alguna vez se encaminaran de verdad, el que habria que derivar
+     * por tasa es el del DAC: el del ADC es un bloqueador de continua de 2,4
+     * a 9,6 Hz, que sobre la I/Q de un receptor de conversion directa no
+     * estorba, quita la fuga del oscilador.)
+     */
 
     /* --- Page 8/9: DRC/biquad coefficient banks (ADC filter) --- */
     wr(8, 0x00, 0x08, "select page 8");

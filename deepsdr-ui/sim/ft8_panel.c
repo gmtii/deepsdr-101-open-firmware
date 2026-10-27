@@ -75,6 +75,11 @@ int main(void)
     st.enganchado = 1;
     st.barra_on = 1; st.barra_v = 9; st.barra_max = 15;
     st.barra_txt = "999c  9999ms  99p  +9,9";
+    /* Como lo arma ft8_chapa(): el segundo de la ranura va pegado a la
+     * derecha de la barra, con su punto, y lo demas se centra en lo que
+     * queda. Sin esto el banco mediria un hueco que no existe. */
+    st.barra_dcha = 1;
+    st.barra_txt_dcha = "9/15";
     for (i = 0; i < sizeof filas / sizeof filas[0]; i++) { st.fila[i] = filas[i]; }
 
     lcd_sim_reset(0x0000);
@@ -115,6 +120,47 @@ int main(void)
         pasa("el reparto usa mas de tres cuartos del ancho",
              fin_ant > (GFX2_W * 3) / 4);
         printf("      el ultimo campo acaba en %d de %d px\n", fin_ant, GFX2_W);
+    }
+
+    /*
+     * Y QUE LA CHAPA QUEPA EN SU HUECO - 23/10/2026.
+     *
+     * El renglon de diagnostico de FT8 se dibuja con gfx2_text_in() sobre
+     * un ancho fijo, asi que pasarse NO rompe nada: RECORTA. Y un
+     * diagnostico recortado es peor que ninguno, porque se lee a medias y
+     * nadie sabe que falta un trozo.
+     *
+     * Hasta hoy no lo miraba nadie, y hoy entra un campo mas -el margen de
+     * dB, que sale cuando no hay candidatos-, asi que se mide: los textos
+     * mas anchos que ft8_chapa() puede producir contra el hueco que
+     * ui_digi les deja de verdad, descontando lo que se lleva el "9/15"
+     * pegado a la derecha.
+     */
+    printf("\n  LA CHAPA DE DIAGNOSTICO\n");
+    {
+        /* Los tres que puede producir ft8_chapa(), con sus topes. Solo uno
+         * de los tres campos del medio sale cada vez; ver su codigo. */
+        static const char *k_peor[] = {
+            "999c \xC2\xB7 99p \xC2\xB7 -9,9 s",
+            "999c \xC2\xB7 9999 ms \xC2\xB7 -9,9 s",
+            "0c \xC2\xB7 -99/+99 dB \xC2\xB7 -9,9 s",
+        };
+        /* El hueco lo da ui_digi con la MISMA resta con la que pinta, no
+         * una copia de la cuenta aqui. Ver ui_digi_barra_hueco_dbg(). */
+        int16_t hueco = ui_digi_barra_hueco_dbg(&st);
+        int16_t dcha  = gfx2_text_w(st.barra_txt_dcha, &font_ui_14b);
+        unsigned k;
+
+        printf("      \"%s\" a la derecha se lleva %d px, al rotulo le quedan %d\n",
+               st.barra_txt_dcha, dcha, hueco);
+        for (k = 0; k < sizeof k_peor / sizeof k_peor[0]; k++) {
+            int16_t w = gfx2_text_w(k_peor[k], &font_ui_14b);
+            char q[96];
+
+            printf("      <%s>  %d px\n", k_peor[k], w);
+            sprintf(q, "cabe sin recortarse (%d de %d px)", w, hueco);
+            pasa(q, w <= hueco);
+        }
     }
 
     printf("\n  ALTO\n");
