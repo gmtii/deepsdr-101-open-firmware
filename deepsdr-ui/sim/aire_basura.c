@@ -226,7 +226,8 @@ typedef void (*arranca_fn)(void);
 
 static float    s_ram_4415[S4415_FLOATS];
 static float    s_ram_stanag[STANAG_RX_FLOATS];
-static uint8_t  s_ram_wspr[WSPR_RX_RAM];
+/* +4 kB para el estado del receptor - ver wspr_rx_ram_necesaria(). */
+static uint8_t  s_ram_wspr[WSPR_RX_RAM + 4096U];
 static jtty_rx_ram_t s_ram_jtty;
 
 static void a_cw(void)     { cw_init(); }
@@ -242,7 +243,7 @@ static void a_wefax(void)  { wefax_start(FS); }
 static void a_hell(void)   { hell_start(FS); }
 static void a_4415(void)   { (void)s4415_init(s_ram_4415, S4415_FLOATS); }
 static void a_stanag(void) { (void)stanag_rx_init(s_ram_stanag, STANAG_RX_FLOATS); }
-static void a_wspr(void)   { wspr_rx_init(s_ram_wspr, (uint32_t)WSPR_RX_RAM); }
+static void a_wspr(void)   { wspr_rx_init(s_ram_wspr, (uint32_t)sizeof s_ram_wspr); }
 static void a_jtty(void)   { jtty_rx_start(&s_ram_jtty, FS); }
 
 static float s_ram_det[STANAG_DET_FLOATS];

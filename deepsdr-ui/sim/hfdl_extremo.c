@@ -290,41 +290,153 @@ static float g_eco = 0.0f;
 static float g_desvio = 0.0f;
 #define ECO_RETARDO 2
 
-static uint32_t rafaga_audio(uint32_t giro, float sigma)
+/*
+ * ======================================================================
+ * EL ESPEJO QUE METE UN CORRECTOR DE IMAGEN MAL CALIBRADO - 28/10/2026
+ * ======================================================================
+ *
+ * *** Puesto por el aviso del usuario: "la vieja decodifica muchisimo mas",
+ * con dos fotos de la misma frecuencia. La V5.06 sacaba cinco aviones con
+ * el embudo en 10>6>6 y 5 buenas de 6; la nueva, dos aviones con 26>15>14
+ * y 3 de 10. O sea MAS enganches y MENOS tramas, que es una forma muy
+ * concreta de romperse y no se parece a "llega menos senal". ***
+ *
+ * QUE SE SOSPECHA. El corrector de imagen de banda ancha de iqbal.c entro
+ * en la V5.11 -o sea DESPUES de la version del usuario- y corrige asi:
+ *
+ *     y[n] = z[n] + suma_k w[k] * conj(z[n-k])
+ *
+ * Esa suma es una copia CONJUGADA de la senal sumada encima de la senal.
+ * Con w bien medido cancela el espejo del hardware. Con w equivocado no
+ * cancela nada: lo FABRICA, y lo fabrica encima de lo que se esta oyendo.
+ *
+ * Y EN HFDL w NO SE PUEDE REVALIDAR. El estimador vive dentro de
+ * sdr_spectrum_waterfall_tick(), que no se llama en los ocho modos de
+ * panel entero -modo_panel_entero() en main.c-, asi que en HFDL las tomas
+ * se quedan congeladas en lo que aprendieron en otro modo y en otra
+ * banda, y alli siguen aplicandose muestra a muestra. Solo se olvidan al
+ * cambiar de tasa o al mover el oscilador mas de un octavo de la
+ * frecuencia: a 11.184 kHz eso son 1,4 MHz.
+ *
+ * LO QUE MIDE ESTE BANCO. g_esp es el modulo de la toma equivocada. Se
+ * inyecta sobre la muestra YA con ruido, que es donde esta en la radio
+ * -iqbal_bloque() corre en la interrupcion del ADC, antes de todo-, y se
+ * cuenta por separado lo que engancha y lo que pasa el CRC. La hipotesis
+ * dice que el correlador de preambulo, que es NO COHERENTE, engancha
+ * igual o mas con energia correlada de mas, y que la constelacion se cae,
+ * porque un termino conjugado NO es respuesta de canal y el ecualizador
+ * no lo puede anular.
+ *
+ * El tope que iqbal.c le pone a cada toma es 0,5 (ver iqbal_resuelve: el
+ * cuadrado contra 0,25), asi que el barrido llega hasta ahi.
+ */
+static float   g_esp = 0.0f;        /* modulo de la toma equivocada */
+static float   g_esp_fase = 0.7f;   /* su fase, en radianes */
+static uint8_t g_esp_tap = 1u;      /* su retardo, en muestras de 12 kHz */
+#define ESP_RETARDO 8
+
+/*
+ * ======================================================================
+ * EL EMISOR, A FICHERO: UNA SOLA CORRIENTE - 28/10/2026
+ * ======================================================================
+ *
+ * Esto estaba DENTRO de rafaga_audio(), con el buffer de bloque y la
+ * linea de retardo del espejo como variables locales. Para el apartado 8
+ * daba igual -una ráfaga por llamada- y para el banco de flujo largo no,
+ * por dos motivos que son el mismo:
+ *
+ *   - entre ráfaga y ráfaga hay que emitir RUIDO, y tiene que ir por el
+ *     mismo sitio. Si el ruido se metiera por otra funcion con su propio
+ *     buffer, los bloques de 40 muestras se partirian en la frontera y la
+ *     cadena veria un salto que en el aire no existe;
+ *   - la linea de retardo del espejo es del CORRECTOR, que en la radio
+ *     corre sin enterarse de donde empieza y acaba una ráfaga. Reiniciarla
+ *     en cada ráfaga seria regalarle al corrector un arranque limpio que
+ *     no tiene.
+ *
+ * Asi que el estado sube a fichero y las dos fuentes -ráfaga y ruido-
+ * empujan por la misma puerta.
+ */
+static float    g_bi[64], g_bq[64];
+static uint32_t g_nb;
+static float    g_esp_i[ESP_RETARDO], g_esp_q[ESP_RETARDO];
+static uint32_t g_esp_p;
+
+/* Una muestra a la cadena, con el espejo del corrector por delante. */
+static void mete_muestra(float zi, float zq)
+{
+    if (g_esp != 0.0f) {
+        uint32_t d = (g_esp_p + (uint32_t)ESP_RETARDO
+                      - (uint32_t)g_esp_tap) % (uint32_t)ESP_RETARDO;
+        float wr = g_esp * cosf(g_esp_fase);
+        float wi = g_esp * sinf(g_esp_fase);
+        float ri = g_esp_i[d], rq = g_esp_q[d];
+
+        g_esp_i[g_esp_p] = zi; g_esp_q[g_esp_p] = zq;
+        g_esp_p = (g_esp_p + 1u) % (uint32_t)ESP_RETARDO;
+        /* w * conj(r) = (wr*ri + wi*rq) + j(wi*ri - wr*rq) */
+        zi += wr * ri + wi * rq;
+        zq += wi * ri - wr * rq;
+    }
+    g_bi[g_nb] = zi;
+    g_bq[g_nb] = zq;
+    g_nb++;
+    if (g_nb == 40u) {
+        hfdl_modo_mete(g_bi, g_bq, g_nb);
+        g_nb = 0u;
+        hfdl_modo_poll();
+    }
+}
+
+/* Lo que quede en el bloque a medias, y una vuelta del bucle principal. */
+static void mete_vacia(void)
+{
+    if (g_nb != 0u) { hfdl_modo_mete(g_bi, g_bq, g_nb); g_nb = 0u; }
+    hfdl_modo_poll();
+}
+
+/* Se llama al empezar una sesion, no una ráfaga. */
+static void mete_reinicia(void)
+{
+    uint32_t k;
+
+    g_nb = 0u;
+    g_esp_p = 0u;
+    for (k = 0u; k < (uint32_t)ESP_RETARDO; k++) {
+        g_esp_i[k] = 0.0f; g_esp_q[k] = 0.0f;
+    }
+}
+
+/* Ruido puro, los milisegundos que se pidan, por la misma puerta. */
+static void ruido_emite(uint32_t ms, float sigma)
+{
+    uint32_t n = ms * 12u;   /* 12 kHz */
+    uint32_t k;
+
+    for (k = 0u; k < n; k++) {
+        mete_muestra(gauss() * sigma, gauss() * sigma);
+    }
+}
+
+/*
+ * ======================================================================
+ * LA RAFAGA, EN TRES PIEZAS - 28/10/2026
+ * ======================================================================
+ *
+ * rafaga_audio() hacia las tres cosas de un tiron: montar la tira de
+ * simbolos, reiniciar el modo, y generar el audio. Para una ráfaga por
+ * llamada estaba bien; el banco de flujo largo (apartado 9) necesita
+ * montar los simbolos UNA vez y emitirlos MUCHAS sin reiniciar nada entre
+ * medias, porque reiniciar el modo entre ráfagas es exactamente lo que
+ * impide medir lo que ese apartado viene a medir.
+ *
+ * Asi que se parte en tres y rafaga_audio() se queda como la suma de las
+ * tres, que es lo que era. Los apartados 1 a 8 no se enteran.
+ */
+static uint32_t simbolos_monta(uint32_t giro)
 {
     float a[HFDL_A_LEN], m1[HFDL_M1_LEN];
-    uint32_t i, v, nd = 0u, idx = 0u, antes_b, m;
-    double t = 0.0;
-    /* Simbolos por muestra. g_reloj es el error de reloj en partes por
-     * millon: el transmisor y la radio no comparten cristal, y sobre
-     * 2160 simbolos un error pequeño se convierte en simbolos enteros de
-     * deriva. El banco sintetico daba por hecho que los dos relojes eran
-     * el mismo, que es justo la clase de suposicion que esconde fallos. */
-    const double PASO = (1800.0 / 12000.0) * (1.0 + (double)g_reloj * 1e-6);
-    float bi[64], bq[64];
-    uint32_t nb = 0u;
-    float sub_ph = 0.0f;
-    float eco_i[ECO_RETARDO] = {0.0f}, eco_q[ECO_RETARDO] = {0.0f};
-    uint32_t eco_p = 0u;
-    /*
-     * EL ECO QUE GIRA, no el canal que se apaga. Ver g_doppler.
-     *
-     * La primera version de esto hacia pasear las ganancias de los dos
-     * caminos alrededor de CERO, y claro: el canal se apagaba y todo
-     * salia 0/10 con 0,2 Hz. Eso no era medir el ecualizador, era medir
-     * un apagon. Un banco que castiga de mas miente igual que uno que
-     * perdona.
-     *
-     * Lo que de verdad le cuesta a un ecualizador no es que baje el
-     * nivel -de eso se encarga el AGC- sino que la RESPUESTA del canal
-     * cambie de forma mientras dura la ráfaga. Asi que aqui el camino
-     * directo se queda quieto y es el ECO el que gira de fase despacio:
-     * la suma de los dos pasa por maximos y minimos, el canal cambia de
-     * forma, y la potencia media se mantiene.
-     */
-    float eco_fase = 0.0f;
-    float eco_paso = (g_doppler > 0.0f)
-                   ? (6.28318530718f * g_doppler / 12000.0f) : 0.0f;
+    uint32_t i, v, nd = 0u, idx = 0u;
 
     hfdl_preamble_seq_build_a(a);
     hfdl_preamble_seq_build_m1_variant(giro, m1);
@@ -366,12 +478,28 @@ static uint32_t rafaga_audio(uint32_t giro, float sigma)
     }
     for (i = 0; i < 40u; i++)         { pon(0.0f, 0.0f); }
 
-    hfdl_modo_stop();
-    if (!hfdl_modo_start()) { return 0u; }
-    hfdl_modo_espia(g_ei, g_eq, MAX_SIM);
-    antes_b = hfdl_modo_buenas();
+    return 1u;
+}
 
-    /* Y el audio, muestra a muestra, con el reloj fraccionario. */
+/* El audio de la tira que haya montado simbolos_monta(), por el emisor
+ * comun. NO reinicia el modo: eso es cosa de quien llama. */
+static void audio_emite(float sigma)
+{
+    uint32_t m;
+    double t = 0.0;
+    /* Simbolos por muestra. g_reloj es el error de reloj en partes por
+     * millon: el transmisor y la radio no comparten cristal, y sobre
+     * 2160 simbolos un error pequeño se convierte en simbolos enteros de
+     * deriva. El banco sintetico daba por hecho que los dos relojes eran
+     * el mismo, que es justo la clase de suposicion que esconde fallos. */
+    const double PASO = (1800.0 / 12000.0) * (1.0 + (double)g_reloj * 1e-6);
+    float sub_ph = 0.0f;
+    float eco_i[ECO_RETARDO] = {0.0f}, eco_q[ECO_RETARDO] = {0.0f};
+    uint32_t eco_p = 0u;
+    float eco_fase = 0.0f;
+    float eco_paso = (g_doppler > 0.0f)
+                   ? (6.28318530718f * g_doppler / 12000.0f) : 0.0f;
+
     m = 0u;
     rrc_init();
     while (t < (double)(g_ns - 1u)) {
@@ -436,15 +564,141 @@ static uint32_t rafaga_audio(uint32_t giro, float sigma)
             eco_p = (eco_p + 1u) % (uint32_t)ECO_RETARDO;
             ii = ri; qq = rq;
         }
-        bi[nb] = ii + gauss() * sigma;
-        bq[nb] = qq + gauss() * sigma;
-        nb++;
-        if (nb == 40u) { hfdl_modo_mete(bi, bq, nb); nb = 0u; hfdl_modo_poll(); }
+        mete_muestra(ii + gauss() * sigma, qq + gauss() * sigma);
         t += PASO;
         m++;
     }
-    if (nb != 0u) { hfdl_modo_mete(bi, bq, nb); }
-    hfdl_modo_poll();
+    mete_vacia();
+}
+
+/*
+ * ======================================================================
+ * EL BANCO DE FLUJO LARGO: CUANTAS DE LAS QUE PASARON SE OYERON
+ * ======================================================================
+ *
+ * *** Esto faltaba, y su ausencia dejo sin contestar la pregunta del
+ * usuario del 28/10/2026. ***
+ *
+ * El trabajo de ese dia salio de una comparacion suya hecha bien: dos
+ * radios en la misma mesa, la misma antena, seis minutos de reloj, las
+ * mismas opciones. Lo que se movia era el PRIMER escalon del embudo:
+ *
+ *     V5.06    23 A1 > 15 A2 > 15 M1     10 abiertas    8 buenas
+ *     V6.12    14 A1 >  6 A2 >  5 M1      3 abiertas    2 buenas
+ *
+ * Y el banco de entonces no podia decir nada de eso. rafaga_audio()
+ * presenta UNA ráfaga limpia por llamada y reinicia el modo antes: A1
+ * sale 1 de 1 siempre, en todas las columnas, pase lo que pase. Mide muy
+ * bien lo que le pasa a una ráfaga que YA se ha oido, y es ciego a la que
+ * no se oye. Con ese instrumento, del escalon que se movia en la radio
+ * del usuario solo se podia opinar.
+ *
+ * QUE HACE ESTO, y es toda la diferencia: una SOLA sesion del modo, una
+ * corriente continua de ruido a 12 kHz, y dentro N ráfagas metidas en
+ * instantes conocidos. Entre ráfaga y ráfaga, ruido puro por la misma
+ * puerta (ver mete_muestra). Al final se pregunta el embudo y se compara
+ * con cuantas se metieron de verdad.
+ *
+ * Asi "A1 = 23" pasa a ser una fraccion con denominador: 23 de las 30 que
+ * pasaron. Que es lo que el usuario ve en su chapa y lo que hasta hoy no
+ * se podia reproducir aqui.
+ *
+ * EL HUECO ENTRE RAFAGAS no es decorativo. El sincronismo de preambulo
+ * vive de lo que lleva oido, y una ráfaga pegada a la anterior le llega
+ * con el lazo ya tirando de la de antes. En el aire HFDL las ranuras son
+ * de 13,44 s; aqui se usa bastante menos para que el banco acabe en un
+ * tiempo razonable, y lo que importa es que sea EL MISMO en todas las
+ * columnas que se comparan.
+ *
+ * LO QUE SALIO, y es el motivo por el que este banco valio la pena.
+ * Tres vueltas de treinta ráfagas, BPSK 600, hueco de 400 ms:
+ *
+ *     sigma 1,00      A1       A2       M1    buenas
+ *       w = 0      91/90    78/90    63/90    50/51
+ *       w = 0,25   90/90    65/90    59/90    29/32
+ *       w = 0,50   90/90    49/90    41/90    12/14
+ *
+ *     sigma 1,15      A1       A2       M1    buenas
+ *       w = 0      61/90    13/90     9/90      3/3
+ *       w = 0,25   52/90     8/90     6/90      3/3
+ *       w = 0,50   33/90     6/90     3/90      2/2
+ *
+ * El espejo SI cuesta enganches, y cuesta mas cuanto mas justa va la
+ * señal: en 1,00 el A1 esta saturado y lo que se cae es la confirmacion
+ * -78 a 49-; en 1,15, donde el detector ya duda, se cae el A1 entero, de
+ * 61 a 33.
+ *
+ * Y LA FORMA COINCIDE CON LA QUE TRAJO EL USUARIO. Sus dos radios, sobre
+ * las mismas seis horas de antena, y este banco en 1,15, puestos como
+ * proporciones del primero:
+ *
+ *                      A1      A2      M1
+ *     el usuario      0,61    0,40    0,33
+ *     este banco      0,54    0,46    0,33
+ *
+ * Eso no demuestra que su radio tuviera exactamente esta toma puesta -eso
+ * no se puede saber desde aqui-, pero si que el mecanismo produce la
+ * MISMA forma de averia, y la forma es lo que se estaba buscando: un
+ * embudo que se estrecha en el primer escalon y no en el CRC.
+ *
+ * LO QUE NO MIDE, dicho para que nadie lo lea de mas: esto no reproduce
+ * la propagacion. El ruido es gaussiano y las ráfagas llegan todas con el
+ * mismo nivel. Sirve para comparar una configuracion de la radio con otra
+ * sobre la misma señal, que es justo lo que se necesita; no para predecir
+ * cuantos aviones salen en una tarde.
+ */
+typedef struct {
+    uint32_t metidas;      /* las que se emitieron */
+    uint32_t a1, a2, m1;   /* el embudo, al final */
+    uint32_t abiertas;     /* hfdl_modo_total() */
+    uint32_t buenas;       /* hfdl_modo_buenas() */
+} flujo_r;
+
+static flujo_r flujo(uint32_t giro, float sigma, uint32_t n, uint32_t hueco_ms)
+{
+    flujo_r r;
+    uint32_t k;
+
+    r.metidas = 0u; r.a1 = 0u; r.a2 = 0u; r.m1 = 0u;
+    r.abiertas = 0u; r.buenas = 0u;
+
+    if (!simbolos_monta(giro)) { return r; }
+
+    /* UNA sola sesion para todo el flujo: es la diferencia con los
+     * apartados de arriba y el motivo por el que este banco existe. */
+    hfdl_modo_stop();
+    if (!hfdl_modo_start()) { return r; }
+    mete_reinicia();
+
+    for (k = 0u; k < n; k++) {
+        ruido_emite(hueco_ms, sigma);
+        audio_emite(sigma);
+        r.metidas++;
+    }
+    /* Y un hueco al final, para que la ultima ráfaga tenga detras lo
+     * mismo que han tenido las otras. */
+    ruido_emite(hueco_ms, sigma);
+    mete_vacia();
+
+    hfdl_modo_embudo(&r.a1, &r.a2, &r.m1);
+    r.abiertas = hfdl_modo_total();
+    r.buenas   = hfdl_modo_buenas();
+    return r;
+}
+
+static uint32_t rafaga_audio(uint32_t giro, float sigma)
+{
+    uint32_t antes_b;
+
+    if (!simbolos_monta(giro)) { return 0u; }
+
+    hfdl_modo_stop();
+    if (!hfdl_modo_start()) { return 0u; }
+    mete_reinicia();
+    hfdl_modo_espia(g_ei, g_eq, MAX_SIM);
+    antes_b = hfdl_modo_buenas();
+
+    audio_emite(sigma);
     return hfdl_modo_buenas() - antes_b;
 }
 
@@ -859,6 +1113,164 @@ int main(void)
             }
         }
         g_eco = 0.0f;
+    }
+
+    /*
+     * ======================================================================
+     * 8. EL ESPEJO DE UN CORRECTOR MAL CALIBRADO
+     * ======================================================================
+     *
+     * Ver g_esp. Se cuentan las DOS cosas por separado -lo que engancha y
+     * lo que pasa el CRC- porque la hipotesis dice justo que se separan:
+     * el preambulo aguanta o sube y las tramas se caen.
+     *
+     * Veinte rafagas por punto, sigma 0,5 y eco 0,5, que es el canal del
+     * apartado 5 y donde la cadena todavia va bien sin espejo.
+     */
+    /*
+     * ======================================================================
+     * 8. EL ESPEJO DE UN CORRECTOR MAL CALIBRADO
+     * ======================================================================
+     *
+     * Ver g_esp. Y lo que se cuenta es EL EMBUDO, no solo el CRC.
+     *
+     * *** Y ESA ES LA CORRECCION DEL BANCO. La primera version de este
+     * apartado contaba solo las buenas, a sigma 0,5, y daba 20/20 en
+     * todos los puntos: a ese nivel la cadena va tan sobrada que no se
+     * mide nada. El usuario trajo despues una comparacion de verdad -dos
+     * radios, misma antena, seis minutos- y lo que se caia en la suya no
+     * era el CRC: era el PRIMER escalon, los enganches de A1. Un banco
+     * que no cuenta A1 no podia ver eso ni aunque pasara. ***
+     *
+     * Asi que: ruido alto -donde el detector esta justo- y las cuatro
+     * cifras por separado. rafaga_audio() hace stop/start, que reinicia
+     * los contadores, asi que se leen y se suman ráfaga a ráfaga.
+     */
+    printf("\n  8. ESPEJO DEL CORRECTOR DE IMAGEN (30 rafagas por punto)\n");
+    {
+        static const float k_e[] = { 0.0f, 0.05f, 0.10f, 0.20f, 0.35f, 0.50f };
+        static const float k_s[] = { 2.0f, 3.0f };
+        uint32_t ei2, rep, si3;
+
+        g_eco = 0.5f;
+        for (si3 = 0u; si3 < 2u; si3++) {
+            printf("      sigma %.1f, BPSK 600 simple\n", (double)k_s[si3]);
+            printf("      %-10s %7s %7s %7s %7s %7s %7s\n", "",
+                   "w=0", "0,05", "0,10", "0,20", "0,35", "0,50");
+            {
+                uint32_t a1s[6], a2s[6], m1s[6], oks[6];
+
+                for (ei2 = 0u; ei2 < 6u; ei2++) {
+                    g_esp = k_e[ei2];
+                    a1s[ei2] = 0u; a2s[ei2] = 0u; m1s[ei2] = 0u; oks[ei2] = 0u;
+                    for (rep = 0u; rep < 30u; rep++) {
+                        uint32_t a1 = 0u, a2 = 0u, mm = 0u;
+
+                        if (rafaga_audio(1u, k_s[si3]) >= 1u) { oks[ei2]++; }
+                        hfdl_modo_embudo(&a1, &a2, &mm);
+                        a1s[ei2] += a1; a2s[ei2] += a2; m1s[ei2] += mm;
+                    }
+                }
+                g_esp = 0.0f;
+                printf("      %-10s", "A1");
+                for (ei2 = 0u; ei2 < 6u; ei2++) { printf(" %7u", a1s[ei2]); }
+                printf("\n      %-10s", "A2");
+                for (ei2 = 0u; ei2 < 6u; ei2++) { printf(" %7u", a2s[ei2]); }
+                printf("\n      %-10s", "M1");
+                for (ei2 = 0u; ei2 < 6u; ei2++) { printf(" %7u", m1s[ei2]); }
+                printf("\n      %-10s", "buenas");
+                for (ei2 = 0u; ei2 < 6u; ei2++) { printf(" %5u/30", oks[ei2]); }
+                printf("\n");
+            }
+        }
+        g_eco = 0.0f;
+    }
+
+    /*
+     * ======================================================================
+     * 9. FLUJO LARGO: EL EMBUDO CON DENOMINADOR
+     * ======================================================================
+     *
+     * Ver flujo(). Aqui el espejo del corrector se barre contra el PRIMER
+     * escalon, que es lo que el apartado 8 no puede ver.
+     *
+     * Treinta ráfagas por punto con un hueco de 400 ms entre ellas, BPSK
+     * 600 -la velocidad que mas se oye- y el ruido en el punto donde el
+     * detector empieza a dudar. Si el espejo le cuesta enganches, se vera
+     * en la fila A1 y con denominador.
+     */
+    printf("\n  9. FLUJO LARGO: EL EMBUDO CON DENOMINADOR\n");
+    {
+        uint32_t ei2, si4;
+
+        /*
+         * EL PUNTO DE TRABAJO SE MIDIO, no se eligio. Barrido previo con
+         * hueco de 400 ms y BPSK 600, treinta ráfagas por punto:
+         *
+         *     sigma   0,8    1,1    1,4    1,7
+         *     M1/30    30      4      1      0
+         *
+         * El acantilado esta entre 0,8 y 1,4 y es MUY vertical, que es lo
+         * que pasa cuando el ruido es continuo: el AGC de HFDL se
+         * normaliza contra el hueco, asi que lo que decide no es la
+         * relacion de la ráfaga sola sino la del conjunto. Por eso este
+         * apartado mide en 1,0 y 1,15 -a los dos lados del codo- y no en
+         * los 2,0 del apartado 8: alli el ruido solo existe mientras dura
+         * la ráfaga y el modo arranca limpio delante de cada una, que es
+         * otra cosa.
+         *
+         * Y TRES VUELTAS DE TREINTA, no una: con treinta ráfagas, una
+         * diferencia de cuatro o cinco en A2 es ruido de muestreo y se
+         * lee como si fuera un efecto. Noventa no lo arregla del todo
+         * pero ya distingue un tercio de un ruido.
+         */
+        static const float k_e[] = { 0.0f, 0.25f, 0.50f };
+        static const float k_s[] = { 1.00f, 1.15f };
+
+        g_eco = 0.5f;
+        for (si4 = 0u; si4 < 2u; si4++) {
+            printf("      sigma %.2f, BPSK 600 simple, 3 x 30 rafagas, hueco 400 ms\n",
+                   (double)k_s[si4]);
+            printf("      %-8s %9s %9s %9s %9s\n",
+                   "toma w", "A1", "A2", "M1", "buenas");
+            for (ei2 = 0u; ei2 < 3u; ei2++) {
+                uint32_t met = 0u, a1 = 0u, a2 = 0u, m1 = 0u, bu = 0u, ab = 0u;
+                uint32_t vuelta;
+
+                g_esp = k_e[ei2];
+                for (vuelta = 0u; vuelta < 3u; vuelta++) {
+                    flujo_r r = flujo(1u, k_s[si4], 30u, 400u);
+
+                    met += r.metidas; a1 += r.a1; a2 += r.a2;
+                    m1 += r.m1; bu += r.buenas; ab += r.abiertas;
+                }
+                printf("      %-8.2f %6u/%-2u %6u/%-2u %6u/%-2u %6u/%-2u\n",
+                       (double)k_e[ei2], a1, met, a2, met, m1, met, bu, ab);
+            }
+            g_esp = 0.0f;
+        }
+        g_eco = 0.0f;
+
+        /*
+         * LA RED: sin espejo y con la señal buena, el flujo tiene que
+         * oir casi todas. Si esto se cae, lo que esta roto es el banco
+         * -el hueco, el ruido, el emisor- y no lo que se esta midiendo.
+         * Un banco de flujo que pierde ráfagas por su cuenta mide su
+         * propio fallo y lo llama resultado.
+         */
+        {
+            flujo_r r;
+
+            g_esp = 0.0f;
+            r = flujo(1u, 0.5f, 20u, 400u);
+            printf("\n      red: sin espejo y con señal buena, "
+                   "A1 %u/%u, M1 %u/%u, buenas %u/%u\n",
+                   r.a1, r.metidas, r.m1, r.metidas, r.buenas, r.abiertas);
+            di(r.m1 >= (r.metidas * 9u) / 10u,
+               "el flujo oye al menos nueve de cada diez sin espejo", 0);
+            di(r.buenas >= (r.metidas * 9u) / 10u,
+               "y las decodifica", 0);
+        }
     }
 
     printf("\n%s (%d fallos)\n", fallos ? "HAY FALLOS" : "TODO CORRECTO", fallos);

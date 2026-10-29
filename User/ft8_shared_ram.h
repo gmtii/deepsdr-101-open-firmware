@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include "waterfall.h"       /* WATERFALL_WIDTH, WATERFALL_ROWS */
-#include "ft8_fft1024.h"     /* FT8_FFT_SIZE, FT8_FFT_BINS_USEFUL */
+#include "ft8_fft.h"     /* FT8_FFT_SIZE, FT8_FFT_BINS_USEFUL */
 #include "ft8_waterfall_adapter.h" /* FT8_ADAPTER_* */
 #include "hfdl_ram.h"       /* HFDL_RAM_TOTAL: el tercer inquilino */
 
@@ -118,7 +118,9 @@ typedef union
 
     struct
     {
-        uint8_t mag[FT8_ADAPTER_MAX_BLOCKS * FT8_ADAPTER_TIME_OSR * FT8_ADAPTER_FREQ_OSR * FT8_ADAPTER_NUM_BINS];
+        /* Bytes, no celdas: desde el 28/10/2026 cada celda ocupa medio
+         * byte. Ver FT8_ADAPTER_MAG_BITS en ft8_waterfall_adapter.h. */
+        uint8_t mag[FT8_ADAPTER_MAG_BYTES];
         /*
          * EL DESVIO. 25/09/2026, sustituye a la copia entera de mag[].
          *
@@ -157,8 +159,7 @@ typedef union
          * que no quepa se pierde. No en silencio: lo cuenta
          * ft8_waterfall_desbordes() y sale en la pantalla.
          */
-        uint8_t lado[FT8_ADAPTER_LADO_BLOQUES * FT8_ADAPTER_TIME_OSR
-                     * FT8_ADAPTER_FREQ_OSR * FT8_ADAPTER_NUM_BINS];
+        uint8_t lado[FT8_ADAPTER_LADO_BYTES];
         float fft_re[FT8_FFT_SIZE];
         float fft_im[FT8_FFT_SIZE];
         /*
@@ -166,7 +167,7 @@ typedef union
          *
          * fft_twiddle_cos, fft_twiddle_sin, fft_hann y fft_bitrev sumaban
          * 10.240 bytes -y el ultimo ya ni existe: lo calcula `rbit` en un
-         * ciclo, ver ft8_bitrev10()-, y ft8_fft1024_init() las RECONSTRUIA
+         * ciclo, ver ft8_bitrev()-, y ft8_fft_init() las RECONSTRUIA
          * en cada entrada
          * a FT8 porque cada salida las borraba. Son funcion pura de
          * FT8_FFT_SIZE, o sea unos numeros que no cambian nunca ocupando la
@@ -188,7 +189,10 @@ typedef union
          * de compartirla. Ver `fuera` aqui abajo.
          */
         int16_t window[FT8_ADAPTER_NFFT];
-        float dbout[FT8_FFT_BINS_USEFUL];
+        /* Solo los bins que el adaptador lee: ver FT8_ADAPTER_DB_BINS.
+         * Con la FFT en 2.048 eran 1.024 floats y se miraba uno de cada
+         * dos. */
+        float dbout[FT8_ADAPTER_DB_BINS];
 
         /*
          * ==============================================================

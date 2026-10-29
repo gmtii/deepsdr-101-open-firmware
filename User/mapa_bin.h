@@ -267,6 +267,35 @@ uint16_t mapa_bin_recargas(void);
  */
 uint32_t mapa_bin_largo(void);
 
+/*
+ * LAS CASILLAS VISIBLES QUE NO CUPIERON EN EL BUFFER.
+ *
+ * `mapa_bin_fuera()` es la recarga de ahora mismo y `mapa_bin_fuera_max()`
+ * la peor de la sesion, que es la que sale en la fila de Informacion: la
+ * de ahora se pone a cero en cada recarga y habria que estar mirando
+ * justo en la ventana mala para verla.
+ *
+ * QUE SIGNIFICA QUE NO SEA CERO: al zoom al que haya pasado, falta un
+ * trozo de costa. Y no es que falte una raya: el relleno va por
+ * par-impar, asi que una costa que no esta descuadra la cuenta de cruces
+ * y lo que viene detras sale del color contrario hasta el siguiente borde
+ * de casilla. Esa es la raya horizontal.
+ *
+ * HOY NO PASA, Y POR LOS PELOS. Recorriendo las ventanas posibles de los
+ * cien mapas, las casillas VISIBLES del peor caso suman 10.195 bytes
+ * contra los 10.240 de MAPA_BIN_RAM: 45 bytes de margen. Las del margen
+ * de arrastre no caben -la suma con margen son 12.770- pero esas no se
+ * ven y solo adelantan la siguiente recarga.
+ *
+ * 45 bytes de 10.240 no son un margen, son suerte. Lo que lo arreglaria
+ * de raiz es que el cuerpo ocupe menos -ver el comentario de los saltos:
+ * con saltos de un byte esa ventana baja a unos 6.800- y no subir el
+ * buffer, que no hay de donde: quedan 3.480 bytes de SRAM en toda la
+ * radio.
+ */
+uint8_t mapa_bin_fuera(void);
+uint8_t mapa_bin_fuera_max(void);
+
 uint16_t mapa_bin_trazos(void);
 uint16_t mapa_bin_puntos(void);
 

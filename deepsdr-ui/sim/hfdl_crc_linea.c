@@ -108,6 +108,67 @@ int main(void)
     exige(hfdl_modo_linea_crc()[0] == '\0' || hfdl_modo_prekeys() != 0U,
           "sin tramas ni pre-keys la linea sale vacia");
 
+    /*
+     * ==================================================================
+     * LA TABLA DE AVIONES VIVE EN LA MEMORIA PRESTADA - 28/10/2026
+     * ==================================================================
+     *
+     * *** Pedido por el usuario: "amplia a 48 aceptando que se borre al
+     * salir". ***
+     *
+     * Al pasar de 20 aviones a 48, la tabla y los renglones se mudaron de
+     * .bss a la cabecera del prestamo (ver HFDL_RAM_AVIONES en
+     * hfdl_ram.h). Eso cambia una cosa que el compilador no ve:
+     * s_tabla.rec apunta DENTRO de esa region, asi que al soltarla el
+     * puntero queda colgando sobre lo que sea que haya despues -pixeles
+     * de cascada, o la ranura de FT8-.
+     *
+     * Si hfdl_modo_stop() no vaciara la tabla, hfdl_modo_aviones()
+     * seguiria diciendo que hay aviones y EL MAPA los recorreria: se
+     * pintarian aviones sacados de pixeles. No daria error, no se
+     * colgaria, y las etiquetas serian basura verosimil, que es la peor
+     * clase de fallo.
+     *
+     * Esto se mide aqui y no en otro sitio porque este banco corre con
+     * AddressSanitizer: si alguien quita el vaciado, lo que salta no es un
+     * numero raro sino el uso de la memoria en si.
+     *
+     * Y SE COMPRUEBA QUE CAZA: quitando las tres lineas de hfdl_modo_stop()
+     * que vacian s_tabla, la primera exigencia de aqui abajo se pone roja.
+     */
+    printf("\n  LA TABLA DE AVIONES, AL SALIR DEL MODO\n");
+    {
+        hfdl_ac_event_t ev;
+        uint8_t pide = 0U;
+
+        printf("    caben %u aviones y %u renglones\n",
+               (unsigned)HFDL_MODO_AVIONES, (unsigned)HFDL_MODO_LINEAS);
+        exige(HFDL_MODO_AVIONES >= 48U && HFDL_MODO_LINEAS >= 48U,
+              "son 48 y 48, como FT8");
+
+        if (hfdl_modo_start()) {
+            exige(s_tabla.cap >= 48U, "la tabla coge sus 48 de la cabecera");
+
+            /* Un avion cualquiera, para que la tabla no este vacia. */
+            memset(&ev, 0, sizeof ev);
+            ev.flags = HFDL_AC_EV_ICAO;
+            ev.icao = 0x4BB0F3UL;
+            ev.ac_id = HFDL_AC_ID_NONE;
+            (void)hfdl_ac_update(&s_tabla, &ev, &pide);
+            exige(hfdl_modo_aviones() == 1U, "con un parte dentro, hay un avion");
+
+            hfdl_modo_stop();
+            exige(hfdl_modo_aviones() == 0U,
+                  "al salir del modo la lista se borra");
+            exige(s_tabla.rec == (hfdl_ac_rec_t *)0,
+                  "y el puntero no se queda colgando sobre la memoria de otro");
+            exige(hfdl_modo_linea(0U)[0] == '\0',
+                  "y el primer renglon ya no dice nada");
+        } else {
+            printf("    (no se pudo coger el prestamo: no se mide)\n");
+        }
+    }
+
     printf("\n  %s\n", fallos ? "*** MAL ***" : "todo correcto");
     return fallos ? 1 : 0;
 }

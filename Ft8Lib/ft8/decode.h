@@ -30,6 +30,87 @@ typedef struct
 #define WF_ELEM_MAG_INT(x) (int)(x)
 #endif
 
+/*
+ * ======================================================================
+ * *** DOS BINS POR BYTE - 28/10/2026, cambio de ESTE proyecto ***
+ * ======================================================================
+ *
+ * ESTO NO ES DE ft8_lib: es una modificacion nuestra sobre su copia, y
+ * esta anotada en PROCEDENCIA.md. Quien venga de arriba tiene que saberlo.
+ *
+ * POR QUE. mag[] es lo que decide cuanta banda se puede mirar: son
+ * bloques x bins bytes, y en esta radio la memoria sale de una union
+ * compartida con la cascada. Con un byte por bin, cubrir los 3.200 Hz de
+ * audio pedia 47.616 bytes y no habia de donde sacarlos; con MEDIO byte
+ * son los mismos 23.808 que ya costaban 1.600 Hz.
+ *
+ * Y NO CUESTA SENSIBILIDAD, medido antes de hacerlo en
+ * deepsdr-ui/sim/ft8_banda.c: la rejilla de medio bin sale bin a bin
+ * igual y el barrido de relacion senal/ruido se queda en los mismos
+ * -18 dB. El motivo es que el decodificador no mira el valor absoluto de
+ * un bin: compara los ocho tonos de cada simbolo entre si, y dieciseis
+ * niveles repartidos sobre el margen de cada bloque le bastan.
+ *
+ * LA ESCALA. Se guardan 0..15 y se leen como 4 dB por nivel, centrados
+ * donde estaba la escala de antes, para que **el numero que sale de
+ * WF_MAG_INT_AT siga siendo el de siempre**: medios decibelios. Eso es lo
+ * que permite no tocar FTX_MIN_SCORE ni ninguno de los umbrales que
+ * cuelgan de el. Un nivel vale ocho unidades de las de antes.
+ *
+ * EL INDICE VA EN BINS, NO EN BYTES, y por eso las funciones de abajo
+ * pasaron de llevar un puntero a llevar un entero: a medio byte no se
+ * puede apuntar. Es el unico cambio de forma; la aritmetica es la misma.
+ */
+#ifndef FTX_MAG_4BITS
+#define FTX_MAG_4BITS 1
+#endif
+
+#if FTX_MAG_4BITS
+/* La escalera: 16 escalones de FTX_MAG4_PASO_DB a partir de
+ * FTX_MAG4_BASE_DB. Se pueden fijar desde fuera (-D) para barrerlos en el
+ * banco sin tocar el fichero; los valores de abajo son los medidos. */
+#ifndef FTX_MAG4_BASE_DB
+#define FTX_MAG4_BASE_DB (-35.0f)
+#endif
+#ifndef FTX_MAG4_PASO_DB
+#define FTX_MAG4_PASO_DB (3.4f)
+#endif
+#define WF_MAG_RAW(wf, i)  ((int)((((const uint8_t *)(wf)->mag)[(i) >> 1]   \
+                                   >> (((i) & 1) ? 4 : 0)) & 0x0F))
+#define WF_MAG_AT(wf, i)     ((float)WF_MAG_RAW(wf, i) * FTX_MAG4_PASO_DB + FTX_MAG4_BASE_DB)
+#define WF_MAG_INT_AT(wf, i) ((int)(2.0f * WF_MAG_AT(wf, i) + 240.0f))
+/*
+ * EL ESCALON CRUDO, Y CUANTOS HAY.
+ *
+ * Lo usa ft8_snr.c para su histograma de ruido. Lo hacia con
+ * WF_MAG_INT_AT, que son unidades de medio dB, y eso ATA EL TAMAÑO DEL
+ * HISTOGRAMA A LA ESCALERA: con base -35 y paso 3 el escalon 15 da 260 y
+ * se sale de un histo[256]. Pasó de verdad, barriendo la escalera el
+ * 28/10/2026: "stack smashing detected".
+ *
+ * Indexando por el escalon crudo no puede pasar: hay WF_MAG_NIVELES y
+ * punto, los diga la escalera que los diga.
+ */
+#define WF_MAG_NIVELES       16
+#define WF_MAG_NIVEL(wf, i)  WF_MAG_RAW(wf, i)
+#define WF_MAG_NIVEL_DB(x)   ((float)(x) * FTX_MAG4_PASO_DB + FTX_MAG4_BASE_DB)
+/* Lo que hay que escribir en el byte `i>>1` para dejar el nivel `q`
+ * (0..15) en el bin `i`. Lo usa el adaptador al guardar. */
+#define WF_MAG_PON(base, i, q)                                             \
+    do {                                                                   \
+        uint8_t *b_ = &((uint8_t *)(base))[(i) >> 1];                      \
+        if ((i) & 1) { *b_ = (uint8_t)((*b_ & 0x0FU) | ((q) << 4)); }      \
+        else         { *b_ = (uint8_t)((*b_ & 0xF0U) | (q)); }             \
+    } while (0)
+#else
+#define WF_MAG_INT_AT(wf, i) WF_ELEM_MAG_INT((wf)->mag[i])
+#define WF_MAG_AT(wf, i)     WF_ELEM_MAG((wf)->mag[i])
+#define WF_MAG_NIVELES       256
+#define WF_MAG_NIVEL(wf, i)  ((int)((wf)->mag[i]))
+#define WF_MAG_NIVEL_DB(x)   ((float)(x) * 0.5f - 120.0f)
+#define WF_MAG_PON(base, i, q) (((uint8_t *)(base))[i] = (uint8_t)(q))
+#endif
+
 /// Input structure to ftx_find_sync() function. This structure describes stored waterfall data over the whole message slot.
 /// Fields time_osr and freq_osr specify additional oversampling rate for time and frequency resolution.
 /// If time_osr=1, FFT magnitude data is collected once for every symbol transmitted, i.e. every 1/6.25 = 0.16 seconds.

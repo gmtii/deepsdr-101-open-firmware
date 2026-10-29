@@ -211,7 +211,7 @@ INCLUDES  += -IFt8Lib
 # El decodificador es el camino caliente de este modo -una ranura de FT8
 # son 15 s de audio que hay que digerir en los 2,4 s que quedan hasta la
 # siguiente- asi que no se compila a -Os con el resto.
-CALIENTES += ft8_decoder.o ft8_fft1024.o ft8_decimator.o \
+CALIENTES += ft8_decoder.o ft8_fft.o ft8_decimator.o \
              ft8_waterfall_adapter.o decode.o ldpc.o
 
 # ENGANCHE DEL .elf. Esto es lo que faltaba y costo un rato entender, asi que

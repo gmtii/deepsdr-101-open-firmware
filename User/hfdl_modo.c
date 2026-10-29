@@ -19,15 +19,95 @@
 
 #include <string.h>
 
-#define HFDL_MODO_LINEAS 14U
-#define HFDL_MODO_LARGO  72U
-#define HFDL_MODO_AVIONES 20U
-
-/* Las lineas SI son estaticas, al contrario que los estados.
+/*
+ * ======================================================================
+ * 48 Y 48, COMO FT8 - 28/10/2026
+ * ======================================================================
  *
- * Son 1.008 bytes y tienen que sobrevivir a hfdl_modo_stop(): si vivieran en
- * la RAM prestada, salir del modo para mirar otra cosa borraria lo que
- * acababa de salir. Lo mismo hace FT8 con las suyas. */
+ * *** Pedido por el usuario: "amplia a 48 aceptando que se borre al
+ * salir". ***
+ *
+ * Eran 14 renglones y 20 aviones. El numero que importaba era el de
+ * AVIONES, porque la tabla no la lee solo el panel: la lee EL MAPA (ver
+ * hfdl_modo_aviones() y el bucle del mapa en main.c), asi que el mapa no
+ * podia enseñar mas de veinte por llena que estuviera la banda. Es la
+ * misma razon por la que FT8 paso de 16 a 48 renglones.
+ *
+ * El porque de 48 y no mas es el de FT8, palabra por palabra: mas filas no
+ * darian mas informacion util.
+ *
+ * DONDE VIVEN AHORA, que es lo que lo hacia imposible: en la memoria
+ * prestada, no en .bss. Ver HFDL_RAM_AVIONES en hfdl_ram.h para la cuenta
+ * entera y para el comentario viejo que lo frenaba.
+ */
+#define HFDL_MODO_LINEAS 48U
+#define HFDL_MODO_LARGO  72U
+#define HFDL_MODO_AVIONES 48U
+
+/*
+ * *** Y DESDE EL 28/10/2026 NO SON ESTATICAS: viven en la memoria
+ * prestada, como los estados. ***
+ *
+ * Aqui ponia esto, y la ultima frase es la que lo sostenia todo:
+ *
+ *   "Las lineas SI son estaticas, al contrario que los estados. Son 1.008
+ *    bytes y tienen que sobrevivir a hfdl_modo_stop(): si vivieran en la
+ *    RAM prestada, salir del modo para mirar otra cosa borraria lo que
+ *    acababa de salir. Lo mismo hace FT8 con las suyas."
+ *
+ * Era verdad cuando se escribio y hoy no lo es: las lineas de FT8 viven
+ * dentro de la union (ver `lineas` en ft8_shared_ram.h) y se borran al
+ * salir, igual que todo lo demas. O sea que HFDL pagaba 2.048 bytes de
+ * SRAM permanente por una garantia que su propia referencia ya no da.
+ *
+ * El usuario acepto el precio -la lista se borra al salir- a cambio de
+ * pasar de 20 aviones a 48 en el mapa. Ver HFDL_RAM_AVIONES en hfdl_ram.h.
+ *
+ * *** Y SE PROBO A DEVOLVERLAS A .bss EL MISMO DIA, Y NO CABEN. ***
+ *
+ * Por la tarde, buscando por que la radio sacaba menos aviones que una
+ * version anterior, se intento sacarlas de aqui para que la lista
+ * sobreviviera al salir del modo. Los 48 aviones y los 48 renglones son
+ * 5.952 bytes de .bss y el enlazador NO LOS DA: la radio va al 98,2 % de
+ * su SRAM y quedan 3.544 libres. No es una preferencia, es que no hay.
+ * Queda escrito para que nadie lo vuelva a intentar sin mirar el mapa de
+ * memoria antes.
+ *
+ * LOS DOS TROZOS VAN AL FINAL DE LA CABECERA, detras del preambulo y de
+ * los estados, que es donde no estorban a nadie. Los offsets salen de
+ * hfdl_ram.h restando desde el final, asi que crecer cualquiera de los dos
+ * no mueve a los otros.
+ */
+#define HFDL_OFF_AVIONES  (HFDL_RAM_CABECERA - HFDL_RAM_AVIONES - HFDL_RAM_LINEAS)
+#define HFDL_OFF_LINEAS   (HFDL_RAM_CABECERA - HFDL_RAM_LINEAS)
+
+_Static_assert((uint32_t)HFDL_MODO_AVIONES * sizeof(hfdl_ac_rec_t)
+                   <= (uint32_t)HFDL_RAM_AVIONES,
+               "los aviones de HFDL no caben en lo que hfdl_ram.h les reserva");
+_Static_assert((uint32_t)HFDL_MODO_LINEAS * (uint32_t)HFDL_MODO_LARGO
+                   <= (uint32_t)HFDL_RAM_LINEAS,
+               "los renglones de HFDL no caben en lo que hfdl_ram.h les reserva");
+
+/*
+ * Los dos punteros a la region prestada. Devuelven NULL fuera del modo, y
+ * eso NO es una comodidad: es lo que impide escribir sobre los pixeles de
+ * la cascada o sobre lo que FT8 tenga ahi. Quien llama lo mira.
+ */
+static hfdl_ac_rec_t *aviones_ram(void)
+{
+    uint8_t *cab = hfdl_ram_cabecera();
+
+    if (cab == (uint8_t *)0) { return (hfdl_ac_rec_t *)0; }
+    return (hfdl_ac_rec_t *)(void *)(cab + HFDL_OFF_AVIONES);
+}
+
+static char *linea_ram(uint32_t i)
+{
+    uint8_t *cab = hfdl_ram_cabecera();
+
+    if (cab == (uint8_t *)0 || i >= (uint32_t)HFDL_MODO_LINEAS) { return (char *)0; }
+    return (char *)(void *)(cab + HFDL_OFF_LINEAS + (i * (uint32_t)HFDL_MODO_LARGO));
+}
 /*
  * UNA FILA POR AVION, NO UNA POR MENSAJE. 25/09/2026.
  *
@@ -48,9 +128,7 @@
  * vale de su modulo es que sabe que el "ID 59" de un mensaje y el
  * "4BB0F3" de otro son el mismo avion; el dibujo es cosa nuestra.
  */
-static hfdl_ac_rec_t   s_aviones[HFDL_MODO_AVIONES];
 static hfdl_ac_table_t s_tabla;
-static char     s_lineas[HFDL_MODO_LINEAS][HFDL_MODO_LARGO];
 /*
  * Y el renglon del volcado: "[46] FF D1 5A ..." con veinte bytes. Son
  * 1 del 0x01 + 5 de la longitud + 60 del hexadecimal + 1 del cero.
@@ -865,17 +943,39 @@ uint8_t hfdl_modo_start(void)
     e = estado();
     if (e == (hfdl_estado_t *)0) { hfdl_ram_suelta(); return 0U; }
 
-    /* Que quepan los estados en la cabecera se comprueba al compilar, no al
+    /*
+     * Que quepan los estados en la cabecera se comprueba al compilar, no al
      * arrancar: si un struct del padre crece y se pasa, esto no compila en
-     * vez de escribir encima de lo de payload_decode. */
-    _Static_assert(sizeof(hfdl_estado_t) + HFDL_RAM_PREAMBULO <= HFDL_RAM_CABECERA,
-                   "los estados de HFDL ya no caben en la cabecera reservada");
+     * vez de escribir encima de lo de payload_decode.
+     *
+     * *** Y SE MIDE CONTRA LOS AVIONES, NO CONTRA EL FINAL - 28/10/2026.
+     *
+     * Hasta hoy ponia "<= HFDL_RAM_CABECERA" y eso era CORRECTO mientras
+     * los estados fueran lo ultimo de la cabecera. Al meter detras la
+     * tabla de aviones y los renglones, la cabecera paso de 9.216 a 15.168
+     * y este aserto se volvio inutil de golpe: seguia en verde aunque los
+     * estados crecieran 6 kB y se comieran la tabla entera.
+     *
+     * Un aserto que deja de proteger lo que protegia, y encima en silencio
+     * y en el mismo cambio que puso ahi lo que hay que proteger. Ahora se
+     * mide contra HFDL_OFF_AVIONES, que es el primer byte que NO es suyo.
+     *
+     * El margen de verdad son 240 bytes: 4.608 de preambulo + 4.368 de
+     * estados = 8.976, y los aviones empiezan en 9.216. (El comentario de
+     * hfdl_ram.h decia 396 con un sizeof de 4.212; hoy son 4.368, medido
+     * con una sonda de compilacion.) ***
+     */
+    _Static_assert(sizeof(hfdl_estado_t) + HFDL_RAM_PREAMBULO <= HFDL_OFF_AVIONES,
+                   "los estados de HFDL se comen la tabla de aviones");
 
     memset(e, 0, sizeof *e);
     hfdl_demod_chain_init(&e->cadena);
     hfdl_preamble_sync_init(&e->preambulo);
 
-    hfdl_ac_init(&s_tabla, s_aviones, sizeof s_aviones);
+    /* La tabla, sobre la region prestada que se acaba de coger. Antes del
+     * 28/10/2026 esto apuntaba a un array estatico; ver linea_ram(). */
+    hfdl_ac_init(&s_tabla, aviones_ram(),
+                 (uint32_t)HFDL_MODO_AVIONES * sizeof(hfdl_ac_rec_t));
     s_estado = 0U;
     s_gs_ultima = 0xFFU;
     /*
@@ -949,6 +1049,22 @@ void hfdl_modo_stop(void)
 {
     if (!s_activo) { return; }
     s_activo = 0U;
+    /*
+     * LA TABLA SE SUELTA ANTES QUE LA MEMORIA - 28/10/2026.
+     *
+     * s_tabla.rec apunta DENTRO de la region prestada desde que los
+     * aviones viven ahi. En cuanto se devuelve, esos bytes vuelven a ser
+     * pixeles de la cascada, y hfdl_modo_aviones() -que lee s_tabla.count
+     * y la lee EL MAPA- seguiria diciendo que hay aviones y entregando
+     * punteros a ellos.
+     *
+     * Dejarla vacia aqui es lo que convierte "la lista se borra al salir"
+     * en una frase verdadera en vez de en un puntero colgando.
+     */
+    s_tabla.rec = (hfdl_ac_rec_t *)0;
+    s_tabla.count = 0;
+    s_tabla.cap = 0;
+    s_nlineas = 0U;
     hfdl_ram_suelta();
 }
 
@@ -1974,7 +2090,8 @@ static const char *fila_avion(uint32_t i)
 
     if (i >= s_tabla.count || i >= HFDL_MODO_LINEAS) { return ""; }
     r = &s_tabla.rec[i];
-    l = s_lineas[i];
+    l = linea_ram(i);
+    if (l == (char *)0) { return ""; }
 
     /* --- quien es: la OACI si se sabe, y si no el identificador --- */
     if ((r->flags & HFDL_AC_R_ICAO) != 0U) {
@@ -2429,7 +2546,26 @@ uint32_t hfdl_modo_aviones(void) { return (uint32_t)s_tabla.count; }
 
 void hfdl_modo_borra(void)
 {
-    hfdl_ac_init(&s_tabla, s_aviones, sizeof s_aviones);
+    /*
+     * CON EL MODO APAGADO NO HAY DONDE: el boton Borrar y la salida del
+     * modo pueden llegar aqui con el prestamo ya devuelto, y entonces
+     * aviones_ram() es NULL. Reiniciar la tabla sobre NULL la deja vacia,
+     * que es lo correcto; lo que no se puede es escribir en ella.
+     */
+    {
+        hfdl_ac_rec_t *av = aviones_ram();
+
+        if (av != (hfdl_ac_rec_t *)0) {
+            hfdl_ac_init(&s_tabla, av,
+                         (uint32_t)HFDL_MODO_AVIONES * sizeof(hfdl_ac_rec_t));
+        } else {
+            /* Sin prestamo no hay donde: se deja vacia a mano en vez de
+             * pasarle un NULL a hfdl_ac_init(), que lo pondria a cero. */
+            s_tabla.rec = (hfdl_ac_rec_t *)0;
+            s_tabla.cap = 0U;
+            s_tabla.count = 0U;
+        }
+    }
     s_nlineas = 0U;
     s_total   = 0U;
     s_buenas  = 0U;

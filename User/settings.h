@@ -303,6 +303,33 @@ typedef enum {
      * hoy.
      */
     SET_X_SQL_WFM,      /* silenciador de FM ancha, dB enteros */
+    /*
+     * LA GANANCIA DE ENTRADA DE FM ANCHA, APARTE - 28/10/2026.
+     *
+     * *** Pedido por el usuario: que la de serie sean 25 dB, y que si se
+     * cambia se guarde. ***
+     *
+     * Hasta hoy la FM ancha no tenia ganancia PROPIA: apply_demod_mode()
+     * ponia el tope del codec (47,5 dB) al entrar, con el argumento de que
+     * a 100 MHz el mezclador pierde 25 dB y "hace falta todo lo que hay".
+     * Eso vale con antena de hilo y una emisora lejana; con una antena
+     * decente y una local satura, y el mando no servia de nada porque el
+     * valor vivo se tiraba a la basura al salir del modo.
+     *
+     * Ahora son dos ajustes de verdad, uno por familia:
+     *
+     *     pga_gain_db_x2   lo tuyo fuera de FM ancha (ya existia)
+     *     pga_wfm_db_x2    lo tuyo DENTRO de FM ancha (esta clave)
+     *
+     * Entrar en FM ancha pone el segundo, salir repone el primero, y el
+     * mando escribe el que corresponda al modo en el que estes. Ninguno
+     * de los dos pisa al otro, que es lo que pasaba antes.
+     *
+     * Al final de la lista, como todas las de arriba: un CONFIG.CSV de una
+     * version anterior no la trae, su bit queda a 0 y la FM ancha arranca
+     * con CONFIG_PGA_WFM_DB_X2, el valor de serie.
+     */
+    SET_X_PGA_WFM,      /* ganancia de entrada en FM ancha, medios dB (0..95) */
     SET_X_N
 } settings_extra_id_t;
 

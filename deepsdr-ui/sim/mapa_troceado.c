@@ -42,6 +42,7 @@
 #include "gfx2.h"
 #include "palette.h"
 #include "mapa.h"
+#include "mapa_bin.h"   /* mapa_bin_fuera_max() y MAPA_BIN_RAM - ver el apartado de las casillas */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -206,6 +207,68 @@ int main(void)
                sueltas, en_borde, sueltas ? (100 * en_borde) / sueltas : 0);
         printf("\n");
     }
+
+    /*
+     * ======================================================================
+     * Y LAS CASILLAS QUE NO CUPIERON, QUE AHORA SE PUEDEN MIRAR - 28/10/2026
+     * ======================================================================
+     *
+     * *** mapa_bin.c las contaba desde el 16/10 en s_vis_fuera y NO LAS
+     * LEIA NADIE: ni getter, ni fila, ni banco. Doce dias contando para el
+     * forro, que es el tercer contador de este proyecto que existe y nadie
+     * mira. Ahora salen por mapa_bin_fuera_max() y ademas en la fila de
+     * Informacion del mapa. ***
+     *
+     * QUE SE MIDE AQUI: lo que el barrido de arriba haya dejado. Si al
+     * zoom 8 alguna ventana pidio mas de MAPA_BIN_RAM, el contador no es
+     * cero y falta costa en la pantalla - y como el relleno va por
+     * par-impar, lo que viene detras sale del color contrario.
+     *
+     * Y LO QUE SALE HOY ES CERO, que es lo correcto. La primera cuenta
+     * que hice fuera decia que se caia: sumaba las casillas de la ventana
+     * MAS EL MARGEN -12.770 bytes- y eso no es lo que el cargador cuenta.
+     * Solo las VISIBLES cuentan como perdidas, y esas suman 10.195 en el
+     * peor caso de los cien mapas, contra los 10.240 que hay.
+     *
+     * *** ESTE BANCO CAZO ESA EQUIVOCACION: daba cero cuando yo decia que
+     * tenia que dar mas de cero, y el equivocado era yo. Es exactamente
+     * para lo que esta. ***
+     *
+     * 45 bytes de margen no son un margen, son suerte, asi que esto se
+     * queda puesto: el dia que un .map traiga una ventana un poco mas
+     * cargada, el numero sube aqui y en la fila de Informacion.
+     */
+    printf("  LAS CASILLAS QUE NO CUPIERON EN EL BUFFER\n\n");
+    /*
+     * Y SE PASEA EL MAPA, que si no esto no prueba nada. El barrido de
+     * arriba mira siempre el centro del mundo, y la ventana mala no esta
+     * ahi: medida fuera, la peor del zoom 8 cae por el Atlantico norte.
+     * Un banco que solo mire el centro da cero y parece que todo va bien.
+     */
+    {
+        int16_t dx;
+
+        memset(&g_caja, 0, sizeof g_caja);
+        mapa_pon(&g_caja, 0, 0, GFX2_W, ALTO);
+        (void)mapa_zoom(&g_caja, 8U, GFX2_W / 2, ALTO / 2);
+        for (dx = -1600; dx <= 1600; dx += 200) {
+            int16_t dy;
+            for (dy = -600; dy <= 600; dy += 200) {
+                mapa_arrastra(&g_caja, dx, dy);
+                lcd_sim_reset(0x0000);
+                g_capturando = 0;
+                gfx2_render(0, 0, GFX2_W, ALTO, pinta, 0);
+                mapa_arrastra(&g_caja, (int16_t)-dx, (int16_t)-dy);
+            }
+        }
+    }
+    printf("      peor de la sesion                     %7u\n",
+           (unsigned)mapa_bin_fuera_max());
+    printf("      (MAPA_BIN_RAM son %u bytes; la peor ventana medida\n",
+           (unsigned)MAPA_BIN_RAM);
+    printf("       de los cien mapas al zoom 8 pide 12770)\n\n");
+    di(mapa_bin_fuera_max() <= 128U,
+       "el contador de casillas sin sitio no se desborda", 0);
 
     printf("  LO QUE DICEN ESTOS NUMEROS\n\n");
     di(peor_cruces <= CRUCES_HOY,

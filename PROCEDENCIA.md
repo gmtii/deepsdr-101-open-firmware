@@ -37,6 +37,30 @@ cabeceras). La huella es inconfundible: el prefijo `ftx_`, `ftx_find_candidates(
    qué parte de FT8 sí es de este proyecto. Los trece ficheros siguen sin
    cabecera individual —no se tocan, para que se vean idénticos a los de
    origen— pero el aviso ya viaja con el código, que es lo que pide la MIT.
+
+   > **Y DESDE EL 28/10/2026 DOS SÍ ESTÁN TOCADOS, y hay que decirlo.**
+   >
+   > `ft8/decode.h` y `ft8/decode.c` llevan una modificación **de este
+   > proyecto**: la cascada `mag[]` guarda **cuatro bits por celda** en vez
+   > de ocho, para que la ventana de búsqueda quepa entera (0 a 3.200 Hz)
+   > en la memoria que tiene esta radio. En `decode.h` eso son las macros
+   > `FTX_MAG_4BITS`, `WF_MAG_AT`, `WF_MAG_INT_AT`, `WF_MAG_PON`,
+   > `WF_MAG_NIVEL*` y los dos parámetros de la escalera; en `decode.c`,
+   > que los seis accesos a `mag[]` pasan de aritmética de **punteros** a
+   > aritmética de **índices** —`get_cand_off()` devuelve un índice y no un
+   > puntero, y `ft8_extract_symbol()`/`ft4_extract_symbol()` reciben el
+   > waterfall y un desplazamiento—.
+   >
+   > Con `FTX_MAG_4BITS` a 0 el fichero se comporta **exactamente** como el
+   > de origen: las dos ramas existen y se compilan, que es como se midió
+   > que no costaba sensibilidad.
+   >
+   > `ft8_decode_multi_symbols()` —que este árbol marca
+   > `__attribute__((unused))`— **no se ha tocado**: sigue siendo la de
+   > origen, palabra por palabra.
+   >
+   > La MIT no exige avisar de los cambios, pero este fichero existe para
+   > que nadie tenga que adivinar qué es de quién.
 2. **`constants.h` trae tablas sacadas de WSJT-X.** Lo dice el propio fichero:
    *«From WSJT-X's `ldpc_174_91_c_reordered_parity.f90`»* y *«Mn from WSJT-X's
    `bpdecode174.f90`»*. **WSJT-X es GPL-3.0.** Esas tablas son las constantes del

@@ -572,7 +572,28 @@ void ft8_decoder_slot_empieza(void)
      * nothing to snapshot for those - only mag[] itself needed a copy.
      */
     s_wf_snap.max_blocks = FT8_ADAPTER_MAX_BLOCKS;
-    s_wf_snap.num_blocks = FT8_ADAPTER_MAX_BLOCKS; /* only ever called once a slot is FULL - see this function's own call site */
+    /*
+     * LOS BLOQUES QUE DE VERDAD HAY, Y NO LOS 93 DE LA RANURA LLENA.
+     * 28/10/2026.
+     *
+     * Aqui ponia MAX_BLOCKS con el argumento de que "solo se llama con la
+     * ranura llena", y eso dejo de ser verdad el mismo dia: una ranura que
+     * se queda en 90 bloques tambien se decodifica ahora, en vez de
+     * tirarse entera. Ver FT8_MIN_BLOQUES en ft8_modo.c.
+     *
+     * Mentirle aqui no habria dado un fallo visible, que es lo peor:
+     * Ft8Lib mira num_blocks para saber que simbolos existen -decode.c,
+     * `block >= wf->num_blocks`- y con un numero inflado leeria bloques
+     * que nadie ha escrito, o sea la ranura ANTERIOR, como si fueran
+     * simbolos de esta.
+     *
+     * Y SALE DE LA FOTO, no de ft8_waterfall_bloques(). Esa cuenta los de
+     * la captura VIVA, y cuando se llega aqui la captura ya esta desviada
+     * a la ranura siguiente: daria cero. La foto es ft8_waterfall_get(),
+     * que es mag[] congelado, y num_blocks dentro de el es lo que llego a
+     * capturar la ranura que se va a decodificar.
+     */
+    s_wf_snap.num_blocks = ft8_waterfall_get()->num_blocks;
     s_wf_snap.num_bins = FT8_ADAPTER_NUM_BINS;
     s_wf_snap.time_osr = FT8_ADAPTER_TIME_OSR;
     s_wf_snap.freq_osr = FT8_ADAPTER_FREQ_OSR;

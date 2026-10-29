@@ -20,7 +20,7 @@
  * ESTO MONTA UNA RANURA DE FT8 ENTERA EN MEMORIA -emisiones sinteticas
  * sobre ruido blanco, a 12 kHz, que es exactamente lo que demod_am.c le
  * entrega a ft8_modo_come()- y la pasa por EL CODIGO DEL FIRMWARE, sin
- * tocarlo: User/ft8_decimator.c, User/ft8_fft1024.c,
+ * tocarlo: User/ft8_decimator.c, User/ft8_fft.c,
  * User/ft8_waterfall_adapter.c y User/ft8_decoder.c, mas Ft8Lib. Despues
  * cuenta los mensajes que salen.
  *
@@ -56,12 +56,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <math.h>
 #include <stdint.h>
 
 #include "ft8_decimator.h"
 #include "ft8_waterfall_adapter.h"
-#include "ft8_fft1024.h"
+#include "ft8_fft.h"
 #include "ft8_decoder.h"
 #include "ft8_shared_ram.h"
 #include "ft8/constants.h"
@@ -73,184 +74,7 @@
 void rtc_hw_get(rtc_hw_datetime_t *o) { if (o) { memset(o, 0, sizeof *o); } }
 const char *dxcc_pais(const char *ind) { (void)ind; return 0; }
 
-/* ------------------------------------------------------- el codificador */
-static uint8_t paridad8(uint8_t x)
-{
-    x ^= (uint8_t)(x >> 4);
-    x ^= (uint8_t)(x >> 2);
-    x ^= (uint8_t)(x >> 1);
-    return (uint8_t)(x & 1U);
-}
-
-/* 91 bits (77 de carga + 14 de CRC) -> 174 bits. El producto por la matriz
- * generadora de Ft8Lib, bit a bit. */
-static void ldpc_codifica(const uint8_t *m91, uint8_t *cw174)
-{
-    int i, j;
-    uint8_t mascara = (uint8_t)(0x80U >> (FTX_LDPC_K % 8));
-    int idx = FTX_LDPC_K_BYTES - 1;
-
-    for (j = 0; j < FTX_LDPC_N_BYTES; j++) {
-        cw174[j] = (j < FTX_LDPC_K_BYTES) ? m91[j] : 0U;
-    }
-    for (i = 0; i < FTX_LDPC_M; i++) {
-        uint8_t acc = 0U;
-        for (j = 0; j < FTX_LDPC_K_BYTES; j++) {
-            acc ^= (uint8_t)(kFTX_LDPC_generator[i][j] & m91[j]);
-        }
-        if (paridad8(acc)) { cw174[idx] |= mascara; }
-        mascara >>= 1;
-        if (mascara == 0U) { mascara = 0x80U; idx++; }
-    }
-}
-
-/* Texto -> los 79 tonos. Devuelve 0 si el texto no se puede codificar. */
-static int ft8_tonos(const char *texto, uint8_t tonos[FT8_NN])
-{
-    ftx_message_t msg;
-    uint8_t a91[FTX_LDPC_K_BYTES];
-    uint8_t cw[FTX_LDPC_N_BYTES];
-    uint8_t mascara = 0x80U;
-    int i_byte = 0, i;
-
-    ftx_message_init(&msg);
-    if (ftx_message_encode(&msg, 0, texto) != FTX_MESSAGE_RC_OK) { return 0; }
-
-    ftx_add_crc(msg.payload, a91);
-    ldpc_codifica(a91, cw);
-
-    for (i = 0; i < FT8_NN; i++) {
-        if (i < 7)                  { tonos[i] = kFT8_Costas_pattern[i]; }
-        else if (i >= 36 && i < 43) { tonos[i] = kFT8_Costas_pattern[i - 36]; }
-        else if (i >= 72)           { tonos[i] = kFT8_Costas_pattern[i - 72]; }
-        else {
-            uint8_t b3 = 0U;
-            int k;
-            for (k = 0; k < 3; k++) {
-                b3 = (uint8_t)(b3 << 1);
-                if (cw[i_byte] & mascara) { b3 |= 1U; }
-                mascara >>= 1;
-                if (mascara == 0U) { mascara = 0x80U; i_byte++; }
-            }
-            tonos[i] = kFT8_Gray_map[b3];
-        }
-    }
-    return 1;
-}
-
-/* ------------------------------------------------------------ el audio */
-#define FS            12000
-#define RANURA_N      (15 * FS)
-/* 1920 = 0,160 s a 12 kHz. Escrito como numero y comprobado, y no como
- * (int)(FT8_SYMBOL_PERIOD * FS): eso no es una constante de compilacion y
- * no vale para dimensionar un array. */
-#define SIMBOLO_N     1920
-_Static_assert(SIMBOLO_N == (FS * 160) / 1000,
-               "SIMBOLO_N ya no son 0,160 s a la frecuencia de muestreo");
-
-static float g_audio[RANURA_N];
-
-/* Ruido gaussiano con una semilla propia: el banco tiene que dar lo mismo
- * en cada compilacion y en cada maquina, asi que no se usa rand(). */
-static uint32_t g_sem;
-static void semilla(uint32_t s) { g_sem = s ? s : 1U; }
-static uint32_t siguiente(void)
-{
-    g_sem ^= g_sem << 13; g_sem ^= g_sem >> 17; g_sem ^= g_sem << 5;
-    return g_sem;
-}
-static float gauss(void)
-{
-    /* Box-Muller, con los dos uniformes abiertos por abajo. */
-    float u1 = ((float)(siguiente() >> 8) + 1.0f) / 16777217.0f;
-    float u2 = ((float)(siguiente() >> 8) + 1.0f) / 16777217.0f;
-    return sqrtf(-2.0f * logf(u1)) * cosf(6.283185307f * u2);
-}
-
-/*
- * UNA EMISION, CON EL PULSO GAUSSIANO DE LA NORMA.
- *
- * FT8 es GFSK con BT=2, y eso NO es un detalle del sintetizador: la primera
- * version de este banco repartia la transicion entre tonos a lo largo de un
- * simbolo entero -mas suave, "parecido"- y el resultado fue que una emision
- * a +5 dB no se decodificaba en casi ninguna frecuencia. No fallaba el
- * firmware: fallaba la senal, que con esa transicion solo pasa por su tono
- * nominal un instante y el resto del simbolo lo pasa barriendo.
- *
- * Lo que se mide con una senal que no es la que manda la norma no es el
- * decodificador. Asi que aqui va el pulso de verdad: la diferencia de dos
- * funciones error, que es el pulso rectangular filtrado por la gaussiana,
- * extendido sobre tres simbolos y sumado solapado.
- */
-#define GFSK_K   5.336446256636997f   /* pi*sqrt(2/ln2), la constante del BT */
-#define GFSK_BT  2.0f
-
-static float g_dfrec[(FT8_NN + 2) * SIMBOLO_N];
-
-static void mete_emision(float f0_hz, float dt_s, float amplitud,
-                         const uint8_t *tonos)
-{
-    double fase = 0.0;
-    int i, j, n;
-    int n0 = (int)(dt_s * (float)FS + 0.5f);
-    int largo = (FT8_NN + 2) * SIMBOLO_N;
-
-    for (n = 0; n < largo; n++) { g_dfrec[n] = 0.0f; }
-
-    for (i = 0; i < FT8_NN; i++) {
-        for (j = 0; j < 3 * SIMBOLO_N; j++) {
-            float t = (float)j / (float)SIMBOLO_N - 1.5f;
-            float a1 = GFSK_K * GFSK_BT * (t + 0.5f);
-            float a2 = GFSK_K * GFSK_BT * (t - 0.5f);
-            float p  = (erff(a1) - erff(a2)) * 0.5f;
-            int   k  = i * SIMBOLO_N + j;
-            if (k >= 0 && k < largo) { g_dfrec[k] += (float)tonos[i] * p; }
-        }
-    }
-    /* Los medios simbolos del principio y del final: el primer y el ultimo
-     * tono se prolongan, que es lo que hace ft8_lib para que la emision no
-     * arranque ni acabe con un escalon. */
-    for (j = 0; j < SIMBOLO_N; j++) {
-        float t = (float)j / (float)SIMBOLO_N - 0.5f;
-        float p = (erff(GFSK_K * GFSK_BT * (t + 0.5f)) + 1.0f) * 0.5f;
-        g_dfrec[j] += (float)tonos[0] * (1.0f - p);
-        t = (float)j / (float)SIMBOLO_N;
-        p = (erff(GFSK_K * GFSK_BT * (t - 0.5f)) + 1.0f) * 0.5f;
-        g_dfrec[(FT8_NN - 1) * SIMBOLO_N + 2 * SIMBOLO_N - SIMBOLO_N + j]
-            += 0.0f * p;   /* ya lo cubre el solape de tres simbolos */
-    }
-
-    for (n = 0; n < (FT8_NN + 1) * SIMBOLO_N; n++) {
-        double f = (double)f0_hz + (double)g_dfrec[n] * 6.25;
-        int    k = n0 + n - SIMBOLO_N / 2;   /* el pulso adelanta medio simbolo */
-        fase += 6.283185307179586 * f / (double)FS;
-        if (fase > 6.283185307179586) { fase -= 6.283185307179586; }
-        if (k >= 0 && k < RANURA_N) {
-            g_audio[k] += (float)(amplitud * sin(fase));
-        }
-    }
-}
-
-/*
- * La relacion senal/ruido de FT8 se da SIEMPRE en 2.500 Hz de referencia,
- * que es como la escribe WSJT-X. El ruido de aqui es blanco sobre los
- * 6.000 Hz de banda que hay a 12 kHz de muestreo, asi que hay que llevar
- * la cuenta de una banda a la otra antes de despejar la amplitud.
- */
-#define RUIDO_SIGMA 1000.0f
-static float amplitud_para(float snr_db)
-{
-    float pn_ref = RUIDO_SIGMA * RUIDO_SIGMA * (2500.0f / 6000.0f);
-    float ps = pn_ref * powf(10.0f, snr_db * 0.1f);
-    return sqrtf(2.0f * ps);
-}
-
-static void ranura_vacia(uint32_t sem)
-{
-    int n;
-    semilla(sem);
-    for (n = 0; n < RANURA_N; n++) { g_audio[n] = RUIDO_SIGMA * gauss(); }
-}
+#include "ft8_gen.h"
 
 /* ---------------------------------------------- pasar la ranura por el fw */
 #define MAX_SALIDA 64
@@ -259,12 +83,14 @@ static int  g_n_salida;
 static int  g_n_total;       /* lo que el decodificador dice haber sacado */
 static int  g_n_cand;
 
+static double g_ms_dec;   /* lo que tardo la ultima decodificacion */
+
 static int decodifica_ranura(void)
 {
     int n;
     ft8_decoded_msg_t m;
 
-    ft8_fft1024_init();
+    ft8_fft_init();
     ft8_decimator_reset();
     ft8_waterfall_reset();
     ft8_decoder_init();
@@ -282,7 +108,27 @@ static int decodifica_ranura(void)
         ft8_decimator_poll();
     }
 
-    ft8_decoder_process_slot();
+    {
+        /*
+         * LO QUE TARDA LA DECODIFICACION, que desde el 28/10/2026 es un
+         * numero con consecuencias: mientras dura, la captura de la ranura
+         * siguiente se escribe en el desvio, que son
+         * FT8_ADAPTER_LADO_BLOQUES bloques de 160 ms. Si tardara mas, lo
+         * que no quepa se pierde (lo cuenta ft8_waterfall_desbordes()).
+         *
+         * Al pasar de 256 a 512 bins el buscador de candidatos mira el
+         * doble de banda, asi que el numero importa mas que antes. Esto
+         * es el anfitrion, no un Cortex-M4; sirve para ver la PROPORCION
+         * y para que un dia que se dispare se vea aqui.
+         */
+        struct timespec t0, t1;
+
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        ft8_decoder_process_slot();
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        g_ms_dec = ((double)(t1.tv_sec - t0.tv_sec) * 1e3)
+                 + ((double)(t1.tv_nsec - t0.tv_nsec) / 1e6);
+    }
 
     g_n_salida = 0;
     while (ft8_decoder_get_message(&m)) {
@@ -458,6 +304,10 @@ static void prueba_5_banda_llena(void)
     printf("      llegan a la cola .......... %d (tope %d)\n",
            g_n_salida, FT8_DECODER_MSG_QUEUE_SIZE);
     printf("      de las 25 puestas se leen . %d\n", leidos);
+    printf("      y tardo ................... %.0f ms (el desvio aguanta %d,"
+           " o sea %.2f s)\n",
+           g_ms_dec, FT8_ADAPTER_LADO_BLOQUES,
+           (double)FT8_ADAPTER_LADO_BLOQUES * 0.160);
     if (g_n_total > g_n_salida) {
         printf("      *** %d mensajes decodificados NO llegan a la pantalla\n",
                g_n_total - g_n_salida);
@@ -578,7 +428,7 @@ static void prueba_8_orden(void)
 
     printf("\n  8. EL ORDEN DE LOS SUBBLOQUES CON EL BUCLE ATRASADO\n");
 
-    ft8_fft1024_init();
+    ft8_fft_init();
     ft8_decimator_reset();
     ft8_waterfall_reset();
 
@@ -607,11 +457,15 @@ static void prueba_8_orden(void)
     ft8_decimator_poll();   /* y el ultimo, que si no se queda sin volcar */
 
     for (k = 2; k < 12; k++) {
-        const uint8_t *fila = &g_ft8_shared_ram.ft8.mag[k * FT8_ADAPTER_NUM_BINS];
+        /* Por celdas y no por bytes: desde el 28/10/2026 mag[] guarda dos
+         * celdas en cada byte (ver FT8_ADAPTER_MAG_BITS). Leerlo a pelo
+         * mezclaba dos bins en uno y esta prueba fallaba sola. */
+        const ftx_waterfall_t *wf = ft8_waterfall_get();
+        int fila = k * wf->block_stride;
         int b, mejor = 0;
 
         for (b = 1; b < FT8_ADAPTER_NUM_BINS; b++) {
-            if (fila[b] > fila[mejor]) { mejor = b; }
+            if (WF_MAG_INT_AT(wf, fila + b) > WF_MAG_INT_AT(wf, fila + mejor)) { mejor = b; }
         }
         printf("      bloque %2d  pico en el bin %3d (%4.0f Hz)%s\n",
                k, mejor, (double)mejor * 6.25,
@@ -626,6 +480,75 @@ static void prueba_8_orden(void)
         printf("\n    con los dos buffers llenos hay que vaciar primero el que\n");
         printf("    lleva mas tiempo lleno, que es el que la interrupcion\n");
         printf("    esta escribiendo ahora - no el del indice 0.\n");
+        g_fallos++;
+    }
+}
+
+/*
+ * ======================================================================
+ * 9. UN GOLPE FUERTE EN MEDIO DE LA RANURA
+ * ======================================================================
+ *
+ * El remuestreador lleva su propio automatico de ganancia delante de la
+ * FFT -ver FT8_AGC_TARGET en ft8_decimator.c- y es de ATAQUE INSTANTANEO
+ * con caida de 1,67 s: un solo pico fuerte le baja la ganancia de golpe y
+ * tarda mas de un segundo y medio en volver.
+ *
+ * En onda corta eso no es raro: un chasquido atmosferico, una estacion
+ * local que arranca, un motor. Si la ganancia se desploma en mitad de la
+ * ranura, los diez segundos que quedan entran atenuados y las emisiones
+ * flojas se van por debajo del suelo. Esto lo mide en vez de suponerlo:
+ * la misma ranura, con y sin un golpe de 20 dB a mitad.
+ */
+static void prueba_9_golpe(void)
+{
+    static const char *k_txt[] = {
+        "CQ EA1ABC IN52", "CQ EA2ABC IN83", "CQ EA3ABC JN01",
+        "CQ EA4ABC IN80",
+    };
+    int i, sin_golpe, con_golpe;
+
+    printf("\n  9. UN GOLPE FUERTE EN MEDIO DE LA RANURA\n");
+
+    for (i = 0; i < 2; i++) {
+        int k, salen = 0;
+
+        ranura_vacia(77u);
+        for (k = 0; k < 4; k++) {
+            uint8_t tonos[FT8_NN];
+
+            if (!ft8_tonos(k_txt[k], tonos)) { continue; }
+            mete_emision(500.0f + 150.0f * (float)k, 0.5f,
+                         amplitud_para(-6.0f), tonos);
+        }
+        if (i == 1) {
+            /* El golpe: 20 ms a veinte decibelios por encima del ruido,
+             * en el segundo 5 de la ranura. */
+            int n0 = 5 * FS;
+
+            for (k = 0; k < FS / 50; k++) {
+                if ((n0 + k) < RANURA_N) {
+                    g_audio[n0 + k] += 10.0f * RUIDO_SIGMA
+                                       * sinf(2.0f * 3.14159265f * 900.0f
+                                              * (float)k / (float)FS);
+                }
+            }
+        }
+        decodifica_ranura();
+        for (k = 0; k < 4; k++) { if (salio(k_txt[k])) { salen++; } }
+        if (i == 0) { sin_golpe = salen; } else { con_golpe = salen; }
+    }
+
+    printf("    sin golpe %d de 4,  con golpe %d de 4\n",
+           sin_golpe, con_golpe);
+    /*
+     * Lo que se exige no es que no cueste NADA -un golpe de verdad tapa
+     * audio de verdad- sino que no se lleve la ranura por delante.
+     */
+    if (con_golpe >= sin_golpe - 1) {
+        printf("    el golpe no se lleva la ranura                     ok\n");
+    } else {
+        printf("    el golpe se lleva la ranura                        MAL\n");
         g_fallos++;
     }
 }
@@ -652,6 +575,7 @@ int main(void)
     prueba_7_cola();      /* mira lo que dejo la 5, asi que va detras */
     prueba_6_colision();
     prueba_8_orden();
+    prueba_9_golpe();
 
     printf("\n");
     if (g_fallos > 0) {

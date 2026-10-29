@@ -210,13 +210,50 @@ static uint32_t tinta_legible(const mapa_tinte_t *t)
 }
 
 /* ------------------------------------------------------------------ */
+/*
+ * ======================================================================
+ * EL TOPE ES EL DEL BUFFER, Y NADA MAS - 28/10/2026
+ * ======================================================================
+ *
+ * *** Avisado por el usuario: "12 en modo lista, 5 en modo mapa". ***
+ *
+ * Aqui ponia esto:
+ *
+ *     n = 4 + c->esc      (recortado a MAPA_ETI_MAX)
+ *
+ * o sea CINCO etiquetas con el mapamundi puesto, que es la escala 1. Doce
+ * aviones decodificados, cinco con nombre. Los PUNTOS salian los doce
+ * -eso lo pinta ft8_mapa_pinta() y no pasa por aqui-, pero los nombres no,
+ * y el usuario los contaba.
+ *
+ * Y ESE NUMERO SOBRA DESDE EL 13/10/2026. Ese dia se le puso a
+ * mapa_eti_pon() el reparto de SEIS COLOCACIONES: antes de escribir una
+ * etiqueta se prueban derecha, izquierda, un renglon arriba y otro abajo,
+ * y solo se rinde si las seis chocan con una que ya este puesta. O sea que
+ * desde entonces el apelotonamiento lo resuelve un choque medido en
+ * pixeles, que es el dato de verdad.
+ *
+ * Con los dos mecanismos puestos manda el peor: el "4 + escala" es un
+ * numero puesto a ojo y se dispara ANTES de mirar si la etiqueta cabia.
+ * Tiraba informacion que si entraba.
+ *
+ * Asi que el tope vuelve a ser lo unico que de verdad es un tope: el
+ * tamaño del array, que son MAPA_ETI_MAX y cuesta lo mismo lleno que
+ * vacio. Quien decide cuantas se ven es el choque.
+ *
+ * EN EL MAPAMUNDI SE SEGUIRAN VIENDO POCAS, y eso esta bien: ahi Europa
+ * entera mide treinta pixeles y no caben. La diferencia es que ahora no
+ * caben porque no caben, y no porque un numero lo hubiera decidido antes
+ * de medir.
+ *
+ * El parametro se queda en la firma a proposito: esta funcion contesta
+ * "cuantas caben en ESTA caja", y si algun dia el tope vuelve a depender
+ * de la caja no hay que tocar a quien llama.
+ */
 uint8_t mapa_eti_tope(const mapa_caja_t *c)
 {
-    uint32_t e = (c != 0 && c->esc > 0U) ? (uint32_t)c->esc : 1UL;
-    uint32_t n = 4UL + e;
-
-    if (n > (uint32_t)MAPA_ETI_MAX) { n = (uint32_t)MAPA_ETI_MAX; }
-    return (uint8_t)n;
+    (void)c;
+    return (uint8_t)MAPA_ETI_MAX;
 }
 
 void mapa_eti_empieza(const mapa_caja_t *c, const char *qth)

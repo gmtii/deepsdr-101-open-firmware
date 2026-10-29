@@ -18,6 +18,7 @@
  * hora falsa diciendo que ha ido bien, es peor que no tenerlo.
  */
 #include "dcf77.h"
+#include "hora_comun.h"
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
@@ -157,7 +158,32 @@ int main(void)
     printf("DCF77: envolvente a %.0f muestras/s, portadora %.0f, marca %.0f (15%%)\n\n",
            FS, ALTO, BAJO);
 
-    printf("  1. SEÑAL LIMPIA\n");
+    /*
+     * ======================================================================
+     * EL HUSO, QUE HASTA EL 28/10/2026 NO PINTABA NADA AQUI
+     * ======================================================================
+     *
+     * *** Avisado por un usuario de Dublin: "My timezone is set for Dublin
+     * (UTC), but when the clock is set after tuning to ALS 162, the time is
+     * set to one hour ahead (CET). It doesn't seem to matter what timezone
+     * I set." ***
+     *
+     * DCF77 y ALS162 no emiten UTC: emiten hora local alemana y francesa
+     * -CET en invierno, CEST en verano-. El decodificador guardaba la trama
+     * TAL CUAL, asi que el reloj se ponia en hora de Europa central pasara
+     * lo que pasara y el ajuste de huso no lo miraba nadie.
+     *
+     * En España no se ve, porque la peninsula ES CET. Por eso este banco no
+     * lo cazaba: ponia una trama, esperaba sus mismos numeros de vuelta, y
+     * eso sale verde tanto si se convierte como si no.
+     *
+     * Ahora el banco DICE DESDE DONDE ESCUCHA. Las tramas siguen siendo las
+     * mismas; lo que cambia es que se exige la hora de pared del sitio en el
+     * que esta la radio, que es lo que el usuario ve.
+     */
+    hora_huso_pon(120);   /* CEST: la radio en España/Alemania, en verano */
+
+    printf("  1. SEÑAL LIMPIA (huso CEST, +120: lo que emite el transmisor)\n");
     r = corre(20, 30, 0.0, -1, 0, 0, 6);
     printf("    sincroniza en %d minutos: %02u:%02u  %02u/%02u/%02u  %s\n",
            r.minutos, r.inf.hora, r.inf.minuto, r.inf.dia, r.inf.mes, r.inf.anno,
@@ -175,6 +201,34 @@ int main(void)
               r.inf.dia == 15U && r.inf.mes == 6U && r.inf.anno == 26U);
     comprueba("tarda 4 minutos o menos", r.minutos <= 4);
     comprueba("solo descarta la primera trama, la del arranque", r.inf.tramas_malas == 1U);
+
+    /*
+     * Y LO MISMO DESDE DUBLIN, que es el caso del aviso.
+     *
+     * La MISMA trama -20:33 CEST, que son 18:33 UTC- tiene que salir como
+     * 19:33 en Dublin, que en verano va en IST (+60). Antes salia 20:33:
+     * una hora de mas, y daba igual lo que se pusiera en el huso.
+     *
+     * Las dos lineas de abajo son el aviso entero convertido en numeros: si
+     * alguien vuelve a quitar la conversion, la primera sigue en verde -en
+     * CEST no se nota- y esta se pone roja sola.
+     */
+    printf("\n  1b. LA MISMA SEÑAL, ESCUCHADA DESDE OTRO HUSO\n");
+    hora_huso_pon(0);     /* UTC */
+    r = corre(20, 30, 0.0, -1, 0, 0, 6);
+    printf("    huso UTC   (+0):   %02u:%02u   (la trama emite 20:33 CEST)\n",
+           r.inf.hora, r.inf.minuto);
+    comprueba("en UTC son las 18:33, no las 20:33",
+              r.ok && r.inf.hora == 18U && r.inf.minuto == 33U);
+
+    hora_huso_pon(60);    /* Dublin en verano: IST */
+    r = corre(20, 30, 0.0, -1, 0, 0, 6);
+    printf("    huso Dublin(+60):  %02u:%02u\n", r.inf.hora, r.inf.minuto);
+    comprueba("en Dublin son las 19:33, no las 20:33",
+              r.ok && r.inf.hora == 19U && r.inf.minuto == 33U);
+
+    /* Se deja como estaba para el resto del banco. */
+    hora_huso_pon(120);
 
     printf("\n  2. CON RUIDO - hasta donde aguanta\n");
     {

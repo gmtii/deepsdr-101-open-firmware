@@ -13,6 +13,7 @@
  * hasta donde aguanta.
  */
 #include "dcf77.h"
+#include "hora_comun.h"
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
@@ -124,6 +125,51 @@ static double g_giro = 0.0;   /* la fase acumulada del oscilador local */
  */
 static int g_relleno = 1;
 
+/*
+ * ======================================================================
+ * EL SILENCIO DE DELANTE, ENSUCIADO - 28/10/2026
+ * ======================================================================
+ *
+ * *** De una foto de la pantalla del usuario con ALS162 a S8: la rejilla
+ * de segundos enganchada y bien -"ciclo 1003"- y el contador de bits sin
+ * pasar de 10 de 59, con "mal 004 corta". ***
+ *
+ * Este banco deja los ultimos 100 ms de cada segundo LIMPIOS a proposito
+ * -"para que el elemento del segundo siguiente cumpla la norma"- y por eso
+ * nunca habia medido lo que pasa cuando no lo estan.
+ *
+ * Y en antena no siempre lo estan: el silencio se mide sobre el triangulo
+ * de fase contra un umbral, asi que lo rompe el RUIDO de fase aunque el
+ * marcador este ahi entero. Con una antena corta en onda larga eso pasa
+ * cada pocos segundos, y era lo que el usuario estaba viendo.
+ *
+ * `g_sucios` dice uno de cada cuantos segundos lleva el silencio roto: 0
+ * para dejarlo limpio como siempre. Lo que se emite es un elemento mas,
+ * pegado al final del segundo anterior, que es exactamente lo que el ruido
+ * hace a efectos de esa puerta.
+ */
+static int g_sucios = 0;
+
+static double ensucia_el_silencio(int seg, double t_ms)
+{
+    if (g_sucios <= 0) { return 0.0; }
+    /* El segundo CUYO silencio se rompe es el siguiente, asi que se mira
+     * (seg+1): asi "uno de cada N" cuenta marcadores y no huecos. */
+    if (((seg + 1) % g_sucios) != 0) { return 0.0; }
+    /* Un elemento que acaba justo en el borde del segundo: deja menos de
+     * los 60 ms de plano que la puerta del silencio pide. */
+    /*
+     * ACABA EN 980 ms, no encima del marcador. Si se pusiera a caballo del
+     * borde seria un elemento COMPETIDOR dentro de la ventana de +-70 ms,
+     * que es otro fallo distinto; lo que se quiere reproducir es que el
+     * marcador de verdad llegue sin sus 60 ms de plano delante.
+     *
+     * De 880 a 980: deja 20 ms de silencio, o sea un tercio de lo que la
+     * puerta pide, y queda a -120 ms del segundo, fuera de la ventana.
+     */
+    return elemento(t_ms - 880.0);
+}
+
 static double datos_del_resto(int seg, double t_ms)
 {
     /* Pseudoaleatorio pero REPETIBLE y funcion solo de (seg, k): asi dos
@@ -164,6 +210,7 @@ static void emite(const uint8_t *b, double ruido, double deriva_hz, int sin_sena
                 /* Y el resto del segundo, TAMBIEN EN EL 59: lo que falta en
                  * el 59 es el elemento HORARIO, no la modulacion entera. */
                 mod += datos_del_resto(seg, t_ms);
+                mod += ensucia_el_silencio(seg, t_ms);
             }
             giro += PI2 * deriva_hz / FS;
             if (giro > 1e6 || giro < -1e6) { giro = fmod(giro, PI2); }
@@ -242,6 +289,19 @@ static void comprueba(const char *q, int ok)
 
 int main(void)
 {
+    /*
+     * EL HUSO, DESDE EL 28/10/2026. ALS162 emite hora local francesa -CET
+     * en invierno, CEST en verano-, y hasta ese dia el decodificador la
+     * guardaba tal cual: el reloj se ponia en hora de Europa central
+     * pasara lo que pasara. Lo aviso un usuario de Dublin. Ver dcf77.c y
+     * sim/dcf77test.c, que es donde esta medido el caso.
+     *
+     * Aqui se escucha desde el huso del propio transmisor, asi que lo que
+     * se exige es exactamente lo que se exigia antes y este banco sigue
+     * midiendo lo suyo -la fase y la trama- y no el huso.
+     */
+    hora_huso_pon(120);   /* CEST */
+
     res_t r;
 
     printf("ALS162: fase a %.0f muestras/s, elemento de +1/-2/+1 rad en 100 ms\n", FS);
@@ -374,6 +434,85 @@ int main(void)
              * falta. */
             comprueba("      y dice por que puerta", dcf77_motivo() == (uint8_t)k[i].motivo);
             comprueba("      contando la trama como mala", r.inf.tramas_malas > 0U);
+        }
+    }
+
+    /*
+     * ==================================================================
+     * 6. CON EL SILENCIO DE DELANTE ROTO - 28/10/2026
+     * ==================================================================
+     *
+     * *** El caso del usuario, en numeros. De su foto: rejilla enganchada
+     * -"ciclo 1003"-, señal S8, y el contador de bits sin pasar de 10 de
+     * 59 con "mal 004 corta". ***
+     *
+     * Un marcador se aceptaba SOLO si venia detras de 60 ms de fase plana.
+     * Ese silencio es lo unico que distingue el elemento horario de los del
+     * canal de datos... cuando no se sabe donde se esta. Con la rejilla ya
+     * cogida, eso lo contesta la VENTANA de +-70 ms, y se estaban exigiendo
+     * las dos cosas.
+     *
+     * Y la del silencio es la fragil: se mide sobre el triangulo de fase
+     * contra un umbral, asi que el RUIDO la rompe aunque el marcador este
+     * entero. Al descartarlo, el segundo se pasaba de 1.070 ms, la rama del
+     * hueco lo leia como el SEGUNDO 59 y cerraba la trama con los bits que
+     * hubiera: "corta", contador a cero, y vuelta a empezar. Un marcador
+     * comido por el ruido tiraba el minuto ENTERO.
+     *
+     * Este banco dejaba los ultimos 100 ms de cada segundo limpios a
+     * proposito, asi que no podia ver nada de esto. Ahora los ensucia.
+     *
+     * LO QUE SE EXIGE: que con uno de cada ocho marcadores sin su silencio
+     * -y luego uno de cada cuatro- la radio SIGA decodificando. Con el
+     * codigo de antes del 28/10/2026 este caso no saca ni una trama.
+     */
+    printf("\n  6. CON EL SILENCIO DE DELANTE ROTO (el caso de la foto)\n");
+    {
+        int cada[] = { 8, 4, 2 };
+        int i;
+
+        for (i = 0; i < 3; i++) {
+            g_sucios = cada[i];
+            r = corre(18, 42, 0.0, 0.0, 0, 6);
+            printf("    uno de cada %d marcadores sin silencio: %-16s"
+                   " buenas %2u  malas %2u  raras %2u\n",
+                   cada[i], r.ok ? "decodifica" : "*** NO ***",
+                   r.inf.tramas_ok, r.inf.tramas_malas, r.inf.marcas_raras);
+        }
+        g_sucios = 0;
+        /*
+         * MEDIDO EL 28/10/2026, seis minutos por caso, la misma señal con
+         * la puerta del silencio de antes y con la de ahora:
+         *
+         *     marcadores sin silencio      antes            ahora
+         *       uno de cada 8         NO, raras 47       decodifica
+         *       uno de cada 4         NO, raras 88       decodifica
+         *       uno de cada 2         NO                 NO
+         *
+         * El "raras" de la columna de antes es el sintoma de la foto: la
+         * rejilla perdiendose una y otra vez. Y el uno de cada dos sigue
+         * sin ir, que es honesto: a ese ritmo no queda minuto entero que
+         * salvar y ninguna puerta lo arregla.
+         */
+        g_sucios = 4;
+        r = corre(18, 42, 0.0, 0.0, 0, 6);
+        g_sucios = 0;
+        comprueba("con uno de cada cuatro sin silencio, sigue sacando la hora",
+                  r.ok);
+        if (r.ok) {
+            /*
+             * EL MINUTO NO ES UN NUMERO FIJO, y por eso no se exige uno.
+             * Con marcadores cayendose, la radio engancha en el primer
+             * minuto que sobreviva entero, que puede ser el primero o el
+             * cuarto. Lo que SI tiene que cumplirse es que la hora que
+             * saque sea una de las que se emitieron y no una inventada:
+             * se emite desde las 18:43 y se corren seis minutos.
+             */
+            printf("      la hora que saca es %02u:%02u\n",
+                   r.inf.hora, r.inf.minuto);
+            comprueba("  y es una de las que se emitieron",
+                      r.inf.hora == 18U
+                      && r.inf.minuto >= 43U && r.inf.minuto <= 48U);
         }
     }
 

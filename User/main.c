@@ -1313,6 +1313,17 @@ static uint32_t s_lo_hz = 0UL;
  * s_lo_hz. ***
  */
 static uint8_t s_lo_source_is_gd32 = 0xFFU;
+/*
+ * LO QUE SE LE PIDIO AL OSCILADOR, que por debajo de 300 kHz no es lo que
+ * salio: el temporizador del GD32 redondea a su rejilla -hasta 1,8 kHz en
+ * onda larga- y s_lo_hz guarda lo REAL, que es lo correcto para el audio.
+ *
+ * La PANTALLA necesita el otro: centrada en el real, el redondeo se le
+ * colaba al panel y a la marca del dial, y la raya iba adelante y atras
+ * dando saltos al sintonizar. Ver lo_para_sintonia() y el giro de
+ * s_db_frame. Cero = todavia no se ha programado ninguno.
+ */
+static uint32_t s_lo_pedido_hz = 0UL;
 
 /* El ajuste: NCO si o no. */
 static uint8_t  s_nco_on = 0U;
@@ -1544,6 +1555,42 @@ static void tasa_vigila(void)
  * que se oye mejor, y desde ella quedan 16 kHz de paseo hacia abajo y 64 kHz
  * hacia arriba antes del siguiente salto.
  */
+/*
+ * ======================================================================
+ * *** LO QUE SE PIDE Y LO QUE SALE, QUE NO SON LO MISMO ABAJO ***
+ * 27/10/2026, visto en la radio: la raya del dial iba adelante y atras
+ * dando saltos mientras se sintonizaba hacia arriba, en onda larga.
+ * ======================================================================
+ *
+ * Por debajo de LO_GEN_CROSSOVER_HZ el oscilador lo hace un temporizador
+ * del GD32, que solo puede dar TIMERCLK/(2*N) con N entero **y par**. Su
+ * escalon crece con el cuadrado de la frecuencia: 118 Hz a 54 kHz, 1.421
+ * en onda larga, 3.668 pegado al cruce. O sea que pidiendole el dial menos
+ * Fs/4 en cada clic de 1.000 Hz, **el oscilador no puede obedecer**:
+ * redondea.
+ *
+ * El AUDIO no se entera, y eso ya estaba resuelto: apply_lo_tune() calcula
+ * el desplazamiento digital contra el oscilador REAL, asi que el
+ * mezclador se come el redondeo y el dial es exacto.
+ *
+ * LA PANTALLA SI SE ENTERABA. El panel se centra en el oscilador y la
+ * marca se pone a `sintonia - oscilador`, asi que el redondeo se colaba en
+ * los dos. Medido en sim/loraya.c, clic a clic en 212 kHz: la marca
+ * avanzaba 3,9 px, retrocedia 1,7, retrocedia 1,8, avanzaba 3,9. La media
+ * es cero: la raya no iba a ninguna parte.
+ *
+ * SE ARREGLA EN LA PANTALLA Y NO EN EL OSCILADOR, que es donde esta el
+ * problema: el panel se centra en lo que se PIDIO -que sigue al dial
+ * exactamente- y los datos se giran los pocos bins del redondeo para que
+ * sigan cayendo donde les toca. Ver s_lo_pedido_hz y el giro de
+ * s_db_frame. Asi la raya se queda quieta, la emisora sigue debajo de
+ * ella, y la radio sintoniza exactamente igual que siempre.
+ *
+ * (El primer intento de esto fue aparcar el oscilador abajo, que tambien
+ * quita el salto. Se deshizo: aparcar es lo que hace el NCO, el NCO es un
+ * ajuste del usuario, y cambiarle a nadie como sintoniza su radio para
+ * arreglarle un pixel es cambiar el problema de sitio.)
+ */
 static uint32_t lo_para_sintonia(uint32_t freq_hz, uint8_t is_wfm)
 {
     if (is_wfm) {
@@ -1580,6 +1627,40 @@ static char s_emis_txt[96];
  * arriba porque el cambio de modo -que lo apaga- esta antes en el fichero
  * que el dibujado. Ver ft8_mapa_pinta(). */
 static uint8_t s_ft8_mapa;
+/*
+ * ======================================================================
+ * EL MAPA SE REPINTA UNA VEZ POR VUELTA, NO UNA POR MUESTRA - 28/10/2026
+ * ======================================================================
+ *
+ * *** Avisado por el usuario: "el modo mapa de ft8 va muy lento". ***
+ *
+ * Y lo estaba, por una cuenta que sale sola en cuanto se escribe:
+ *
+ *   - arrastrar el mapa llamaba a ft8_mapa_draw() DENTRO del despachador
+ *     del tactil, una vez por cada muestra que pasara el umbral del
+ *     temblor;
+ *   - y el tactil se mira DOS VECES por vuelta del bucle, a proposito
+ *     (lo vigila tools/tactil_check.py, que no deja dejar una sola).
+ *
+ * O sea hasta dos repintados enteros por vuelta. Y un repintado entero no
+ * es barato: son 800 x 288 pixeles por el bus de la pantalla MAS la costa,
+ * que a escala 1 son 225.211 pixeles de trazo (medido en sim/mapa_coste.c).
+ * De los dos, solo se ve el ultimo: el primero se tira entero.
+ *
+ * Es el mismo fallo que el de los 484.800 pixeles del 30/09 -pintar algo
+ * que el siguiente paso tapa- y el mismo que el de los renglones del
+ * 19/10. Aqui lo que sobra no es una capa: es una vuelta.
+ *
+ * ASI QUE EL ARRASTRE YA NO PINTA: mueve la caja y marca esto. Quien pinta
+ * es el bucle, una sola vez, despues de las dos miradas. Lo que el dedo
+ * haya hecho entre medias se acumula en la caja y sale junto, que es
+ * exactamente lo que se ve.
+ *
+ * El zoom y el mando siguen pintando directos: no llegan en rafagas.
+ */
+static uint8_t s_mapa_sucio;
+static void    ft8_mapa_draw(void);    /* lo sirve el bucle: ver s_mapa_sucio */
+static uint8_t modo_tiene_mapa(void);
 /*
  * LA VISTA DE BYTES DE HFDL - 14/10/2026. Ver hfdl_modo_linea_bytes().
  * El boton "Mapa" de HFDL cicla lista -> bytes -> mapa, que es el mismo
@@ -2258,7 +2339,11 @@ int main(void)
             s_pga_gain_db_x2 = (int16_t)v;
             rf_agc_apply_pga(); /* the only allowed call site for aic3204_set_pga_gain_db() - see its own comment */
         } else {
-            debug_print_dec("pga: arranque en WFM, el tope manda; tu HF guardado x2", (uint32_t)v);
+            /* En FM ancha manda la ganancia de FM ancha, que desde el
+             * 28/10/2026 tambien es tuya y tambien se guarda: la repone
+             * extras_aplicar() unas lineas mas abajo. Aqui solo se aparta
+             * la de onda corta. Ver s_pga_wfm_x2. */
+            debug_print_dec("pga: arranque en WFM, manda la suya; tu HF guardado x2", (uint32_t)v);
         }
     }
     if (s_loaded_settings.have_spectrum_smooth_pct) {
@@ -3054,6 +3139,25 @@ int main(void)
              * misma vuelta. s_tactil_us sigue contando solo la primera: ese
              * numero quiere decir "lo que cuesta mirar una vez". */
             tramo_us[TRAMO_TAC] += (DWT->CYCCNT - t0) / (SystemCoreClock / 1000000U);
+        }
+        /*
+         * Y AQUI SE PINTA EL MAPA SI EL DEDO LO HA MOVIDO - 28/10/2026.
+         *
+         * Despues de LAS DOS miradas del tactil, para que las dos muestras
+         * de la vuelta se junten en un solo repintado. Ver s_mapa_sucio
+         * para la cuenta de lo que eso ahorra.
+         *
+         * La condicion se vuelve a mirar aqui -y no se fia de que el
+         * arrastre solo se arme en el mapa- porque entre marcar y pintar
+         * cabe un cambio de modo: soltar el dedo fuera, que se cierre el
+         * panel, y entonces pintar el mapa seria pintarlo encima de otra
+         * cosa.
+         */
+        if (s_mapa_sucio) {
+            s_mapa_sucio = 0U;
+            if (s_ft8_mapa && modo_tiene_mapa() && !s_menu_open) {
+                ft8_mapa_draw();
+            }
         }
         /*
          * EL AJUSTE AUTOMATICO DEL RTTY - 06/10/2026.
@@ -8127,6 +8231,20 @@ static uint8_t       s_chrome_init = 0U;
  * se le pasa ya resuelto, para que spec_chrome.c compile igual en el
  * simulador de host.
  */
+/*
+ * LA DISTANCIA QUE ENSEÑA EL PANEL, que no es la que usa el mezclador.
+ *
+ * El mezclador trabaja contra el oscilador REAL -tiene que hacerlo, si no
+ * el dial no seria exacto-. El panel trabaja contra el PEDIDO, porque el
+ * redondeo del temporizador ya se lo ha comido el giro de s_db_frame. Ver
+ * s_lo_pedido_hz. Arriba de 300 kHz los dos son el mismo numero.
+ */
+static float panel_mix_hz(void)
+{
+    if (s_lo_pedido_hz == 0UL) { return demod_am_get_mix_hz(); }
+    return (float)((int64_t)s_tune_hz - (int64_t)s_lo_pedido_hz);
+}
+
 static void chrome_sync(spec_chrome_t *c)
 {
     uint32_t full_span_hz = spec_zoom_full_span_hz();
@@ -8187,8 +8305,8 @@ static void chrome_sync(spec_chrome_t *c)
      * ha movido nada para el modo normal.
      */
     if (s_spec_zoom == SPEC_ZOOM_1X && demod_am_get_mix_hz() != 0.0f) {
-        panel_center_hz = s_lo_hz;
-        c->demod_px = (int16_t)((demod_am_get_mix_hz() * (float)SPC_TRACE_W)
+        panel_center_hz = s_lo_pedido_hz ? s_lo_pedido_hz : s_lo_hz;
+        c->demod_px = (int16_t)((panel_mix_hz() * (float)SPC_TRACE_W)
                                 / (float)full_span_hz);
     } else {
         c->demod_px = 0;
@@ -9853,6 +9971,37 @@ static uint8_t rx_capture_looks_corrupted(void)
 static int16_t s_pga_hf_x2 = -1;   /* -1 = aun sin inicializar */
 
 /*
+ * ======================================================================
+ * Y FM ANCHA TIENE LA SUYA, QUE AHORA SI SE ELIGE - 28/10/2026
+ * ======================================================================
+ *
+ * *** Pedido por el usuario: 25 dB de serie en FM ancha, y que si se
+ * cambia se guarde. ***
+ *
+ * Lo de arriba decia "WFM usa el tope de ganancia y punto. No hay nada que
+ * recordar porque no hay nada que elegir". La primera frase era una
+ * decision, no una medida, y la segunda era su consecuencia: como el valor
+ * vivo se tiraba al salir del modo, girar el mando dentro de FM ancha no
+ * servia de nada y por eso parecia que no habia nada que elegir.
+ *
+ * Y SI LO HAY: 47,5 dB es lo que hace falta con antena de hilo y una
+ * emisora lejana. Con una antena decente y una local, satura. Los 25 dB de
+ * CONFIG_PGA_WFM_DB_X2 son el punto de partida, y lo que se gire a partir
+ * de ahi se guarda -pga_wfm_db_x2 en CONFIG.CSV, ver SET_X_PGA_WFM-.
+ *
+ * SON DOS AJUSTES SEPARADOS, uno por familia de modo:
+ *
+ *     s_pga_hf_x2    lo tuyo FUERA de FM ancha
+ *     s_pga_wfm_x2   lo tuyo DENTRO de FM ancha
+ *
+ * y s_pga_gain_db_x2 es el vivo, que vale uno u otro segun donde estes.
+ * Entrar pone el segundo, salir repone el primero, y el mando escribe el
+ * que toca. Ninguno pisa al otro, que es justo el fallo que el reparto
+ * entre las dos primeras variables ya evitaba en una sola direccion.
+ */
+static int16_t s_pga_wfm_x2 = CONFIG_PGA_WFM_DB_X2;
+
+/*
  * El unico valor del PGA que puede acabar en CONFIG.CSV.
  *
  * En WFM el valor VIVO es el tope (47,5 dB) que puso apply_demod_mode(),
@@ -10022,15 +10171,27 @@ static void apply_demod_mode(demod_mode_t mode)
 
     if (will_be_wfm && !era_wfm) {
         s_pga_hf_x2 = s_pga_gain_db_x2;   /* guarda lo tuyo antes de pisarlo */
-        s_pga_gain_db_x2 = (int16_t)PGA_MAX_X2;
+        /*
+         * LA DE FM ANCHA, NO EL TOPE - 28/10/2026. Aqui ponia PGA_MAX_X2
+         * y el mando no servia de nada dentro del modo: lo que girabas se
+         * tiraba al salir. Ver s_pga_wfm_x2.
+         */
+        s_pga_gain_db_x2 = s_pga_wfm_x2;
         rf_agc_apply_pga();
-        debug_print("pga: WFM, al tope por perdida de VHF\n");
+        debug_print_dec("pga: WFM, a su ganancia x2", (uint32_t)s_pga_gain_db_x2);
     } else if (!will_be_wfm && era_wfm) {
         s_pga_gain_db_x2 = s_pga_hf_x2;
         rf_agc_apply_pga();
         debug_print_dec("pga: fuera de WFM, restaurado a x2", (uint32_t)s_pga_gain_db_x2);
     } else if (!will_be_wfm) {
         s_pga_hf_x2 = s_pga_gain_db_x2;   /* fuera de WFM, lo vivo ES lo tuyo */
+    } else {
+        /* Sigues en FM ancha -cambio de modo que no cruza la frontera-:
+         * entonces el vivo ES tu ajuste de FM ancha. Sin esta rama, un
+         * reentrar en el modo sin salir dejaria s_pga_wfm_x2 viejo y el
+         * autoguardado escribiria el valor de antes, que es el mismo fallo
+         * que el mando tenia con s_pga_hf_x2. */
+        s_pga_wfm_x2 = s_pga_gain_db_x2;
     }
     aic3204_rate_t desired_rate = (will_be_wfm || s_rf_doble) ? AIC3204_RATE_192K :
         (s_nonwfm_use_48k ? AIC3204_RATE_48K : AIC3204_RATE_96K);
@@ -12507,6 +12668,15 @@ static char        s_hora_fecha[16];  /* "15/06/26" */
  * que la alargue se entera al compilar.
  */
 static char        s_hora_det[88];
+/* El renglon que dice a que apunta el mando con el RDS puesto. Buffer
+ * propio y no s_hora_det: ese lo escriben las otras ramas de
+ * hora_poll_rds() en la misma pasada. Ver el bloque del mando en
+ * tune_encoder_poll(). */
+static char        s_hora_mando[64];
+/* El peor caso, contado: "Ganancia " (9) + "-47,5 dB" (8) +
+ * " - pulsa el mando para sintonizar" (33) = 50, mas el cero. */
+_Static_assert(sizeof s_hora_mando >= 51,
+               "el renglon del mando del RDS no cabe: ver la cuenta de arriba");
 _Static_assert(sizeof s_hora_det >= 62,
                "el detalle de la hora por RDS no cabe: ver la cuenta de arriba");
 
@@ -13126,6 +13296,57 @@ static void hora_poll_rds(void)
         s_hora.puede_aplicar = 1U;
     }
 
+    /*
+     * Y EL RENGLON DEL MANDO, SIEMPRE Y PISANDO LO QUE HAYA - 28/10/2026.
+     *
+     * Ver el bloque del mando en tune_encoder_poll(): con el RDS puesto, la
+     * pulsacion pasa el mando de sintonia a ganancia. Un mando que cambia
+     * de significado sin decirlo es peor que uno que no cambia, asi que
+     * esto va el ULTIMO y se come el detalle que hubieran puesto las ramas
+     * de arriba.
+     *
+     * Y se come el que mas aporta, no el que menos: las tres frases que
+     * tapa -"sintoniza una emisora de FM con el mando", "la hora se manda
+     * una vez por minuto" y la del anclado- dicen lo que PASA, y esta dice
+     * lo que el mando HACE AHORA MISMO, que es lo unico que se pierde si no
+     * se enseña. El codigo de emisora desconocida es la excepcion y no se
+     * toca: ese hay que poder anotarlo.
+     */
+    if (!(in.enganchado && !in.tiene_hora && in.tiene_pi
+          && !rds_pi_nombre(in.pi))) {
+        char *q = s_hora_mando;
+        const char *t;
+
+        /* La comparacion va a una variable y no dentro del `if` a
+         * proposito: tools/pga_check.py busca el mando del PGA por el
+         * primer `if (s_encoder_target == ENCODER_TARGET_PGA)` del
+         * fichero, y este renglon -que solo PINTA- se le colaba delante
+         * del mando de verdad y lo hacia auditar el bloque equivocado.
+         * El guion se ha apretado ademas para que lo busque dentro de
+         * tune_encoder_poll(); esto es el cinturon. */
+        uint8_t en_ganancia = (uint8_t)(s_encoder_target == ENCODER_TARGET_PGA);
+
+        if (en_ganancia) {
+            char val[16];
+
+            volume_format_ui(s_pga_gain_db_x2, val);
+            t = tr("Ganancia ", "Gain ");
+            while (*t != '\0') { *q++ = *t++; }
+            {
+                uint8_t i = 0U;
+                while (val[i] != '\0') { *q++ = val[i++]; }
+            }
+            t = tr(" - pulsa el mando para sintonizar",
+                   " - press the knob to tune");
+        } else {
+            t = tr("gira para sintonizar - pulsa para la ganancia",
+                   "turn to tune - press for the gain");
+        }
+        while (*t != '\0') { *q++ = *t++; }
+        *q = '\0';
+        s_hora.detalle = s_hora_mando;
+    }
+
     ui_hora_draw(&s_hora);
 }
 
@@ -13298,10 +13519,16 @@ static void hora_poll(void)
             *p++ = ' ';
             p = hora_u3(p, (inf.marcas_raras > 999U) ? 999U : inf.marcas_raras);
         } else {
+            /* Los dos ultimos son de MSF - 28/10/2026, ver DCF_MOT_MSF_PAT
+             * en dcf77.h-. Siguen siendo cortos por lo mismo: caben al lado
+             * de los otros dos numeros. */
             static const char *const k_mot[] = {
                 "", "corta", "b0", "b20", "z1z2", "par-min", "par-hor",
-                "par-fec", "rango"
+                "par-fec", "rango", "patron", "par-anno"
             };
+            _Static_assert((int)(sizeof k_mot / sizeof k_mot[0])
+                               == (int)DCF_MOT_MSF_PAR_ANNO + 1,
+                           "k_mot[] y los DCF_MOT_* se han desincronizado");
             uint8_t mt = dcf77_motivo();
             const char *t;
 
@@ -13809,6 +14036,12 @@ static void extras_leer(settings_extra_t *e)
     e->v[SET_X_AGC]        = (int32_t)demod_am_get_agc_profile();
     e->v[SET_X_SQL]        = (int32_t)demod_am_get_squelch_db();
     e->v[SET_X_SQL_WFM]    = (int32_t)demod_am_get_wfm_sql_db();
+    /* La ganancia de entrada de FM ancha, que desde el 28/10/2026 es un
+     * ajuste tuyo y no el tope que ponia la radio. Se guarda la VARIABLE
+     * DE FM ANCHA, no la viva: si estas en onda corta la viva es la de HF,
+     * y guardarla aqui te cambiaria la de FM sin tocarla. Es el mismo
+     * reparto que ya protege pga_para_guardar() en la otra direccion. */
+    e->v[SET_X_PGA_WFM]    = (int32_t)s_pga_wfm_x2;
     e->v[SET_X_NR]         = (int32_t)s_nr_strength;
     e->v[SET_X_NR_ON]      = (int32_t)s_nr_on;
     e->v[SET_X_RTTY_AUTO]  = (int32_t)rtty_auto_get();
@@ -13926,6 +14159,38 @@ static void extras_aplicar(const settings_extra_t *e)
     /* Y el de FM ancha, que es OTRO numero. Un CONFIG.CSV de antes del
      * 26/10/2026 no trae la clave, su bit queda a 0 y el silenciador de FM
      * arranca apagado, que es como estaba esa radio hasta hoy. */
+    /*
+     * Y la de FM ancha. Si CONFIG.CSV no la trae -primer arranque, o un
+     * fichero de antes de que existiera- se queda el valor de serie,
+     * CONFIG_PGA_WFM_DB_X2, que es lo que hace esta linea al no tocar
+     * nada. El margen es el mismo del codec que vigila el mando.
+     */
+    if (EX_HAY(SET_X_PGA_WFM)) {
+        s_pga_wfm_x2 = (int16_t)ex_rec(e->v[SET_X_PGA_WFM],
+                                       PGA_MIN_X2, PGA_MAX_X2);
+        /*
+         * Y SI ESTAS ARRANCANDO EN FM ANCHA, AL VIVO TAMBIEN.
+         *
+         * Esto no es de adorno: al arrancar, apply_demod_mode() corre
+         * ANTES que esta funcion, asi que al entrar en FM ancha se llevo
+         * el valor de serie -CONFIG_PGA_WFM_DB_X2- porque lo guardado
+         * todavia no se habia leido. Sin esta linea, arrancar en FM ancha
+         * te daria 25 dB aunque tuvieras otra cosa guardada, y bastaria
+         * cambiar de modo y volver para que apareciera la tuya.
+         *
+         * Es EXACTAMENTE el fallo que el bloque de pga_gain_db_x2 de
+         * main() cuenta para la ganancia de onda corta -medido en el video
+         * del arranque del 05/10, 23 dB de diferencia- con los dos modos
+         * cambiados de sitio. Se arregla igual y se dice igual.
+         */
+        if (demod_am_get_mode() == DEMOD_MODE_WFM) {
+            s_pga_gain_db_x2 = s_pga_wfm_x2;
+            rf_agc_apply_pga();
+            debug_print_dec("pga: arranque en WFM, tu ganancia guardada x2",
+                            (uint32_t)s_pga_wfm_x2);
+        }
+    }
+
     if (EX_HAY(SET_X_SQL_WFM)) {
         demod_am_set_wfm_sql_db((float)ex_rec(e->v[SET_X_SQL_WFM],
                                               (int32_t)demod_am_wfm_sql_min(),
@@ -17237,6 +17502,31 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
         k = pega_num(buf, k, (uint8_t)sizeof buf, (uint32_t)mapa_bin_trazos());
         k = pega_txt(buf, k, (uint8_t)sizeof buf, tr(" trazos", " outlines"));
         /*
+         * Y LAS CASILLAS QUE NO CUPIERON, SI LAS HUBO - 28/10/2026.
+         *
+         * *** mapa_bin.c las contaba desde el 16/10 y no las leia nadie.
+         * Medido ahora recorriendo las ventanas de los cien mapas: la
+         * peor del zoom 8 pide 12.770 bytes contra los 10.240 del
+         * buffer, o sea que esto NO es una red por si acaso: al
+         * acercarse del todo en ciertos sitios se cae hoy. ***
+         *
+         * Sale el peor de la sesion y SOLO si no es cero: una fila que
+         * pone "0 sin sitio" cada vez que la miras es ruido, y esta fila
+         * ya lleva dos numeros y el aviso del borrado.
+         *
+         * Lo que significa para quien lo lea: a ese zoom falta un trozo
+         * de costa, y como el relleno va por par-impar, lo que viene
+         * detras sale del color contrario hasta el siguiente borde de
+         * casilla. Es la raya horizontal.
+         */
+        if (mapa_bin_fuera_max() != 0U) {
+            k = pega_txt(buf, k, (uint8_t)sizeof buf, "  ·  ");
+            k = pega_num(buf, k, (uint8_t)sizeof buf,
+                         (uint32_t)mapa_bin_fuera_max());
+            k = pega_txt(buf, k, (uint8_t)sizeof buf,
+                         tr(" sin sitio", " did not fit"));
+        }
+        /*
          * Y QUE SE PUEDE BORRAR, pero solo si hay algo guardado en la
          * flash. Un mapa que se esté viendo sin estar guardado no lo
          * puede haber -se carga de la flash y de ningún otro sitio- pero
@@ -20309,6 +20599,27 @@ static void mem_graba(uint8_t bk, uint8_t c)
      * "no ha podido ser". Al cerrar la foto se vuelve a tocar y ya.
      */
     if (s_gsv_on) { bip_error(); return; }
+    /*
+     * LOS NOMBRES DE SERIE Y SU AYUDA, JUSTO ANTES DE ESCRIBIR.
+     *
+     * Aqui y no al arrancar, porque los dos van TRADUCIDOS y el idioma se
+     * cambia con la radio encendida: puestos una sola vez al principio, un
+     * fichero grabado despues de cambiar de idioma saldria con los de
+     * antes. Ver banco_nombres_pon().
+     */
+    {
+        static const char *serie[BANCO_N];
+        uint8_t b;
+
+        for (b = 0U; b < (uint8_t)BANCO_N; b++) {
+            serie[b] = k_banco_nombres[b][idioma()];
+        }
+        banco_nombres_pon(serie, (uint8_t)BANCO_N,
+                          tr("Para ponerle nombre a un banco, quita la"
+                             " almohadilla y escribe el tuyo:",
+                             "To name a bank, remove the hash and write"
+                             " your own:"));
+    }
     (void)banco_guarda((char *)s_gsv_buf, (uint32_t)sizeof s_gsv_buf);
     bip_listo();
 }
@@ -22012,6 +22323,74 @@ static void menu_mode_preset_callback(void *widget, ui_event_t event, void *user
          * para que nadie busque un mensaje de error que no existe.
          */
         if (k_demod_modes[idx].wspr)  { (void)wspr_modo_start(); }
+
+        /*
+         * ======================================================================
+         * Y EL FIR DEL ESPEJO SE OLVIDA EN LOS MODOS DE PANEL ENTERO
+         * 28/10/2026
+         * ======================================================================
+         *
+         * *** Encontrado persiguiendo el aviso del usuario: su radio con la
+         * version de hoy sacaba menos aviones en HFDL que otra con una
+         * version anterior, misma antena, mismo sitio, seis minutos. ***
+         *
+         * EL CORRECTOR DE IMAGEN DE BANDA ANCHA (iqbal.c, cuatro tomas,
+         * entro en la V5.11) corrige asi, muestra a muestra y dentro de la
+         * interrupcion del ADC:
+         *
+         *     y[n] = z[n] + suma_k  w[k] * conj(z[n-k])
+         *
+         * Esa suma es una copia CONJUGADA de la banda entera puesta encima
+         * de la banda. Con w bien medido cancela el espejo del hardware.
+         * Con w equivocado no cancela: FABRICA espejo, y lo fabrica encima
+         * de lo que se esta decodificando.
+         *
+         * Y AQUI w NO SE PUEDE REVALIDAR. El estimador vive dentro de
+         * sdr_spectrum_waterfall_tick() -las ranuras las llena la FFT del
+         * panadaptador y iqbal_resuelve() corre cada dos segundos desde
+         * alli-. Esa funcion NO SE LLAMA en los ocho modos de panel entero
+         * (ver modo_panel_entero(): FT8, HFDL, WSPR, AIS, ALE, JTTY,
+         * STANAG e IDENT), porque se quedan la pantalla y no pintan
+         * espectro. O sea que mientras estas en uno de ellos las tomas
+         * estan congeladas en lo que aprendieron EN OTRO MODO Y EN OTRA
+         * BANDA, y alli siguen corrigiendo sin que nada pueda medir si lo
+         * que hacen es bueno.
+         *
+         * Y solo se olvidaban al cambiar la tasa o al mover el oscilador
+         * mas de un octavo de la frecuencia: a 11.184 kHz, 1,4 MHz.
+         *
+         * MEDIDO, no supuesto. sim/hfdl_extremo.c, apartado 8: una ráfaga
+         * entera por la cadena de verdad, con el espejo inyectado donde lo
+         * inyecta la radio -sobre la muestra ya con ruido, antes de todo-,
+         * 30 ráfagas por punto, BPSK 600 y sigma 2,0:
+         *
+         *     toma w        0     0,05   0,10   0,20   0,35   0,50
+         *     buenas/30    17      13      8     10      9      4
+         *
+         * De 17 a 4. El tope que iqbal_resuelve() le pone a cada toma es
+         * justo 0,5, asi que la ultima columna no es un caso inventado: es
+         * el peor que el propio corrector permite.
+         *
+         * (Y por que no se habia visto antes: con la señal fuerte no se ve.
+         * La primera version de ese apartado media a sigma 0,5 y daba 20/20
+         * en todas las columnas. El espejo solo se nota donde la señal va
+         * justa, que es donde esta HFDL casi siempre.)
+         *
+         * LO QUE SE HACE: olvidarlo al entrar. El corrector PLANO no se
+         * toca -es el que arreglo el espejo que se veia, de 25 a 86 dB de
+         * rechazo, y ademas sigue midiendo aqui porque su estimador vive
+         * dentro de iqbal_bloque()-. Lo que se deja fuera es solo la parte
+         * que depende de la frecuencia, que es la fina y la que aqui nadie
+         * puede comprobar. Al salir a un modo con espectro, el lazo la
+         * vuelve a aprender sola en unos segundos.
+         *
+         * Es la misma decision que ya esta tomada para la FM ancha -ver
+         * iqbal_aprende() unas lineas arriba de apply_demod_mode()-: donde
+         * el estimador no puede funcionar, no se usa lo que dijo.
+         */
+        if (modo_panel_entero()) {
+            iqbal_fir_olvida();
+        }
 
         switch (k_demod_modes[idx].rtty_variant) {
         case RTTY_VARIANT_NORMAL:
@@ -23755,6 +24134,9 @@ static void apply_lo_tune(uint32_t freq_hz)
 
                 if (real != 0UL) { s_lo_hz = real; }
             }
+            /* Y lo PEDIDO, que es de lo que vive la pantalla: ver
+             * s_lo_pedido_hz. Arriba del cruce los dos valen lo mismo. */
+            s_lo_pedido_hz = actual_lo_hz;
         }
     }
 
@@ -23786,11 +24168,15 @@ static void apply_lo_tune(uint32_t freq_hz)
      * el oscilador". El argumento es cierto y la premisa NO: **el NCO
      * viene APAGADO de fabrica** -s_nco_on arranca a cero y solo lo
      * enciende CONFIG.CSV o el ajuste-, y con el apagado lo_para_sintonia()
-     * devuelve freq_hz menos el desplazamiento, o sea que **el oscilador
-     * sigue al dial hercio a hercio**. En una radio recien flasheada, cada
-     * clic del mando borraba las cuatro tomas, la historia y las dieciseis
-     * ranuras: el FIR no llegaba a existir mientras se busca, que es justo
-     * cuando se mira el espejo en la pantalla.
+     * devuelve freq_hz menos el desplazamiento por encima de los 300 kHz,
+     * o sea que **el oscilador sigue al dial hercio a hercio** en toda la
+     * onda corta y la FM, que es casi toda la radio. (Por debajo del cruce
+     * se aparca siempre desde el 27/10/2026, pero eso no cambia nada de lo
+     * de aqui: lo que hay que aguantar es el caso en que se mueve.) En una
+     * radio recien flasheada, cada clic del mando borraba las cuatro
+     * tomas, la historia y las dieciseis ranuras: el FIR no llegaba a
+     * existir mientras se busca, que es justo cuando se mira el espejo en
+     * la pantalla.
      *
      * DE DONDE SALE EL UMBRAL, que no me lo invento:
      *
@@ -32460,6 +32846,50 @@ static void tune_encoder_poll(void)
         }
     }
 
+    /*
+     * ======================================================================
+     * EL MANDO, EN "HORA POR RADIO" CON EL RDS: GIRO O GANANCIA - 28/10/2026
+     * ======================================================================
+     *
+     * *** Avisado por un usuario: "al elegir RDS en el menu de la hora la
+     * ganancia se pone sola muy alta y satura, y no hay forma comoda de
+     * tocarla sin salir del menu". ***
+     *
+     * La primera mitad de ese aviso ya esta arreglada -la V6.11 le dio a
+     * FM ancha su propia ganancia, 25 dB, en vez del tope de 47,5 que
+     * ponia antes-. Esta es la segunda mitad, que seguia abierta: DENTRO
+     * de esta pantalla no habia forma de llegar a la ganancia.
+     *
+     * Y no la habia por una razon de reparto, no por descuido: la
+     * ganancia se elige con el boton de la barra de abajo, y esta
+     * pantalla ocupa la barra con sus propios botones. El mando sigue
+     * girando -no esta cogido por nadie- pero apunta a lo que apuntara al
+     * entrar, que casi siempre es la sintonia.
+     *
+     * LO QUE SE HACE: con el RDS elegido, la PULSACION del mando lo pasa
+     * de sintonia a ganancia y al reves. La pulsacion estaba libre: en
+     * todas las ramas de abajo lo que hace es cambiar el paso de
+     * sintonia, y aqui el paso no se enseña ni sirve para nada, porque lo
+     * que se busca es una emisora de FM cualquiera.
+     *
+     * SOLO CON EL RDS. Las seis emisoras horarias de onda larga tienen
+     * frecuencia fija -la pone hora_sintoniza()- y alli ni se sintoniza ni
+     * sobra ganancia; meterles un segundo significado a la pulsacion seria
+     * un ajuste escondido en una pantalla donde no hace falta.
+     *
+     * Y SE DICE EN PANTALLA, siempre, en el renglon de detalle: ver
+     * hora_poll_rds(). Un mando que cambia de significado sin decirlo es
+     * peor que uno que no cambia. (Esto NO se queda los detentes ni vuelve
+     * antes de tiempo, asi que la escalera de abajo -y la regla de
+     * tools/mando_check.py sobre ENCODER_TARGET_VOLUME- sigue intacta.)
+     */
+    if (s_menu_hora_active && s_hora_emisora == HORA_RDS && press) {
+        s_encoder_target = (s_encoder_target == ENCODER_TARGET_PGA)
+                           ? ENCODER_TARGET_TUNE : ENCODER_TARGET_PGA;
+        press = 0U;
+        s_hora_ult_ms = 0U;   /* que el proximo poll repinte el detalle */
+    }
+
     uint8_t changed = 0;
 
     /* Antes que nada: la rafaga de rescate. Va aqui arriba y no dentro de
@@ -32816,8 +33246,18 @@ static void tune_encoder_poll(void)
                  * entre las dos variables viene a proteger: alli el valor
                  * vivo es el tope que puso la radio, no una eleccion tuya.
                  */
+                /*
+                 * Y DENTRO DE FM ANCHA, EL SUYO - 28/10/2026, pedido por
+                 * el usuario. Aqui no se tocaba nada "porque alli el valor
+                 * vivo es el tope que puso la radio, no una eleccion
+                 * tuya". Desde hoy SI lo es: FM ancha tiene su propia
+                 * ganancia guardada (ver s_pga_wfm_x2), y lo que se gira
+                 * dentro del modo es tan tuyo como lo que se gira fuera.
+                 */
                 if (demod_am_get_mode() != DEMOD_MODE_WFM) {
                     s_pga_hf_x2 = s_pga_gain_db_x2;
+                } else {
+                    s_pga_wfm_x2 = s_pga_gain_db_x2;
                 }
                 /* rf_agc_apply_pga() (07/08/2026), not a direct
                  * aic3204_set_pga_gain_db() call - the encoder now
@@ -33726,7 +34166,7 @@ static void spec_tap_tune_to_x(uint16_t x)
     int64_t step_hz = (int64_t)k_tune_steps[s_tune_step_idx];
 
     if (s_spec_zoom == SPEC_ZOOM_1X && demod_am_get_mix_hz() != 0.0f) {
-        panel_center_hz = s_lo_hz;
+        panel_center_hz = s_lo_pedido_hz ? s_lo_pedido_hz : s_lo_hz;
     }
 
     /* Pixel DENTRO de la traza, no de la pantalla. */
@@ -34944,8 +35384,10 @@ static void demo_touch_poll(void)
 
         /* El umbral del temblor lo pone mapa_gesto_mueve(). */
         if (mapa_gesto_mueve(&s_mapa_gesto, (int16_t)x, (int16_t)y, &dx, &dy)) {
+            /* Mover y marcar; pintar lo hace el bucle una vez por vuelta.
+             * Ver s_mapa_sucio. */
             mapa_arrastra(mapa_caja(), dx, dy);
-            ft8_mapa_draw();
+            s_mapa_sucio = 1U;
         }
         goto fin;
     }
@@ -36432,6 +36874,77 @@ static void sdr_spectrum_waterfall_tick(void)
     }
 
     /*
+     * ==================================================================
+     * *** Y AQUI SE GIRA EL CUADRO LO QUE EL OSCILADOR REDONDEO ***
+     * 27/10/2026, visto en la radio: la raya del dial iba adelante y
+     * atras dando saltos en onda larga.
+     * ==================================================================
+     *
+     * EL PROBLEMA, Y NO ERA DE DIBUJO. Por debajo de 300 kHz el oscilador
+     * lo hace un temporizador cuyo escalon son 1.421 Hz en onda larga,
+     * mientras el dial va de 1.000 en 1.000: no puede obedecer, redondea.
+     * El panel se centra en el oscilador REAL, asi que el redondeo movia
+     * el panel entero, y la marca -que se pone a `sintonia - oscilador`-
+     * se iba detras. Medido: +3,9 px, -1,7, -1,8, +3,9, y media cero.
+     *
+     * LO QUE SE HACE. El panel pasa a centrarse en lo que se PIDIO -que
+     * sigue al dial exactamente, ver s_lo_pedido_hz- y este giro mueve los
+     * datos los pocos bins que hagan falta para que sigan cayendo en su
+     * frecuencia. O sea: la raya se queda quieta, la emisora sigue debajo
+     * de ella, y el oscilador y el audio no se enteran de nada.
+     *
+     * POR QUE AQUI Y NO ANTES. iqbal_mira_espectro() empareja el bin k con
+     * el 2c-k alrededor del centro del array, que para el ES el oscilador
+     * real. Girando antes, su centro de simetria se mueve y el rechazo de
+     * imagen que mide deja de ser el rechazo de imagen. Va despues.
+     *
+     * POR QUE EN BINS ENTEROS. Un bin son Fs/512 -375 Hz a 192 kHz de
+     * tasa cruda, 187 a 96- y el redondeo del temporizador no pasa de la
+     * mitad de su escalon. Lo que queda sin corregir es menos de medio
+     * bin, o sea menos de un pixel de los 756: por debajo de lo que el
+     * panel puede enseñar. Interpolar entre bins costaria una FFT de
+     * verdad para ganar algo que no se ve.
+     *
+     * Y EN LOS BORDES SE REPITE EL EXTREMO en vez de dar la vuelta: los
+     * bins que entran por un lado no existen, y traerlos del otro lado
+     * pegaria el borde de arriba de la ventana al de abajo. Son cuatro
+     * columnas de 756, en el borde, y repetir no inventa una señal.
+     */
+    if (s_spec_zoom == SPEC_ZOOM_1X && !analiz_activo()
+        && s_lo_pedido_hz != 0UL && s_lo_hz != 0UL
+        && s_lo_pedido_hz != s_lo_hz) {
+        int32_t  err_hz = (int32_t)((int64_t)s_lo_pedido_hz - (int64_t)s_lo_hz);
+        uint32_t bin_hz = tasa_cruda_hz() / s_fft_bins;
+        int32_t  giro;
+
+        if (bin_hz == 0UL) { bin_hz = 1UL; }
+        /* Al bin mas cercano, con el redondeo hecho en los dos sentidos. */
+        giro = (err_hz >= 0) ? (int32_t)(((uint32_t)err_hz + bin_hz / 2UL) / bin_hz)
+                             : -(int32_t)(((uint32_t)(-err_hz) + bin_hz / 2UL) / bin_hz);
+        if (giro > (int32_t)(s_fft_bins / 4U))  { giro =  (int32_t)(s_fft_bins / 4U); }
+        if (giro < -(int32_t)(s_fft_bins / 4U)) { giro = -(int32_t)(s_fft_bins / 4U); }
+
+        if (giro > 0) {
+            /* El oscilador salio POR DEBAJO de lo pedido, o sea que todo
+             * lo que se ve esta mas arriba de lo que el panel va a decir:
+             * los datos se mueven hacia los bins BAJOS. */
+            for (bi = 0; bi + (uint32_t)giro < s_fft_bins; bi++) {
+                s_db_frame[bi] = s_db_frame[bi + (uint32_t)giro];
+            }
+            for (; bi < s_fft_bins; bi++) {
+                s_db_frame[bi] = s_db_frame[s_fft_bins - 1U - (uint32_t)giro];
+            }
+        } else if (giro < 0) {
+            uint32_t g = (uint32_t)(-giro);
+
+            for (bi = s_fft_bins; bi-- > g; ) {
+                s_db_frame[bi] = s_db_frame[bi - g];
+            }
+            for (bi = 0; bi < g; bi++) { s_db_frame[bi] = s_db_frame[g]; }
+        }
+    }
+
+    /*
      * Y RESOLVER EL FIR DEL ESPEJO, CADA DOS SEGUNDOS - 19/10/2026.
      *
      * Las ranuras las rellena fft.c en cada FFT; esto es lo caro -un sistema
@@ -36560,7 +37073,7 @@ static void sdr_spectrum_waterfall_tick(void)
              * vuelve a ser Fs/4: es la misma cuenta, sin el atajo.
              */
             center_mark_offset_px =
-                (int16_t)((demod_am_get_mix_hz() * (float)SPEC_TRACE_W)
+                (int16_t)((panel_mix_hz() * (float)SPEC_TRACE_W)
                           / (float)spec_zoom_full_span_hz());
         }
 

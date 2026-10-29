@@ -13,7 +13,7 @@
  * simbolos de 8-FSK, tonos cada 6,25 Hz, 0,16 s cada uno- mas ruido gaussiano
  * a un nivel CALCULADO para que el SNR verdadero en 2.500 Hz sea exactamente
  * el que se pide. Se mete por el ADAPTADOR DE VERDAD del firmware
- * (ft8_waterfall_adapter.c + ft8_fft1024.c, los mismos que corren en la
+ * (ft8_waterfall_adapter.c + ft8_fft.c, los mismos que corren en la
  * radio, no una copia) y se compara lo que sale con lo que se metio.
  *
  * Y SE BARRE, QUE ES LO QUE DE VERDAD MIDE. Una sola medida no distingue un
@@ -46,8 +46,11 @@ static void di(const char *que, int ok, const char *det)
     if (!ok) { fallos++; }
 }
 
-#define FS        3200.0           /* FT8_ADAPTER_SAMPLE_RATE_HZ */
-#define NYQ       (FS / 2.0)       /* 1.600 Hz */
+/* NO a mano: sale del adaptador, que el 28/10/2026 paso de 3.200 a 6.400
+ * Hz al ensanchar la ventana a la banda entera. Escrito a pelo, este banco
+ * fabricaba la señal a la mitad de velocidad y todo caia al suelo. */
+#define FS        ((double)FT8_ADAPTER_SAMPLE_RATE_HZ)
+#define NYQ       (FS / 2.0)       /* la banda que se analiza */
 #define REF_BW    2500.0
 #define SUB       FT8_ADAPTER_SUBBLOCK_SIZE   /* 512 = un simbolo */
 #define SIMBOLOS  79

@@ -18,6 +18,664 @@ ordered by date, does not spare the detail, and is not published.
 
 ---
 
+## V6.14 · 2026-10-28
+
+### Qué cambia
+
+- **La fila del mapa dice si se ha quedado sin sitio.** Preguntado por el
+  usuario: si se puede optimizar el mapa.
+
+  El mapa no cabe entero en la RAM. Lo que se guarda son **trazos** y no una
+  foto —una foto del mundo a esta pantalla son 460.800 bytes y leerla costaría
+  370 ms por repintado, cuando el presupuesto de un fotograma son 22—, y aun
+  así sólo vive en memoria un trozo: 10.240 bytes. Al máximo zoom, la radio
+  carga las casillas que tocan lo que ves, y **si no caben, deja fuera las que
+  sobran**. Cuando la que falta es una costa, el relleno —que va por
+  par-impar— descuadra la cuenta de cruces y lo que viene detrás sale del
+  color contrario hasta el siguiente borde: eso es una raya horizontal.
+
+  La radio contaba esas casillas desde hace doce días y **no las leía nadie**:
+  ni se podían consultar ni salían en ninguna pantalla. Ahora sale el peor
+  valor de la sesión en **Ajustes → Equipo → Información → Mapa**, y sólo si
+  no es cero.
+
+  **Medido sobre los cien mapas, recorriendo todas las ventanas posibles:**
+
+  | | |
+  |---|---|
+  | peor ventana, sólo lo que se ve | 10.195 B |
+  | el buffer | 10.240 B |
+  | **margen** | **45 B** |
+
+  O sea que **hoy no falta ninguna** — pero 45 bytes de 10.240 no son un
+  margen, son suerte. Un `.map` con algo más de detalle en una sola ventana ya
+  empezaría a perder costa, y hasta ahora habría pasado sin que se supiera.
+
+### What's new
+
+- **The map row now says when it has run out of room.** Asked by the user:
+  whether the map can be optimised.
+
+  The map does not fit in RAM. What is stored are **outlines**, not a picture
+  — a picture of the world at this screen's resolution is 460,800 bytes and
+  reading it would cost 370 ms per repaint, against a frame budget of 22 — and
+  even so only a slice lives in memory: 10,240 bytes. At maximum zoom the
+  radio loads the tiles covering what you see, and **if they do not fit, the
+  rest are left out**. When the missing one is a coastline, the fill — which
+  works by odd-even — loses its crossing count and everything after it comes
+  out in the opposite colour until the next tile edge: that is a horizontal
+  streak.
+
+  The radio had been counting those tiles for twelve days and **nobody read
+  them**: no way to query them, not shown anywhere. The worst value of the
+  session now appears in **Settings → Device → Information → Map**, and only
+  when it is not zero.
+
+  **Measured across the hundred maps, sweeping every possible window:**
+
+  | | |
+  |---|---|
+  | worst window, visible tiles only | 10,195 B |
+  | the buffer | 10,240 B |
+  | **headroom** | **45 B** |
+
+  So **nothing is missing today** — but 45 bytes out of 10,240 is not headroom,
+  it is luck. A `.map` with slightly more detail in a single window would start
+  losing coastline, and until now it would have done so silently.
+
+---
+
+## V6.13 · 2026-10-28
+
+### Qué cambia
+
+- **Los modos digitales dejan de aplicar una corrección de imagen que no
+  pueden comprobar, y HFDL lo nota.** Avisado por un usuario con dos radios
+  en la misma mesa, la misma antena y seis minutos de reloj: la versión
+  anterior sacaba el doble de aviones.
+
+  El corrector de imagen de banda ancha corrige sumando una copia
+  **conjugada** de la banda encima de la banda. Con sus tomas bien medidas
+  eso cancela el espejo del aparato; con las tomas equivocadas no cancela
+  nada: **lo fabrica**, encima de lo que se está decodificando. Y corre
+  dentro de la interrupción del convertidor, sobre todas las muestras de
+  todos los modos.
+
+  El problema es que en los **ocho modos de panel entero** —FT8, HFDL, WSPR,
+  AIS, ALE, JTTY, STANAG e IDENT— no se puede volver a medir: el estimador
+  vive dentro del dibujo del espectro, y esos modos se quedan la pantalla y
+  no pintan espectro. Las tomas se quedaban congeladas en lo que aprendieron
+  **en otro modo y en otra banda** y allí seguían corrigiendo, sin que nada
+  pudiera comprobar si lo que hacían era bueno.
+
+  Medido de dos formas. Con una ráfaga entera por la cadena de verdad,
+  30 ráfagas por punto, BPSK 600 y la señal justa:
+
+  | toma del corrector | 0 | 0,05 | 0,10 | 0,20 | 0,35 | 0,50 |
+  |---|---|---|---|---|---|---|
+  | ráfagas buenas de 30 | 17 | 13 | 8 | 10 | 9 | **4** |
+
+  Y con un banco nuevo de **flujo largo** —ruido continuo con noventa
+  ráfagas metidas dentro, una sola sesión del modo— que es el único que
+  puede contar los enganches **perdidos**:
+
+  | toma | A1 | A2 | M1 | buenas |
+  |---|---|---|---|---|
+  | 0 | 61/90 | 13/90 | 9/90 | 3/3 |
+  | 0,50 | **33/90** | 6/90 | **3/90** | 2/2 |
+
+  De 17 a 4, de 61 enganches a 33, y 0,50 es exactamente el tope que el
+  propio corrector permite.
+  Ahora, al entrar en esos ocho modos, esa parte se olvida. **El corrector
+  plano no se toca** —es el que arregló el espejo que se veía, de 25 a 86 dB
+  de rechazo— y además sigue midiendo dentro del modo; lo que se deja fuera
+  es sólo la parte fina, la que depende de la frecuencia. Al volver a un modo
+  con espectro se aprende sola en segundos.
+
+- **Con el RDS puesto, el mando ya llega a la ganancia de entrada sin salir
+  de la pantalla del reloj.** Avisado por un usuario. Esa pantalla ocupa la
+  barra de abajo con sus propios botones, así que el botón con el que se
+  elige qué mueve el mando no está, y la ganancia quedaba fuera de alcance
+  justo donde más falta hace. Ahora, **con el RDS elegido**, pulsar el mando
+  lo pasa de sintonía a ganancia y al revés, y el renglón de detalle dice en
+  todo momento a cuál de las dos apunta y cuántos decibelios hay puestos.
+
+  Sólo con el RDS: las seis emisoras horarias de onda larga tienen frecuencia
+  fija y allí ni se sintoniza ni sobra ganancia.
+
+- **ALS162 ya pasa de la mitad de la trama.** Avisado por el usuario con una
+  foto: `04/59`, `10/59` y vuelta a empezar. La radio exigía 60 ms de fase
+  plana para dar por buena una marca de segundo, y con la portadora sucia esa
+  condición no se cumple nunca aunque la marca esté exactamente donde toca.
+
+  **Sólo ALS162**, que es la única que se decodifica por fase. DCF77 y MSF van
+  por amplitud —portadora que se apaga y se enciende— y no pasan por esta
+  puerta: a esas dos no les cambia nada. Ahora, **con la rejilla de segundos ya enganchada**,
+  caer dentro de la ventana de ±70 ms vale igual que el silencio; y un hueco
+  sólo se toma por el segundo 59 si antes han entrado 55 bits, en vez de
+  tirar la trama entera por una marca perdida.
+
+  Medido en el banco contra la misma señal, seis minutos por caso:
+
+  | marcadores sin silencio | antes | ahora |
+  |---|---|---|
+  | uno de cada 8 | no engancha (47 raras) | decodifica |
+  | uno de cada 4 | no engancha (88 raras) | decodifica |
+  | uno de cada 2 | no engancha | no engancha |
+
+- **El mapa ya escribe el nombre de todos los aviones que caben, no de
+  cinco.** Avisado por el usuario: doce en la lista, cinco en el mapa.
+
+  Había un tope de etiquetas puesto a ojo —`4 + nivel de zoom`—, así que con
+  el mapamundi entero eran **cinco** por mucho que hubiera. Los puntos salían
+  todos; lo que faltaba eran los nombres escritos.
+
+  Y ese tope sobraba desde que, en octubre, se le enseñó a cada etiqueta a
+  probar **seis colocaciones** antes de rendirse —derecha, izquierda, un
+  renglón arriba y otro abajo—. Eso ya resuelve el apelotonamiento midiendo
+  píxeles de verdad; el `4 + zoom` se disparaba antes de mirar si la etiqueta
+  cabía y tiraba nombres que sí entraban.
+
+  Ahora el único tope es el del buffer, 12, y quien reparte es el choque. En
+  el mapamundi se seguirán viendo pocas —ahí Europa entera mide treinta
+  píxeles— pero porque no caben, no porque un número lo decidiera antes de
+  medir. Vale igual para el mapa de FT8.
+
+### What's new
+
+- **The digital modes stop applying an image correction they cannot check,
+  and HFDL notices.** Reported by a user with two radios on the same desk,
+  the same antenna and six minutes on the clock: the older version pulled
+  twice as many aircraft.
+
+  The wideband image corrector works by adding a **conjugate** copy of the
+  band on top of the band. With its taps correctly measured that cancels the
+  radio's own mirror; with the taps wrong it cancels nothing — it **creates**
+  mirror, on top of whatever is being decoded. And it runs inside the
+  converter interrupt, over every sample of every mode.
+
+  The trouble is that in the **eight full-panel modes** — FT8, HFDL, WSPR,
+  AIS, ALE, JTTY, STANAG and IDENT — it can never be re-measured: the
+  estimator lives inside the spectrum drawing, and those modes take the whole
+  screen and draw no spectrum. The taps stayed frozen at whatever they learnt
+  **in another mode and another band** and went on correcting there, with
+  nothing able to check whether what they did was any good.
+
+  Measured two ways. With a whole burst through the real chain, 30 bursts
+  per point, BPSK 600 and the signal marginal:
+
+  | corrector tap | 0 | 0.05 | 0.10 | 0.20 | 0.35 | 0.50 |
+  |---|---|---|---|---|---|---|
+  | good bursts out of 30 | 17 | 13 | 8 | 10 | 9 | **4** |
+
+  And with a new **long-flow** bench — continuous noise with ninety bursts
+  inside it, one single session of the mode — which is the only one that
+  can count the detections that were **missed**:
+
+  | tap | A1 | A2 | M1 | good |
+  |---|---|---|---|---|
+  | 0 | 61/90 | 13/90 | 9/90 | 3/3 |
+  | 0.50 | **33/90** | 6/90 | **3/90** | 2/2 |
+
+  From 17 to 4, from 61 detections to 33, and 0.50 is exactly the ceiling
+  the corrector itself allows.
+  Entering any of those eight modes now forgets that part. **The flat
+  corrector is untouched** — it is the one that fixed the mirror you could
+  actually see, from 25 to 86 dB of rejection — and it keeps measuring inside
+  the mode; what is left out is only the fine, frequency-dependent part. Back
+  in a mode with a spectrum it is learnt again by itself in seconds.
+
+- **With RDS selected, the knob now reaches the input gain without leaving
+  the clock screen.** Reported by a user. That screen fills the bottom bar
+  with its own buttons, so the button that picks what the knob moves is not
+  there, and the gain was out of reach exactly where it is most needed. Now,
+  **with RDS selected**, pressing the knob swaps it between tuning and gain,
+  and the detail line says at all times which of the two it is on and how
+  many decibels are set.
+
+  RDS only: the six longwave time stations sit on fixed frequencies, where
+  there is nothing to tune and no gain to spare.
+
+- **ALS162 now gets past the middle of the frame.** Reported by the user with
+  a photo: `04/59`, `10/59` and back to the start. The radio demanded 60 ms of
+  flat phase before accepting a second marker, and with a dirty carrier that
+  condition is never met even when the marker is exactly where it should be.
+
+  **ALS162 only**, the one station decoded from phase. DCF77 and MSF are
+  decoded from amplitude — carrier switched off and on — and do not go through
+  this gate: nothing changes for those two. Now, **once the second grid is locked**, falling inside
+  the ±70 ms window counts as much as the silence; and a gap is only taken
+  for second 59 if 55 bits have arrived first, instead of throwing the whole
+  frame away over one lost marker.
+
+  Measured on the bench against the same signal, six minutes per case:
+
+  | markers with no silence | before | now |
+  |---|---|---|
+  | one in 8 | no lock (47 odd) | decodes |
+  | one in 4 | no lock (88 odd) | decodes |
+  | one in 2 | no lock | no lock |
+
+- **The map now writes the name of every aircraft that fits, not of five.**
+  Reported by the user: twelve on the list, five on the map.
+
+  There was a label budget set by eye — `4 + zoom level` — so with the whole
+  world on screen it was **five**, however many there were. The dots were all
+  drawn; what was missing were the written names.
+
+  And that budget had been redundant since October, when each label learnt to
+  try **six placements** before giving up — right, left, one row up, one row
+  down. That already resolves crowding by measuring real pixels; the
+  `4 + zoom` fired before looking at whether the label fitted, and threw away
+  names that did.
+
+  Now the only limit is the buffer, 12, and the collision test does the
+  sharing. On the world view you will still see few — Europe is thirty pixels
+  wide there — but because they do not fit, not because a number decided it
+  before measuring. The same applies to FT8's map.
+
+---
+
+## V6.12 · 2026-10-28
+
+### Qué cambia
+
+- **La lista de aviones de HFDL pasa de 20 a 48, como la de FT8.** El número
+  que importaba era el de aviones: esa tabla no la lee sólo el panel, **la
+  lee el mapa**, así que el mapa no podía enseñar más de veinte por llena
+  que estuviera la banda. Es la misma razón por la que FT8 pasó de 16 a 48
+  en su día; a HFDL no se le aplicó. Los renglones de la lista suben también
+  a 48.
+
+  **El precio: la lista se borra al salir del modo**, igual que ya le pasa a
+  la de FT8. A cambio, las dos tablas se mudan a la memoria compartida y
+  esto **no cuesta ni un byte**: la ocupación de RAM baja 2.048 bytes.
+
+- **Cuando MSF rechaza una trama, la radio dice por qué.** El decodificador
+  tiene nueve puertas de rechazo y ninguna ponía el motivo, así que la
+  pantalla enseñaba «mal 7» y se callaba cuál —con DCF77 sí lo dice desde
+  siempre—. Ahora salen `patron`, `par-anno`, `par-fec`, `par-hor` y
+  `rango`, que son cinco averías distintas con cinco arreglos distintos.
+
+  Esto **no** arregla por sí solo una recepción que no engancha: es lo que
+  hacía falta para poder mirarla.
+
+### What's new
+
+- **HFDL's aircraft list goes from 20 to 48, like FT8's.** The number that
+  mattered was the aircraft count: that table is not read only by the panel,
+  **the map reads it**, so the map could never show more than twenty however
+  busy the band was. It is the same reason FT8 went from 16 to 48; HFDL
+  never got the same treatment. The list rows go to 48 as well.
+
+  **The price: the list is cleared when you leave the mode**, exactly as
+  FT8's already is. In exchange both tables move to the shared memory and
+  this **costs nothing**: RAM use drops by 2,048 bytes.
+
+- **When MSF rejects a frame, the radio now says why.** The decoder has nine
+  rejection paths and not one of them recorded the reason, so the screen
+  showed "mal 7" and stayed quiet about which — with DCF77 it has always
+  said. Now it shows `patron`, `par-anno`, `par-fec`, `par-hor` and `rango`:
+  five different faults with five different fixes.
+
+  This does **not** by itself fix a reception that will not lock: it is what
+  was missing in order to look at it.
+
+---
+
+## V6.11 · 2026-10-28
+
+### Qué cambia
+
+- **La FM ancha ya tiene su propia ganancia de entrada, y son 25 dB.** Hasta
+  ahora, entrar en FM ancha ponía el amplificador de entrada **al tope**
+  —47,5 dB— y el mando no servía de nada dentro del modo: lo que girases se
+  tiraba al salir. El razonamiento era que a 100 MHz el mezclador pierde unos
+  25 dB y «hace falta todo lo que hay». Eso vale con una antena de hilo y una
+  emisora lejana; con una antena decente y una local, satura.
+
+- **Y si la cambias, se guarda.** Son dos ajustes separados, uno por familia
+  de modo:
+
+  | | dónde manda | se guarda como |
+  |---|---|---|
+  | tu ganancia de siempre | fuera de FM ancha | `pga_gain_db_x2` |
+  | tu ganancia de FM ancha | dentro de FM ancha | `pga_wfm_db_x2` |
+
+  Entrar en FM ancha pone la segunda, salir repone la primera, y el mando
+  escribe la que corresponda al modo en el que estés. Ninguna pisa a la otra.
+  Un `CONFIG.CSV` de una versión anterior no trae la nueva clave: entonces la
+  FM ancha arranca con los 25 dB de serie.
+
+- **La hora por radio ya no se pone en hora alemana.** DCF77 y ALS162 **no
+  emiten UTC**: emiten hora local alemana y francesa (CET en invierno, CEST
+  en verano). El decodificador guardaba la trama tal cual, así que el reloj
+  se ponía en hora de Europa central pasara lo que pasara y **el ajuste de
+  huso no lo miraba nadie**. En España no se nota, porque la península *es*
+  CET; fuera, la hora salía adelantada y cambiar el huso no servía de nada.
+
+  La misma trama, 20:33 CEST, con el huso puesto en cada sitio:
+
+  | huso | antes | ahora |
+  |---|---|---|
+  | España/Alemania (+120) | 20:33 | 20:33 |
+  | Dublín, verano (+60) | 20:33 | **19:33** |
+  | UTC (+0) | 20:33 | **18:33** |
+
+  De paso, el botón que **mide** el huso ya funciona también con estas dos
+  emisoras; antes sólo con MSF.
+
+- **Los indicativos franceses ya sacan país.** La tabla tenía para Francia
+  un solo prefijo, `F`, mientras los demás países grandes llevaban su bloque
+  entero. En FT8 eso dejaba sin país a `TM8R` y a cualquier indicativo
+  especial francés, que son constantes. Añadidos `HW`, `HX`, `HY`, `TH`,
+  `TM`, `TP`, `TQ` y `TV`.
+
+- **El mapa de FT8 se arrastra con fluidez.** Mover el mapa con el dedo
+  repintaba los 800×288 enteros **en cada muestra del táctil**, y el táctil
+  se mira dos veces por vuelta: hasta dos repintados completos por vuelta
+  de los que sólo se veía el último. Ahora el arrastre acumula y se pinta
+  una sola vez por vuelta.
+
+### What's new
+
+- **Wide FM now has its own input gain, and it is 25 dB.** Until now,
+  entering wide FM set the input amplifier to **maximum** —47.5 dB— and the
+  knob did nothing inside the mode: whatever you turned was discarded on the
+  way out. The reasoning was that the mixer loses about 25 dB at 100 MHz and
+  "all of it is needed". That holds with a wire antenna and a distant
+  station; with a decent antenna and a local one, it clips.
+
+- **And if you change it, it is kept.** They are two separate settings, one
+  per mode family:
+
+  | | where it applies | stored as |
+  |---|---|---|
+  | your usual gain | outside wide FM | `pga_gain_db_x2` |
+  | your wide-FM gain | inside wide FM | `pga_wfm_db_x2` |
+
+  Entering wide FM applies the second, leaving restores the first, and the
+  knob writes whichever matches the mode you are in. Neither overwrites the
+  other. A `CONFIG.CSV` from an earlier release does not carry the new key:
+  wide FM then starts at the default 25 dB.
+
+- **Radio time no longer comes out on German time.** DCF77 and ALS162 do
+  **not** transmit UTC: they transmit German and French local time (CET in
+  winter, CEST in summer). The decoder stored the frame as received, so the
+  clock was set to Central European time whatever you did, and **the
+  timezone setting was never looked at**. It does not show in Spain, which
+  *is* CET; elsewhere the time ran ahead and changing the timezone did
+  nothing.
+
+  The same frame, 20:33 CEST, with the timezone set to each place:
+
+  | timezone | before | now |
+  |---|---|---|
+  | Spain/Germany (+120) | 20:33 | 20:33 |
+  | Dublin, summer (+60) | 20:33 | **19:33** |
+  | UTC (+0) | 20:33 | **18:33** |
+
+  The button that *measures* the timezone now works with these two stations
+  as well; before, only with MSF.
+
+- **French callsigns now show a country.** The table held a single prefix
+  for France, `F`, while every other large country carried its whole block.
+  In FT8 that left `TM8R` — and every French special-event callsign, which
+  are constant — with an empty country column. Added `HW`, `HX`, `HY`,
+  `TH`, `TM`, `TP`, `TQ` and `TV`.
+
+- **The FT8 map drags smoothly.** Dragging the map repainted the full
+  800×288 **on every touch sample**, and the touch is read twice per loop:
+  up to two full repaints per pass, of which only the last was ever seen.
+  The drag now accumulates and paints once per pass.
+
+---
+
+## V6.10 · 2026-10-28
+
+### Qué cambia
+
+- **FT8 mira ahora la banda entera: de 0 a 3.200 Hz, no hasta 1.600.** Hasta
+  esta versión el decodificador analizaba la mitad de lo que entra por el
+  audio, y lo de arriba no es que se decodificara peor: es que no se miraba.
+  Con veinticinco emisiones repartidas por la banda, el banco de pruebas que
+  compila el código de la radio leía trece; ahora lee veinte, y la última
+  que se lee pasa de 1.500 Hz a 3.000.
+
+  Esto es lo que había detrás de «oigo pitidos de FT8 y no sale nada»: si la
+  estación estaba por encima de 1.600 Hz de audio, no había nada que hacer
+  más que sintonizar alrededor.
+
+- **Sin perder sensibilidad.** Medido contra la versión anterior con las
+  mismas señales y las mismas semillas:
+
+  | | antes | ahora |
+  |---|---|---|
+  | última emisión que se lee | 1.500 Hz | **3.000 Hz** |
+  | de 25 repartidas por la banda | 13 | **20** |
+  | rejilla de medio bin | 8 8 8 5 0 7 8 8 | 8 8 8 5 0 7 8 8 |
+  | sensibilidad (−18 dB, 8 semillas) | 6 de 8 | 6 de 8 |
+  | relación S/R: error peor | 4,0 dB | **1,0 dB** |
+
+  La relación señal/ruido que sale en la lista es además más fiel que antes,
+  porque ya no se queda en el escalón más cercano: interpola dentro de él.
+
+- **Y sin pedirle más memoria a la radio.** La RAM libre pasa de 1.316 a
+  1.500 bytes y la flash libre de 1.720 a 4.632. Para que cupiera, el fax, el
+  SSTV y WSPR pasan a usar la misma memoria prestada que ya usaban FT8, HFDL,
+  AIS, ALE, DSC, HELL, IDENT, JTTY y STANAG: son modos que no pueden estar
+  encendidos a la vez, así que no tiene sentido que cada uno tenga su trozo
+  reservado todo el día.
+
+### What's new
+
+- **FT8 now looks at the whole band: 0 to 3,200 Hz, not just up to 1,600.**
+  Until this release the decoder analysed half of what comes in through the
+  audio, and everything above that was not decoded badly — it was not looked
+  at. With twenty-five signals spread across the band, the test bench that
+  compiles the radio's own code read thirteen; it now reads twenty, and the
+  highest one read goes from 1,500 Hz to 3,000.
+
+  This is what was behind "I can hear FT8 tones and nothing comes out": if the
+  station sat above 1,600 Hz of audio there was nothing to be done but tune
+  around it.
+
+- **With no loss of sensitivity.** Measured against the previous release with
+  the same signals and the same seeds:
+
+  | | before | now |
+  |---|---|---|
+  | highest signal read | 1,500 Hz | **3,000 Hz** |
+  | of 25 spread across the band | 13 | **20** |
+  | half-bin grid | 8 8 8 5 0 7 8 8 | 8 8 8 5 0 7 8 8 |
+  | sensitivity (−18 dB, 8 seeds) | 6 of 8 | 6 of 8 |
+  | SNR readout: worst error | 4.0 dB | **1.0 dB** |
+
+  The signal-to-noise figure shown in the list is also more faithful than
+  before, because it no longer settles for the nearest step: it interpolates
+  within it.
+
+- **And without asking the radio for more memory.** Free RAM goes from 1,316
+  to 1,500 bytes and free flash from 1,720 to 4,632. To make it fit, WEFAX,
+  SSTV and WSPR now use the same borrowed memory that FT8, HFDL, AIS, ALE,
+  DSC, HELL, IDENT, JTTY and STANAG already shared: these modes cannot be on
+  at the same time, so there is no point in each keeping its own slice
+  reserved all day.
+
+---
+
+## V6.09 · 2026-10-28
+
+### Qué cambia
+
+- **Los nombres de serie de los bancos ya salen en MEM.CSV.** Antes sólo se
+  escribía un renglón `nombre,` para los bancos a los que ya les habías
+  puesto uno, así que en un fichero recién hecho no salía ninguno y quien
+  lo abría no tenía forma de saber que eso se cambia ahí.
+
+  Ahora salen los cuatro siempre, con su renglón de ayuda encima:
+
+  ```
+  banco,memoria,hz,modo,paso_hz,fil_lo,fil_hi,cw
+  # Para ponerle nombre a un banco, quita la almohadilla y escribe el tuyo:
+  # nombre,1,HF
+  # nombre,2,Aviones
+  # nombre,3,Marina
+  # nombre,4,Repetidores
+  1,1,9690000,0,1000,100,4000,0
+  ```
+
+  **Comentados a propósito.** Los nombres de serie están traducidos
+  —«Aviones» / «Aircraft»—, así que escribirlos como renglones vivos los
+  congelaría en el idioma que hubiera puesto el día que se grabó el
+  fichero: cambiabas la radio a inglés y seguías viendo «Aviones». Con la
+  almohadilla se ven, se entiende que se tocan, y no cambian nada mientras
+  no se la quites. El que tú pongas se escribe vivo, sin almohadilla.
+
+### What's new
+
+- **The banks' default names now appear in MEM.CSV.** Until now a `nombre,`
+  row was only written for banks you had already renamed, so a freshly
+  written file had none at all and whoever opened it had no way of knowing
+  that is where you change them.
+
+  Now all four are always written, with a hint line above them:
+
+  ```
+  banco,memoria,hz,modo,paso_hz,fil_lo,fil_hi,cw
+  # To name a bank, remove the hash and write your own:
+  # nombre,1,HF
+  # nombre,2,Aircraft
+  # nombre,3,Marine
+  # nombre,4,Repeaters
+  1,1,9690000,0,1000,100,4000,0
+  ```
+
+  **Commented out on purpose.** The default names are translated —«Aviones»
+  / «Aircraft»— so writing them as live rows would freeze them in whatever
+  language was set the day the file was written: switch the radio to
+  English and you would still see «Aviones». Hashed out they are visible,
+  it is obvious they can be changed, and they change nothing until you
+  remove the hash. A name you set is written live, without the hash.
+
+---
+
+## V6.08 · 2026-10-28
+
+### Qué cambia
+
+- **FT8: arreglado que un parón del bucle principal tirara el ciclo
+  entero.** Era lo de "oigo los pitidos de la ranura y no sale nada".
+
+  La captura de una ranura son **93 bloques de 160 ms = 14,880 s** dentro
+  de una ranura de **15 s**: **120 ms de margen, menos de un bloque**. Y el
+  remuestreador tiene un colchón de 320 ms (dos buffers), así que cualquier
+  parón del bucle principal más largo que eso se come 160 ms de audio, la
+  ranura se queda en 92 bloques de 93 y **se tiraba entera**, en silencio.
+
+  Ahora, si la ranura que se acaba tiene bloques de sobra para que quepa un
+  mensaje, **se decodifica con los que tenga** en vez de tirarla. Ft8Lib ya
+  lo admite: pone a cero las verosimilitudes de los símbolos que falten y
+  el LDPC se los come como borrados. Una emisión ocupa 79 bloques de los
+  93. Medido en el banco nuevo: con un parón de 600 ms, antes salían **0
+  líneas** y ahora salen **3**.
+
+  Y la chapa lleva ahora la cuenta de las ranuras que se decodificaron
+  cortas, que antes no la decía nadie.
+
+### What's new
+
+- **FT8: fixed a main-loop stall throwing away the whole cycle.** This was
+  the "I hear the slot's tones and nothing comes out".
+
+  A slot's capture is **93 blocks of 160 ms = 14.880 s** inside a **15 s**
+  slot: **120 ms of margin, less than one block**. The resampler's cushion
+  is 320 ms (two buffers), so any main-loop stall longer than that eats
+  160 ms of audio, the slot ends at 92 blocks out of 93, and **it was
+  thrown away whole**, silently.
+
+  Now, if the slot that is ending has enough blocks for a message to fit,
+  **it is decoded with the blocks it has** instead of being discarded.
+  Ft8Lib already supports this: it zeroes the likelihoods of the missing
+  symbols and the LDPC treats them as erasures. A transmission occupies 79
+  of the 93 blocks. Measured in the new bench: with a 600 ms stall, before
+  it produced **0 lines** and now it produces **3**.
+
+  The badge now also counts the slots decoded short, which nothing used to
+  report.
+
+---
+
+## V6.07 · 2026-10-27
+
+### Qué cambia
+
+- **Arreglado: por debajo de 300 kHz la raya del dial iba hacia delante y
+  hacia atrás dando saltos** mientras subías de frecuencia, sin llegar a
+  ninguna parte. Visto en onda larga con paso de 1 kHz.
+
+  No era un fallo de dibujo. Ahí abajo el oscilador no lo hace el
+  sintetizador sino **un temporizador del micro**, que sólo puede dar
+  `99,84 MHz / (2·N)` con N entero y par: en onda larga su escalón son
+  **1.421 Hz** —3.668 pegado a los 300 kHz— mientras el dial va de 1.000
+  en 1.000. Pidiéndole «el dial menos 24 kHz» en cada clic, **no puede
+  obedecer**: redondea. El audio no se entera, porque el desplazamiento
+  digital se calcula contra el oscilador real y el dial sale exacto. La
+  pantalla sí: el panel se centra en el oscilador, así que el redondeo se
+  colaba en el panel y en la marca. Medido: avanzaba 3,9 píxeles,
+  retrocedía 1,7, retrocedía 1,8, avanzaba 3,9.
+
+  **Se arregla en la pantalla, no en el oscilador.** El panel pasa a
+  centrarse en lo que se *pidió* —que sigue al dial exactamente— y los
+  datos del espectro y la cascada se giran los pocos bins del redondeo
+  para que sigan cayendo en su frecuencia. Resultado: la raya se queda
+  **clavada**, que es lo correcto con el oscilador siguiendo al dial, y lo
+  que se desplaza es el espectro por debajo. En toda la banda, con paso de
+  1 kHz, de **119 retrocesos de 239 clics a cero**.
+
+  **La radio sintoniza exactamente igual que siempre** y el NCO sigue
+  siendo tuyo: no se toca ni el oscilador ni el ajuste.
+
+  Lo que queda sin corregir es el redondeo a bin entero: menos de medio
+  bin, **0,37 píxeles de los 756**. Sin el giro, la emisora se habría ido
+  hasta 2,9 píxeles de debajo de la raya, que es peor que el temblor.
+
+### What's new
+
+- **Fixed: below 300 kHz the dial marker lurched forwards and backwards**
+  as you tuned up, never getting anywhere. Seen on longwave with a 1 kHz
+  step.
+
+  It was not a drawing bug. Down there the oscillator is not made by the
+  synthesiser but by **a timer inside the micro**, which can only produce
+  `99.84 MHz / (2·N)` with N an even integer: on longwave its step is
+  **1,421 Hz** —3,668 right at 300 kHz— while the dial moves in steps of
+  1,000. Asked for "the dial minus 24 kHz" on every click, it **cannot
+  comply**: it rounds. The audio never notices, because the digital shift
+  is computed against the real oscillator and the dial comes out exact.
+  The screen did: the panel centres on the oscillator, so the rounding
+  leaked into both the panel and the marker. Measured: forward 3.9 pixels,
+  back 1.7, back 1.8, forward 3.9.
+
+  **The fix is in the screen, not in the oscillator.** The panel now
+  centres on what was *asked for* — which follows the dial exactly — and
+  the spectrum and waterfall data are rotated by the few bins of the
+  rounding so they keep landing on their real frequency. The result: the
+  marker sits **still**, which is what it should do with the oscillator
+  following the dial, and what moves is the spectrum underneath. Across
+  the whole band at a 1 kHz step, from **119 backward steps out of 239
+  clicks to none**.
+
+  **The radio tunes exactly as it always did** and the NCO is still yours:
+  neither the oscillator nor the setting is touched.
+
+  What is left uncorrected is the rounding to a whole bin: less than half
+  a bin, **0.37 pixels out of 756**. Without the rotation the station
+  would have drifted up to 2.9 pixels out from under the marker, which is
+  worse than the twitch.
+
+---
+
 ## V6.06 · 2026-10-27
 
 ### Qué cambia

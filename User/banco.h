@@ -103,6 +103,35 @@ void banco_nombre_pon(uint8_t b, const char *s);
  */
 void banco_pasos_pon(const uint32_t *hz, uint8_t n);
 
+/*
+ * LOS NOMBRES DE SERIE DE LOS BANCOS, PARA QUE SALGAN EN EL FICHERO.
+ * 28/10/2026, pedido por el usuario: *los nombres por defecto tienen que
+ * salir en el CSV, si no como va a saber el usuario que los tiene que
+ * cambiar ahi.*
+ *
+ * Y tenia razon: hasta hoy solo se escribia un renglon `nombre,` para los
+ * bancos a los que YA se les habia puesto uno, o sea que en un fichero
+ * recien hecho no salia ninguno. Quien lo abriera no tenia como saber que
+ * eso se toca ahi.
+ *
+ * AHORA SALEN LOS CUATRO SIEMPRE, y los que no ha tocado nadie salen
+ * COMENTADOS con una almohadilla y con el de serie escrito. Asi se ven,
+ * se entiende que se pueden cambiar, y no cambian nada mientras no se les
+ * quite la almohadilla.
+ *
+ * Y COMENTADOS, NO COMO RENGLONES DE VERDAD, por una razon concreta: los
+ * nombres de serie estan TRADUCIDOS -"Aviones" / "Aircraft"-. Escribirlos
+ * como renglones vivos los congelaria en el idioma que hubiera puesto el
+ * dia que se grabo el fichero, y quien cambiara la radio a ingles seguiria
+ * viendo "Aviones" sin entender por que.
+ *
+ * Los nombres los sabe main.c, que es quien tiene la tabla y el idioma, no
+ * este fichero. `pista` es el renglon de ayuda que va encima, tambien
+ * traducido. Los dos punteros tienen que vivir mientras viva el programa:
+ * aqui se guardan tal cual, no se copian.
+ */
+void banco_nombres_pon(const char *const *serie, uint8_t n, const char *pista);
+
 uint8_t banco_lee(uint8_t banco, uint8_t i, banco_mem_t *out);
 
 /* Guarda una memoria en su sitio. Devuelve 0 si el indice no vale. */

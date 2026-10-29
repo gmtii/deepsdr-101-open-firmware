@@ -36,7 +36,7 @@
  */
 #include "ft8_shared_ram.h"
 #include "ft8_waterfall_adapter.h"
-#include "ft8_fft1024.h"
+#include "ft8_fft.h"
 #include "waterfall.h"
 #include <stdio.h>
 #include <string.h>
@@ -88,7 +88,7 @@ int main(void)
            FT8_ADAPTER_TIME_OSR * FT8_ADAPTER_FREQ_OSR * FT8_ADAPTER_NUM_BINS);
 
     waterfall_presta(1U);
-    ft8_fft1024_init();
+    ft8_fft_init();
     ft8_waterfall_reset();
 
     /* --- normal: escribir mueve mag[] --------------------------------- */
@@ -120,10 +120,11 @@ int main(void)
     /* --- reintegrar: aparece al principio y en orden ------------------- */
     printf("\n  AL REINTEGRAR\n");
     {
-        static uint8_t esperado[FT8_ADAPTER_LADO_BLOQUES
-                                * FT8_ADAPTER_TIME_OSR * FT8_ADAPTER_FREQ_OSR
-                                * FT8_ADAPTER_NUM_BINS];
-        int paso = FT8_ADAPTER_TIME_OSR * FT8_ADAPTER_FREQ_OSR * FT8_ADAPTER_NUM_BINS;
+        /* EN BYTES, QUE NO ES LO MISMO QUE EN CELDAS: desde el
+         * 28/10/2026 cada celda ocupa medio byte (FT8_ADAPTER_MAG_BITS),
+         * asi que un bloque son block_stride/2 bytes. */
+        static uint8_t esperado[FT8_ADAPTER_LADO_BYTES];
+        int paso = (FT8_ADAPTER_CELDAS_BLOQUE * FT8_ADAPTER_MAG_BITS) / 8;
         int n = 5;
 
         for (i = 0; i < n; i++) { mete(20 + i); }

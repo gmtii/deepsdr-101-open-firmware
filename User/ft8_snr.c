@@ -15,26 +15,39 @@ static float lineal(float db)
 }
 
 /*
- * get_cand_mag() de ft8_lib es static dentro de decode.c, asi que la cuenta
+ * get_cand_off() de ft8_lib es static dentro de decode.c, asi que la cuenta
  * se repite aqui. No es una copia por comodidad: es la MISMA aritmetica de
  * indices que usa el decodificador, y si algun dia cambia la estructura de
  * mag[] esto tiene que cambiar con ella. Por eso esta junta y nombrada.
+ *
+ * Y EL 28/10/2026 CAMBIO: mag[] guarda cuatro bits por celda, asi que esto
+ * devuelve un INDICE DE CELDA y no un puntero. Sumarle un numero de celdas
+ * sigue valiendo; desreferenciarlo, no. De ahi que todas las lecturas pasen
+ * por WF_MAG_INT_AT(wf, indice), que es quien sabe de que mitad del byte
+ * sacar el valor.
+ *
+ * LO QUE CUESTA AQUI: la mediana del ruido sale de un histograma que antes
+ * tenia escalones de 0,5 dB y ahora los tiene de 4. La relacion S/R que se
+ * enseña en la lista queda redondeada a ese paso. Es una chapa informativa
+ * -no decide nada-, y lo que se compra con ello es la banda entera.
  */
-static const WF_ELEM_T *base_del_candidato(const ftx_waterfall_t *wf,
-                                           const ftx_candidate_t *cand)
+static int base_del_candidato(const ftx_waterfall_t *wf,
+                              const ftx_candidate_t *cand)
 {
     int off = cand->time_offset;
 
     off = (off * wf->time_osr) + (int)cand->time_sub;
     off = (off * wf->freq_osr) + (int)cand->freq_sub;
     off = (off * wf->num_bins) + cand->freq_offset;
-    return wf->mag + off;
+    return off;
 }
 
 float ft8_snr_db(const ftx_waterfall_t *wf, const ftx_candidate_t *cand)
 {
-    const WF_ELEM_T *base;
-    uint16_t histo[256];
+    int base;
+    /* Por ESCALON crudo, no por dB: ver WF_MAG_NIVELES en decode.h, y el
+     * desbordamiento que eso evita. */
+    uint16_t histo[WF_MAG_NIVELES];
     uint32_t n_ruido = 0UL;
     uint32_t simbolos = 0UL;
     double suma_sn = 0.0;          /* potencias lineales: se acumulan en doble */
@@ -50,11 +63,11 @@ float ft8_snr_db(const ftx_waterfall_t *wf, const ftx_candidate_t *cand)
         return FT8_SNR_SUELO_DB;
     }
 
-    for (i = 0; i < 256; i++) { histo[i] = 0U; }
+    for (i = 0; i < WF_MAG_NIVELES; i++) { histo[i] = 0U; }
     base = base_del_candidato(wf, cand);
 
     for (sym = 0; sym < 79; sym++) {
-        const WF_ELEM_T *fila;
+        int fila;
         int bloque = cand->time_offset + sym;
         int mayor;
 
@@ -64,12 +77,12 @@ float ft8_snr_db(const ftx_waterfall_t *wf, const ftx_candidate_t *cand)
         /* SEÑAL+RUIDO: el maximo de los ocho tonos. El maximo conmuta con el
          * logaritmo, asi que se busca sobre el byte crudo y se convierte una
          * sola vez. */
-        mayor = (int)WF_ELEM_MAG_INT(fila[0]);
+        mayor = WF_MAG_NIVEL(wf, fila + 0);
         for (k = 1; k < 8; k++) {
-            int v = (int)WF_ELEM_MAG_INT(fila[k]);
+            int v = WF_MAG_NIVEL(wf, fila + k);
             if (v > mayor) { mayor = v; }
         }
-        suma_sn += (double)lineal((float)mayor * 0.5f - 120.0f);
+        suma_sn += (double)lineal(WF_MAG_NIVEL_DB(mayor));
         simbolos++;
 
         /*
@@ -84,25 +97,61 @@ float ft8_snr_db(const ftx_waterfall_t *wf, const ftx_candidate_t *cand)
             if (k >= -FT8_SNR_GUARDA && k <= (7 + FT8_SNR_GUARDA)) { continue; }
             bin = cand->freq_offset + k;
             if (bin < 0 || bin >= wf->num_bins) { continue; }
-            histo[(int)WF_ELEM_MAG_INT(fila[k])]++;
+            histo[WF_MAG_NIVEL(wf, fila + k)]++;
             n_ruido++;
         }
     }
 
     if (simbolos == 0UL || n_ruido == 0UL) { return FT8_SNR_SUELO_DB; }
 
-    /* La mediana del histograma. */
+    /*
+     * LA MEDIANA DEL HISTOGRAMA, INTERPOLADA DENTRO DEL ESCALON.
+     *
+     * Por que no basta con el escalon: con cuatro bits por celda los
+     * escalones son de 4 dB, y quedarse en el centro del que contiene la
+     * mediana mete hasta 2 dB de error en el ruido - que es el
+     * denominador, asi que sale entero en la S/R. Medido con sim/ft8_snr.c
+     * antes de interpolar: pendiente 1,15 y hasta 4,4 dB de error con las
+     * señales debiles.
+     *
+     * La cuenta es la de toda la vida para una mediana agrupada: dentro
+     * del escalon que la contiene se reparte proporcionalmente segun
+     * cuantas muestras quedaban por llegar y cuantas hay en el. Con
+     * cientos de muestras de ruido -79 simbolos por sus vecinos- esa
+     * proporcion devuelve buena parte de la resolucion que el escalon
+     * tiro, SIN guardar un bit mas en mag[].
+     *
+     * Con ocho bits WF_MAG_INT_PASO vale 1 y esto se queda en la mediana
+     * de siempre, que es lo que tiene que pasar.
+     */
     {
         uint32_t mitad = n_ruido / 2UL;
-        uint32_t acum = 0UL;
+        uint32_t acum = 0UL, antes_de = 0UL;
         int med = 0;
+        float medf;
 
-        for (i = 0; i < 256; i++) {
+        for (i = 0; i < WF_MAG_NIVELES; i++) {
+            if (histo[i] == 0U) { continue; }
+            antes_de = acum;
             acum += (uint32_t)histo[i];
             if (acum > mitad) { med = i; break; }
         }
+
+        /* El escalon, mas donde cae la mediana DENTRO de el: del borde de
+         * abajo hacia arriba, en proporcion a cuantas muestras quedaban. */
+        medf = (float)med - 0.5f;
+        if (histo[med] > 0U) {
+            float dentro = ((float)mitad - (float)antes_de) / (float)histo[med];
+
+            if (dentro < 0.0f) { dentro = 0.0f; }
+            if (dentro > 1.0f) { dentro = 1.0f; }
+            medf += dentro;
+        } else {
+            medf = (float)med;
+        }
+
         /* mediana -> media, para ruido exponencial. Ver la cabecera. */
-        p_ruido = lineal((float)med * 0.5f - 120.0f) * FT8_SNR_MEDIANA_A_MEDIA;
+        p_ruido = lineal(WF_MAG_NIVEL_DB(medf)) * FT8_SNR_MEDIANA_A_MEDIA;
     }
 
     if (!(p_ruido > 0.0f)) { return FT8_SNR_SUELO_DB; }

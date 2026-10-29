@@ -1,13 +1,13 @@
 #include "ft8_waterfall_adapter.h"
-#include "ft8_fft1024.h"
+#include "ft8_fft.h"
 #include "ft8_shared_ram.h"
 
 #if FT8_ADAPTER_NFFT != FT8_FFT_SIZE
-#error "FT8_ADAPTER_NFFT must equal ft8_fft1024.h's FT8_FFT_SIZE - see ft8_waterfall_adapter.h's derivation comment"
+#error "FT8_ADAPTER_NFFT must equal ft8_fft.h's FT8_FFT_SIZE - see ft8_waterfall_adapter.h's derivation comment"
 #endif
 
 #if (FT8_ADAPTER_MIN_RAW_BIN + (FT8_ADAPTER_NUM_BINS * FT8_ADAPTER_RAW_BIN_STEP)) > FT8_FFT_BINS_USEFUL
-#error "FT8_ADAPTER_NUM_BINS/MIN_RAW_BIN window exceeds ft8_fft1024_compute_db()'s available output bins"
+#error "FT8_ADAPTER_NUM_BINS/MIN_RAW_BIN window exceeds ft8_fft_compute_db()'s available output bins"
 #endif
 
 /* Real memory union with the main waterfall's own pixel buffer - see
@@ -18,9 +18,23 @@
 #define s_window    (g_ft8_shared_ram.ft8.window)    /* sliding analysis window, oldest sample first - see ft8_waterfall_feed_subblock() */
 #define s_dbout     (g_ft8_shared_ram.ft8.dbout)
 #define s_lado      (g_ft8_shared_ram.ft8.lado)      /* ver su comentario en ft8_shared_ram.h */     /* scratch, reused every subblock */
-#define s_mag       (g_ft8_shared_ram.ft8.mag)       /* 23.808 bytes con 256 bins y FREQ_OSR=1 - ver la cabecera */
+#define s_mag       (g_ft8_shared_ram.ft8.mag)       /* 23.808 bytes con 512 bins, FREQ_OSR=1 y 4 bits por celda - ver la cabecera */
 
-#define FT8_ADAPTER_MAG_SIZE (FT8_ADAPTER_MAX_BLOCKS * FT8_ADAPTER_TIME_OSR * FT8_ADAPTER_FREQ_OSR * FT8_ADAPTER_NUM_BINS)
+/*
+ * LOS CUATRO BITS DE mag[] SE DECIDEN EN DOS SITIOS, Y TIENEN QUE DECIR LO
+ * MISMO: aqui se ESCRIBE (WF_MAG_PON) y en Ft8Lib/ft8/decode.h se LEE
+ * (WF_MAG_AT). Si uno empaqueta y el otro no, no hay error de compilacion
+ * ni fallo visible: simplemente no se decodifica nada, que es el peor fallo
+ * posible porque se parece a una banda vacia. Este aserto lo convierte en
+ * un error de compilacion.
+ */
+#if FT8_ADAPTER_MAG_BITS == 4
+_Static_assert(FTX_MAG_4BITS == 1,
+               "FT8_ADAPTER_MAG_BITS vale 4 pero decode.h no empaqueta");
+#else
+_Static_assert(FTX_MAG_4BITS == 0,
+               "FT8_ADAPTER_MAG_BITS vale 8 pero decode.h empaqueta");
+#endif
 
 static ftx_waterfall_t s_wf;
 static int s_time_sub; /* 0..FT8_ADAPTER_TIME_OSR-1: which subblock within the CURRENT symbol block this feed will land in */
@@ -152,7 +166,10 @@ void ft8_waterfall_reintegra(void)
 
     if (!s_desviada) { return; }
 
-    n = s_lado_n * s_wf.block_stride;
+    /* En BYTES: con cuatro bits por celda, block_stride cuenta celdas y
+     * cada dos caben en un byte. Los bloques empiezan siempre en byte
+     * entero porque block_stride es par (NUM_BINS lo es). */
+    n = (s_lado_n * s_wf.block_stride * FT8_ADAPTER_MAG_BITS) / 8;
     for (i = 0; i < n; i++) { s_mag[i] = s_lado[i]; }
 
     s_wf.num_blocks = s_lado_n;
@@ -161,6 +178,11 @@ void ft8_waterfall_reintegra(void)
 }
 
 uint8_t  ft8_waterfall_desviada(void)  { return s_desviada; }
+
+uint16_t ft8_waterfall_bloques(void)
+{
+    return (uint16_t)(s_desviada ? s_lado_n : s_wf.num_blocks);
+}
 uint16_t ft8_waterfall_desbordes(void) { return s_desbordes; }
 
 /*
@@ -246,7 +268,10 @@ void ft8_waterfall_feed_subblock(const int16_t *audio_samples)
         s_window[FT8_ADAPTER_NFFT - FT8_ADAPTER_SUBBLOCK_SIZE + i] = audio_samples[i];
     }
 
-    ft8_fft1024_compute_db(s_window, s_dbout);
+    ft8_fft_compute_db_rango(s_window, s_dbout,
+                             (uint32_t)FT8_ADAPTER_MIN_RAW_BIN,
+                             (uint32_t)FT8_ADAPTER_DB_PASO,
+                             (uint32_t)FT8_ADAPTER_DB_BINS);
 
     if (escribe)
     {
@@ -270,19 +295,35 @@ void ft8_waterfall_feed_subblock(const int16_t *audio_samples)
     {
         for (bin = 0; bin < FT8_ADAPTER_NUM_BINS; bin++)
         {
-            int src_bin = FT8_ADAPTER_MIN_RAW_BIN + (bin * FT8_ADAPTER_RAW_BIN_STEP) + (freq_sub * (FT8_ADAPTER_RAW_BIN_STEP / FT8_ADAPTER_FREQ_OSR));
+            /* El mismo src_bin de siempre, dividido por el paso: dbout
+             * ya no guarda los bins que no se leen. Ver
+             * FT8_ADAPTER_DB_BINS. */
+            int src_bin = (bin * FT8_ADAPTER_FREQ_OSR) + freq_sub;
             float db = s_dbout[src_bin] + FT8_ADAPTER_DB_OFFSET;
-            int scaled = (int)(2.0f * db + 240.0f);
+#if FT8_ADAPTER_MAG_BITS == 4
+            /* La inversa exacta de WF_MAG_AT (decode.h), que es quien
+             * define la escalera: q = (dB - base) / paso. El +0,5 redondea
+             * al escalon mas cercano en vez de truncar hacia abajo. */
+            int q = (int)((db - FTX_MAG4_BASE_DB) / FTX_MAG4_PASO_DB + 0.5f);
+            const int q_tope = 15;
+#else
+            /* Lo de siempre: medio dB por escalon en un byte entero. Esta
+             * rama se conserva PARA PODER MEDIR, que es como se decidio
+             * pasar a cuatro bits: se compila el banco con las dos y se
+             * comparan los numeros. */
+            int q = (int)(2.0f * db + 240.0f);
+            const int q_tope = 255;
+#endif
 
             if (db < s_db_min) { s_db_min = db; }
             if (db > s_db_max) { s_db_max = db; }
 
-            if (scaled < 0) { scaled = 0; }
-            if (scaled > 255) { scaled = 255; }
+            if (q < 0)      { q = 0; }
+            if (q > q_tope) { q = q_tope; }
 
             if (escribe)
             {
-                destino[offset] = (WF_ELEM_T)scaled;
+                WF_MAG_PON(destino, offset, (uint8_t)q);
                 offset++;
             }
         }

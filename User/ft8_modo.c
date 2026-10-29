@@ -3,7 +3,7 @@
 #include "idioma.h"
 #include "ft8_decimator.h"
 #include "ft8_waterfall_adapter.h"
-#include "ft8_fft1024.h"
+#include "ft8_fft.h"
 #include "ft8_decoder.h"
 #include "rtc_hw.h"
 #include "waterfall.h"
@@ -19,6 +19,20 @@ extern volatile uint32_t g_msticks;
  */
 
 #define FT8_RANURA_S   15U    /* una ranura de FT8 dura 15 segundos exactos */
+
+/*
+ * LOS BLOQUES MINIMOS PARA QUE VALGA LA PENA DECODIFICAR UNA RANURA.
+ *
+ * Una emision de FT8 son 79 simbolos, o sea 79 bloques de los 93 que cabe
+ * capturar. Por debajo de eso faltarian simbolos del MENSAJE y no solo de
+ * los margenes, asi que no hay nada que intentar.
+ *
+ * 85 y no 79: deja seis bloques de holgura para que la emision pueda no
+ * empezar pegada al borde -el DT de la gente se reparte facil un segundo-
+ * y los que falten entren como borrados por el final y no por el medio.
+ * Con 85 bloques se cubre una emision que arranque hasta 0,96 s tarde.
+ */
+#define FT8_MIN_BLOQUES  85U
 
 static uint8_t  s_on;
 static uint8_t  s_seg_ant;
@@ -43,6 +57,9 @@ static uint8_t  s_hay_hora;
  * radio y este cristal, no para esta sesion de escucha.
  */
 static uint8_t  s_desfase;   /* 0..FT8_RANURA_S-1, segundos enteros */
+/* Ranuras decodificadas SIN llegar a los 93 bloques. Es el contador que
+ * faltaba: antes esas ranuras se tiraban y no lo decia nada. */
+static uint16_t s_cortas;
 
 /*
  * Y LA PARTE DE DEBAJO DEL SEGUNDO - 25/09/2026.
@@ -148,6 +165,7 @@ void ft8_modo_start(float fs_hz)
      * milisegundos de la ultima ranura de la sesion anterior, y ese numero
      * se mira para decidir si el reloj esta torcido AHORA. */
     s_dt_visto = 0;
+    s_cortas = 0U;
 
     /*
      * LO PRIMERO, ANTES DE ESCRIBIR UN SOLO BYTE: pedir el buffer.
@@ -174,7 +192,7 @@ void ft8_modo_start(float fs_hz)
      * la tabla de bits invertidos se usa como indice, sin construir contiene
      * pixeles de cascada, y leer con ese indice se sale de la SRAM.
      */
-    ft8_fft1024_init();
+    ft8_fft_init();
 
     ft8_decimator_reset();
     /*
@@ -292,6 +310,9 @@ void ft8_modo_cuadra(void)
     s_seg_ant = s_seg;
 }
 
+uint16_t ft8_modo_cortas(void)  { return s_cortas; }
+uint16_t ft8_modo_ajuste_ms(void) { return s_ajuste_ms; }
+uint16_t ft8_modo_ms_dec(void)   { return s_ms_dec; }
 uint8_t ft8_modo_desfase(void)  { return s_desfase; }
 int16_t ft8_modo_dt_ms(void)    { return s_dt_visto; }
 uint8_t ft8_modo_activo(void)   { return s_on; }
@@ -476,8 +497,74 @@ void ft8_modo_tick(void)
 
     if (s_pendiente && ((int32_t)(g_msticks - s_arranca_ms) >= 0)) {
         s_pendiente = 0U;
-        ft8_decimator_reset();
-        ft8_waterfall_reset();
+        /*
+         * ==============================================================
+         * *** Y ANTES DE BORRARLA, SE DECODIFICA LO QUE HAYA ***
+         * 28/10/2026. El usuario: oia la ranura entera de pitidos y no
+         * salia nada, y "eso podria pasar una vez pero no tan a menudo".
+         * ==============================================================
+         *
+         * AQUI SE TIRABA LA RANURA ENTERA, EN SILENCIO. La captura solo
+         * se decodificaba si llegaba a los 93 bloques exactos, y este
+         * borde la ponia a cero pasara lo que pasara. Las cuentas dicen
+         * lo apretado que era eso:
+         *
+         *     bloque .............. 512 muestras a 3.200 Hz = 160 ms
+         *     ranura llena ........ 93 bloques  = 14,880 s
+         *     ranura de FT8 ....... 15,000 s
+         *     margen .............. 120 ms, o sea MENOS DE UN BLOQUE
+         *
+         * Con ese margen bastaba cualquiera de estas dos para perder el
+         * ciclo entero:
+         *
+         *   - UN SOLO SUBBLOQUE PERDIDO. El remuestreador tiene dos
+         *     buffers, 320 ms de colchon: un paron del bucle principal
+         *     mas largo que eso se come 160 ms de audio y la ranura ya
+         *     no llega. Lo cuenta ft8_decimator_perdidos().
+         *
+         *   - Y LA RANURA EN LA QUE EL AUTOAJUSTE CAMBIA. cuadra_sola()
+         *     corre al final de cada tanda y mueve el arranque de la
+         *     captura; la ranura que esta en vuelo cuando eso pasa se
+         *     queda corta por el rato que se haya movido.
+         *
+         *     (Aqui llegue a escribir que un ajuste de N ms dejaba la
+         *     ventana en 15.000-N y que por encima de 120 ms la ranura no
+         *     llegaba NUNCA a 93 bloques, o sea que el autoajuste mataba
+         *     FT8 para siempre. Es FALSO, y lo enseño sim/ft8_ranuras.c
+         *     al correrlo: el arranque se difiere los mismos N ms en CADA
+         *     borde, asi que la ventana sigue midiendo 15 s enteros, solo
+         *     que corrida. Se queda escrito para no volver a razonarlo
+         *     mal.)
+         *
+         * LO QUE SE HACE: si la ranura que se acaba tiene bloques de
+         * sobra para que quepa un mensaje, se decodifica CON LOS QUE
+         * TENGA en vez de tirarla. Ft8Lib ya lo admite: decode.c mira
+         * `block >= wf->num_blocks` y pone a cero las verosimilitudes de
+         * los simbolos que falten, que para el LDPC son borrados y se
+         * los come. Una emision ocupa 79 bloques de los 93.
+         *
+         * Asi el ajuste deja de ser mortal -mueve la ventana, no la
+         * mata- y un subbloque perdido cuesta un simbolo borrado en vez
+         * de un ciclo entero.
+         */
+        if (!s_decodificando
+            && ft8_waterfall_bloques() >= (uint16_t)FT8_MIN_BLOQUES
+            && !ft8_waterfall_is_full()) {
+            s_cortas++;
+            ft8_waterfall_cierra_ranura();
+            s_decodificando = 1U;
+            s_ms_ini = g_msticks;
+            ft8_decoder_slot_empieza();
+            /* Y NO se llama a ft8_waterfall_reset() detras: cerrar la
+             * ranura ya ha desviado la captura y puesto el desvio a cero,
+             * que es exactamente el arranque de la ranura nueva. Llamarlo
+             * seria volver a ponerlo a cero, que no hace daño, pero el
+             * decimador si hay que reiniciarlo igual. */
+            ft8_decimator_reset();
+        } else {
+            ft8_decimator_reset();
+            ft8_waterfall_reset();
+        }
     }
 
     /* Mientras se decodifica NO se arma nada nuevo: la captura ya se rearmo
@@ -538,7 +625,8 @@ void ft8_modo_tick(void)
          * trabajo por candidato es pequeno, pero el bucle principal no va
          * suelto: lo marca el repintado del espectro, unos 69 ms por
          * vuelta. Asi que la decodificacion avanzaba a 14 candidatos por
-         * segundo pasara lo que pasara, y con la ventana de 1.600 Hz salen
+         * segundo pasara lo que pasara, y con la ventana de entonces -1.600
+         * Hz; desde el 28/10/2026 son 3.200- salen
          * del orden de cien o mas. Cien candidatos a 69 ms son SIETE
          * SEGUNDOS; doscientos, catorce.
          *

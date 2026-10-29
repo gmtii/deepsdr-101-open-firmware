@@ -19,7 +19,7 @@ principal puede colarse a pintar sobre datos que ya son de FT8.
 SEGUNDA PARTE, anadida el mismo dia despues de que la radio se colgara:
 que ft8_modo_start() llame a TODOS los arranques de FT8.
 
-Faltaba ft8_fft1024_init(). Sus cuatro tablas viven dentro de la memoria
+Faltaba ft8_fft_init(). Sus cuatro tablas viven dentro de la memoria
 prestada, o sea que se borran cada vez que se sale de FT8 y hay que
 rehacerlas en cada arranque. Sin rehacer, la tabla de bits invertidos -que se
 usa como INDICE- contiene pixeles de cascada, y leer con un indice de hasta
@@ -94,9 +94,58 @@ def main(ruta):
         print('    %-16s lo borra al devolverlo' % 'ft8_modo_stop()')
 
     fallos += arranques(src, os.path.dirname(ruta))
+    fallos += prestatarios(os.path.dirname(ruta))
 
     print('  TODO CORRECTO' if not fallos else '  %d FALLOS' % fallos)
     return 1 if fallos else 0
+
+
+# Los OTROS modos que viven en la misma memoria. Cada uno con el par de
+# funciones por donde entra y sale del modo.
+#
+# POR QUE ESTA LISTA EXISTE: el cerrojo lo echa quien entra y lo quita quien
+# sale, y eso no lo puede comprobar el compilador. Un modo que coge la
+# memoria y no la suelta deja la cascada apagada para siempre; uno que la
+# suelta sin cogerla pinta sobre los pixeles del siguiente. Los dos fallos
+# son de los que se ven una semana despues y en otro modo.
+#
+# El 28/10/2026 entraron el fax y -ya estaban- el SSTV, HELL, DSC y WSPR,
+# al ensanchar FT8 a la banda entera y tener que devolver SRAM.
+PRESTATARIOS = [
+    ('wefax.c', 'wefax_start', 'wefax_stop'),
+    ('sstv.c',  'sstv_start',  'sstv_stop'),
+    ('hell.c',  'hell_start',  'hell_stop'),
+    ('wspr_modo.c', 'wspr_modo_start', 'wspr_modo_stop'),
+]
+
+
+def prestatarios(dircab):
+    """Que cada prestatario coja la memoria al entrar y la suelte al salir."""
+    fallos = 0
+
+    for fichero, arranca, para in PRESTATARIOS:
+        ruta = os.path.join(dircab, fichero)
+        if not os.path.exists(ruta):
+            print('  FALLA: no esta %s, que esta en la lista de '
+                  'prestatarios' % fichero)
+            fallos += 1
+            continue
+        txt = open(ruta, encoding='utf-8').read()
+        for fn, llamada, verbo in ((arranca, 'hfdl_ram_coge', 'coge'),
+                                   (para, 'hfdl_ram_suelta', 'suelta')):
+            c = cuerpo(txt, fn)
+            if c is None:
+                print('  FALLA: no se encuentra %s() en %s' % (fn, fichero))
+                fallos += 1
+                continue
+            if not re.search(re.escape(llamada) + r'\s*\(', c):
+                print('  FALLA: %s() no %s la memoria prestada '
+                      '(falta %s())' % (fn, verbo, llamada))
+                fallos += 1
+            else:
+                print('    %-18s %s la memoria' % (fn + '()', verbo))
+
+    return fallos
 
 
 def arranques(src, dircab):

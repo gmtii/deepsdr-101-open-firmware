@@ -122,7 +122,9 @@ MUTANTES = [
 ]
 
 BANCOS = ('wefaxtest.c', 'wefaxfuzz.c')
-OTROS  = ('disc_fm.c', 'nco.c', 'nco_tabla.c')
+# hfdl_ram.c desde el 28/10/2026: el anillo del fax vive en la memoria
+# prestada de la cascada (ver s_linea en User/wefax.c).
+OTROS  = ('disc_fm.c', 'nco.c', 'nco_tabla.c', 'hfdl_ram.c')
 
 # --- el segundo frente: el giro del fichero ---
 MUTANTES_REC = [
@@ -175,9 +177,11 @@ def compila_y_corre(wefax, banco, tmp):
              '-I' + os.path.join(RAIZ, 'User'),
              '-I' + os.path.join(UI, 'hostinc'),
              '-I' + os.path.join(UI, 'sim'),
+             '-I' + os.path.join(RAIZ, 'Ft8Lib'),
              '-o', exe, os.path.join(UI, 'sim', banco), wefax]
     orden += [os.path.join(RAIZ, 'User', x) for x in OTROS]
-    orden += ['-lm']
+    orden += [os.path.join(UI, 'sim', 'waterfall_prestamo.c'),
+              os.path.join(UI, 'gfx2', 'idioma.c'), '-lm']
     if subprocess.call(orden, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL) != 0:
         return None                      # no compila: cuenta como cazado

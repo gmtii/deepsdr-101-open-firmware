@@ -28,7 +28,9 @@ static int fallos;
 /* Reparto de trabajo entre la interrupcion y el bucle. Ver la
  * comprobacion del final. */
 double g_t_mete, g_t_pasos;
-static uint8_t g_ram[WSPR_RX_RAM];
+/* El estado del receptor tambien sale de aqui desde el 28/10/2026: ver
+ * wspr_rx_ram_necesaria(). Se pide de mas y punto, que esto es un banco. */
+static uint8_t g_ram[WSPR_RX_RAM + 4096U];
 
 static void exige(int cond, const char *que)
 {

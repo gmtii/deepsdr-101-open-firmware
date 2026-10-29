@@ -791,6 +791,37 @@ static const dxcc_t k_dxcc[] __attribute__((section(".rodata.k_dxcc"))) = {
     { "2U",   PAIS_20 },
     { "2W",   PAIS_21 },
     { "IH9",  PAIS_152 },
+
+    /* ------------------------------------------------------------------
+     * ANADIDOS EL 28/10/2026: FRANCIA SE HABIA QUEDADO CON UN SOLO PREFIJO
+     *
+     * *** Avisado por el usuario: en FT8 salio "CQ TM8R IN88" y la columna
+     * de pais aparecia vacia. ***
+     *
+     * Y es el MISMO fallo del 25/09 de aqui arriba -"la primera version
+     * ponia UN prefijo por pais cuando casi todos tienen un BLOQUE
+     * entero"- en el unico pais grande al que no se le completo el bloque
+     * aquel dia. Francia se quedo con "F" y nada mas, mientras a Espana se
+     * le pusieron AM/AN/AO, al Reino Unido GB y a Portugal CQ/CR/CS.
+     *
+     * TM es justo el que mas se ve: es el de los indicativos especiales
+     * franceses, y en FT8 salen constantemente.
+     *
+     * LOS QUE NO ESTAN, Y A PROPOSITO: TO, TW y TX tambien son de Francia
+     * pero se usan para los territorios de ULTRAMAR, que son entidades
+     * DXCC distintas -Guadalupe, Reunion, Nueva Caledonia...- y cual sea
+     * depende del sufijo, no del prefijo. Ponerlas aqui como "Francia"
+     * seria cambiar una celda vacia por una celda equivocada, que es peor:
+     * la vacia se ve, la equivocada no.
+     * ------------------------------------------------------------------ */
+    { "HW",   PAIS_14 },
+    { "HX",   PAIS_14 },
+    { "HY",   PAIS_14 },
+    { "TH",   PAIS_14 },
+    { "TM",   PAIS_14 },
+    { "TP",   PAIS_14 },
+    { "TQ",   PAIS_14 },
+    { "TV",   PAIS_14 },
 };
 
 #define DXCC_N ((unsigned)(sizeof k_dxcc / sizeof k_dxcc[0]))

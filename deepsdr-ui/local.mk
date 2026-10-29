@@ -316,7 +316,7 @@ BASURA_FW  := ecualiz cw rtty rtty_auto rtty_scope fft navtex dsc psk31 ais_rx a
               hfdl_iq_mixer hfdl_matched_filter hfdl_payload_decode hfdl_pdu \
               hfdl_preamble_seq hfdl_preamble_sync hfdl_rational_resampler \
               hfdl_soft_demod hfdl_symsync icao24_db \
-              ft8_modo ft8_decoder ft8_snr ft8_decimator ft8_fft1024 ft8_tablas \
+              ft8_modo ft8_decoder ft8_snr ft8_decimator ft8_fft ft8_tablas \
               ft8_waterfall_adapter
 BASURA_FT8 := $(FIRMWARE)/Ft8Lib/ft8/decode.c $(FIRMWARE)/Ft8Lib/ft8/ldpc.c \
               $(FIRMWARE)/Ft8Lib/ft8/crc.c $(FIRMWARE)/Ft8Lib/ft8/message.c \
@@ -1287,9 +1287,9 @@ comprueba: navtex
 
 # WEFAX. Compila User/wefax.c del firmware; deja las imagenes en out/*.pgm
 # para poder MIRARLAS, que en un decodificador de imagen es media medida.
-out/wefaxtest: sim/wefaxtest.c $(FIRMWARE)/User/wefax.c $(FIRMWARE)/User/disc_fm.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c
+out/wefaxtest: sim/wefaxtest.c $(FIRMWARE)/User/wefax.c $(FIRMWARE)/User/disc_fm.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c $(FIRMWARE)/User/hfdl_ram.c sim/waterfall_prestamo.c
 	@mkdir -p out
-	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ sim/wefaxtest.c $(FIRMWARE)/User/wefax.c $(FIRMWARE)/User/disc_fm.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c $(LDLIBS)
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -I$(FIRMWARE)/Ft8Lib -o $@ sim/wefaxtest.c $(FIRMWARE)/User/wefax.c $(FIRMWARE)/User/disc_fm.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c $(FIRMWARE)/User/hfdl_ram.c sim/waterfall_prestamo.c $(LDLIBS)
 
 wefax: out/wefaxtest ; ./out/wefaxtest
 
@@ -1895,6 +1895,14 @@ ifneq ($(wildcard vendor/gfx.c),)
 comprueba: cascadaprestada
 endif
 
+# Que el corrector de imagen de banda ancha no se quede aplicandose en los
+# modos donde su estimador no corre. Ver tools/espejo_check.py y el
+# apartado 9 de sim/hfdl_extremo.c, que es donde se midio lo que cuesta.
+.PHONY: espejochk
+espejochk: ; python3 tools/espejo_check.py $(FIRMWARE)/User/main.c
+
+comprueba: espejochk
+
 .PHONY: prestamochk
 prestamochk:
 	python3 tools/prestamo_check.py $(FIRMWARE)/User/ft8_modo.c
@@ -1904,9 +1912,9 @@ comprueba: prestamochk
 # ---------------------------------------------------------------------
 # LAS TABLAS DE LA FFT DE FT8 (25/09/2026). Ver la cabecera de
 # sim/ft8_tablas.c: la radio se colgaba con un pitido continuo porque
-# ft8_fft1024_init() no la llamaba nadie y una tabla de INDICES contenia
+# ft8_fft_init() no la llamaba nadie y una tabla de INDICES contenia
 # pixeles de cascada.
-out/ft8tablas: sim/ft8_tablas.c sim/ipa_sim.c sim/lcd_sim.c vendor/gfx.c gfx2/gfx2.c gfx2/fonts_data.c $(FIRMWARE)/User/ft8_fft1024.c $(FIRMWARE)/User/waterfall.c $(FIRMWARE)/User/ft8_tablas.c
+out/ft8tablas: sim/ft8_tablas.c sim/ipa_sim.c sim/lcd_sim.c vendor/gfx.c gfx2/gfx2.c gfx2/fonts_data.c $(FIRMWARE)/User/ft8_fft.c $(FIRMWARE)/User/waterfall.c $(FIRMWARE)/User/ft8_tablas.c
 	@mkdir -p out
 	$(CC) -O2 -Wall -I hostinc -I sim -I $(FIRMWARE)/User -I $(FIRMWARE)/Ft8Lib -o $@ $(FUENTES) $(LDLIBS)
 
@@ -1922,7 +1930,7 @@ endif
 # sim/ft8_desvio.c: sustituye a una copia entera de mag[] y mueve el sitio
 # donde escribe la captura segun un estado, que es justo lo que falla en
 # silencio si se cuela.
-out/ft8desvio: sim/ft8_desvio.c sim/ipa_sim.c sim/lcd_sim.c vendor/gfx.c gfx2/gfx2.c gfx2/fonts_data.c $(FIRMWARE)/User/ft8_waterfall_adapter.c $(FIRMWARE)/User/ft8_fft1024.c $(FIRMWARE)/User/ft8_tablas.c $(FIRMWARE)/User/waterfall.c
+out/ft8desvio: sim/ft8_desvio.c sim/ipa_sim.c sim/lcd_sim.c vendor/gfx.c gfx2/gfx2.c gfx2/fonts_data.c $(FIRMWARE)/User/ft8_waterfall_adapter.c $(FIRMWARE)/User/ft8_fft.c $(FIRMWARE)/User/ft8_tablas.c $(FIRMWARE)/User/waterfall.c
 	@mkdir -p out
 	$(CC) -O2 -Wall -I hostinc -I sim -I $(FIRMWARE)/User -I $(FIRMWARE)/Ft8Lib -o $@ $(FUENTES) $(LDLIBS)
 
@@ -2074,10 +2082,25 @@ comprueba: brillo
 # hfdlpruebas, que si lo usa para comparar dibujados. Este banco no pinta
 # nada: mide una cadena. Con vendor/gfx.c dentro, un repositorio clonado
 # -que no lo trae, porque no es nuestro- se paraba aqui.
-out/hfdlcrclinea: sim/hfdl_crc_linea.c sim/rtc_sim.c sim/ipa_sim.c sim/lcd_sim.c \
+# Y hfdl_modo.c ES una dependencia aunque NO se enlace - 28/10/2026.
+#
+# Este banco lo INCLUYE (#include "hfdl_modo.c"), que es lo que lo hace de
+# caja blanca, y por eso el $(filter-out ...) de abajo lo saca del enlazado:
+# si entrara dos veces, sus estaticos se duplicarian.
+#
+# Pero sacarlo del enlazado lo sacaba TAMBIEN de las dependencias, asi que
+# make no veia sus cambios y volvia a correr el binario viejo. Se descubrio
+# probando un canario -quitando a proposito el vaciado de la tabla- y el
+# banco siguiendo en verde con el ejecutable de antes. Un banco que no se
+# reconstruye cuando cambia lo que mide no mide nada.
+# Y para que siga SIN enlazarse, FUENTES se recorta solo para este
+# objetivo: la dependencia esta, el fichero no entra en la linea de enlace.
+out/hfdlcrclinea: FUENTES = $(filter-out $(FIRMWARE)/User/hfdl_modo.c,$(filter-out %.h,$^))
+out/hfdlcrclinea: sim/hfdl_crc_linea.c $(FIRMWARE)/User/hfdl_modo.c \
+                  sim/rtc_sim.c sim/ipa_sim.c sim/lcd_sim.c \
                   gfx2/gfx2.c gfx2/fonts_data.c \
                   $(FIRMWARE)/User/waterfall.c \
-                  $(filter-out $(FIRMWARE)/User/hfdl_modo.c,$(wildcard $(FIRMWARE)/User/hfdl_*.c)) \
+                  $(wildcard $(FIRMWARE)/User/hfdl_*.c) \
                   $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c \
                   $(FIRMWARE)/User/icao24_db.c $(FIRMWARE)/User/zona_alta.c \
                   sim/spi_flash_vacio.c
@@ -2659,6 +2682,22 @@ scannivel: out/scannivel ; ./out/scannivel
 comprueba: scannivel
 
 # ---------------------------------------------------------------------
+# LA RAYA DEL DIAL POR DEBAJO DE 300 kHz (27/10/2026)
+#
+# Visto en la radio: en onda larga la marca del punto de demodulacion iba
+# adelante y atras dando saltos mientras se subia de frecuencia. No era
+# dibujo: era el escalon del temporizador que hace el oscilador ahi abajo.
+# Corre las dos cuentas de verdad -lo_gen_gd32.h y nco.c-, sin copiarlas.
+out/loraya: sim/loraya.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I $(FIRMWARE)/User -o $@ $^ $(LDLIBS)
+
+.PHONY: loraya
+loraya: out/loraya ; ./out/loraya
+
+comprueba: loraya
+
+# ---------------------------------------------------------------------
 # LA MAQUINA DEL BARRIDO DE MEMORIAS (27/10/2026)
 #
 # scan_nivel mide LA LECTURA; esto corre LA MAQUINA. El barrido se ha
@@ -2977,7 +3016,7 @@ comprueba: qthcoord
 out/ft8banda: sim/ft8_banda.c \
               $(FIRMWARE)/User/ft8_decimator.c \
               $(FIRMWARE)/User/ft8_waterfall_adapter.c \
-              $(FIRMWARE)/User/ft8_fft1024.c \
+              $(FIRMWARE)/User/ft8_fft.c \
               $(FIRMWARE)/User/ft8_tablas.c \
               $(FIRMWARE)/User/ft8_decoder.c \
               $(FIRMWARE)/User/ft8_snr.c \
@@ -2993,6 +3032,112 @@ out/ft8banda: sim/ft8_banda.c \
 
 .PHONY: ft8banda
 ft8banda: out/ft8banda ; ./out/ft8banda
+
+# ---------------------------------------------------------------------
+# CON EL MODO APAGADO, NADIE ESCRIBE EN LA MEMORIA PRESTADA (28/10/2026)
+#
+# Ver la cabecera de sim/prestamo_apagado.c: al mudar los buffers del fax,
+# de WSPR y del SSTV a la union, sus punteros pasaron a ser nulos mientras
+# el modo no esta. Este banco llama a todas sus entradas publicas con el
+# modo parado y comprueba que no se mueve ni un byte de la union.
+# ---------------------------------------------------------------------
+out/prestamoapag: sim/prestamo_apagado.c \
+              $(FIRMWARE)/User/wefax.c \
+              $(FIRMWARE)/User/wspr_rx.c \
+              $(FIRMWARE)/User/wspr_msg.c \
+              $(FIRMWARE)/User/wspr_fano.c \
+              $(FIRMWARE)/User/sstv.c \
+              $(FIRMWARE)/User/disc_fm.c \
+              $(FIRMWARE)/User/nco.c \
+              $(FIRMWARE)/User/nco_tabla.c \
+              $(FIRMWARE)/User/hfdl_ram.c \
+              sim/waterfall_prestamo.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I $(FIRMWARE)/User -I $(FIRMWARE)/Ft8Lib -o $@ $^ $(LDLIBS)
+
+.PHONY: prestamoapag
+prestamoapag: out/prestamoapag ; ./out/prestamoapag
+
+comprueba: prestamoapag
+
+# ---------------------------------------------------------------------
+# LAS DOS TABLAS GENERADAS DE FT8, CONTRA SU GENERADOR (28/10/2026)
+#
+# Las tablas de la FFT y el filtro del remuestreador se escriben con un
+# guion; si alguien las toca a mano o cambia un parametro sin regenerar,
+# el arbol queda diciendo una cosa y haciendo otra. Esto lo caza.
+#
+# El filtro llevaba desde siempre una nota que decia "generated offline
+# (Python)" con el Python en ningun sitio. Ahora esta, y lo primero que
+# hace es demostrar que reproduce la tabla que habia.
+# ---------------------------------------------------------------------
+.PHONY: generados
+generados:
+	@echo ""
+	@echo "LAS TABLAS GENERADAS, CONTRA SU GENERADOR"
+	@echo ""
+	@echo "  el filtro del remuestreador (tools/gen_ft8_fir.py)"
+	@python3 tools/gen_ft8_fir.py --comprueba $(FIRMWARE)/User/ft8_decimator.c
+	@echo ""
+	@echo "  las tablas de la FFT (tools/gen_ft8_tablas.py)"
+	@python3 tools/gen_ft8_tablas.py out/ft8_tablas_regenerado.c >/dev/null
+	@if cmp -s out/ft8_tablas_regenerado.c $(FIRMWARE)/User/ft8_tablas.c; then \
+	    echo "  el fichero del arbol es el que sale del generador, byte a byte   ok"; \
+	 else \
+	    echo "  *** MAL: User/ft8_tablas.c no es lo que sale del generador ***"; \
+	    echo "      regenera con: python3 tools/gen_ft8_tablas.py ../User/ft8_tablas.c"; \
+	    exit 1; \
+	 fi
+	@echo ""
+
+comprueba: generados
+
+# ---------------------------------------------------------------------
+# LA VENTANA DE HANN DE FT8 (28/10/2026)
+#
+# Dejo de ser una tabla de 4.096 bytes en flash y pasa a calcularse. Eso
+# se llevo por delante lo unico contra lo que se podia comparar, asi que
+# esto compara contra la DEFINICION y contra las propiedades que una
+# ventana de Hann tiene que cumplir se calcule como se calcule.
+out/ft8hann: sim/ft8_hann.c $(FIRMWARE)/User/ft8_fft.c \
+             $(FIRMWARE)/User/ft8_tablas.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I $(FIRMWARE)/User -I $(FIRMWARE)/Ft8Lib -o $@ $^ $(LDLIBS)
+
+.PHONY: ft8hann
+ft8hann: out/ft8hann ; ./out/ft8hann
+
+comprueba: ft8hann
+
+# ---------------------------------------------------------------------
+# LA MAQUINA DE RANURAS DE FT8 (28/10/2026)
+#
+# ft8banda mete audio y cuenta mensajes, pero llena la ranura a mano: toda
+# la maquina de User/ft8_modo.c -borde de ranura, arranque diferido,
+# autoajuste y guardia del desvio- no la probaba nadie, y ahi estaban los
+# dos fallos que dejaban FT8 mudo. Esto la corre con un reloj de mentira.
+out/ft8ranuras: sim/ft8_ranuras.c \
+              $(FIRMWARE)/User/ft8_modo.c \
+              $(FIRMWARE)/User/ft8_decimator.c \
+              $(FIRMWARE)/User/ft8_waterfall_adapter.c \
+              $(FIRMWARE)/User/ft8_fft.c \
+              $(FIRMWARE)/User/ft8_tablas.c \
+              $(FIRMWARE)/User/ft8_decoder.c \
+              $(FIRMWARE)/User/ft8_snr.c \
+              $(FIRMWARE)/Ft8Lib/ft8/decode.c \
+              $(FIRMWARE)/Ft8Lib/ft8/ldpc.c \
+              $(FIRMWARE)/Ft8Lib/ft8/message.c \
+              $(FIRMWARE)/Ft8Lib/ft8/crc.c \
+              $(FIRMWARE)/Ft8Lib/ft8/constants.c \
+              $(FIRMWARE)/Ft8Lib/ft8/text.c \
+              sim/waterfall_prestamo.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I $(FIRMWARE)/User -I $(FIRMWARE)/Ft8Lib -o $@ $^ $(LDLIBS)
+
+.PHONY: ft8ranuras
+ft8ranuras: out/ft8ranuras ; ./out/ft8ranuras
+
+comprueba: ft8ranuras
 
 comprueba: ft8banda
 
@@ -4805,7 +4950,7 @@ comprueba: espcentrado
 # solo punto no distingue un error de escala de uno de desplazamiento.
 out/ft8snr: sim/ft8_snr.c $(FIRMWARE)/User/ft8_snr.c \
             $(FIRMWARE)/User/ft8_waterfall_adapter.c \
-            $(FIRMWARE)/User/ft8_fft1024.c $(FIRMWARE)/User/ft8_tablas.c \
+            $(FIRMWARE)/User/ft8_fft.c $(FIRMWARE)/User/ft8_tablas.c \
             sim/ipa_sim.c sim/lcd_sim.c vendor/gfx.c gfx2/gfx2.c \
             gfx2/fonts_data.c $(FIRMWARE)/User/waterfall.c
 	@mkdir -p out
@@ -5597,11 +5742,12 @@ comprueba: sanitiza
 # salida de imagen por el tono de arranque-: dice "el estado es 3, no la
 # señal de fase" y "entran 109 renglones de los 40 de la carta". Las dos
 # mitades hacen falta: contando renglones solo por abajo, 109 pasaba.
-out/wefaxfuzz: sim/wefaxfuzz.c $(FIRMWARE)/User/wefax.c $(FIRMWARE)/User/disc_fm.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c
+out/wefaxfuzz: sim/wefaxfuzz.c $(FIRMWARE)/User/wefax.c $(FIRMWARE)/User/disc_fm.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c $(FIRMWARE)/User/hfdl_ram.c sim/waterfall_prestamo.c
 	@mkdir -p out
-	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ sim/wefaxfuzz.c \
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -I$(FIRMWARE)/Ft8Lib -o $@ sim/wefaxfuzz.c \
 	      $(FIRMWARE)/User/wefax.c $(FIRMWARE)/User/disc_fm.c \
-	      $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c $(LDLIBS)
+	      $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c \
+	      $(FIRMWARE)/User/hfdl_ram.c sim/waterfall_prestamo.c $(LDLIBS)
 
 .PHONY: wefaxfuzz
 wefaxfuzz: out/wefaxfuzz ; ./out/wefaxfuzz

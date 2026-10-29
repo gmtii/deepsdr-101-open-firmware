@@ -119,7 +119,32 @@ enum {
     DCF_MOT_PAR_MIN,      /* paridad de los minutos */
     DCF_MOT_PAR_HOR,      /* paridad de las horas */
     DCF_MOT_PAR_FEC,      /* paridad de la fecha */
-    DCF_MOT_RANGO         /* paridades buenas pero un campo imposible */
+    DCF_MOT_RANGO,        /* paridades buenas pero un campo imposible */
+    /*
+     * ==================================================================
+     * Y LOS DE MSF, QUE NO EXISTIAN - 28/10/2026
+     * ==================================================================
+     *
+     * *** Avisado por un usuario: "MSF on 60kHz, which has a strong
+     * signal, and I can hear the seconds beating, does not seem to work at
+     * all." ***
+     *
+     * No se ha podido reproducir su antena ni su ruido, asi que esto no es
+     * "el arreglo": es lo que hacia falta para poder diagnosticarlo. Y era
+     * un agujero de verdad.
+     *
+     * decodifica_msf() tiene NUEVE salidas de rechazo y NINGUNA ponia
+     * s_motivo. decodifica() -la de DCF77- lo pone en las ocho suyas. O
+     * sea que cuando MSF tira una trama la pantalla dice "mal 7" y se
+     * calla por cual de las nueve puertas, que es justo el dato que
+     * convierte "no funciona" en algo que se puede mirar.
+     *
+     * Los de aqui abajo son los que MSF no comparte con DCF77. Las
+     * paridades y el rango SI se comparten -significan lo mismo en las
+     * dos- y se reutilizan tal cual.
+     */
+    DCF_MOT_MSF_PAT,      /* MSF: el patron fijo 01111110 de los segundos 52..59 */
+    DCF_MOT_MSF_PAR_ANNO  /* MSF: paridad del año (la unica que DCF77 no tiene) */
 };
 
 /* El motivo del ultimo rechazo, uno de los DCF_MOT_* de arriba. */

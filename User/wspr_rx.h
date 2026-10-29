@@ -104,8 +104,20 @@
  * si se sintoniza la frecuencia de dial que toca. */
 #define WSPR_RX_CENTRO_HZ  1500
 
-/* Prepara el receptor sobre `ram` (>= WSPR_RX_RAM bytes, alineado a 4). */
+/* Prepara el receptor sobre `ram` (>= WSPR_RX_RAM + sizeof(wspr_rx_t)
+ * bytes, alineado a 4). Desde el 28/10/2026 el ESTADO del receptor
+ * tambien sale de ahi: ver su comentario en el .c. */
 void wspr_rx_init(void *ram, uint32_t bytes);
+
+/* Los bytes que wspr_rx_init() necesita de verdad: el espectrograma MAS el
+ * estado del receptor, que desde el 28/10/2026 tambien sale de la region
+ * prestada. wspr_rx_t es privado del .c, asi que el tamaño se pregunta en
+ * vez de calcularse fuera. */
+uint32_t wspr_rx_ram_necesaria(void);
+
+/* Suelta el estado. Hay que llamarla ANTES de devolver el prestamo: a
+ * partir de ahi esos bytes vuelven a ser pixeles de la cascada. */
+void wspr_rx_fin(void);
 
 /* Tira lo capturado y empieza de cero: se llama al empezar cada emision. */
 void wspr_rx_reinicia(void);

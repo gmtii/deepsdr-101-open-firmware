@@ -23,6 +23,24 @@ ANCHO_ENTERO = len("-2147483648")
 def main(ruta):
     src = open(ruta, encoding='utf-8').read()
 
+    # SIN COMENTARIOS - 28/10/2026, y por lo mismo que persist_check.py.
+    #
+    # El punto 4 de aqui abajo busca el tamaño del buffer con un
+    # `(?:s_async_csv_buf|csv|buf)\[(\d+)\]` y se queda con el MENOR. En
+    # settings.c hay un comentario que cuenta la historia del fichero y
+    # dice "Aqui habia un uint8_t buf[1600] local": ese 1600 no es un
+    # buffer, es una frase, y era el menor de los dos.
+    #
+    # Resultado: con el buffer de verdad en 2.112 bytes y el peor caso en
+    # 1.618, este banco decia "NO CABE: el buffer necesita al menos 1619" y
+    # dos renglones mas abajo "el peor caso ocupa 1618 y sobran 430 OK".
+    # Las dos frases en la misma pantalla, contradiciendose.
+    #
+    # Un banco al que se le puede cambiar el veredicto escribiendo prosa no
+    # mide el codigo. Se miran los numeros que COMPILAN y nada mas.
+    src = re.sub(r'/\*.*?\*/', '', src, flags=re.S)
+    src = re.sub(r'//[^\n]*', '', src)
+
     # 1) Las claves con nombre propio: append_str(buf, p, buf_size, "clave,")
     con_nombre = re.findall(r'append_str\(buf,\s*p,\s*buf_size,\s*"([a-z_0-9]+),"\)', src)
 

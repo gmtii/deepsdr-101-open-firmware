@@ -65,6 +65,40 @@ static uint8_t s_niveles;
 static uint8_t s_par_masc;
 static uint8_t s_par_bytes;
 static uint8_t s_vis_fuera;   /* casillas visibles que no cupieron */
+/*
+ * Y EL PEOR DE TODA LA SESION, QUE ES EL QUE SE PUEDE MIRAR - 28/10/2026.
+ *
+ * *** s_vis_fuera se contaba desde el 16/10 "para que esto se pudiera ver
+ * sin una foto", y NO LO LEIA NADIE: ni getter, ni fila, ni nada. Doce
+ * dias contando para el forro. Es el mismo fallo que este cuaderno ya
+ * tiene escrito dos veces -una funcion de reinicio que nadie dispara, un
+ * contador que nadie mira- y van tres. ***
+ *
+ * Y NO BASTA CON SACAR s_vis_fuera TAL CUAL, porque se pone a cero en
+ * cada recarga: para verlo habria que estar mirando la fila justo en la
+ * ventana mala, que es pedirle al usuario que acierte. Lo que se enseña
+ * es el PEOR de la sesion, que es el que contesta a "¿le pasa a mi mapa
+ * en mi zona?" sin tener que cronometrar nada.
+ *
+ * LO QUE MIDE DE VERDAD, y la primera cuenta que hice estaba mal. Sume
+ * las casillas que tocan la ventana MAS EL MARGEN -12.770 bytes al zoom
+ * 8- y di por hecho que hoy se caia. No se cae: el cargador mete primero
+ * las VISIBLES y solo esas cuentan como perdidas; las del margen que no
+ * caben solo adelantan la siguiente recarga, que no se ve.
+ *
+ * Recorriendo las ventanas posibles de los cien mapas, las visibles del
+ * peor caso suman 10.195 bytes contra los 10.240 que hay:
+ *
+ *     peor ventana, solo lo visible     10.195 B
+ *     el buffer                         10.240 B
+ *     margen                                45 B
+ *
+ * O sea que hoy NO falta ninguna, y el contador dira cero. Pero 45 bytes
+ * de 10.240 no son un margen, son suerte: un .map con un poco mas de
+ * detalle en una sola ventana ya empieza a perder costa. Por eso esto se
+ * ve ahora, y por eso la cuenta esta escrita aqui con el numero delante.
+ */
+static uint8_t s_vis_fuera_max;
 static uint8_t s_idx_puesto = 0xFFU;      /* que nivel esta cargado */
 static uint16_t s_zoom_puesto;           /* el zoom del nivel cargado */
 static int16_t  s_vx0, s_vy0, s_vx1, s_vy1;  /* la ventana, en 1/32 de grado */
@@ -618,7 +652,12 @@ uint8_t mapa_bin_ventana(uint8_t esc, int32_t lon0, int32_t lat0,
                      * que no cabe puede venir otra que si. Cortar aqui
                      * dejaba fuera casillas que habrian entrado.
                      */
-                    if (vis) { s_vis_fuera++; }
+                    if (vis) {
+                        s_vis_fuera++;
+                        if (s_vis_fuera > s_vis_fuera_max) {
+                            s_vis_fuera_max = s_vis_fuera;
+                        }
+                    }
                     continue;
                 }
                 s_lee(base + off, &s_buf[puesto], tam - 2UL);
@@ -644,6 +683,9 @@ uint8_t mapa_bin_ventana(uint8_t esc, int32_t lon0, int32_t lat0,
     recuenta();
     return 1U;
 }
+
+uint8_t mapa_bin_fuera(void)     { return s_vis_fuera; }
+uint8_t mapa_bin_fuera_max(void) { return s_vis_fuera_max; }
 
 mapa_bin_r_t mapa_bin_estado(void) { return s_estado; }
 uint32_t mapa_bin_largo(void) { return s_largo; }

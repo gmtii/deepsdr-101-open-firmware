@@ -2,6 +2,7 @@
  * WEFAX. Ver wefax.h para el porque de cada pieza.
  */
 #include "wefax.h"
+#include "hfdl_ram.h"   /* el prestamo del buffer de la cascada - ver s_linea */
 #include "disc_fm.h"
 #include <string.h>
 #include <math.h>
@@ -208,7 +209,28 @@ static volatile uint32_t s_acc_n;
  * a 120 lpm. Eso lo lleva la RAM normal sin enterarse, y la TCM -que son
  * 64 kB y estan llenos- hace falta para lo que de verdad corre.
  */
-static uint8_t s_linea[WFX_ANILLO][WEFAX_ANCHO];
+/*
+ * ======================================================================
+ * EL ANILLO VIVE EN LA MEMORIA PRESTADA - 28/10/2026
+ * ======================================================================
+ *
+ * *** POR QUE: son 6.048 bytes, y al ensanchar FT8 a la banda entera
+ * -0 a 3.200 Hz- hicieron falta. La union de ft8_shared_ram.h crecio y
+ * la radio se quedo sin SRAM libre; estos son de los pocos bytes que se
+ * podian devolver sin quitarle nada a nadie. ***
+ *
+ * Y SE PUEDE PORQUE EL FAX NO PINTA CASCADA. Mientras el fax esta vivo,
+ * main.c no llama a sdr_spectrum_waterfall_tick() -ver la rama
+ * "wefax_activo() || sstv_activo() || hell_activo()" de su bucle de
+ * dibujo, que a proposito no pinta nada encima-, asi que el buffer de la
+ * cascada no se esta usando para pixeles. Es exactamente el caso que ya
+ * aprovechan el SSTV, HELL y DSC con hfdl_ram_coge().
+ *
+ * SI NO HAY PRESTAMO NO SE ARRANCA. Pintar con un puntero nulo seria
+ * mucho peor que no pintar, que es lo que dice hell_start() y es verdad.
+ */
+#define WFX_ANILLO_BYTES ((uint32_t)WFX_ANILLO * (uint32_t)WEFAX_ANCHO)
+static uint8_t (*s_linea)[WEFAX_ANCHO];
 static volatile uint8_t s_esc;          /* en cual escribe la interrupcion */
 static volatile uint8_t s_lee;          /* cual toca entregar al bucle */
 static volatile uint8_t s_linea_lista;  /* cuantas hay sin recoger */
@@ -479,6 +501,8 @@ static void fase_cero(void)
 
 static void linea_reinicia(void)
 {
+    if (s_linea == (void *)0) { return; }
+
     /*
      * El borrado va FUERA del cerrojo - 21/10/2026. Son 6 kB, o sea decenas
      * de microsegundos con todas las interrupciones cerradas, y no hace
@@ -486,7 +510,7 @@ static void linea_reinicia(void)
      * Mientras se borra, la interrupcion puede estar escribiendo en una
      * ranura; da igual, porque acto seguido se declaran todas vacias.
      */
-    memset((void *)s_linea, 0, sizeof s_linea);
+    memset((void *)s_linea, 0, (size_t)WFX_ANILLO_BYTES);
 
     WFX_CIERRA();
     anillo_cero();
@@ -495,7 +519,28 @@ static void linea_reinicia(void)
 
 void wefax_start(float fs_hz)
 {
+    uint8_t *prestada;
+    uint32_t cap = 0U;
+
     if (fs_hz <= 0.0f) { return; }
+
+    /*
+     * DUENO DEL PRESTAMO, no prestatario: aqui no se pregunta
+     * waterfall_prestada() y es a proposito, igual que en sstv_start(),
+     * hell_start() y dsc_start(). Se entra desde el cambio de modo, con el
+     * modo anterior ya parado y la memoria suelta.
+     */
+    s_linea = (void *)0;
+    hfdl_ram_coge();
+    prestada = hfdl_ram_todo(&cap);
+    if (prestada == (void *)0 || cap < WFX_ANILLO_BYTES) {
+        /* Sin prestamo no se arranca, y se dice que no. */
+        hfdl_ram_suelta();
+        s_on = 0U;
+        s_estado = WEFAX_PARADO;
+        return;
+    }
+    s_linea = (uint8_t (*)[WEFAX_ANCHO])prestada;
     /* Lo PRIMERO, antes de borrar nada: apply_demod_mode() no tiene salida
      * temprana si el modo no cambia, asi que se puede entrar aqui con la
      * interrupcion viva llamando a disc_fm_paso() sobre s_disc mientras
@@ -524,7 +569,18 @@ void wefax_start(float fs_hz)
     s_on = 1U;
 }
 
-void wefax_stop(void)      { s_on = 0U; s_estado = WEFAX_PARADO; }
+void wefax_stop(void)
+{
+    s_on = 0U;
+    s_estado = WEFAX_PARADO;
+    /* Devolver el prestamo BORRA el buffer (ver hfdl_ram_suelta()), que es
+     * lo que evita que la cascada pinte el fax como si fueran pixeles de
+     * paleta al volver a un modo analogico. */
+    if (s_linea != (void *)0) {
+        s_linea = (void *)0;
+        hfdl_ram_suelta();
+    }
+}
 uint8_t wefax_activo(void) { return s_on; }
 
 void wefax_set_lpm(uint16_t lpm)
@@ -573,7 +629,9 @@ void wefax_set_lpm(uint16_t lpm)
                  * -son decenas de microsegundos- y va ANTES, para que la
                  * ultima palabra sobre los indices la tenga el cerrojo.
                  */
-                memset((void *)s_linea, 0, sizeof s_linea);
+                if (s_linea != (void *)0) {
+                    memset((void *)s_linea, 0, (size_t)WFX_ANILLO_BYTES);
+                }
 
                 WFX_CIERRA();
                 s_lpm_i = i;
@@ -764,7 +822,7 @@ uint8_t wefax_linea_en(uint8_t *dst)
      * deja de importar en cuanto se vuelve. Son unos 3 us de interrupciones
      * cerradas cada medio segundo. Es lo que hace sstv.c desde siempre.
      */
-    if (!dst) { return 0U; }
+    if (!dst || s_linea == (void *)0) { return 0U; }
 
     WFX_CIERRA();
     if (s_linea_lista == 0U) {

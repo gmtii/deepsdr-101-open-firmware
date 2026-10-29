@@ -65,6 +65,26 @@ int main(void)
     mira("IT9ABC", "Sicilia");
     mira("I1ABC",  "Italia");
 
+    /*
+     * FRANCIA ENTERA, DESDE EL 28/10/2026.
+     *
+     * Salio de un aviso: en FT8 aparecio "CQ TM8R IN88" y la columna de
+     * pais estaba vacia. Francia tenia "F" y nada mas, mientras a los
+     * demas paises grandes se les completo el bloque el 25/09. TM es el de
+     * los indicativos especiales franceses y en FT8 sale a todas horas.
+     *
+     * TK NO es Francia -es Corsega, entidad DXCC propia- y se comprueba
+     * aqui al lado justo para que nadie lo "arregle" metiendolo en el
+     * bloque.
+     */
+    printf("\n  FRANCIA, CON TODO SU BLOQUE\n");
+    mira("TM8R",   "Francia");         /* el del aviso */
+    mira("F5ABC",  "Francia");
+    mira("HW5XYZ", "Francia");
+    mira("TP2CE",  "Francia");
+    mira("TV5ABC", "Francia");
+    mira("TK5ABC", "Corcega");         /* y NO Francia */
+
     printf("\n  LO DE TODOS LOS DIAS\n");
     mira("DL5AN",  "Alemania");
     mira("TA3NK",  "Turquia");

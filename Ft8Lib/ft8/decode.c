@@ -73,8 +73,8 @@ static void heapify_down(ftx_candidate_t heap[], int heap_size);
 static void heapify_up(ftx_candidate_t heap[], int heap_size);
 
 static void ftx_normalize_logl(float* log174);
-static void ft4_extract_symbol(const WF_ELEM_T* wf, float* logl);
-static void ft8_extract_symbol(const WF_ELEM_T* wf, float* logl);
+static void ft4_extract_symbol(const ftx_waterfall_t* wf, int off, float* logl);
+static void ft8_extract_symbol(const ftx_waterfall_t* wf, int off, float* logl);
 /* Sin usar en el camino que enlazamos: el decodificador toma la rama de un
  * simbolo cada vez. Se deja tal cual -esto es codigo de otro y no se toca-
  * y solo se marca como "puede no usarse" para que no ensucie la compilacion,
@@ -82,13 +82,16 @@ static void ft8_extract_symbol(const WF_ELEM_T* wf, float* logl);
  * pierden entre el ruido. El enlazador ya lo descarta con --gc-sections. */
 static __attribute__((unused)) void ft8_decode_multi_symbols(const WF_ELEM_T* wf, int num_bins, int n_syms, int bit_idx, float* log174);
 
-static const WF_ELEM_T* get_cand_mag(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate)
+/* Devuelve el INDICE EN BINS del simbolo 0 del candidato, no un puntero:
+ * con dos bins por byte no se puede apuntar a medio byte. Ver el bloque
+ * de WF_MAG_RAW en decode.h. */
+static int get_cand_off(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate)
 {
     int offset = candidate->time_offset;
     offset = (offset * wf->time_osr) + candidate->time_sub;
     offset = (offset * wf->freq_osr) + candidate->freq_sub;
     offset = (offset * wf->num_bins) + candidate->freq_offset;
-    return wf->mag + offset;
+    return offset;
 }
 
 static int ft8_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate)
@@ -97,7 +100,7 @@ static int ft8_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
     int num_average = 0;
 
     // Get the pointer to symbol 0 of the candidate
-    const WF_ELEM_T* mag_cand = get_cand_mag(wf, candidate);
+    int mag_cand = get_cand_off(wf, candidate);
 
     // Compute average score over sync symbols (m+k = 0-7, 36-43, 72-79)
     for (int m = 0; m < FT8_NUM_SYNC; ++m)
@@ -113,7 +116,7 @@ static int ft8_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
                 break;
 
             // Get the pointer to symbol 'block' of the candidate
-            const WF_ELEM_T* p8 = mag_cand + (block * wf->block_stride);
+            int p8 = mag_cand + (block * wf->block_stride);
 
             // Weighted difference between the expected and all other symbols
             // Does not work as well as the alternative score below
@@ -127,25 +130,25 @@ static int ft8_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
             if (sm > 0)
             {
                 // look at one frequency bin lower
-                score += WF_ELEM_MAG_INT(p8[sm]) - WF_ELEM_MAG_INT(p8[sm - 1]);
+                score += WF_MAG_INT_AT(wf, p8 + sm) - WF_MAG_INT_AT(wf, p8 + sm - 1);
                 ++num_average;
             }
             if (sm < 7)
             {
                 // look at one frequency bin higher
-                score += WF_ELEM_MAG_INT(p8[sm]) - WF_ELEM_MAG_INT(p8[sm + 1]);
+                score += WF_MAG_INT_AT(wf, p8 + sm) - WF_MAG_INT_AT(wf, p8 + sm + 1);
                 ++num_average;
             }
             if ((k > 0) && (block_abs > 0))
             {
                 // look one symbol back in time
-                score += WF_ELEM_MAG_INT(p8[sm]) - WF_ELEM_MAG_INT(p8[sm - wf->block_stride]);
+                score += WF_MAG_INT_AT(wf, p8 + sm) - WF_MAG_INT_AT(wf, p8 + sm - wf->block_stride);
                 ++num_average;
             }
             if (((k + 1) < FT8_LENGTH_SYNC) && ((block_abs + 1) < wf->num_blocks))
             {
                 // look one symbol forward in time
-                score += WF_ELEM_MAG_INT(p8[sm]) - WF_ELEM_MAG_INT(p8[sm + wf->block_stride]);
+                score += WF_MAG_INT_AT(wf, p8 + sm) - WF_MAG_INT_AT(wf, p8 + sm + wf->block_stride);
                 ++num_average;
             }
         }
@@ -163,7 +166,7 @@ static int ft4_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
     int num_average = 0;
 
     // Get the pointer to symbol 0 of the candidate
-    const WF_ELEM_T* mag_cand = get_cand_mag(wf, candidate);
+    int mag_cand = get_cand_off(wf, candidate);
 
     // Compute average score over sync symbols (block = 1-4, 34-37, 67-70, 100-103)
     for (int m = 0; m < FT4_NUM_SYNC; ++m)
@@ -179,7 +182,7 @@ static int ft4_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
                 break;
 
             // Get the pointer to symbol 'block' of the candidate
-            const WF_ELEM_T* p4 = mag_cand + (block * wf->block_stride);
+            int p4 = mag_cand + (block * wf->block_stride);
 
             int sm = kFT4_Costas_pattern[m][k]; // Index of the expected bin
 
@@ -190,25 +193,25 @@ static int ft4_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
             if (sm > 0)
             {
                 // look at one frequency bin lower
-                score += WF_ELEM_MAG_INT(p4[sm]) - WF_ELEM_MAG_INT(p4[sm - 1]);
+                score += WF_MAG_INT_AT(wf, p4 + sm) - WF_MAG_INT_AT(wf, p4 + sm - 1);
                 ++num_average;
             }
             if (sm < 3)
             {
                 // look at one frequency bin higher
-                score += WF_ELEM_MAG_INT(p4[sm]) - WF_ELEM_MAG_INT(p4[sm + 1]);
+                score += WF_MAG_INT_AT(wf, p4 + sm) - WF_MAG_INT_AT(wf, p4 + sm + 1);
                 ++num_average;
             }
             if ((k > 0) && (block_abs > 0))
             {
                 // look one symbol back in time
-                score += WF_ELEM_MAG_INT(p4[sm]) - WF_ELEM_MAG_INT(p4[sm - wf->block_stride]);
+                score += WF_MAG_INT_AT(wf, p4 + sm) - WF_MAG_INT_AT(wf, p4 + sm - wf->block_stride);
                 ++num_average;
             }
             if (((k + 1) < FT4_LENGTH_SYNC) && ((block_abs + 1) < wf->num_blocks))
             {
                 // look one symbol forward in time
-                score += WF_ELEM_MAG_INT(p4[sm]) - WF_ELEM_MAG_INT(p4[sm + wf->block_stride]);
+                score += WF_MAG_INT_AT(wf, p4 + sm) - WF_MAG_INT_AT(wf, p4 + sm + wf->block_stride);
                 ++num_average;
             }
         }
@@ -285,7 +288,7 @@ int ftx_find_candidates(const ftx_waterfall_t* wf, int num_candidates, ftx_candi
 
 static void ft4_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, float* log174)
 {
-    const WF_ELEM_T* mag = get_cand_mag(wf, cand); // Pointer to 4 magnitude bins of the first symbol
+    int mag = get_cand_off(wf, cand); // Indice en bins del primer simbolo
 
     // Go over FSK tones and skip Costas sync symbols
     for (int k = 0; k < FT4_ND; ++k)
@@ -304,14 +307,14 @@ static void ft4_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidat
         }
         else
         {
-            ft4_extract_symbol(mag + (sym_idx * wf->block_stride), log174 + bit_idx);
+            ft4_extract_symbol(wf, mag + (sym_idx * wf->block_stride), log174 + bit_idx);
         }
     }
 }
 
 static void ft8_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, float* log174)
 {
-    const WF_ELEM_T* mag = get_cand_mag(wf, cand); // Pointer to 8 magnitude bins of the first symbol
+    int mag = get_cand_off(wf, cand); // Indice en bins del primer simbolo
 
     // Go over FSK tones and skip Costas sync symbols
     for (int k = 0; k < FT8_ND; ++k)
@@ -331,7 +334,7 @@ static void ft8_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidat
         }
         else
         {
-            ft8_extract_symbol(mag + (sym_idx * wf->block_stride), log174 + bit_idx);
+            ft8_extract_symbol(wf, mag + (sym_idx * wf->block_stride), log174 + bit_idx);
         }
     }
 }
@@ -509,14 +512,14 @@ static void heapify_up(ftx_candidate_t heap[], int heap_size)
 }
 
 // Compute unnormalized log likelihood log(p(1) / p(0)) of 2 message bits (1 FSK symbol)
-static void ft4_extract_symbol(const WF_ELEM_T* wf, float* logl)
+static void ft4_extract_symbol(const ftx_waterfall_t* wf, int off, float* logl)
 {
     // Cleaned up code for the simple case of n_syms==1
     float s2[4];
 
     for (int j = 0; j < 4; ++j)
     {
-        s2[j] = WF_ELEM_MAG(wf[kFT4_Gray_map[j]]);
+        s2[j] = WF_MAG_AT(wf, off + kFT4_Gray_map[j]);
     }
 
     logl[0] = max2(s2[2], s2[3]) - max2(s2[0], s2[1]);
@@ -524,7 +527,7 @@ static void ft4_extract_symbol(const WF_ELEM_T* wf, float* logl)
 }
 
 // Compute unnormalized log likelihood log(p(1) / p(0)) of 3 message bits (1 FSK symbol)
-static void ft8_extract_symbol(const WF_ELEM_T* wf, float* logl)
+static void ft8_extract_symbol(const ftx_waterfall_t* wf, int off, float* logl)
 {
     // Cleaned up code for the simple case of n_syms==1
 #if 1
@@ -532,7 +535,7 @@ static void ft8_extract_symbol(const WF_ELEM_T* wf, float* logl)
 
     for (int j = 0; j < 8; ++j)
     {
-        s2[j] = WF_ELEM_MAG(wf[kFT8_Gray_map[j]]);
+        s2[j] = WF_MAG_AT(wf, off + kFT8_Gray_map[j]);
     }
 
     logl[0] = max4(s2[4], s2[5], s2[6], s2[7]) - max4(s2[0], s2[1], s2[2], s2[3]);

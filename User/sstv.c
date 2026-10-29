@@ -399,8 +399,10 @@ static float     s_sep_sum;
 static uint32_t  s_sep_n;
 /* Robot 36 manda una croma por linea, asi que hay que GUARDAR una linea
  * entera hasta que llegue la siguiente con la otra mitad del color. */
-static uint8_t   s_r36_y[SSTV_ANCHO];
-static uint8_t   s_r36_c[SSTV_ANCHO];
+/* Dentro del prestamo: ver sal_t. Fuera del modo s_sal_p es nulo y estos
+ * no existen, que es justo lo que impide escribir sobre la cascada. */
+#define s_r36_y (s_sal_p->r36_y)
+#define s_r36_c (s_sal_p->r36_c)
 static uint8_t   s_r36_es_cr;
 static uint8_t   s_r36_hay;
 /* Los dos renglones de salida NO van en la RAM rapida: se tocan una vez por
@@ -456,9 +458,24 @@ static uint8_t   s_r36_hay;
 #define SAL_N 12U
 #define SAL_ANCHO (SSTV_ANCHO * 3U)
 
+/*
+ * Y LOS TRES BUFFERS DE LINEA TAMBIEN - 28/10/2026.
+ *
+ * *** POR QUE: al ensanchar FT8 a la banda entera -0 a 3.200 Hz- la union
+ * crecio y la radio se quedo sin SRAM libre. Estos 1.600 bytes son del
+ * mismo tipo que los 11,5 kB de arriba: solo valen mientras hay una foto
+ * entrando, y el prestamo ya estaba cogido. ***
+ *
+ *   r36_y / r36_c: la linea de luminancia y la de croma del Robot 36, que
+ *                  manda media linea de color por cada linea de brillo.
+ *   rgb:           la linea ya convertida, lista para pintar.
+ */
 typedef struct {
     uint8_t  px[SAL_N][SAL_ANCHO];
     uint16_t ys[SAL_N];
+    uint8_t  r36_y[SSTV_ANCHO];
+    uint8_t  r36_c[SSTV_ANCHO];
+    uint8_t  rgb[SSTV_ANCHO * 3U];
 } sal_t;
 
 static sal_t    *s_sal_p;
@@ -1074,8 +1091,14 @@ static uint8_t croma_de_linea(void)
 
 static void linea_cierra(void)
 {
-    static uint8_t rgb[SSTV_ANCHO * 3U];
+    uint8_t *rgb;
     uint16_t x;
+
+    /* Sin prestamo no hay donde dejar la linea. No puede pasar -sstv_start()
+     * no arranca sin el- pero el que lo da por hecho es el que acaba
+     * escribiendo en memoria de otro. */
+    if (s_sal_p == 0) { return; }
+    rgb = s_sal_p->rgb;
 
     if (s_pl.color == SSTV_COLOR_GBR) {
         /*

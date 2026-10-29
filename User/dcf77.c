@@ -354,6 +354,21 @@ static uint32_t s_elem_ultimo_ms;
 #ifndef SEG_VENTANA_MS
 #define SEG_VENTANA_MS  70.0f
 #endif
+
+/*
+ * Los bits que hay que llevar contados para que un hueco sea el segundo 59
+ * y no una marca perdida. Ver la rama que lo usa.
+ *
+ * 55 y no 59: el hueco llega DESPUES del bit 58, asi que lo normal es
+ * tenerlos los 59. Se deja aire por si se ha perdido alguno al final -esos
+ * minutos se tiran igual en decodifica(), que exige los 59 exactos- para no
+ * convertir "una marca perdida en el segundo 57" en "la rejilla se ha ido".
+ * Lo que esto separa son dos cosas MUY distintas: diez bits y cincuenta y
+ * cinco.
+ */
+#ifndef MINUTO_MIN_BITS
+#define MINUTO_MIN_BITS 55U
+#endif
 /* Por debajo de esto el triangulo se considera plano. Ver el comentario del
  * contador de silencio: se mide sobre s_tri y no sobre el filtrado. */
 #ifndef QUIETO_UMBRAL
@@ -734,7 +749,64 @@ static uint8_t decodifica(const uint8_t *b)
         return 0U;
     }
 
-    s_h = h; s_m = m; s_d = d; s_mes = mes; s_a = a; s_ds = ds;
+    /*
+     * ======================================================================
+     * Y AHORA SE CONVIERTE A UTC ANTES DE SUMAR EL HUSO - 28/10/2026
+     * ======================================================================
+     *
+     * *** Avisado por un usuario de Dublin: "My timezone is set for Dublin
+     * (UTC), but when the clock is set after tuning to ALS 162, the time is
+     * set to one hour ahead (CET). It doesn't seem to matter what timezone
+     * I set." ***
+     *
+     * Y tenia toda la razon, con las dos mitades de la frase:
+     *
+     *   - la hora salia una hora adelantada, y
+     *   - daba igual el huso que pusiera.
+     *
+     * Aqui se guardaba la trama TAL CUAL. DCF77 y ALS162 no emiten UTC:
+     * emiten hora local alemana y francesa, que es CET en invierno y CEST
+     * en verano (el bit 17 dice cual). O sea que el reloj se ponia en hora
+     * de Europa central PASE LO QUE PASE, y el ajuste de huso -que esta en
+     * la pantalla, y que el usuario habia puesto- no lo miraba nadie.
+     *
+     * EN ESPAÑA NO SE VE, y por eso llevaba aqui desde el principio: la
+     * peninsula ES CET, asi que no convertir y convertir dan el mismo
+     * numero. Es el mismo fallo que ya salio en MSF el 10/10/2026 -"España
+     * peninsular va una hora por delante en invierno y dos en verano.
+     * Perfecto, si la radio esta en España"- en las otras dos emisoras, y
+     * aquella vez se dio por cerrada la lista de sitios sin sacarla de un
+     * grep. Eran cuatro sitios y se arreglaron tres.
+     *
+     * LA CUENTA, que es la de MSF al reves y luego igual:
+     *
+     *   1. quitar el desplazamiento del transmisor (60 o 120 minutos) para
+     *      llegar a UTC;
+     *   2. sumar hora_huso(), que es lo que el usuario ha puesto.
+     *
+     * Las dos de una vez, que hora_suma_minutos() arrastra el calendario y
+     * asi una trama de las 00:30 CET no deja la fecha de mañana.
+     *
+     * Y DE PASO SE PUEDE MEDIR EL HUSO CON ELLAS. s_utc_hay existia para
+     * eso y el comentario de su declaracion decia que DCF77 y ALS162 "dejan
+     * s_utc_hay a cero y no se puede medir con ellas". Podia: lo que
+     * faltaba era justamente esta resta.
+     */
+    {
+        int16_t tx_min = (int16_t)(b[17] ? 120 : 60);  /* CEST : CET */
+        uint8_t dsx = ds;
+        uint8_t dd = d, mm = mes, aa = a, hh = h, mi = m;
+
+        /* 1) a UTC, y se guarda crudo para el boton que mide el huso */
+        hora_suma_minutos((int16_t)-tx_min, &hh, &mi, &dd, &mm, &aa, &dsx);
+        s_utc_h = hh; s_utc_m = mi; s_utc_hay = 1U;
+
+        /* 2) y de UTC al huso que haya puesto el usuario */
+        hora_suma_minutos(hora_huso(), &hh, &mi, &dd, &mm, &aa, &dsx);
+        s_h = hh; s_m = mi; s_d = dd; s_mes = mm; s_a = aa; s_ds = dsx;
+    }
+    /* Sigue diciendo si el TRANSMISOR va en horario de verano, que es lo
+     * que este campo ha significado siempre. Ya no decide la hora. */
     s_ver = b[17];
     return 1U;
 }
@@ -789,13 +861,30 @@ static uint8_t decodifica_msf(void)
      * fuerte que tiene MSF: ocho bits que solo pueden valer una cosa, y que
      * ademas estan repartidos por el final de la trama, justo donde un
      * desvanecimiento del final se notaria. */
-    if (a[52] != 0U || a[59] != 0U) { return 0U; }
-    for (k = 53U; k <= 58U; k++) { if (a[k] != 1U) { return 0U; } }
+    /*
+     * Y CADA PUERTA DICE CUAL ES - 28/10/2026.
+     *
+     * Aqui habia nueve `return 0U` a pelo, sin tocar s_motivo. La pantalla
+     * enseña "mal N <motivo>" desde hace tiempo, y con MSF decia "mal N" y
+     * se callaba el motivo SIEMPRE, porque el motivo se quedaba en el de la
+     * ultima trama de DCF77... o en ninguno. Ver DCF_MOT_MSF_PAT.
+     *
+     * No es un adorno: con una emisora que "no funciona", saber si lo que
+     * falla es el patron fijo -o sea el sincronismo de la trama- o una
+     * paridad -o sea un bit suelto- son dos averias distintas y dos
+     * arreglos distintos.
+     */
+    if (a[52] != 0U || a[59] != 0U) { s_motivo = DCF_MOT_MSF_PAT; return 0U; }
+    for (k = 53U; k <= 58U; k++) {
+        if (a[k] != 1U) { s_motivo = DCF_MOT_MSF_PAT; return 0U; }
+    }
 
-    if (!paridad_impar_ok(a, 17U, 24U, b[54])) { return 0U; }
-    if (!paridad_impar_ok(a, 25U, 35U, b[55])) { return 0U; }
-    if (!paridad_impar_ok(a, 36U, 38U, b[56])) { return 0U; }
-    if (!paridad_impar_ok(a, 39U, 51U, b[57])) { return 0U; }
+    /* Las paridades se llaman igual que en DCF77 porque significan lo
+     * mismo; la del año MSF la tiene y DCF77 no. */
+    if (!paridad_impar_ok(a, 17U, 24U, b[54])) { s_motivo = DCF_MOT_MSF_PAR_ANNO; return 0U; }
+    if (!paridad_impar_ok(a, 25U, 35U, b[55])) { s_motivo = DCF_MOT_PAR_FEC; return 0U; }
+    if (!paridad_impar_ok(a, 36U, 38U, b[56])) { s_motivo = DCF_MOT_PAR_FEC; return 0U; }
+    if (!paridad_impar_ok(a, 39U, 51U, b[57])) { s_motivo = DCF_MOT_PAR_HOR; return 0U; }
 
     anno = bcd_msf(a, 17U, 24U);
     mes  = bcd_msf(a, 25U, 29U);
@@ -805,12 +894,13 @@ static uint8_t decodifica_msf(void)
     m    = bcd_msf(a, 45U, 51U);
     verano = b[58];
 
-    if (m > 59U) { return 0U; }
-    if (h > 23U) { return 0U; }
-    if (mes < 1U || mes > 12U) { return 0U; }
-    if (d < 1U || d > k_dias_mes[mes]) { return 0U; }
-    if (ds > 6U) { return 0U; }   /* 0=domingo .. 6=sabado */
-    if (anno > 99U) { return 0U; }
+    if (m > 59U || h > 23U || mes < 1U || mes > 12U
+        || d < 1U || d > k_dias_mes[mes]
+        || ds > 6U       /* 0=domingo .. 6=sabado */
+        || anno > 99U) {
+        s_motivo = DCF_MOT_RANGO;
+        return 0U;
+    }
 
     /*
      * *** EL CUARTO SITIO DONDE ESTABA ESPAÑA CABLEADA - 10/10/2026. ***
@@ -1097,9 +1187,61 @@ static void feed_fase(float fase)
                 s_elem_ultimo_ms = ms;
                 s_elem_n = 2U;
                 s_ms_marca = 200U;
-            } else if (s_elem_n == 0U && quieto_ms >= (uint32_t)QUIETO_MIN_MS) {
-                /* UN CANDIDATO A MARCADOR: silencio delante y, si ya hay
-                 * rejilla, en su sitio. */
+            } else if (s_elem_n == 0U
+                       && (quieto_ms >= (uint32_t)QUIETO_MIN_MS
+                           || (s_seg_enganchado
+                               && seg_ms >= 1000 - (int32_t)SEG_VENTANA_MS
+                               && seg_ms <= 1000 + (int32_t)SEG_VENTANA_MS))) {
+                /*
+                 * UN CANDIDATO A MARCADOR: silencio delante O, si la
+                 * rejilla ya esta cogida, en su sitio.
+                 *
+                 * ==============================================================
+                 * EL "O" ES DE HOY - 28/10/2026
+                 * ==============================================================
+                 *
+                 * *** De una pantalla con ALS162 a S8: cuatro bits de
+                 * cincuenta y nueve, marca 100, ciclo 1003 ms, cuatro
+                 * tramas cortas, y el contador de bits sin pasar de diez
+                 * de cincuenta y nueve. ***
+                 *
+                 * La rejilla estaba enganchada y BIEN -ciclo 1003 ms- y aun
+                 * asi no juntaba una trama. Lo que fallaba era esta puerta.
+                 *
+                 * Hasta hoy pedia SIEMPRE 60 ms de fase plana delante. Esa
+                 * exigencia esta bien razonada y sigue estandolo: es lo
+                 * unico que distingue el elemento HORARIO -el unico que
+                 * viene detras de 100 ms sin modulacion- de los del canal
+                 * de datos, que van pegados unos a otros.
+                 *
+                 * Pero distingue por el SITIO EQUIVOCADO cuando ya se sabe
+                 * donde se esta. El silencio contesta "¿cual de todos estos
+                 * elementos es el horario?" cuando no hay rejilla. Con la
+                 * rejilla cogida, esa pregunta ya la contesta la VENTANA: el
+                 * horario cae a menos de 70 ms del segundo y los de datos
+                 * caen en cualquier punto. Son dos respuestas a la misma
+                 * pregunta y se estaban exigiendo LAS DOS.
+                 *
+                 * Y la del silencio es la fragil de las dos: se mide sobre
+                 * el triangulo de fase contra QUIETO_UMBRAL, asi que el
+                 * ruido de fase la rompe aunque el marcador este ahi
+                 * entero. Con una señal de S8 pero sucia -una antena corta
+                 * en onda larga- eso pasa cada pocos segundos.
+                 *
+                 * LO QUE COSTABA, que es lo que se ve en la foto: al
+                 * descartar el marcador, el segundo se pasaba de 1.070 ms y
+                 * la rama de abajo lo leia como el SEGUNDO 59. Cerraba la
+                 * trama con diez bits, contaba una mala "corta" y reiniciaba
+                 * el contador. Un marcador que el ruido se come tiraba el
+                 * minuto ENTERO.
+                 *
+                 * NO SE ABRE LA MANO CON LOS DATOS: sin rejilla se sigue
+                 * pidiendo el silencio igual que siempre, que es cuando no
+                 * hay otra cosa que mirar. Y con rejilla, un elemento de
+                 * datos tiene que caer ademas dentro de los 70 ms para
+                 * colarse, que es justo lo que la ventana lleva filtrando
+                 * desde que existe.
+                 */
                 uint8_t en_ventana = (uint8_t)(seg_ms >= 1000 - (int32_t)SEG_VENTANA_MS
                                                && seg_ms <= 1000 + (int32_t)SEG_VENTANA_MS);
 
@@ -1208,12 +1350,45 @@ static void feed_fase(float fase)
             s_elem_n = 0U;
             s_elem_cerrado = 1U;
             s_seg_vacios++;
-            if (s_seg_vacios == 1U && s_seg_enganchado) {
+            if (s_seg_vacios == 1U && s_seg_enganchado
+                && s_n_bits >= MINUTO_MIN_BITS) {
                 /*
                  * UNO es el segundo 59 y es lo normal: "the 59th second has
                  * no phase modulation". Aqui se cierra el minuto.
                  */
                 cierra_trama();
+            } else if (s_seg_vacios == 1U && s_seg_enganchado) {
+                /*
+                 * ==============================================================
+                 * UN HUECO A MITAD DE MINUTO NO ES EL SEGUNDO 59 - 28/10/2026
+                 * ==============================================================
+                 *
+                 * Y hasta hoy se trataba como si lo fuera. Un marcador que
+                 * el ruido se comiera -ver la puerta del silencio mas
+                 * arriba- dejaba pasar el segundo de largo, esto lo leia
+                 * como fin de minuto y cerraba la trama con los bits que
+                 * hubiera. En la pantalla que se vio: diez bits de
+                 * cincuenta y nueve y cuatro tramas cortas contadas.
+                 *
+                 * El segundo 59 se reconoce por DONDE esta, no solo por ser
+                 * un hueco: llega cuando ya se han contado los 59 bits. Un
+                 * hueco con diez bits contados es una marca perdida.
+                 *
+                 * QUE SE HACE CON ELLA: el minuto esta perdido igual -falta
+                 * un bit y lo que venga detras ya no cuadra- asi que la
+                 * trama se tira. Pero NO se toca la rejilla: sigue
+                 * enganchada, el reloj sigue corriendo solo y el minuto
+                 * SIGUIENTE empieza limpio desde su propio hueco. Antes se
+                 * tiraba lo mismo, solo que ademas contandolo como trama
+                 * "corta" -que no lo era- y sin decir lo que de verdad
+                 * habia pasado.
+                 *
+                 * Se cuenta en `marcas_raras`, que es el contador de "aqui
+                 * ha pasado algo con las marcas" y es justo lo que esto es.
+                 */
+                s_marcas_raras++;
+                s_n_bits = 0U;
+                s_prev_valida = 0U;
             } else if (s_seg_vacios >= 3U) {
                 /* TRES seguidos ya no es el 59: se ha perdido la señal. */
                 s_seg_enganchado = 0U;

@@ -114,7 +114,26 @@ typedef struct {
     volatile uint16_t perdidos;   /* pasos que no dio tiempo a procesar */
 } wspr_rx_t;
 
-static wspr_rx_t s_rx;
+/*
+ * ======================================================================
+ * EL ESTADO TAMBIEN VIVE EN LA MEMORIA PRESTADA - 28/10/2026
+ * ======================================================================
+ *
+ * *** POR QUE: son 2.092 bytes, y al ensanchar FT8 a la banda entera
+ * -0 a 3.200 Hz- la union crecio y la radio se quedo sin SRAM libre. ***
+ *
+ * Y SE PUEDE PORQUE WSPR YA LA TENIA COGIDA: wspr_modo_start() llama a
+ * hfdl_ram_coge() y le pasa la region entera a wspr_rx_init(), que
+ * reparte. Lo unico que cambia es que ahora se reparte tambien este
+ * estado, al final de la region, en vez de tenerlo aparte en SRAM todo el
+ * dia para un modo que esta apagado casi siempre.
+ *
+ * FUERA DEL MODO EL PUNTERO ES NULO, y eso no es una comodidad: es lo que
+ * impide escribir sobre los pixeles de la cascada. Las entradas publicas
+ * lo comprueban.
+ */
+static wspr_rx_t *s_rxp;
+#define s_rx (*s_rxp)
 
 /* Lo que eligio la ultima busqueda. Se guarda porque es lo primero que
  * hay que mirar cuando una emision no sale: dice si fallo la busqueda o
@@ -150,18 +169,42 @@ void wspr_rx_diag(uint8_t *q, int16_t *hz_e2)
     }
 }
 
+uint32_t wspr_rx_ram_necesaria(void)
+{
+    return WSPR_RX_RAM + (((uint32_t)sizeof(wspr_rx_t) + 3U) & ~3U);
+}
+
 void wspr_rx_init(void *ram, uint32_t bytes)
 {
+    /* El estado al final de la region, y el espectrograma delante. Se
+     * alinea a 4 porque wspr_rx_t lleva floats. */
+    uint32_t sitio = (((uint32_t)sizeof(wspr_rx_t) + 3U) & ~3U);
+
+    if ((ram == (void *)0) || (bytes < (WSPR_RX_RAM + sitio))) {
+        s_rxp = (wspr_rx_t *)0;
+        return;
+    }
+
+    bytes -= sitio;
+    s_rxp = (wspr_rx_t *)(void *)((uint8_t *)ram + bytes);
+
     memset(&s_rx, 0, sizeof s_rx);
     s_rx.espectro = (uint8_t *)ram;
     s_rx.bytes = bytes;
-    s_rx.arrancado = (uint8_t)((ram != (void *)0) &&
-                               (bytes >= WSPR_RX_RAM)) ;
+    s_rx.arrancado = 1U;
     wspr_rx_reinicia();
+}
+
+/* Suelta el estado: lo llama wspr_modo_stop() al devolver el prestamo, para
+ * que nadie siga escribiendo en unos bytes que ya son de la cascada. */
+void wspr_rx_fin(void)
+{
+    s_rxp = (wspr_rx_t *)0;
 }
 
 void wspr_rx_reinicia(void)
 {
+    if (s_rxp == (wspr_rx_t *)0) { return; }
     s_rx.nco = 0U;
     s_rx.aci = 0.0f; s_rx.acq = 0.0f;
     s_rx.cuenta = 0U;
@@ -175,8 +218,8 @@ void wspr_rx_reinicia(void)
     }
 }
 
-uint16_t wspr_rx_pasos(void) { return s_rx.paso; }
-uint8_t  wspr_rx_listo(void) { return (uint8_t)(s_rx.paso >= WSPR_RX_PASOS); }
+uint16_t wspr_rx_pasos(void) { return (s_rxp == (wspr_rx_t *)0) ? 0U : s_rx.paso; }
+uint8_t  wspr_rx_listo(void) { return (uint8_t)((s_rxp != (wspr_rx_t *)0) && (s_rx.paso >= WSPR_RX_PASOS)); }
 
 /*
  * GOERTZEL. La potencia de UN bin sobre las 256 muestras de la ventana,
@@ -303,6 +346,7 @@ static void un_paso(uint16_t pos)
 
 void wspr_rx_mete(const float *audio, uint16_t n)
 {
+    if (s_rxp == (wspr_rx_t *)0) { return; }
     uint16_t k;
 
     if (!s_rx.arrancado || audio == (const float *)0) { return; }
@@ -360,6 +404,8 @@ uint8_t wspr_rx_pasos_pendientes(void)
 {
     uint8_t hechos = 0U;
 
+    if (s_rxp == (wspr_rx_t *)0) { return 0U; }
+
     while (s_rx.pend_col != s_rx.pend_cab) {
         uint16_t pos = s_rx.pend_pos[s_rx.pend_col];
 
@@ -371,7 +417,7 @@ uint8_t wspr_rx_pasos_pendientes(void)
     return hechos;
 }
 
-uint16_t wspr_rx_perdidos(void) { return s_rx.perdidos; }
+uint16_t wspr_rx_perdidos(void) { return (s_rxp == (wspr_rx_t *)0) ? 0U : s_rx.perdidos; }
 
 /* ---------------- la busqueda ---------------- */
 
@@ -405,7 +451,7 @@ static int32_t puntua(const uint8_t *esp, uint16_t f0, uint16_t t0)
 
 uint8_t wspr_rx_decodifica(wspr_msg_t *m, int16_t *hz_out, uint8_t *calidad_out)
 {
-    const uint8_t *esp = s_rx.espectro;
+    const uint8_t *esp;
     uint16_t f0, t0, mf = 0U, mt = 0U;
     int32_t mejor = -0x7FFFFFFF;
     uint8_t canal[WSPR_SIMBOLOS], desmez[WSPR_SIMBOLOS];
@@ -413,6 +459,8 @@ uint8_t wspr_rx_decodifica(wspr_msg_t *m, int16_t *hz_out, uint8_t *calidad_out)
     uint8_t bits[7], q = 0U;
     uint16_t i;
 
+    if (s_rxp == (wspr_rx_t *)0) { return 0U; }
+    esp = s_rx.espectro;
     if (!s_rx.arrancado || s_rx.paso < WSPR_RX_PASOS) { return 0U; }
 
     /* Los cuatro tonos tienen que caber, y estan separados DOS medios bines

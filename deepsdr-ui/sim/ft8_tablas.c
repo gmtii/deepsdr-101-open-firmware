@@ -7,7 +7,7 @@
  * congelada, un pitido continuo por el altavoz, y a apagarla por el
  * interruptor.
  *
- * La causa: ft8_fft1024_init() no la llamaba nadie. Construia cuatro tablas
+ * La causa: ft8_fft_init() no la llamaba nadie. Construia cuatro tablas
  * -seno, coseno, Hann y el orden de bits invertido- DENTRO de la memoria que
  * FT8 le toma prestada a la cascada. Sin construir, contenian lo que la
  * cascada dejo ahi, o sea indices de paleta. Y una de ellas, fft_bitrev, se
@@ -26,7 +26,7 @@
  * Las cuatro tablas se fueron a FLASH -User/ft8_tablas.c, generado por
  * tools/gen_ft8_tablas.py- y con ellas se fue el sello que las avalaba.
  * Desde el 26/10/2026 son tres: la del orden de bits la calcula
- * ft8_bitrev10() con una instruccion, y aqui se comprueba igual.
+ * ft8_bitrev() con una instruccion, y aqui se comprueba igual.
  * Nadie puede borrarlas, asi que "¿estan construidas?" dejo de ser una
  * pregunta. Lo que se hizo con los 10.240 bytes que dejaron libres DENTRO
  * de la union esta contado en ft8_shared_ram.h.
@@ -51,10 +51,11 @@
  *     simplemente crece y la RAM se acaba en otro sitio.
  */
 #include "ft8_shared_ram.h"
-#include "ft8_fft1024.h"
+#include "ft8_fft.h"
 #include "waterfall.h"
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 static int fallos = 0;
 
@@ -65,7 +66,7 @@ static void pasa(const char *que, int bien)
 }
 
 /*
- * LA CUENTA DE ANTES, TAL CUAL ESTABA EN ft8_fft1024.c hasta el 10/10/2026.
+ * LA CUENTA DE ANTES, TAL CUAL ESTABA EN ft8_fft.c hasta el 10/10/2026.
  * Esta COPIADA a proposito y no sacada del firmware: si se llamara a la del
  * firmware se estaria comparando la tabla consigo misma.
  */
@@ -94,7 +95,7 @@ static int es_permutacion(int *fuera, int *repes)
     *fuera = 0; *repes = 0;
 
     for (n = 0U; n < (uint32_t)FT8_FFT_SIZE; n++) {
-        uint16_t v = ft8_bitrev10(n);
+        uint16_t v = ft8_bitrev(n);
         if (v >= (uint16_t)FT8_FFT_SIZE) { (*fuera)++; continue; }
         if (visto[v]) { (*repes)++; }
         visto[v] = 1U;
@@ -116,31 +117,88 @@ int main(void)
     {
         unsigned mal = 0U;
 
-        for (n = 0U; n < (uint32_t)FT8_FFT_SIZE / 2U; n++) {
-            float ang = -2.0f * 3.14159265358979f * (float)n / (float)FT8_FFT_SIZE;
-            float c = cos_viejo(ang), s = sin_viejo(ang);
-            if (memcmp(&c, &k_ft8_twiddle_cos[n], sizeof c) != 0) { mal++; }
-            if (memcmp(&s, &k_ft8_twiddle_sin[n], sizeof s) != 0) { mal++; }
+        /*
+         * LA TABLA ES UN CUARTO DE ONDA - 28/10/2026, ver ft8_fft.h.
+         *
+         * Lo que se comprueba bit a bit es LA TABLA: cada uno de sus
+         * N/4+1 valores tiene que ser cos_bhaskara(2*pi*n/N) exacto. Eso
+         * es lo que el generador promete y lo que se puede exigir.
+         *
+         * Lo que NO se puede exigir bit a bit son los giros que salen de
+         * una reflexion: la aproximacion de Bhaskara no es simetrica, asi
+         * que -C[N/2-j] no es el mismo float que cos_bhaskara del angulo
+         * de j. Eso se mide aparte, mas abajo, contra el coseno de
+         * verdad, que es la referencia que importa.
+         */
+        for (n = 0U; n <= (uint32_t)FT8_FFT_SIZE / 4U; n++) {
+            float ang = 2.0f * 3.14159265358979f * (float)n / (float)FT8_FFT_SIZE;
+            float c = cos_viejo(ang);
+            if (memcmp(&c, &k_ft8_cuarto[n], sizeof c) != 0) { mal++; }
         }
         for (n = 0U; n < (uint32_t)FT8_FFT_SIZE; n++) {
-            float h = 0.5f - 0.5f * cos_viejo(
-                2.0f * 3.14159265358979f * (float)n / (float)(FT8_FFT_SIZE - 1U));
             uint32_t v = n, r = 0U, b;
-            if (memcmp(&h, &k_ft8_hann[n], sizeof h) != 0) { mal++; }
+            /*
+             * Y LA TERCERA TAMPOCO EXISTE - 28/10/2026. La ventana de Hann
+             * la calcula ft8_fft_hann() con un seno aproximado, asi que ya
+             * no es bit a bit la de antes y aqui no se puede comparar como
+             * se comparan las otras. Quien la vigila es sim/ft8_hann.c, que
+             * la mide contra la definicion y contra las cuatro propiedades
+             * que una ventana de Hann tiene que cumplir.
+             */
             /*
              * Y LA CUARTA TABLA YA NO EXISTE - 26/10/2026. La calcula
-             * ft8_bitrev10() con `rbit`, un ciclo, y eran 2.048 bytes de
+             * ft8_bitrev() con `rbit`, un ciclo, y eran 2.048 bytes de
              * flash interna. Se sigue comprobando contra la MISMA cuenta
              * de antes, que es lo que importa: el decodificador tiene que
              * ver los mismos indices, vengan de una tabla o de una
              * instruccion.
              */
-            for (b = 0U; b < 10U; b++) { r = (r << 1U) | (v & 1U); v >>= 1U; }
-            if (ft8_bitrev10(n) != (uint16_t)r) { mal++; }
+            /* LOS BITS QUE TOCAN, no diez a mano: con la FFT en 2.048
+             * son once, y el 28/10/2026 esta linea decia 10 y daba 2.047
+             * diferencias de 2.048. Lo que se comprueba sigue siendo lo
+             * mismo: que invertir el indice a mano y ft8_bitrev() dan la
+             * misma permutacion. */
+            for (b = 0U; b < FT8_FFT_BITS; b++) { r = (r << 1U) | (v & 1U); v >>= 1U; }
+            if (ft8_bitrev(n) != (uint16_t)r) { mal++; }
         }
         printf("    %u valores comprobados, %u diferencias\n",
-               (unsigned)(FT8_FFT_SIZE * 3U), mal);
-        pasa("*** la tabla de flash es la de antes, bit a bit ***", mal == 0U);
+               (unsigned)(FT8_FFT_SIZE + FT8_FFT_SIZE / 4U + 1U), mal);
+        pasa("*** la tabla de flash es la que dice el generador, bit a bit ***",
+             mal == 0U);
+    }
+
+    /*
+     * Y LOS GIROS REFLEJADOS, CONTRA EL COSENO DE VERDAD.
+     *
+     * Aqui la referencia no es Bhaskara: es cosf()/sinf() de la biblioteca.
+     * Lo que se exige es que el error de un giro sacado de la tabla no sea
+     * PEOR que el que ya tenia la aproximacion de Bhaskara, que es el que
+     * la radio lleva usando desde que existe esta FFT. Si reflejar
+     * empeorase, saldria aqui.
+     */
+    printf("\n  1b. LOS GIROS QUE SALEN DE REFLEJAR EL CUARTO DE ONDA\n");
+    {
+        double peor_tabla = 0.0, peor_bhaskara = 0.0;
+
+        for (n = 0U; n < (uint32_t)FT8_FFT_SIZE / 2U; n++) {
+            double ang = -2.0 * 3.14159265358979 * (double)n / (double)FT8_FFT_SIZE;
+            float  angf = (float)ang;
+            double d;
+
+            d = fabs((double)ft8_cos_giro(n) - cos(ang));
+            if (d > peor_tabla) { peor_tabla = d; }
+            d = fabs((double)ft8_sen_giro(n) - sin(ang));
+            if (d > peor_tabla) { peor_tabla = d; }
+
+            d = fabs((double)cos_viejo(angf) - cos(ang));
+            if (d > peor_bhaskara) { peor_bhaskara = d; }
+            d = fabs((double)sin_viejo(angf) - sin(ang));
+            if (d > peor_bhaskara) { peor_bhaskara = d; }
+        }
+        printf("    peor error de la tabla %.3e, de Bhaskara a pelo %.3e\n",
+               peor_tabla, peor_bhaskara);
+        pasa("reflejar no empeora lo que ya habia",
+             peor_tabla <= peor_bhaskara * 1.05);
     }
 
     /* --------------------------------------------------------------
@@ -191,39 +249,41 @@ int main(void)
         pasa("el miembro de FT8 cabe en la union", ft8 <= (unsigned)sizeof u);
         printf("    a FT8 le sobran %u bytes dentro de la union\n",
                (unsigned)sizeof u - ft8);
-        (void)cascada;
 
         /*
          * ==============================================================
-         * ESTA COMPROBACION CAMBIO DE DUENO EL 11/10/2026
+         * Y VOLVIO A CAMBIAR DE DUENO EL 28/10/2026
          * ==============================================================
          *
-         * Aqui ponia `sizeof u == cascada`: "la union no mide mas que la
-         * cascada". Era verdad y era util, porque los dos inquilinos de
-         * entonces -la cascada y FT8- cabian uno dentro del otro y la union
-         * salia gratis. Si crecia, la RAM se acababa en otro sitio y nadie
-         * relacionaria las dos cosas.
+         * Esto exigia `sizeof u == hfdl`: "la union mide exactamente lo
+         * que pide HFDL". Fue verdad desde el 11/10, cuando se ensancho
+         * para el giro 6, y dejo de serlo al ensanchar FT8 a la banda
+         * entera -0 a 3.200 Hz-, que es un cambio deliberado y medido.
          *
-         * Y SALTO EN ROJO al ensanchar la union para el giro 6 de HFDL. Hizo
-         * bien: ese dia la union crecio 5.872 bytes a proposito, y una
-         * guarda que no salta cuando la RAM crece no sirve para nada.
+         * Ya ha pasado dos veces: la cascada mandaba por casualidad, luego
+         * mando HFDL porque se decidio, y ahora manda FT8 por lo mismo.
+         * Escribir el nombre del inquilino mayor en el banco obliga a
+         * reescribirlo cada vez, y mientras tanto lo que vigila es el
+         * NOMBRE, no la RAM.
          *
-         * Lo que NO se puede hacer es callarla. El invariante cambio, asi
-         * que se reescribe el invariante:
-         *
-         *   - FT8 sigue teniendo que caber en la cascada (arriba). Eso no
-         *     ha cambiado y es lo que impide que FT8 crezca a escondidas.
-         *   - y la union tiene que medir EXACTAMENTE lo que pide HFDL, ni
-         *     un byte mas. Antes mandaba la cascada por casualidad; ahora
-         *     manda HFDL porque se decidio, y el numero esta justificado
-         *     en hfdl_ram.h contra la tabla de los ocho giros.
-         *
-         * Un "<=" aqui dejaria pasar que alguien ensanche la cascada y se
-         * lleve RAM de regalo sin que nadie lo note. Por eso es "==".
+         * LO QUE DE VERDAD NO PUEDE PASAR es que la union mida mas que su
+         * mayor inquilino: eso serian bytes de SRAM que no usa nadie, que
+         * es exactamente el derroche que esta union existe para evitar. Eso
+         * no depende de quien mande, y sigue saltando si alguien ensancha
+         * un miembro a escondidas -porque entonces la union crece con el, y
+         * el renglon de arriba dice cuanto-.
          */
-        pasa("la union mide exactamente lo que pide HFDL, ni un byte mas",
-             (unsigned)sizeof u == hfdl);
-        pasa("y HFDL es el que manda, no la cascada", hfdl > cascada);
+        {
+            unsigned mayor = cascada;
+
+            if (ft8  > mayor) { mayor = ft8; }
+            if (hfdl > mayor) { mayor = hfdl; }
+            printf("    el mayor inquilino es %s\n",
+                   (mayor == ft8) ? "FT8"
+                 : (mayor == hfdl) ? "HFDL" : "la cascada");
+            pasa("la union mide lo que su mayor inquilino, ni un byte mas",
+                 (unsigned)sizeof u == mayor);
+        }
     }
 
     printf("\n  %s (%d fallos)\n\n",

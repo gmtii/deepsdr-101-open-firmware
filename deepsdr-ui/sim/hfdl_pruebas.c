@@ -3,7 +3,7 @@
  *
  * POR QUE EXISTE (25/09/2026). Antes de que HFDL toque la radio. Con FT8 se
  * hizo al reves y costo un cuelgue con un pitido continuo que solo se
- * quitaba apagandola: ft8_fft1024_init() no se llamaba, una tabla de la
+ * quitaba apagandola: ft8_fft_init() no se llamaba, una tabla de la
  * union tenia pixeles dentro y se usaba como indice. Esa leccion sale cara
  * una vez; repetirla seria tonto.
  *

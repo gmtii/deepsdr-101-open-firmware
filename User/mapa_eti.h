@@ -60,7 +60,7 @@
  * en dos.
  */
 
-#define MAPA_ETI_MAX    12U   /* el tope mas alto: 4 + MAPA_ESC_MAX */
+#define MAPA_ETI_MAX    12U   /* el tope, y el unico: ver mapa_eti_tope() */
 /*
  * Lo que se sabe de una etiqueta ademas de su nombre. Hoy: la direccion
  * OACI de un avion y su modelo, "781F2E A359 Airbus A350-941".

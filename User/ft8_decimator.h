@@ -5,18 +5,42 @@
 
 /*
  * Rational resampler: 12kHz (demod_am.c's demodulated audio rate) ->
- * 3200Hz, feeding ft8_waterfall_adapter.c automatically. REPLACES the
+ * 6.400 Hz desde el 28/10/2026 -antes 3.200, y antes 800-, feeding
+ * ft8_waterfall_adapter.c automatically. REPLACES the
  * original simple integer decimate-by-15 (12kHz->800Hz) - kept the
  * same public function names (ft8_decimator_reset/feed_sample) so
  * demod_am.c's tap point needed NO changes at all, only this module's
  * internals changed.
+ *
+ * ======================================================================
+ * Y EL 28/10/2026 PASO A 6.400 Hz
+ * ======================================================================
+ *
+ * *** POR QUE: para que FT8 mire los 3.200 Hz enteros que entrega
+ * demod_am y no la mitad. A 3.200 muestras por segundo, Nyquist son
+ * 1.600 Hz y de ahi para arriba no hay NADA que decodificar: medido, de
+ * veinticinco emisiones repartidas por la banda se leian trece, todas por
+ * debajo de 1.500 Hz. Ver ft8_waterfall_adapter.h. ***
+ *
+ * LO QUE CAMBIA AQUI: L pasa de 4 a 8 -M se queda en 15, porque
+ * 12.000*8/15 = 6.400 exacto- y el filtro se rehace con el corte en
+ * 3.200 Hz en vez de 1.600. Son 960 coeficientes en vez de 480, repartidos
+ * en 8 fases de 120; el soporte en el tiempo es el mismo (10 ms) y la
+ * banda de transicion tambien (unos 100 Hz), porque la tasa virtual sube
+ * en la misma proporcion que el numero de coeficientes.
+ *
+ * Y AHORA HAY GENERADOR: deepsdr-ui/tools/gen_ft8_fir.py. La tabla de
+ * abajo decia "generated offline (Python)" y el Python no estaba en
+ * ningun sitio, asi que no se podia ni rehacer ni comprobar. El generador
+ * reproduce la tabla de L=4 que habia aqui -comprobado coeficiente a
+ * coeficiente- antes de escribir la nueva.
  *
  * WHY 3200Hz, AND WHY THIS NEEDED A REAL RESAMPLER (09/2026, per the
  * project owner green-lighting a wider search window beyond
  * 400Hz): 12000 has no integer decimation factor landing on a fs that
  * gives a power-of-two nfft together with a two-symbol analysis window
  * (see ft8_waterfall_adapter.h). 3200Hz DOES: nfft = (3200*0.16)*2 =
- * 1024, a clean power of two (see ft8_fft1024.h) - cuadruplicando la
+ * 1024, a clean power of two (see ft8_fft.h) - cuadruplicando la
  * ventana de 400 a 1.600 Hz.
  *
  * *** DOS CIFRAS DE AQUI ERAN FALSAS Y SE CORRIGEN EL 23/10/2026: decia
@@ -37,7 +61,7 @@
  * ft8_decimator.c's own comment on the actual per-output-sample cost).
  *
  * Single prototype filter, 480 taps (120 per polyphase phase,
- * 480=4*120 exactly), Blackman-windowed-sinc, cutoff 1600Hz referenced
+ * 960=8*120 exactly), Blackman-windowed-sinc, cutoff 3200Hz referenced
  * to the 48kHz virtual (post-interpolation) rate - simulated response
  * before committing to these coefficients: flat to ~12dB (=20*log10(4),
  * the L=4 gain compensating the interpolation zero-stuffing loss) up
@@ -45,8 +69,8 @@
  * (comfortably covering every alias zone up to and beyond the
  * resampler's own output Nyquist).
  */
-#define FT8_RESAMPLER_L          4    /* interpolation factor */
-#define FT8_RESAMPLER_M          15   /* decimation factor - 12000*L/M = 3200Hz exactly */
+#define FT8_RESAMPLER_L          8    /* interpolation factor */
+#define FT8_RESAMPLER_M          15   /* decimation factor - 12000*L/M = 6400Hz exactly */
 #define FT8_DECIM_INPUT_RATE_HZ  12000 /* must match demod_am.c's post-decimation audio rate */
 
 /* Call once when starting a fresh FT8 slot capture (alongside
@@ -58,7 +82,7 @@ void ft8_decimator_reset(void);
 
 /* Feed ONE new demodulated audio sample at FT8_DECIM_INPUT_RATE_HZ
  * (12kHz) - e.g. one element of demod_am.c's s_ssb_dec. Internally
- * runs the polyphase L=4/M=15 resampler, producing a new 3200Hz
+ * runs the polyphase L=8/M=15 resampler, producing a new 6.400 Hz
  * output sample roughly every 3.75 input samples (not evenly - see
  * ft8_decimator.c for the exact bookkeeping), accumulates those into
  * a FT8_ADAPTER_SUBBLOCK_SIZE-sized buffer, and calls

@@ -222,12 +222,28 @@ int main(void)
     }
 
     /* ---------------------------------------------------------------- */
-    printf("\n  2) el tope sube con el zoom\n\n");
+    printf("\n  2) el tope es el del buffer, en todas las escalas\n\n");
     {
+        /*
+         * *** ESTE APARTADO EXIGIA "a mas zoom, mas etiquetas" HASTA EL
+         * 28/10/2026. ***
+         *
+         * Protegia el "4 + escala" de mapa_eti_tope(), y ese numero se ha
+         * quitado: con el mapamundi puesto daba CINCO etiquetas, el
+         * usuario tenia doce aviones en la lista y contaba cinco nombres
+         * en el mapa. Quien reparte el sitio es el choque de seis
+         * colocaciones de mapa_eti_pon() -ver el apartado 3, que es el
+         * que de verdad lo mide-, y encima de el ese tope solo tiraba
+         * etiquetas que SI cabian.
+         *
+         * Lo que se exige ahora es lo que queda siendo verdad: el unico
+         * tope es el del array, y es el mismo en todas las escalas. Un
+         * banco que siguiera pidiendo que suba con el zoom estaria
+         * protegiendo lo que se acaba de quitar.
+         */
         static const uint8_t k_esc[] = { 1U, 2U, 4U, 8U };
         unsigned i;
         int bien = 1;
-        uint8_t ant = 0U;
 
         for (i = 0; i < sizeof k_esc / sizeof k_esc[0]; i++) {
             mapa_caja_t c = g_caja;
@@ -237,11 +253,9 @@ int main(void)
             t = mapa_eti_tope(&c);
             printf("     escala %u: caben %u etiquetas\n",
                    (unsigned)k_esc[i], (unsigned)t);
-            if (t <= ant) { bien = 0; }
-            ant = t;
+            if (t != (uint8_t)MAPA_ETI_MAX) { bien = 0; }
         }
-        exige(bien && ant == (uint8_t)MAPA_ETI_MAX,
-              "a mas zoom, mas etiquetas, y al final el tope del buffer");
+        exige(bien, "el tope es MAPA_ETI_MAX en todas las escalas");
     }
 
     /* ---------------------------------------------------------------- */

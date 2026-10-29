@@ -82,8 +82,21 @@ static uint8_t vale(uint8_t b, uint8_t i)
  * el fallo que mas veces ha mordido en este proyecto. Main la presta una
  * vez al arrancar; el banco de pruebas hace lo mismo.
  */
+/* Los de serie y el renglon de ayuda, que los pone main.c: ver
+ * banco_nombres_pon() en banco.h. */
+static const char *const *s_serie;
+static uint8_t            s_serie_n;
+static const char        *s_pista;
+
 static const uint32_t *s_pasos_hz;
 static uint8_t         s_pasos_n;
+
+void banco_nombres_pon(const char *const *serie, uint8_t n, const char *pista)
+{
+    s_serie   = serie;
+    s_serie_n = n;
+    s_pista   = pista;
+}
 
 void banco_pasos_pon(const uint32_t *hz, uint8_t n)
 {
@@ -215,17 +228,31 @@ uint32_t banco_a_csv(char *buf, uint32_t cap)
      */
     pos = pon_s(buf, cap, pos,
                 "banco,memoria,hz,modo,paso_hz,fil_lo,fil_hi,cw\n");
+    /* El renglon de ayuda de los nombres, si main.c lo ha dado. */
+    if (s_pista != 0 && s_pista[0] != '\0') {
+        pos = pon_s(buf, cap, pos, "# ");
+        pos = pon_s(buf, cap, pos, s_pista);
+        pos = pon_c(buf, cap, pos, '\n');
+    }
     /*
      * Los nombres, los primeros y solo los que tengan uno puesto. Arriba
      * del todo porque es lo que se busca cuando abres el fichero para
      * cambiarlos, y porque asi se leen antes que las memorias.
      */
     for (b = 0U; b < BANCO_N; b++) {
-        if (s_nom[b][0] == '\0') { continue; }
+        const char *n = s_nom[b];
+
+        if (n[0] == '\0') {
+            /* Sin tocar: sale el de serie COMENTADO, para que se vea que
+             * se puede cambiar sin cambiar nada. Ver banco_nombres_pon(). */
+            if (s_serie == 0 || b >= s_serie_n || s_serie[b] == 0) { continue; }
+            pos = pon_s(buf, cap, pos, "# ");
+            n = s_serie[b];
+        }
         pos = pon_s  (buf, cap, pos, "nombre,");
         pos = pon_u32(buf, cap, pos, (uint32_t)(b + 1U));
         pos = pon_c  (buf, cap, pos, ',');
-        pos = pon_s  (buf, cap, pos, s_nom[b]);
+        pos = pon_s  (buf, cap, pos, n);
         pos = pon_c  (buf, cap, pos, '\n');
     }
     for (b = 0U; b < BANCO_N; b++) {

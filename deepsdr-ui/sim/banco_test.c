@@ -267,6 +267,51 @@ int main(void)
     }
 
     /* ------------------------------------------------------------------
+     * (10) LOS NOMBRES DE SERIE SALEN EN EL FICHERO, COMENTADOS
+     * ------------------------------------------------------------------
+     * 28/10/2026, pedido por el usuario: los de serie TIENEN que salir, si
+     * no quien abra el fichero no sabe que eso se cambia ahi. Y salen
+     * comentados a proposito, porque los de serie estan TRADUCIDOS:
+     * escribirlos vivos los congelaria en el idioma del dia que se grabo.
+     * ------------------------------------------------------------------ */
+    printf("\n  -- (10) los de serie salen comentados --\n");
+    {
+        static const char *const k_serie[4] = {
+            "HF", "Aviones", "Marina", "Repetidores"
+        };
+        static char buf[BANCO_CSV_MIN];
+        uint32_t n;
+
+        banco_init();
+        banco_nombres_pon(k_serie, 4U, "Para ponerle nombre a un banco...");
+        memset(&m, 0, sizeof m);
+        m.hz = 9690000UL; m.modo = 1U;
+        banco_graba(0U, 0U, &m);
+        banco_nombre_pon(1U, "Rusos");
+        n = banco_a_csv(buf, (uint32_t)sizeof buf);
+
+        di("la ayuda sale arriba",
+           strstr(buf, "# Para ponerle nombre") != 0, 0);
+        di("el de serie del banco 1 sale comentado",
+           strstr(buf, "# nombre,1,HF\n") != 0, 0);
+        di("y el del 4 tambien",
+           strstr(buf, "# nombre,4,Repetidores\n") != 0, 0);
+        di("el que puso el usuario sale VIVO",
+           strstr(buf, "\nnombre,2,Rusos\n") != 0, 0);
+        di("y no comentado",
+           strstr(buf, "# nombre,2,") == 0, 0);
+
+        /* Y lo que importa: releerlo NO le pone nombre a los comentados. */
+        banco_init();
+        banco_de_csv(buf, n);
+        di("al releerlo los comentados siguen sin nombre",
+           banco_nombre(0U)[0] == '\0' && banco_nombre(3U)[0] == '\0', 0);
+        di("y el del usuario vuelve",
+           strcmp(banco_nombre(1U), "Rusos") == 0, 0);
+        di("y las memorias siguen ahi", banco_usadas(0U) == 1U, 0);
+    }
+
+    /* ------------------------------------------------------------------
      * EL PASO VA EN HERCIOS, Y UN FICHERO VIEJO SIGUE VALIENDO
      * ------------------------------------------------------------------
      * Hasta el 27/10/2026 el fichero guardaba el INDICE del paso. El dia

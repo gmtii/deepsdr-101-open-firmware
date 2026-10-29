@@ -88,6 +88,25 @@ uint8_t ft8_modo_segundo(void);
  * momento bueno lo arregla. El desfase se conserva al apagar y encender FT8.
  * Ver el comentario de s_desfase en ft8_modo.c. */
 void    ft8_modo_cuadra(void);
+
+/*
+ * Ranuras que se decodificaron SIN llegar a los 93 bloques, desde que se
+ * encendio FT8. Cero es lo normal; un numero que sube dice que a la
+ * captura le estan faltando trozos -bucle principal atascado, o el
+ * autoajuste de ranura corriendo el arranque-. Antes esas ranuras no se
+ * decodificaban: se tiraban enteras y no lo decia nada. Ver
+ * FT8_MIN_BLOQUES en ft8_modo.c.
+ */
+uint16_t ft8_modo_cortas(void);
+
+/* Lo que el autoajuste de ranura ha movido el arranque de la captura
+ * respecto al borde, en milisegundos. Lo mira sim/ft8_ranuras.c, que es
+ * quien comprueba que un ajuste grande ya no deja FT8 mudo. */
+uint16_t ft8_modo_ajuste_ms(void);
+
+/* Lo que tardo en reloj la ultima decodificacion, en milisegundos. Sale en
+ * la chapa y lo mide sim/ft8_ranuras.c contra el plazo del desvio. */
+uint16_t ft8_modo_ms_dec(void);
 uint8_t ft8_modo_desfase(void);
 
 /*

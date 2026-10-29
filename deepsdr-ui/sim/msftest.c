@@ -290,6 +290,88 @@ int main(void)
            r.ok ? "*** SE HA COLADO ***" : "rechazada",
            r.inf.tramas_ok, r.inf.tramas_malas);
     comprueba("el patron fijo 01111110 la rechaza", !r.ok);
+    /*
+     * Y QUE DIGA POR CUAL DE LAS NUEVE PUERTAS - 28/10/2026.
+     *
+     * decodifica_msf() tenia nueve salidas de rechazo y ninguna ponia el
+     * motivo, asi que la pantalla enseñaba "mal N" y se callaba el porque
+     * SIEMPRE con esta emisora. Salio buscando el aviso de un usuario -"MSF
+     * on 60kHz... does not seem to work at all"- que no se pudo reproducir:
+     * esto no arregla su recepcion, pero sin esto no hay forma de mirarla.
+     *
+     * Se exige el motivo CONCRETO y no "cualquiera distinto de cero": con
+     * una trama corrida lo que falla es el patron fijo, y si algun dia
+     * fallara por otra puerta el banco tiene que decirlo.
+     */
+
+    /*
+     * ==================================================================
+     * 5b. Y QUE DIGA POR CUAL DE LAS NUEVE PUERTAS - 28/10/2026
+     * ==================================================================
+     *
+     * decodifica_msf() tenia nueve salidas de rechazo y NINGUNA ponia el
+     * motivo, asi que la pantalla enseñaba "mal N" y se callaba el porque
+     * SIEMPRE con esta emisora -con DCF77 si lo dice desde siempre-. Salio
+     * buscando el aviso de un usuario -"MSF on 60kHz... does not seem to
+     * work at all"- que no se pudo reproducir: esto no arregla su
+     * recepcion, pero sin esto no hay forma de mirarla.
+     *
+     * La prueba 5 de aqui arriba NO vale para medirlo: con la trama
+     * corrida no llega ninguna marca de minuto, asi que decodifica_msf()
+     * no se llega a llamar -"malas 0"- y el motivo se queda a cero con
+     * razon. Hay que meter un minuto ENTERO y bueno con un bit picado.
+     *
+     * Se exige el motivo CONCRETO de cada puerta y no "cualquiera distinto
+     * de cero": si algun dia una trama saliera por otra, el banco tiene que
+     * decirlo en vez de dar por bueno cualquier numero.
+     */
+    printf("\n  5b. CADA RECHAZO DICE POR QUE\n");
+    {
+        struct { const char *que; int bit_a; int bit_b; uint8_t espera; } k_casos[] = {
+            { "el patron fijo de los segundos 52..59", 55, -1, (uint8_t)DCF_MOT_MSF_PAT },
+            { "la paridad del año",                    -1, 54, (uint8_t)DCF_MOT_MSF_PAR_ANNO },
+            { "la paridad de la fecha",                -1, 55, (uint8_t)DCF_MOT_PAR_FEC },
+            { "la paridad de la hora",                 -1, 57, (uint8_t)DCF_MOT_PAR_HOR },
+        };
+        unsigned c;
+
+        for (c = 0U; c < sizeof k_casos / sizeof k_casos[0]; c++) {
+            uint8_t a[60], b[60];
+            dcf_info_t inf;
+            int i;
+
+            s_rnd = 24681357UL;
+            dcf77_start(HORA_MSF, FS);
+            /*
+             * CUATRO MINUTOS Y EL PICADO ES EL TERCERO.
+             *
+             * MSF cierra una trama cuando llega la marca del minuto
+             * SIGUIENTE, asi que la picada no se juzga hasta que entra la
+             * de despues. Con tres minutos y el ultimo picado, el banco
+             * media "buenas 1, malas 0": la mala no se habia llegado a
+             * mirar y el motivo se quedaba a cero con razon.
+             */
+            for (i = 0; i < 4; i++) {
+                trama(a, b, 7, 31 + i, 15, 6, 26, 1, 0, 3);
+                if (i == 2) {
+                    if (k_casos[c].bit_a >= 0) {
+                        a[k_casos[c].bit_a] ^= 1U;
+                    } else {
+                        b[k_casos[c].bit_b] ^= 1U;
+                    }
+                }
+                emite_minuto(a, b, 0.0, 0, 0);
+            }
+            dcf77_info(&inf);
+            printf("    %-40s motivo %u (se espera %u)\n",
+                   k_casos[c].que, (unsigned)dcf77_motivo(),
+                   (unsigned)k_casos[c].espera);
+            (void)inf;
+            comprueba("      y lo dice",
+                      dcf77_motivo() == k_casos[c].espera);
+            dcf77_stop();
+        }
+    }
 
     printf("\n  6. SIN SEÑAL - LO IMPORTANTE\n");
     {

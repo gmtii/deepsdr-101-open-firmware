@@ -70,6 +70,14 @@ uint8_t *hfdl_scope_get_hfdl_ram(uint32_t *capacity_out);
  *     giro 2 1200 bps  sencilla ... 22.288      giro 6 1200  doble ... 51.088
  *     giro 3 1800 bps  sencilla ... 33.088      giro 7 1800  doble ... 76.288
  *
+ * *** Y LOS NUMEROS DE ABAJO SON LOS DE ENTONCES - 28/10/2026. Hoy la
+ * cabecera mide HFDL_RAM_CABECERA (15.168: los 9.216 de siempre mas la
+ * tabla de aviones y los renglones) y la region de pago queda en 54.684,
+ * que sigue tragando el giro 6. Y el margen de los estados ya no son 396
+ * sino 240: sizeof(hfdl_estado_t) son 4.368 medidos hoy, no los 4.212 que
+ * dice el parrafo de abajo. Lo vigila el _Static_assert de hfdl_modo.c,
+ * que desde hoy se mide contra HFDL_OFF_AVIONES y no contra el final. ***
+ *
  * Con 9.216 de cabecera quedan 45.216. Los seis giros que cabian siguen
  * cabiendo -el mayor de ellos, el 3, pide 33.088- y los giros 6 y 7 no
  * caben, igual que no cabian antes: el 7 pide 76 kB y no entrara nunca en
@@ -95,7 +103,68 @@ uint8_t *hfdl_scope_get_hfdl_ram(uint32_t *capacity_out);
  * 9.216 para 8.784, y el margen lo vigila un _Static_assert.
  */
 #define HFDL_RAM_PREAMBULO 4608U
-#define HFDL_RAM_CABECERA  9216U
+
+/*
+ * ======================================================================
+ * Y LA TABLA DE AVIONES Y SUS RENGLONES, TAMBIEN AQUI - 28/10/2026
+ * ======================================================================
+ *
+ * *** Pedido por el usuario: "amplia a 48 aceptando que se borre al
+ * salir". ***
+ *
+ * LA PREGUNTA ERA: ¿por que la lista de aviones de HFDL se quedo en 14
+ * renglones y 20 aviones cuando la de FT8 paso a 48?
+ *
+ * Y no hay respuesta buena. Cuando FT8 paso de 16 a 48 (ver
+ * FT8_MODO_LINEAS) fueron dos razones, y UNA VALE IGUAL AQUI: esa lista no
+ * la lee solo el panel, LA LEE EL MAPA. Los puntos y las etiquetas de HFDL
+ * salen de recorrer la tabla de aviones, asi que el mapa no podia enseñar
+ * mas de veinte por llena que estuviera la banda. La otra razon -que el
+ * panel se sube con el dedo- HFDL no la tiene, y sigue sin tenerla.
+ *
+ * LO QUE LO FRENABA ERA UN COMENTARIO QUE SE QUEDO VIEJO. Las dos tablas
+ * eran estaticas con este argumento escrito en hfdl_modo.c: "tienen que
+ * sobrevivir a hfdl_modo_stop(): si vivieran en la RAM prestada, salir del
+ * modo para mirar otra cosa borraria lo que acababa de salir. Lo mismo
+ * hace FT8 con las suyas".
+ *
+ * La ultima frase ERA VERDAD CUANDO SE ESCRIBIO y hoy no lo es: las lineas
+ * de FT8 viven dentro de la union desde hace tiempo (ver `lineas` en
+ * ft8_shared_ram.h) y se borran al salir del modo, igual que todo lo
+ * demas. O sea que HFDL estaba pagando 2.048 bytes de SRAM permanente por
+ * una garantia que el modo con el que se comparaba ya no da.
+ *
+ * LO QUE CUESTA, que es lo bonito: NADA. La union la dimensiona FT8
+ * (69.852 bytes) y el miembro de HFDL anda por 60.304, asi que estos
+ * 5.952 caben en el hueco que ya habia. Y se devuelven 2.048 bytes de .bss
+ * a la radio.
+ *
+ *     antes   cabecera  9.216 + giro6 51.088 = 60.304   +2.048 de .bss
+ *     ahora   cabecera 15.168 + giro6 51.088 = 66.256   +0
+ *
+ * El giro 6 sigue cabiendo -la region de pago queda en 54.684 y el pide
+ * 51.088- y el 7 sigue sin caber, igual que antes.
+ *
+ * EL PRECIO, que el usuario acepto: la lista se borra al salir del modo.
+ * Es exactamente lo que ya le pasa a la de FT8.
+ *
+ * *** Y NO HAY VUELTA ATRAS POR .bss - 28/10/2026, por la tarde. ***
+ *
+ * Se intento devolverlas a memoria estatica para que la lista sobreviviera
+ * al salir del modo, y el enlazador lo rechaza: los 5.952 bytes no estan.
+ * La radio va al 98,2 % de su SRAM -193.064 de 196.608- y quedan 3.544
+ * libres. Queda escrito con el numero delante para que nadie lo intente
+ * otra vez a ciegas.
+ *
+ * Los tamaños se escriben aqui porque es aqui donde se reparte la
+ * cabecera, pero quien manda son HFDL_MODO_AVIONES y HFDL_MODO_LINEAS en
+ * hfdl_modo.c: alli hay un _Static_assert que no deja compilar si lo que
+ * de verdad se declara no cabe en lo que aqui se reserva.
+ */
+#define HFDL_RAM_AVIONES   2496U   /* 48 x sizeof(hfdl_ac_rec_t), 52 bytes */
+#define HFDL_RAM_LINEAS    3456U   /* 48 x HFDL_MODO_LARGO (72) */
+
+#define HFDL_RAM_CABECERA  (9216U + HFDL_RAM_AVIONES + HFDL_RAM_LINEAS)
 
 /*
  * ======================================================================
@@ -132,7 +201,7 @@ uint8_t *hfdl_scope_get_hfdl_ram(uint32_t *capacity_out);
  * hay que cambiar es este y el banco lo dira.
  */
 #define HFDL_RAM_GIRO6     51088U   /* 1200 bps, ranura doble - ver la tabla */
-#define HFDL_RAM_TOTAL     (HFDL_RAM_CABECERA + HFDL_RAM_GIRO6)   /* 60.304 */
+#define HFDL_RAM_TOTAL     (HFDL_RAM_CABECERA + HFDL_RAM_GIRO6)   /* 66.256 desde el 28/10/2026: ver HFDL_RAM_AVIONES */
 
 /* La cabecera reservada, o NULL si el modo no esta activo. Es de hfdl_modo.c
  * y de nadie mas. */

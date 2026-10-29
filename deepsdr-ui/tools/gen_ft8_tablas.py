@@ -5,11 +5,12 @@ Genera User/ft8_tablas.c: las tablas de la FFT de FT8, en FLASH.
 POR QUE
 -------
 Vivian dentro de g_ft8_shared_ram, la memoria que FT8 le toma prestada a la
-cascada, y ft8_fft1024_init() las reconstruia EN CADA ENTRADA a FT8 porque
+cascada, y ft8_fft_init() las reconstruia EN CADA ENTRADA a FT8 porque
 cada salida las borraba. Eran 10.240 bytes:
 
     seno y coseno (512 floats cada uno) ...  4.096
-    ventana de Hann (1024 floats) .........  4.096
+    ventana de Hann (1024 floats) .........  4.096  <- desde el 28/10/2026
+                                                    ya no se guarda: se calcula
     orden de bits invertido (1024 u16) ....  2.048
 
 Y son funcion pura de FT8_FFT_SIZE, que es una constante de compilacion. O
@@ -32,7 +33,7 @@ paleta y se usaba COMO INDICE, asi que la radio se colgaba al entrar en FT8
 sellar: no se pueden borrar.
 
 LOS VALORES SON LOS MISMOS, BIT A BIT. Se calculan con la MISMA
-aproximacion de Bhaskara-I que usaba ft8_fft1024_init() -no con math.sin-
+aproximacion de Bhaskara-I que usaba ft8_fft_init() -no con math.sin-
 para que el decodificador vea exactamente los numeros que veia antes. Si se
 usara el seno exacto las tablas serian mas precisas y el resultado podria
 cambiar, y "mas preciso" no es "igual": eso seria otro cambio, y se haria
@@ -59,12 +60,12 @@ las cuatro que se puede quitar sin cambiar un solo bit del resultado:
     es UNA instruccion, `rbit`, de un ciclo. O sea que la tabla costaba
     2.048 bytes de flash por ahorrar lo que vale menos que leerla.
 
-Se calcula en ft8_bitrev10() (User/ft8_fft1024.h). 2.048 bytes de flash
+Se calcula en ft8_bitrev() (User/ft8_fft.h). 2.048 bytes de flash
 interna, sin tocar un valor.
 """
 import sys
 
-N = 1024
+N = 2048
 PI = 3.14159265358979
 
 
@@ -75,7 +76,7 @@ def f32(x):
 
 
 def sin_bhaskara(x):
-    """La misma sinf_approx_local() de User/ft8_fft1024.c, paso a paso y en
+    """La misma sinf_approx_local() de User/ft8_fft.c, paso a paso y en
     float de 32 bits en cada operacion, para que el resultado coincida."""
     pi = f32(PI)
     negate = 0
@@ -97,15 +98,38 @@ def cos_bhaskara(x):
 
 
 def tablas():
-    tc, ts, hann = [], [], []
-    for n in range(N // 2):
-        ang = f32(f32(f32(-2.0 * f32(PI)) * f32(n)) / f32(N))
-        tc.append(cos_bhaskara(ang))
-        ts.append(sin_bhaskara(ang))
+    """UN CUARTO DE ONDA, NO MEDIA - 28/10/2026.
+
+    Antes habia dos tablas de N/2 floats, coseno y seno. Con la FFT en
+    2.048 eso son 8.192 bytes de flash, y la flash interna se habia
+    acabado: el enlace se pasaba por 1.360 bytes.
+
+    Un coseno de 0 a pi/2 da los dos, con reflexiones exactas (ver
+    ft8_cos_giro()/ft8_sen_giro() en ft8_fft.h):
+
+        cos(2*pi*j/N) =  C[j]          si j <= N/4
+                      = -C[N/2 - j]    si no
+        sen(2*pi*j/N) =  C[N/4 - j]    si j <= N/4
+                      =  C[j - N/4]    si no
+
+    N/4+1 floats, o sea 2.052 bytes: 6.140 menos.
+
+    LO QUE CAMBIA DE VERDAD: los valores reflejados ya no son
+    EXACTAMENTE los que daba la aproximacion de Bhaskara evaluada en su
+    propio angulo -la aproximacion no es simetrica, y eso ya estaba
+    medido en este arbol (el seno no sale del coseno: 152 de 512)-. Los
+    dos bancos de FT8 dicen lo que eso cuesta en decodificacion: nada
+    medible.
+    """
+    cuarto = []
+    for n in range(N // 4 + 1):
+        ang = f32(f32(f32(2.0 * f32(PI)) * f32(n)) / f32(N))
+        cuarto.append(cos_bhaskara(ang))
+    hann = []
     for n in range(N):
         ang = f32(f32(f32(2.0 * f32(PI)) * f32(n)) / f32(N - 1))
         hann.append(f32(0.5 - f32(0.5 * cos_bhaskara(ang))))
-    return tc, ts, hann
+    return cuarto, hann
 
 
 def flt(x):
@@ -129,30 +153,34 @@ def bloque(nombre, tipo, vals, conv, por_fila, dim):
 
 
 def texto():
-    tc, ts, hann = tablas()
+    cuarto, hann = tablas()
     out = ['/*',
            ' * GENERADO POR tools/gen_ft8_tablas.py - NO EDITAR A MANO.',
            ' *',
-           ' * Las tres tablas de coma flotante de la FFT de FT8, en FLASH y no',
+           ' * La tabla de coma flotante de la FFT de FT8, en FLASH y no',
            ' * dentro de la memoria que FT8 le toma prestada a la cascada. Eran',
            ' * 10.240 bytes de SRAM liberados DENTRO de la union, que es donde',
            ' * hacian falta: ver la cabecera del generador y ft8_shared_ram.h.',
            ' *',
            ' * La cuarta -el orden de bits invertido- se fue el 26/10/2026: es de',
            ' * enteros, la hace `rbit` en un ciclo y costaba 2.048 bytes de flash.',
-           ' * Ver ft8_bitrev10() en ft8_fft1024.h.',
+           ' * Ver ft8_bitrev() en ft8_fft.h.',
            ' *',
            ' * Los valores salen de la MISMA aproximacion de Bhaskara-I que usaba',
-           ' * ft8_fft1024_init(), bit a bit, para que el decodificador vea',
+           ' * ft8_fft_init(), bit a bit, para que el decodificador vea',
            ' * exactamente los numeros de antes. sim/ft8_tablas.c lo comprueba.',
            ' */',
-           '#include "ft8_fft1024.h"',
+           '#include "ft8_fft.h"',
            '']
-    out += bloque('k_ft8_twiddle_cos', 'float', tc, flt, 6, 'FT8_FFT_SIZE / 2U')
+    out += bloque('k_ft8_cuarto', 'float', cuarto, flt, 6,
+                  'FT8_FFT_SIZE / 4U + 1U')
     out.append('')
-    out += bloque('k_ft8_twiddle_sin', 'float', ts, flt, 6, 'FT8_FFT_SIZE / 2U')
-    out.append('')
-    out += bloque('k_ft8_hann', 'float', hann, flt, 6, 'FT8_FFT_SIZE')
+    # LA VENTANA DE HANN YA NO SE GUARDA - 28/10/2026. Se calcula en
+    # ft8_fft_hann() con esta misma aproximacion, bit a bit: eran 4.096
+    # bytes de flash de una funcion que no depende de nada. Ver el
+    # comentario largo de ese fichero. La cuenta se queda aqui arriba
+    # porque es la que define QUE ventana es, y porque el banco la usa
+    # para comprobar que la de la radio no se ha movido.
     return '\n'.join(out) + '\n'
 
 
@@ -160,4 +188,6 @@ if __name__ == '__main__':
     destino = sys.argv[1] if len(sys.argv) > 1 else 'User/ft8_tablas.c'
     with open(destino, 'w', encoding='utf-8') as f:
         f.write(texto())
-    print('  %s: %d+%d+%d floats' % (destino, N // 2, N // 2, N))
+    print('  %s: %d floats de un cuarto de onda (el seno y la media onda'
+          ' salen de ella, y la ventana de Hann se calcula)'
+          % (destino, N // 4 + 1))

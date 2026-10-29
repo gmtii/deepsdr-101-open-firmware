@@ -128,7 +128,8 @@ uint8_t wspr_modo_start(void)
      */
     ram = hfdl_ram_todo(&cap);
     if ((ram == (uint8_t *)0) ||
-        (cap < (WSPR_RX_RAM + (uint32_t)sizeof(wspr_lineas_t)))) {
+        (cap < (wspr_rx_ram_necesaria()
+                + (uint32_t)sizeof(wspr_lineas_t)))) {
         hfdl_ram_suelta();
         return 0U;
     }
@@ -156,6 +157,7 @@ void wspr_modo_stop(void)
     s_capturando = 0U;
     s_linp = (wspr_lineas_t *)0;
     s_n = 0U;              /* los renglones se van con la memoria prestada */
+    wspr_rx_fin();         /* y el estado del receptor, que vive alli */
     hfdl_ram_suelta();
 }
 

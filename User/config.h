@@ -75,6 +75,27 @@
  * puesto en un momento dado. */
 #define CONFIG_PGA_START_DB_X2  40
 
+/*
+ * Y EL DE FM ANCHA, APARTE - 28/10/2026.
+ *
+ * *** Pedido por el usuario: 25 dB de serie en FM ancha, y que si se
+ * cambia se guarde. ***
+ *
+ * Hasta hoy la FM ancha no tenia ganancia propia: apply_demod_mode() ponia
+ * el tope del codec (95 = 47,5 dB) al entrar, porque a 100 MHz el QSD
+ * pierde unos 25 dB de conversion y el razonamiento era "hace falta todo
+ * lo que hay". Con antena de hilo y una emisora lejana vale; con una
+ * antena decente y una local satura, y el mando no servia de nada porque
+ * el valor vivo se tiraba al salir del modo.
+ *
+ * 50 son 25,0 dB: deja 22,5 dB de margen por arriba para las lejanas y
+ * quita la saturacion de las locales. Lo que se gire a partir de ahi se
+ * guarda en CONFIG.CSV como pga_wfm_db_x2 (ver SET_X_PGA_WFM en
+ * settings.h), que es un ajuste SEPARADO del de onda corta: ninguno de los
+ * dos pisa al otro.
+ */
+#define CONFIG_PGA_WFM_DB_X2    50   /* 25,0 dB */
+
 /* ============ AUTOMATICO DE GANANCIA DE RADIOFRECUENCIA (PGA) ==========
  * El diseño entero esta en el comentario de s_rf_agc_enabled en main.c
  * -viene apagado, se enciende con la casilla RFAGC- y la parte que
@@ -224,7 +245,7 @@
  * El _Static_assert de abajo es el que obliga a que el menor lleve
  * siempre sus dos cifras: "5" no pasa, "05" si. */
 #define CONFIG_FW_MAYOR    "6"
-#define CONFIG_FW_MENOR "06"   /* SIEMPRE dos cifras: 00..99 */
+#define CONFIG_FW_MENOR "14"   /* SIEMPRE dos cifras: 00..99 */
 #define CONFIG_FW_VERSION  "V" CONFIG_FW_MAYOR "." CONFIG_FW_MENOR
 
 _Static_assert(sizeof(CONFIG_FW_MENOR) == 3,

@@ -54,6 +54,7 @@
  * enganche que lleva ahora feed_fase().
  */
 #include "dcf77.h"
+#include "hora_comun.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -93,6 +94,19 @@ static void mete(size_t n, dcf_info_t *out)
 
 int main(void)
 {
+    /*
+     * EL HUSO, DESDE EL 28/10/2026. ALS162 emite hora local francesa -CET
+     * en invierno, CEST en verano-, y hasta ese dia el decodificador la
+     * guardaba tal cual: el reloj se ponia en hora de Europa central
+     * pasara lo que pasara. Lo aviso un usuario de Dublin. Ver dcf77.c y
+     * sim/dcf77test.c, que es donde esta medido el caso.
+     *
+     * Aqui se escucha desde el huso del propio transmisor, asi que lo que
+     * se exige es exactamente lo que se exigia antes y este banco sigue
+     * midiendo lo suyo -la fase y la trama- y no el huso.
+     */
+    hora_huso_pon(120);   /* CEST */
+
     dcf_info_t inf;
     size_t n;
     unsigned elem, i;
