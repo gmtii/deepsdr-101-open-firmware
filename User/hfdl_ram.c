@@ -48,12 +48,42 @@ uint8_t *hfdl_scope_get_hfdl_ram(uint32_t *capacity_out)
         if (capacity_out != (void *)0) { *capacity_out = 0U; }
         return (uint8_t *)0;
     }
-    /* Despues de la cabecera reservada - ver hfdl_ram.h. */
+    /*
+     * Despues de la cabecera reservada - ver hfdl_ram.h.
+     *
+     * Y LA CAPACIDAD SALE DE LA UNION ENTERA, NO DEL MIEMBRO - apuntado el
+     * 29/10/2026, revision a fondo.
+     *
+     * El comentario de ft8_shared_ram.h dice que desde el 11/10 HFDL "lo
+     * pide por su nombre" y que por eso su capacidad ya no depende del
+     * ancho de un buffer de otro. Esa frase NO es verdad hoy: el miembro
+     * mayor de la union es el de FT8 (69.852, mas que los 66.256 de
+     * hfdl_buf), y esta linea mide la UNION, asi que lo que HFDL puede
+     * repartir sigue dependiendo de la ventana de FT8.
+     *
+     * Se deja asi A PROPOSITO, y no por dejadez: medir el miembro daria
+     * 51.088, que es EXACTAMENTE lo que pide el giro 6 -margen cero-,
+     * mientras que medir la union da 54.684 y deja 3.596 de sobra. Cambiarlo
+     * seria tirar margen real para que un comentario dijera la verdad.
+     *
+     * Lo que SI se hace es poner la red: el _Static_assert de abajo no deja
+     * que la union encoja por debajo de lo que HFDL necesita. Asi, el dia
+     * que alguien estreche la ventana de FT8, se entera al compilar y no
+     * cuando un giro 6 deja de caber en antena.
+     */
     if (capacity_out != (void *)0) {
         *capacity_out = (uint32_t)sizeof g_ft8_shared_ram - HFDL_RAM_CABECERA;
     }
     return (uint8_t *)&g_ft8_shared_ram + HFDL_RAM_CABECERA;
 }
+
+/*
+ * LA RED DE LA QUE HABLA hfdl_scope_get_hfdl_ram(): la union no puede
+ * encoger por debajo de lo que HFDL necesita. Hoy sobran 3.596 bytes.
+ */
+_Static_assert(sizeof(g_ft8_shared_ram) >= HFDL_RAM_TOTAL,
+               "la union se ha quedado por debajo de lo que pide HFDL: "
+               "mira HFDL_RAM_TOTAL en hfdl_ram.h");
 
 uint8_t *hfdl_ram_cabecera(void)
 {

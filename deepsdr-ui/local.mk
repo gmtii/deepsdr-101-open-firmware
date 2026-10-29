@@ -376,6 +376,34 @@ endif
 
 comprueba: manual
 
+# QUE NINGUNA ENTREGA SALGA SIN DECIR A QUE AFECTA - 29/10/2026.
+#
+# La segunda mitad de lo que pidio el dueno el 29/10: que cada cambio venga
+# con el estudio de a que componentes afecta de principio a fin, y que eso
+# no le obligue a el a probar la radio entera en cada version.
+#
+# Las dos mitades piden lo mismo. El fallo del corrector de imagen no fue de
+# medida -habia 275 objetivos corriendo- sino de ALCANCE: nadie escribio que
+# ese escalon corre dentro de la interrupcion del ADC sobre todas las
+# muestras de todos los modos, asi que HFDL no entro en la lista de cosas
+# que repasar, asi que no habia banco porque no habia sospecha.
+#
+# El mapa de la cadena esta en CADENA.md. El apartado va en la ULTIMA
+# entrada de CAMBIOS.md y lo exige tools/alcance_check.py: una cosa por
+# renglon, y cada renglon con el banco que la mide o diciendo que no lo hay.
+#
+# Se salta sin docs/, como version y manual: ahi no esta el diario.
+.PHONY: alcance
+alcance:
+ifeq ($(HAY_DOCS),)
+	@echo "  (docs/ no esta en el repositorio: me salto alcance_check)"
+else
+	python3 $(FIRMWARE)/tools/alcance_check.py $(FIRMWARE)/../docs/CAMBIOS.md \
+	        $(FIRMWARE)/CADENA.md
+endif
+
+comprueba: alcance
+
 # Que ningun enlace ni ninguna imagen de los .md apunte a donde no hay nada.
 # Ver tools/md_enlaces_check.py: HARDWARE.md llevaba meses abriendo con un
 # ![](deepsdr_1.jpg) que no existe, y como iba a ser la primera linea que
@@ -509,6 +537,72 @@ comprueba: alsiq
 comprueba: alsreal
 
 comprueba: als
+
+# QUE LA HORA POR RADIO SE PONGA CON SU SEGUNDO - 29/10/2026.
+#
+# *** Un probador: "tras sincronizar con ALS162 se ensena HH.MM y se
+# enciende Aplicar, pero los segundos no avanzan, asi que al pulsar el
+# reloj se queda con los segundos a cero". ***
+#
+# Los bancos de arriba -dcf77, msf, als, alsreal, alsiq- comprueban que la
+# hora que sale del decodificador sea la correcta, y la sacaban bien. Lo
+# que fallaba estaba despues: esa hora vale en el borde de minuto, y entre
+# el borde y el dedo se tiraban los segundos. Eso vive en main.c y ninguno
+# de esos bancos lo ve. Ver tools/hora_segundo_check.py.
+.PHONY: horaseg
+horaseg: ; python3 $(FIRMWARE)/tools/hora_segundo_check.py $(FIRMWARE)/User/main.c
+
+comprueba: horaseg
+
+# QUE LA MARQUESINA DE LA CABECERA NO SE PARE CON UN MENU ABIERTO -
+# 29/10/2026.
+#
+# *** El usuario, con Ajustes abierto y el cartel rodeado en rojo: "China
+# National Rad" y "CHN - UI - 11:00-14:0", cortados y quietos. ***
+#
+# Las dos marquesinas se iban con s_menu_open, y ningun menu de esta radio
+# tapa la cabecera: empiezan todos en Y=104 y la franja acaba en Y=54. El
+# guion comprueba las dos mitades -que la guarda no este, y que ninguna
+# pantalla baje de ahi-, porque la segunda es la que justifica la primera.
+# Ver tools/marquesina_check.py.
+.PHONY: marquesina
+marquesina: ; python3 $(FIRMWARE)/tools/marquesina_check.py $(FIRMWARE)/User
+
+comprueba: marquesina
+
+# QUE AL CAMBIAR DE TEMA NO SE QUEDE NADA DEL TEMA ANTERIOR - 29/10/2026.
+#
+# *** El usuario, con el tema claro puesto: que se ha quedado un trozo
+# gris al cambiar de tema. ***
+#
+# tema_aplicar() repintaba con freq_display_draw() y el comentario "la
+# cabecera entera" al lado. Esa funcion pinta de 0 a rds_x1() desde el
+# 05/10, cuando se recorto a proposito. El comentario se quedo
+# describiendo lo de antes, y la esquina del reloj se quedaba del tema
+# viejo hasta el siguiente cambio de minuto.
+#
+# No se caza leyendo ninguna de las dos funciones por separado: las dos
+# son correctas. Ver tools/tema_check.py.
+.PHONY: tema
+tema: ; python3 $(FIRMWARE)/tools/tema_check.py $(FIRMWARE)/User
+
+comprueba: tema
+
+# QUE EL RENGLON DE DETALLE DE LA HORA QUEPA EN LOS DOS IDIOMAS -
+# 29/10/2026. Ver la cabecera de sim/hora_ancho.c: los rotulos de esa
+# linea son cortos a proposito porque van al lado de dos numeros, asi que
+# una traduccion mas larga los sacaria del hueco. Se mide con font_ui_14,
+# que es la de verdad, y se rehace en cada tanda en vez de quedarse
+# escrita en un documento.
+out/horaancho: sim/hora_ancho.c sim/lcd_sim.c gfx2/gfx2.c gfx2/fonts_data.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I hostinc -I sim -I gfx2 -I $(FIRMWARE)/User -I vendor \
+	      -o $@ $^ $(LDLIBS)
+
+.PHONY: horaancho
+horaancho: out/horaancho ; ./out/horaancho
+
+comprueba: horaancho
 
 # Banco del calendario compartido (User/hora_comun.c): dia de la semana, dia
 # del año, y sobre todo el horario de verano europeo, que es lo que convierte
@@ -1903,11 +1997,45 @@ espejochk: ; python3 tools/espejo_check.py $(FIRMWARE)/User/main.c
 
 comprueba: espejochk
 
+# QUE DE UN MODO DE PANEL ENTERO SE PUEDA SALIR SIN EL TACTIL - 29/10/2026.
+#
+# *** El usuario: que el modo IDENT le deja la radio tostada y que no va el
+# tactil, con el encoder funcionando. ***
+#
+# Que el tactil falle ahi es un fallo. Que de esos ocho modos no se pueda
+# SALIR sin tactil es otro, y peor: el boton Modo vive en la barra de abajo
+# y la rejilla se maneja con el dedo, asi que la unica salida era apagar la
+# radio. La pulsacion larga del mando lo arregla. Ver tools/salida_check.py.
+.PHONY: salida
+salida: ; python3 $(FIRMWARE)/tools/salida_check.py $(FIRMWARE)/User/main.c
+
+comprueba: salida
+
 .PHONY: prestamochk
 prestamochk:
 	python3 tools/prestamo_check.py $(FIRMWARE)/User/ft8_modo.c
 
 comprueba: prestamochk
+
+# Y EL OTRO prestamo_check, EL DE LA RAIZ, QUE NO COLGABA DE NADA -
+# 29/10/2026.
+#
+# Hay DOS guiones con ese nombre y comprueban cosas distintas:
+#
+#   deepsdr-ui/tools/prestamo_check.py   que ft8_modo.c pida y devuelva el
+#                                        buffer, y el orden de las listas
+#   tools/prestamo_check.py              QUIEN se declara dueño de esa
+#                                        memoria, contra una lista escrita
+#
+# El primero colgaba de "comprueba" desde el dia que se escribio. El
+# segundo no colgaba de nada, y llevaba en ROJO desde la V6.10: wefax.c se
+# habia puesto la marca de dueño sin pasar por la lista, que es exactamente
+# lo que ese guion existe para cazar. Un guion que nadie ejecuta no vigila
+# nada.
+.PHONY: dueno
+dueno: ; python3 $(FIRMWARE)/tools/prestamo_check.py $(FIRMWARE)
+
+comprueba: dueno
 
 # ---------------------------------------------------------------------
 # LAS TABLAS DE LA FFT DE FT8 (25/09/2026). Ver la cabecera de
@@ -2628,6 +2756,22 @@ out/ft8lista: sim/ft8_lista.c $(FIRMWARE)/User/ft8_lista.c
 ft8lista: out/ft8lista ; ./out/ft8lista
 
 comprueba: ft8lista
+
+# EL PEGAMENTO DE LA LISTA DE FT8, QUE NINGUN SIMULADOR COMPILA -
+# 29/10/2026.
+#
+# *** El usuario: que la lista de FT8 parece que no se llena bien, como si
+# solo cupieran quince. ***
+#
+# out/ft8lista mide ft8_lista.c y pasa. Lo que nadie miraba son las veinte
+# lineas de main.c que lo llaman, y ahi habia dos cosas: la cola del
+# decodificador era mas corta que la lista -tiraba mensajes que si cabian,
+# y en silencio- y el scroll se movia con el contador del decodificador en
+# vez de con el de inserciones. Ver tools/ft8_lista_check.py.
+.PHONY: ft8pega
+ft8pega: ; python3 $(FIRMWARE)/tools/ft8_lista_check.py $(FIRMWARE)/User
+
+comprueba: ft8pega
 
 # ---------------------------------------------------------------------
 # EL DIEZMADOR DE MEDIO BANDA 192 -> 96 kHz (23/10/2026)
@@ -4360,6 +4504,34 @@ out/stanaglatido: sim/stanag_latido.c $(FIRMWARE)/User/stanag_modo.c \
 stanaglatido: out/stanaglatido ; ./out/stanaglatido
 
 comprueba: stanaglatido
+
+# Y EL DEL IDENTIFICADOR, QUE LLEVABA ESCRITO Y SIN ENGANCHAR - 29/10/2026.
+#
+# *** El usuario, hoy: que el modo IDENT le deja la radio tostada y que no
+# va el tactil, con el encoder funcionando. ***
+#
+# sim/ident_latido.c existe desde el 18/10 y mide exactamente eso: cuantas
+# veces por segundo se repinta el panel del identificador. Su propia
+# cabecera dice que es el mismo fallo que ha salido cuatro veces y que la
+# causa no es el calculo, es el REPINTADO -un panel entero por un bus SPI
+# varias veces por segundo porque algo que no deberia moverse se mueve en
+# la primera linea-.
+#
+# Y NO TENIA OBJETIVO EN NINGUN MAKEFILE. Escrito, razonado, con sus topes
+# puestos, y sin correr ni una vez. Su gemelo de STANAG si cuelga de
+# "comprueba" desde el dia que se escribio; este se quedo fuera.
+#
+# Un banco que no corre es un comentario largo.
+out/identlatido: sim/ident_latido.c $(FIRMWARE)/User/ident.c \
+                 $(FIRMWARE)/User/stanag_det.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) $(GFX2) -I$(FIRMWARE)/User -Ihostinc -Isim -o $@ \
+	      $(filter %.c,$^) $(LDLIBS)
+
+.PHONY: identlatido
+identlatido: out/identlatido ; ./out/identlatido
+
+comprueba: identlatido
 
 # ---------------------------------------------------------------------
 # EL BOTON DE APRENDIZAJE DEL CW - 08/10/2026

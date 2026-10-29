@@ -3673,6 +3673,55 @@ float demod_am_get_active_fs_hz(void)
  */
 static void mix_reparte(void);
 
+
+/*
+ * LAS COLAS DE LOS DIEZMADORES, OLVIDADAS - 29/10/2026, revision a fondo
+ * de HFDL.
+ *
+ * s_decim_i_state y s_decim_q_state son 95 muestras de historia cada uno
+ * a 96 kHz, y hasta hoy SOLO se ponian a cero dentro de
+ * demod_am_set_active_rate(), o sea cuando cambia la TASA. Entrar en HFDL
+ * es un cambio de modo a banda lateral que normalmente NO cruza tasa, asi
+ * que el diezmador que alimenta a hfdl_modo_mete() arrancaba con muestras
+ * de la ultima sesion de banda lateral -que puede ser de hace minutos- y,
+ * desde la V6.15, con OTRA GANANCIA: el PGA salta de 20,0 a 35,0 dB en esa
+ * misma transicion. El primer bloque diezmado entrega unas doce de sus
+ * treinta y dos muestras contaminadas por un escalon de nivel, 1 ms de
+ * basura a 12 kHz metida justo en el AGC y el porton de HFDL. Y el
+ * silencio de entrada de AM no protege de esto: solo acalla el ALTAVOZ, y
+ * HFDL pincha mucho antes.
+ *
+ * Este mismo fichero ya lo arreglo tres veces en la revision de FM ancha
+ * -s_wfm_alpf_*_state, s_wfm_ifbw_*_state y s_i_delay_hist-; el diezmador
+ * de banda lateral, que es el que alimenta a HFDL, es el que se quedo
+ * fuera de la lista.
+ *
+ * Se barre la cadena diezmada ENTERA y no solo los dos de banda lateral:
+ * el Hilbert, el interpolador y el par del reductor de ruido arrastran lo
+ * mismo por los mismos motivos, y una lista a mano con dos de seis es
+ * como empezo esto.
+ *
+ * LA LLAMA apply_demod_mode() EN main.c, justo detras de cadena_olvida() y
+ * NO dentro de ella. La primera version de esta tarde la metio dentro, y
+ * eso la colaba ademas en tras_cambio_de_ganancia() -cada escalon del
+ * atenuador y del PGA-, que corre a proposito CON EL GANCHO DEL BLOQUE
+ * PUESTO: un escalon del automatico a mitad de una rafaga de HFDL borraba
+ * esta historia con la interrupcion viva, o sea casi dos simbolos de basura
+ * dentro de la trama, y sin ningun beneficio medido para ese caso.
+ *
+ * En apply_demod_mode() el gancho esta suelto, que es lo que hace falta
+ * para barrer un buffer que lee la interrupcion.
+ */
+void demod_am_decim_olvida(void)
+{
+    memset(s_decim_i_state,   0, sizeof s_decim_i_state);
+    memset(s_decim_q_state,   0, sizeof s_decim_q_state);
+    memset(s_hilbert_state,   0, sizeof s_hilbert_state);
+    memset(s_interp_state,    0, sizeof s_interp_state);
+    memset(s_nr_decim_state,  0, sizeof s_nr_decim_state);
+    memset(s_nr_interp_state, 0, sizeof s_nr_interp_state);
+}
+
 void demod_am_set_rf_doble(uint8_t doble)
 {
     uint8_t nuevo = doble ? 1U : 0U;

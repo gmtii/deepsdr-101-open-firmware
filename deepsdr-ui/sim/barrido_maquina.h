@@ -139,6 +139,32 @@ static void mem_scan_poll(void)
     uint8_t hay;
 
     if (!s_scan_on) { return; }
+
+    /*
+     * Y SE PARA SOLO EN LOS MODOS DE PANEL ENTERO - 29/10/2026, tarde,
+     * revision a fondo de HFDL.
+     *
+     * No habia ni una llamada a mem_scan_para() en ningun camino de
+     * cambio de modo: los unicos frenos eran tocar MEM, reconmutar el
+     * mismo banco y quedarse el banco sin memorias. Asi que arrancabas el
+     * barrido, elegias HFDL en la rejilla de modos y el barrido seguia
+     * vivo, saltando de memoria cada SCAN_ESPERA_MS + SCAN_MIRA_MS. El
+     * dial se iba de la frecuencia DOS VECES Y MEDIA POR SEGUNDO, y una
+     * rafaga de HFDL dura un segundo. Lo mismo al reves: desde HFDL se
+     * puede abrir el banco y arrancarlo desde dentro.
+     *
+     * La guarda va AQUI y no en los sitios que cambian de modo, y es
+     * deliberado: en el latido no hay forma de rodearla. Poniendola en
+     * los cambios de modo habria que acordarse en cada camino nuevo, que
+     * es exactamente como se escapo esto.
+     *
+     * Barrer no tiene sentido en estos ocho: todos viven en un canal
+     * fijo, el panel ocupa la pantalla entera y el nivel que mira el
+     * barrido -demod_am_set_nivel_medir()- cuesta 256 multiplicaciones y
+     * un logaritmo por bloque, que es lo que ya ahogo a la radio en
+     * STANAG.
+     */
+    if (modo_panel_entero()) { mem_scan_para(); return; }
     /* Un rato de gracia para que el silenciador decida: la cadena acaba de
      * cambiar de frecuencia y de modo, y el silencio de entrada de FM ancha
      * son doscientos bloques. Preguntar antes es preguntar al transitorio. */

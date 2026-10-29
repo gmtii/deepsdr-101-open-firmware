@@ -1,4 +1,5 @@
 #include "stanag_rx.h"
+#include "pump.h"   /* pump(): ver su cabecera */
 #include "hfdl_ram.h"
 #include "hfdl_viterbi.h"
 #include <math.h>
@@ -2094,7 +2095,12 @@ uint8_t stanag_rx_paso(void)
     }
 
     /* ¿hay una trama entera por delante del puntero de lectura? */
+    /* Un latido del tactil: este bucle puede tardar decenas de
+     * milisegundos con señal, y mientras tanto nadie mira el dedo.
+     * Ver User/pump.h. */
+    pump();
     while ((s_escrito > s_leido) && ((s_escrito - s_leido) > (MUE_TRAMA + (2U * SPS)))) {
+        pump();
         uint32_t ini;
         float q;
 

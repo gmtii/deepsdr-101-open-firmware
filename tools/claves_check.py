@@ -21,6 +21,27 @@ Mira que cada SET_X_* del enum de settings.h tenga las tres patas:
   2. un sitio en main.c que la ESCRIBA:  e->v[SET_X_LOQUESEA] = ...
   3. un sitio en main.c que la LEA:      if (EX_HAY(SET_X_LOQUESEA))
 
+Y DESDE EL 29/10/2026, TAMBIEN POR TABLA. Las ocho ganancias por modo
+digital (SET_X_PGA_FT8..SET_X_PGA_IDENT, V6.15) se escriben y se leen
+recorriendo una tabla de claves, no nombrandolas una a una:
+
+    static const uint8_t k_clave[PGA_DIGI_N] = { SET_X_PGA_FT8, ... };
+    for (i = ...) { e->v[k_clave[i]] = ...; }
+    for (i = ...) { if (EX_HAY(k_clave[i])) { ... } }
+
+Eso es exactamente igual de seguro -la clave sigue NOMBRADA, y un
+_Static_assert ata la cuenta de la tabla con la del enum-, pero no cuadra
+con los dos patrones de arriba. Este guion las daba por huerfanas, y por
+eso `make comprueba` salia en rojo con el firmware correcto: un guardian
+que grita sin motivo acaba leido en diagonal, que es la forma mas barata
+de perder uno que grite con motivo.
+
+Lo que se admite NO es "la clave aparece en algun sitio". Es la cadena
+entera: la clave esta nombrada en una tabla, Y esa misma tabla se usa
+indexada dentro de un `e->v[...] =` para la escritura, Y dentro de un
+`EX_HAY(...)` para la lectura. Una clave que se quede en la tabla sin que
+nadie recorra la tabla sigue saliendo señalada.
+
 Una clave a la que le falte la 2 se guarda siempre a cero; una a la que le
 falte la 3 se escribe y no se usa nunca. Las dos se ven igual desde fuera:
 "no guarda".
@@ -75,12 +96,57 @@ if len(claves) != len(nombres):
     print('  NO COINCIDEN: el enum y la tabla de nombres se han desincronizado   MAL')
     fallos += 1
 
-sin_escribir, sin_leer = [], []
+def tablas_con(clave):
+    """Las tablas `static const uint8_t NOMBRE[..] = { .. clave .. }`.
+
+    Devuelve los NOMBRE que nombran esa clave. Se exige `static const` a
+    proposito: una tabla que se pueda reescribir en caliente no prueba
+    nada sobre lo que acaba en CONFIG.CSV.
+    """
+    out = []
+    for g in re.finditer(r'static\s+const\s+uint8_t\s+(\w+)\s*\[[^\]]*\]'
+                         r'\s*=\s*\{([^}]*)\}', m, re.S):
+        if re.search(r'\b' + clave + r'\b', g.group(2)):
+            out.append(g.group(1))
+    return out
+
+
+def por_tabla(clave, patron):
+    """Si alguna tabla que nombra la clave se recorre dentro de `patron`.
+
+    `patron` lleva un %s donde va el nombre de la tabla indexada.
+    """
+    for t in tablas_con(clave):
+        if re.search(patron % re.escape(t), m):
+            return t
+    return None
+
+
+sin_escribir, sin_leer, por_tablas = [], [], []
 for k in claves:
-    if not re.search(r'e->v\[\s*' + k + r'\s*\]\s*=', m):
+    esc = re.search(r'e->v\[\s*' + k + r'\s*\]\s*=', m) is not None
+    lee = re.search(r'EX_HAY\(\s*' + k + r'\s*\)', m) is not None
+    # El `= ` del final NO es adorno: `e->v[k_clave[i]]` aparece tambien en
+    # la rama que LEE, como argumento de ex_rec(). Sin exigir la asignacion,
+    # quitar la escritura entera dejaba el guardian en verde - probado.
+    t_esc = None if esc else por_tabla(
+        k, r'e->v\[\s*%s\s*\[[^\]]*\]\s*\]\s*=[^=]')
+    t_lee = None if lee else por_tabla(k, r'EX_HAY\(\s*%s\s*\[')
+    if not esc and t_esc is None:
         sin_escribir.append(k)
-    if not re.search(r'EX_HAY\(\s*' + k + r'\s*\)', m):
+    if not lee and t_lee is None:
         sin_leer.append(k)
+    if (t_esc is not None) and (t_esc == t_lee):
+        por_tablas.append((k, t_esc))
+
+if por_tablas:
+    # Se dicen EN VOZ ALTA, no se pasan en silencio: quien lea la salida
+    # tiene que poder ver cuales no se nombran una a una.
+    print('  %d clave(s) por tabla (nombradas en %s, recorridas en los dos'
+          ' sitios):' % (len(por_tablas),
+                         ', '.join(sorted({t for _, t in por_tablas}))))
+    for k, t in por_tablas:
+        print('      %-20s via %s[]' % (k, t))
 
 if sin_escribir:
     print('  claves que NADIE escribe (se guardarian siempre a cero):')

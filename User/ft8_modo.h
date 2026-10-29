@@ -130,6 +130,19 @@ uint32_t ft8_modo_total(void);
 uint8_t  ft8_modo_ultima(void);
 
 /*
+ * Y CUANTOS HAN ENTRADO DE VERDAD EN LA LISTA.
+ *
+ * ft8_modo_total() cuenta lo que vio el decodificador; esto cuenta lo que
+ * se metio. Se diferencian cuando una ranura trae mas mensajes de los que
+ * admite la cola del decodificador y alguno se cae por el camino.
+ *
+ * Quien lleva el scroll tiene que usar ESTE: lo que mueve la ventana es lo
+ * que entra por arriba de la lista, no lo que el decodificador alcanzo a
+ * ver. Ver s_metidas en ft8_modo.c.
+ */
+uint32_t ft8_modo_metidas(void);
+
+/*
  * LOS DOS NUMEROS QUE CONTESTAN A "¿POR QUE NO DECODIFICA?".
  *
  * `candidatos` son los sitios donde la busqueda de sincronismo creyo ver una

@@ -292,6 +292,11 @@ typedef struct {
  */
 uint8_t stanag_det_init(float *trabajo, uint32_t n_floats);
 
+/* Suelta los punteros al area de trabajo, que vive en la memoria
+ * prestada. La llaman stanag_modo_stop() e ident_modo_stop() antes de
+ * devolverla: ver el .c. */
+void stanag_det_fin(void);
+
 /*
  * Mete audio de banda lateral a 12 kHz, el mismo que comen FT8, ALE y
  * JTTY (ver demod_am.c). Se le puede dar en trozos de cualquier tamaño.

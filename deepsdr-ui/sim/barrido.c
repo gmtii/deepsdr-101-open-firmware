@@ -140,6 +140,23 @@ static void menu_screen_close(void) { s_cerrada++; }
 static void mem_boton_repinta(void) { }
 static void mem_rejilla_repinta(void) { }
 
+/*
+ * LOS MODOS DE PANEL ENTERO, QUE AQUI NO HAY - 29/10/2026.
+ *
+ * mem_scan_poll() se para sola si esta en uno de los ocho modos que se
+ * quedan la pantalla entera (FT8, HFDL, WSPR, AIS, ALE, JTTY, STANAG,
+ * IDENT): barrer ahi no tiene sentido y le movia el dial al decodificador
+ * dos veces y media por segundo. Ver la guarda en User/main.c.
+ *
+ * El banco mide el BARRIDO, o sea el caso en que no estas en ninguno de
+ * ellos, asi que esto devuelve 0 y la maquina corre entera. Lo que mide
+ * que la guarda EXISTE es tools/mando_check.py, no este banco; aqui lo
+ * unico que hace falta es que el extracto de main.c compile tal cual, sin
+ * tocarle una linea, que es de lo que va barrido_dump.py.
+ */
+static uint8_t s_panel_entero_sim = 0U;
+static uint8_t modo_panel_entero(void) { return s_panel_entero_sim; }
+
 /* Y AQUI ENTRA LA MAQUINA DE VERDAD, sacada de User/main.c. */
 static uint8_t s_scan_on;
 static uint8_t s_scan_banco;
@@ -486,6 +503,44 @@ int main(void)
         snprintf(t, sizeof t, "no para en ninguna en diez vueltas (%u pitidos)",
                  s_bips);
         pasa(t, s_bips == 0u);
+        mem_scan_para();
+    }
+
+    /* --------------------------------------------------------------
+     * 10. Y EN UN MODO DE PANEL ENTERO SE PARA SOLO
+     * --------------------------------------------------------------
+     * 29/10/2026, revision a fondo de HFDL. No habia ni una llamada a
+     * mem_scan_para() en ningun camino de cambio de modo, asi que se
+     * podia arrancar el barrido, elegir HFDL en la rejilla y dejarlo
+     * corriendo: el dial se iba de la frecuencia cada 400 ms y una
+     * rafaga de HFDL dura un segundo.
+     *
+     * Lo que se mide aqui es la guarda del LATIDO, que es donde esta
+     * puesta a proposito: en el latido no hay forma de rodearla.
+     * -------------------------------------------------------------- */
+    printf("\n  10. EN UN MODO DE PANEL ENTERO SE PARA SOLO\n");
+    {
+        pon_banco(8u, DEMOD_MODE_USB, 40.0f);
+        mem_scan_conmuta(0U);
+        corre_ms(2000U);
+        pasa("barriendo antes de entrar en el modo digital", s_scan_on != 0u);
+
+        s_panel_entero_sim = 1U;      /* el usuario elige HFDL */
+        {
+            uint8_t mem_antes = s_scan_mem;
+            corre_ms(2000U);
+            pasa("el barrido se ha parado solo", s_scan_on == 0u);
+            snprintf(t, sizeof t,
+                     "y no ha saltado de memoria al pararse (%u -> %u)",
+                     mem_antes, s_scan_mem);
+            pasa(t, s_scan_mem == mem_antes);
+        }
+
+        /* Y al salir del modo digital NO se vuelve a arrancar solo: parar
+         * es una decision, no una pausa. */
+        s_panel_entero_sim = 0U;
+        corre_ms(4000U);
+        pasa("y al salir no se arranca solo", s_scan_on == 0u);
         mem_scan_para();
     }
 

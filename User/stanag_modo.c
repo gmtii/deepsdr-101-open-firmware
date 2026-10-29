@@ -318,6 +318,9 @@ void stanag_modo_stop(void)
     s_activo = 0U;        /* PRIMERO: calla a la interrupcion */
     stanag_rx_fin();
     s4415_fin();
+    /* Y el detector, que es el tercero que reparte esa region y el unico
+     * que no tenia fin(). Ver stanag_det_fin(). */
+    stanag_det_fin();
     hfdl_ram_suelta();
 }
 

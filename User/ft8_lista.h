@@ -16,11 +16,14 @@
  * LO QUE TIENE MIGA, y es lo unico:
  *
  *   SE MIRAN TODOS LOS GUARDADOS, NO LOS QUE CABEN. Sin filtro da igual
- *   -hay dieciseis mensajes y caben quince, asi que recorrer hasta quince
- *   deja fuera el mas viejo y ya esta-. Con filtro NO da igual: si de los
- *   dieciseis solo tres son CQ y se mira hasta el decimoquinto, el panel
- *   enseña las CQ que hubiera ahi dentro y se pierde las de mas abajo. Un
- *   filtro que busca en media lista no filtra: recorta y despues filtra.
+ *   -en el panel caben quince y a los demas se llega con el dedo-. Con
+ *   filtro NO da igual: si de los cuarenta y ocho guardados solo tres son
+ *   CQ y se mira hasta el decimoquinto, el panel enseña las CQ que hubiera
+ *   ahi dentro y se pierde las de mas abajo. Un filtro que busca en media
+ *   lista no filtra: recorta y despues filtra.
+ *
+ *   (Decia "dieciseis mensajes" hasta el 29/10/2026, que es lo que medIa
+ *   la lista cuando se escribio esto. Ver FT8_MODO_LINEAS.)
  *
  *   Y SI PASAN MAS DE LOS QUE CABEN, se enseñan LOS ULTIMOS. Los mas
  *   nuevos, que son los que se pueden contestar... salvo que el dedo haya

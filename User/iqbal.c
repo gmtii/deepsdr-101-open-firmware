@@ -83,7 +83,29 @@ static volatile uint8_t s_on  TCMRAM_BSS;
  * FM ancha no puede, porque la portadora vive en continua. Volatil por lo
  * mismo que s_on: lo escribe el bucle principal y lo lee la interrupcion. */
 static volatile uint8_t s_aprende TCMRAM_BSS;
-static uint8_t  s_hay         TCMRAM_BSS;  /* ya hay una estimacion creible */
+/*
+ * VOLATILES DESDE EL 29/10/2026, revision a fondo de HFDL.
+ *
+ * Las dos las escribe el BUCLE PRINCIPAL -iqbal_fir_olvida(),
+ * iqbal_plano_olvida(), iqbal_resuelve()- y las lee la INTERRUPCION del
+ * DMA una vez por bloque. Este fichero establece esa regla en su cabecera
+ * y pone volatile en s_on, en s_aprende y en las once variables de la
+ * prueba A/B, porque sin volatil el compilador puede guardarselo en un
+ * registro a los dos lados. Estas dos se quedaron fuera.
+ *
+ * Y hay un arreglo que DEPENDE de ellas: el del 26/10 apaga la bandera la
+ * PRIMERA y borra las tomas despues, para que la interrupcion vea que no
+ * hay FIR desde la primera instruccion. Eso es una garantia de ORDEN entre
+ * escrituras a objetos distintos, y sin volatile el compilador no tiene
+ * ninguna obligacion de respetarla.
+ *
+ * Mirado el ensamblador del binario de hoy: el orden se respeta, asi que
+ * no es un fallo observable ahora mismo. Es un contrato que no estaba
+ * escrito, y la clase de cosa que se convierte en fallo el dia que alguien
+ * toque el nivel de optimizacion. Si el fichero dice que lo que cruza va
+ * volatile, va volatile.
+ */
+static volatile uint8_t s_hay TCMRAM_BSS;  /* ya hay una estimacion creible */
 static float    s_ii TCMRAM_BSS, s_qq TCMRAM_BSS, s_iq TCMRAM_BSS;
 static float    s_theta TCMRAM_BSS, s_g TCMRAM_BSS;
 static uint32_t s_bloques     TCMRAM_BSS;
@@ -567,7 +589,8 @@ static float   s_fir_re[IQB_FIR_TOMAS] TCMRAM_BSS;
 static float   s_fir_im[IQB_FIR_TOMAS] TCMRAM_BSS;
 static float   s_hre[IQB_FIR_TOMAS]    TCMRAM_BSS;  /* historia entre bloques */
 static float   s_him[IQB_FIR_TOMAS]    TCMRAM_BSS;
-static uint8_t s_fir_hay               TCMRAM_BSS;
+/* Volatil por lo mismo que s_hay: ver su comentario. */
+static volatile uint8_t s_fir_hay      TCMRAM_BSS;
 
 uint8_t iqbal_fir_hay(void) { return s_fir_hay; }
 

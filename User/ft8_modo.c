@@ -87,7 +87,42 @@ static uint16_t s_ms_dec;   /* lo que tardo la ultima decodificacion */
 #define s_lin (g_ft8_shared_ram.ft8.lineas)
 _Static_assert(sizeof(g_ft8_shared_ram.ft8.lineas) == FT8_MODO_LINEAS * FT8_MODO_LARGO,
                "lineas[] de ft8_shared_ram.h ya no cuadra con FT8_MODO_LINEAS/LARGO");
+/*
+ * Y QUE LA COLA NO SEA MAS CORTA QUE LA LISTA - 29/10/2026.
+ *
+ * Este fichero es el unico que ve las dos cuentas, y por eso el aserto
+ * vive aqui. Lo que vigila esta escrito entero en ft8_decoder.h: la cola
+ * se vacia de golpe nada mas decodificar, asi que una cola mas corta que
+ * la lista recorta ANTES de que el usuario pueda ver nada, y lo hace en
+ * silencio. El limite tiene que ser el que se ve y se sube con el dedo.
+ */
+_Static_assert((int)FT8_DECODER_MSG_QUEUE_SIZE >= (int)FT8_MODO_LINEAS,
+               "la cola del decodificador es mas corta que la lista: tiraria "
+               "mensajes que si caben. Ver ft8_decoder.h.");
 static uint32_t s_total;
+/*
+ * ======================================================================
+ * Y LOS QUE DE VERDAD HAN ENTRADO EN LA LISTA - 29/10/2026
+ * ======================================================================
+ *
+ * No es lo mismo que s_total, y la diferencia importa exactamente en un
+ * sitio: el scroll del dedo.
+ *
+ * s_total lo lleva el decodificador y cuenta CADA decodificacion, incluso
+ * las que se le caen de su cola cuando una ranura trae mas de las que
+ * admite (ver queue_push() en ft8_decoder.c, que lo dice con todas las
+ * letras). Para "cuantas llevas esta sesion" eso es lo correcto.
+ *
+ * Pero main.c lo usaba tambien para mover la ventana cuando el dedo la ha
+ * subido: suma a `subidos` cuantos mensajes han entrado POR ARRIBA. Si se
+ * le dan los que el decodificador vio en vez de los que de verdad se
+ * metieron, la ventana sube de mas y lo que estabas leyendo se va hacia
+ * abajo. Son dos preguntas distintas con un solo numero.
+ *
+ * Este cuenta inserciones, una por llamada a linea_nueva(), que es la
+ * definicion exacta de "ha entrado por arriba".
+ */
+static uint32_t s_metidas;
 static uint8_t  s_ultima;
 
 /* Convertir de float a int16 de 256 en 256: la escala del audio de banda
@@ -158,6 +193,7 @@ void ft8_modo_start(float fs_hz)
 
     memset(s_lin, 0, sizeof s_lin);
     s_total = 0UL;
+    s_metidas = 0UL;
     s_ultima = 0U;
     s_decodificando = 0U;
     /* El DT que sale en la chapa, por lo mismo que la cuenta de candidatos
@@ -372,6 +408,7 @@ void ft8_modo_db(int16_t *lo, int16_t *hi)
 }
 
 uint32_t ft8_modo_total(void)   { return s_total; }
+uint32_t ft8_modo_metidas(void) { return s_metidas; }
 uint8_t  ft8_modo_ultima(void)  { return s_ultima; }
 
 const char *ft8_modo_linea(uint8_t i)
@@ -455,13 +492,25 @@ void ft8_modo_come(const float *muestras, uint16_t n)
  * donde pasa en vez de donde se suponia.
  */
 
-/* Mete una linea nueva arriba y empuja las demas hacia abajo. Doce lineas,
- * asi que mover el bloque entero es mas barato que llevar un indice de
- * anillo y traducirlo cada vez que se pinta. */
+/*
+ * Mete una linea nueva arriba y empuja las demas hacia abajo.
+ *
+ * SON CUARENTA Y OCHO, NO DOCE - 29/10/2026. Aqui ponia "Doce lineas, asi
+ * que mover el bloque entero es mas barato que llevar un indice de anillo".
+ * La lista crecio a 48 y el comentario se quedo con el numero viejo, que es
+ * justo la clase de podredumbre que esta semana ya ha costado dos
+ * versiones. El argumento sigue valiendo, pero con la cuenta de hoy: son
+ * 47 memcpy de 88 bytes por mensaje -4.136 bytes- y con la banda abierta
+ * entran unos quince mensajes por ranura, o sea 62 kB cada quince
+ * segundos. Son 4 kB/s de memcpy en el bucle principal: nada al lado de la
+ * cascada, y a cambio el indice 0 es siempre el mas nuevo y quien pinta no
+ * tiene que traducir nada.
+ */
 static void linea_nueva(const char *txt)
 {
     uint8_t i;
 
+    s_metidas++;
     for (i = (uint8_t)(FT8_MODO_LINEAS - 1U); i > 0U; i--) {
         memcpy(s_lin[i], s_lin[i - 1U], FT8_MODO_LARGO);
     }

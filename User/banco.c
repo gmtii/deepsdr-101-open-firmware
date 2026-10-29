@@ -114,6 +114,19 @@ static uint32_t paso_a_hz(uint8_t idx)
 }
 
 /*
+ * LOS DIEZ PASOS DE ANTES DEL 27/10/2026, en hercios y en su orden.
+ *
+ * Esta tabla no se toca NUNCA: no describe la radio de hoy, describe los
+ * ficheros MEM.CSV que ya existen ahi fuera. Si manyana se añade otro
+ * paso, se añade arriba, en TUNE_STEPS_LISTA, y aqui no se escribe nada.
+ */
+static const uint32_t k_pasos_viejos[] = {
+    10UL, 100UL, 500UL, 1000UL, 5000UL,
+    10000UL, 12500UL, 25000UL, 100000UL, 1000000UL
+};
+#define PASOS_VIEJOS_N  (sizeof k_pasos_viejos / sizeof k_pasos_viejos[0])
+
+/*
  * Hercios -> indice, con la puerta de atras para los ficheros VIEJOS.
  *
  * El orden importa y no es casual: primero se mira si el numero es uno de
@@ -121,6 +134,22 @@ static uint32_t paso_a_hz(uint8_t idx)
  * que escribia el firmware anterior. Asi no hay ambigüedad posible: el
  * paso mas pequeño son 10 Hz y los indices viejos llegaban como mucho al
  * 9, o sea que ningun indice viejo puede confundirse con unos hercios.
+ *
+ * Y EL INDICE VIEJO SE TRADUCE, NO SE DEVUELVE TAL CUAL - 29/10/2026,
+ * revision a fondo de HFDL.
+ *
+ * La V6.05 metio los 9 kHz en la POSICION 5 de la lista y paso MEM.CSV a
+ * hercios precisamente para que los indices no se corrieran. Pero esta
+ * puerta de atras devolvia el numero viejo como indice de la lista NUEVA,
+ * sin traducir: todo indice de 5 para arriba se leia corrido un puesto.
+ * La memoria de marina guardada en 12,5 kHz (el 6 de antes) volvia en 10
+ * kHz, y la aeronautica de 25 volvia en 12,5. Que es, palabra por
+ * palabra, lo que las notas de aquella version ponen como ejemplo de lo
+ * que el cambio a hercios evitaba.
+ *
+ * Ahora el indice viejo se convierte a HERCIOS con la tabla de arriba y
+ * esos hercios se buscan en la lista de hoy. Asi el remapeo lo hace la
+ * lista y no una cuenta a mano, y añadir otro paso no vuelve a romperlo.
  */
 static uint8_t paso_de_hz(uint32_t v)
 {
@@ -130,7 +159,13 @@ static uint8_t paso_de_hz(uint32_t v)
     for (i = 0U; i < s_pasos_n; i++) {
         if (s_pasos_hz[i] == v) { return i; }
     }
-    if (v < (uint32_t)s_pasos_n) { return (uint8_t)v; }  /* fichero viejo */
+    if (v < (uint32_t)PASOS_VIEJOS_N) {        /* fichero viejo: era un indice */
+        uint32_t hz = k_pasos_viejos[v];
+
+        for (i = 0U; i < s_pasos_n; i++) {
+            if (s_pasos_hz[i] == hz) { return i; }
+        }
+    }
     return 0U;
 }
 

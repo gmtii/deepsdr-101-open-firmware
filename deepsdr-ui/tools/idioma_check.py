@@ -30,6 +30,42 @@ No todo literal en castellano es un fallo:
 Todo lo demas tiene que pasar por tr() o por T(), o estar en BLANCA de
 aqui abajo con su motivo escrito. Una excepcion sin motivo es una
 excepcion que nadie puede revisar.
+
+Y LAS PALABRAS ESCRITAS LETRA A LETRA (29/10/2026)
+--------------------------------------------------
+*** El usuario: que revise que TODAS las palabras cambien de castellano a
+ingles al cambiar el idioma. ***
+
+Y habia cinco que no. Este guion recorre los LITERALES del fichero, y en
+la pantalla de hora por radio los rotulos se escribian asi:
+
+    *p++ = 'm'; *p++ = 'a'; *p++ = 'r'; *p++ = 'c'; *p++ = 'a';
+
+Eso no es un literal: son cinco caracteres sueltos. Guardian en verde y
+"marca", "ciclo", "raras", "mal" y "codigo" en castellano en la radio
+inglesa, en la pantalla que mas se mira cuando algo no sincroniza.
+
+Asi que ahora tambien se juntan esas rachas y se miran como palabras. No
+es una rareza que no vaya a repetirse: este fichero escribe sin snprintf
+-ver el comentario de pega_txt()- y pegar letras a mano es el gesto
+natural. Lo que hace falta es que el gesto no esconda una palabra.
+
+Se eximen las rachas que NO son palabras: cifras, signos y los nombres de
+bit de las normas -b0, b20, z1z2-, que no se traducen igual que no se
+traduce "UTC". La lista esta en BLANCA_LETRAS.
+
+Y LAS TABLAS GEMELAS
+--------------------
+Lo que no cabe en tr() -una tabla estatica- va en dos tablas, `X_es[]` y
+`X_en[]`, como k_fase_es/k_fase_en o k_mot_es/k_mot_en. Ahi la averia
+natural es copiar la de arriba y olvidarse de traducirla: compila, el
+_Static_assert de tamanos cuadra, y la radio inglesa dice lo mismo que la
+castellana.
+
+Asi que se exige que las dos no sean IDENTICAS. No se exige mas -entradas
+sueltas iguales son normales: "b0" y "z1z2" son nombres de bit en los dos
+idiomas-, pero una copia entera sin tocar si se caza, y es justo la que se
+hace sin querer.
 """
 import os, re, sys
 
@@ -83,6 +119,14 @@ BLANCA = {
     # castellano-. Misma razon que las claves de CONFIG.CSV: es un dato.
     ('banco.c', r'banco,memoria,hz,modo,paso_hz,fil_lo,fil_hi,cw\n'):
         'cabecera de columnas de BANCO.CSV, no es interfaz',
+}
+
+# Las rachas de letra a letra que NO son palabras que traducir. Como en
+# BLANCA, cada una con su motivo: una excepcion sin motivo no se puede
+# revisar.
+BLANCA_LETRAS = {
+    ('main.c', 'UTC'):  'no se traduce, es la escala de tiempo',
+    ('main.c', 'lpm'):  'lineas por minuto, se dice igual en los dos idiomas',
 }
 
 ACENTO = r"[áéíóúñÁÉÍÓÚÑ¿¡]"
@@ -187,6 +231,64 @@ def rangos_de(src, fn):
         out.append((i, j))
     return out
 
+CARACTER = re.compile(r"\*\s*\w+\+\+\s*=\s*'(\\?.)'\s*;")
+
+
+def letra_a_letra(src, nom):
+    """Palabras escritas caracter a caracter, que no son literales.
+
+    Se juntan las rachas de `*p++ = 'x';` seguidas -saltando los
+    comentarios, que ya vienen tapados- y se devuelve la racha entera.
+    Una racha se corta en cuanto hay una linea que no pega caracteres:
+    ahi es donde acaba la palabra y empieza un numero, un bucle o lo que
+    sea.
+    """
+    out = []
+    cur, ini = '', 0
+    for n, linea in enumerate(src.split('\n'), 1):
+        ms = CARACTER.findall(linea)
+        if ms:
+            if not cur:
+                ini = n
+            cur += ''.join(' ' if c == '\\\\' else c for c in ms)
+            continue
+        if cur:
+            out.append((ini, cur))
+            cur = ''
+    if cur:
+        out.append((ini, cur))
+    res = []
+    for n, w in out:
+        w = w.strip()
+        # Hace falta una PALABRA: tres letras seguidas. Una racha de
+        # cifras, barras o signos no tiene nada que traducir.
+        if len(w) < 3 or not re.search(r'[A-Za-z]{3}', w):
+            continue
+        if (nom, w) in BLANCA_LETRAS:
+            continue
+        res.append((n, w))
+    return res
+
+
+TABLA = re.compile(
+    r"\b(\w+)_(es|en)\s*\[[^\]]*\]\s*=\s*\{(.*?)\}\s*;", re.S)
+
+
+def tablas_gemelas(src):
+    """Los pares X_es[]/X_en[] cuyo contenido es identico."""
+    tablas = {}
+    for m in TABLA.finditer(src):
+        tablas.setdefault(m.group(1), {})[m.group(2)] = (
+            src.count('\n', 0, m.start()) + 1, m.group(3))
+    malas = []
+    for nombre, par in sorted(tablas.items()):
+        if 'es' not in par or 'en' not in par:
+            continue
+        if par['es'][1].strip() == par['en'][1].strip():
+            malas.append((par['en'][0], nombre))
+    return malas
+
+
 def revisa(path):
     nom = os.path.basename(path)
     if nom in DATOS: return []
@@ -223,6 +325,23 @@ def revisa(path):
                 pareja = True
         if pareja:                                continue
         malos.append((line, fn or '-', s))
+
+    # Y las palabras escritas letra a letra, que no son literales y por eso
+    # no estan en `lits`. Se miran sobre el fichero SIN comentarios, que es
+    # lo que hace el bucle de arriba al saltarselos.
+    def _tapa(m):
+        return ''.join(c if c == '\n' else ' ' for c in m.group(0))
+
+    sin_com = re.sub(r'/\*.*?\*/', _tapa, src, flags=re.S)
+    sin_com = re.sub(r'(?m)//[^\n]*', _tapa, sin_com)
+    for line, w in letra_a_letra(sin_com, nom):
+        malos.append((line, 'letra a letra', w))
+
+    # Y las tablas gemelas que son la misma copiada dos veces.
+    for line, nombre in tablas_gemelas(sin_com):
+        malos.append((line, 'tabla gemela',
+                      '%s_en[] es identica a %s_es[]' % (nombre, nombre)))
+
     return malos
 
 def main():
@@ -254,6 +373,9 @@ def main():
     if total:
         print('  *** %d cadenas de interfaz sin tr() ***' % total)
         print('  Envuelvelas en tr("es","en") o apuntalas en BLANCA con su motivo.')
+        print('  Las de "letra a letra" son palabras pegadas caracter a')
+        print('  caracter: pasalas por tr() -hay hora_rot() en main.c- o')
+        print('  apuntalas en BLANCA_LETRAS si no son una palabra.')
         return 1
     print('  todas las cadenas de interfaz pasan por tr() o por T()')
     return 0

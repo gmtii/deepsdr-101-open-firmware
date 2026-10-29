@@ -95,6 +95,7 @@ def main(ruta):
 
     fallos += arranques(src, os.path.dirname(ruta))
     fallos += prestatarios(os.path.dirname(ruta))
+    fallos += orden_en_apply(os.path.dirname(ruta))
 
     print('  TODO CORRECTO' if not fallos else '  %d FALLOS' % fallos)
     return 1 if fallos else 0
@@ -146,6 +147,117 @@ def prestatarios(dircab):
                 print('    %-18s %s la memoria' % (fn + '()', verbo))
 
     return fallos
+
+
+# Los que SUELTAN la memoria al salir de su modo, dentro de
+# apply_demod_mode(). Son los nueve del panel entero mas FT8.
+SUELTAN = ('ft8_modo_stop', 'hfdl_modo_stop', 'wspr_modo_stop',
+           'ais_modo_stop', 'ale_modo_stop', 'jtty_modo_stop',
+           'stanag_modo_stop', 'ident_modo_stop')
+
+# Y los que la COGEN al entrar.
+COGEN = ('wefax_start', 'sstv_start', 'hell_start', 'dsc_start',
+         'ft8_modo_start', 'hfdl_modo_start', 'wspr_modo_start',
+         'ais_modo_start', 'ale_modo_start', 'jtty_modo_start',
+         'stanag_modo_start', 'ident_modo_start')
+
+
+def sin_comentarios(t):
+    """Tapa /* ... */ y // ... con espacios, dejando los saltos de linea.
+
+    Hace falta porque main.c EXPLICA este reparto en prosa y nombra a
+    wefax_start() y compania dentro de los comentarios que documentan el
+    arreglo. Sin esto, el guion se denunciaba a si mismo.
+    """
+    out = []
+    i = 0
+    n = len(t)
+    while i < n:
+        if t.startswith('/*', i):
+            j = t.find('*/', i + 2)
+            j = n if j < 0 else j + 2
+            out.append(''.join(c if c == '\n' else ' ' for c in t[i:j]))
+            i = j
+        elif t.startswith('//', i):
+            j = t.find('\n', i)
+            j = n if j < 0 else j
+            out.append(' ' * (j - i))
+            i = j
+        else:
+            out.append(t[i])
+            i += 1
+    return ''.join(out)
+
+
+def orden_en_apply(dircab):
+    """PRIMERO TODAS LAS PARADAS, Y DESPUES TODOS LOS ARRANQUES.
+
+    Dentro de menu_mode_preset_callback(), que es la funcion que reparte
+    los modos.
+
+    29/10/2026. Esta es la regla de la que depende todo lo demas, y este
+    guion no la comprobaba: cinco ficheros del arbol lo citan por su nombre
+    como el guardian de esta memoria -"el que coja esta RAM, que pregunte"-
+    y lo unico que miraba era que cada start() tuviera su hfdl_ram_coge().
+
+    Por eso paso el fax. wefax_start() estaba CIENTO CINCUENTA LINEAS antes
+    de la lista de paradas, asi que de HFDL a FAX el fax montaba su anillo
+    sobre la union con HFDL todavia vivo escribiendo encima, y acto seguido
+    hfdl_modo_stop() soltaba el prestamo, que es un memset de los 69.852
+    bytes sobre ese anillo recien montado. Y a partir de ahi el fax corria
+    con la memoria sin marcar como prestada, o sea con la cascada
+    escribiendo pixeles dentro de sus renglones.
+
+    El cerrojo no lo puede evitar: es UN BIT, sin cuenta de anidamiento.
+    Lo unico que lo evita es el orden, y el orden ahora se mide.
+    """
+    ruta = os.path.join(dircab, 'main.c')
+    if not os.path.exists(ruta):
+        print('  (no esta main.c: me salto el orden de las listas)')
+        return 0
+    src = sin_comentarios(open(ruta, encoding='utf-8').read())
+    # El reparto de modos vive en menu_mode_preset_callback(), que es quien
+    # tiene las dos listas; apply_demod_mode() solo rehace la cadena.
+    c = cuerpo(src, 'menu_mode_preset_callback')
+    if c is None:
+        print('  FALLA: no se encuentra menu_mode_preset_callback()')
+        return 1
+
+    def ultimo(nombres):
+        pos = -1
+        cual = None
+        for n in nombres:
+            for m in re.finditer(r'\b' + n + r'\s*\(', c):
+                if m.start() > pos:
+                    pos, cual = m.start(), n
+        return pos, cual
+
+    def primero(nombres):
+        pos = len(c) + 1
+        cual = None
+        for n in nombres:
+            for m in re.finditer(r'\b' + n + r'\s*\(', c):
+                if m.start() < pos:
+                    pos, cual = m.start(), n
+        return pos, cual
+
+    p_ult, n_ult = ultimo(SUELTAN)
+    p_pri, n_pri = primero(COGEN)
+    if p_ult < 0 or n_pri is None:
+        print('  FALLA: no encuentro las paradas o los arranques dentro '
+              'de menu_mode_preset_callback()')
+        return 1
+
+    if p_pri < p_ult:
+        print('  FALLA: %s() coge la memoria prestada ANTES de que %s() la '
+              'suelte.' % (n_pri, n_ult))
+        print('         Primero TODAS las paradas y despues TODOS los '
+              'arranques: el cerrojo es un bit y no cuenta anidamiento.')
+        return 1
+
+    print('    %-18s todos los arranques van detras de la ultima parada (%s)'
+          % ('la rejilla de modos:', n_ult + '()'))
+    return 0
 
 
 def arranques(src, dircab):

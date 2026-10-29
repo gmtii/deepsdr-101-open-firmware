@@ -330,6 +330,31 @@ typedef enum {
      * con CONFIG_PGA_WFM_DB_X2, el valor de serie.
      */
     SET_X_PGA_WFM,      /* ganancia de entrada en FM ancha, medios dB (0..95) */
+    /*
+     * Y UNA POR CADA UNO DE LOS OCHO MODOS DE PANEL ENTERO - 29/10/2026.
+     *
+     * Pedido por el usuario con la medida delante: "he entrado a hfdl con
+     * 20 dB y parecia perder paquetes, la he subido a 35 y parece ir
+     * mejor", y una por modo, no una compartida.
+     *
+     * EL ORDEN ES EL DE pga_digi_t EN main.c y tiene que seguir siendolo:
+     * extras_leer() y extras_aplicar() recorren el array con un bucle
+     * desde SET_X_PGA_FT8, asi que mover una de sitio aqui mueve la
+     * ganancia de otro modo. Van las ocho seguidas a proposito, para que
+     * ese bucle exista y no haya ocho lineas que copiar mal.
+     *
+     * Al final de la lista, como todas: un CONFIG.CSV anterior no las
+     * trae, sus bits quedan a 0 y cada modo arranca con su valor de
+     * serie -20,0 dB en siete y 35,0 en HFDL-.
+     */
+    SET_X_PGA_FT8,
+    SET_X_PGA_HFDL,
+    SET_X_PGA_WSPR,
+    SET_X_PGA_AIS,
+    SET_X_PGA_ALE,
+    SET_X_PGA_JTTY,
+    SET_X_PGA_STANAG,
+    SET_X_PGA_IDENT,
     SET_X_N
 } settings_extra_id_t;
 

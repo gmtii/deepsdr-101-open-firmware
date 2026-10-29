@@ -1,5 +1,6 @@
 /* Ver s4415.h para el porque de cada numero. Aqui esta el como. */
 #include "s4415.h"
+#include "pump.h"   /* pump(): ver su cabecera */
 #include <stdint.h>
 #include "hfdl_viterbi.h"
 #include <math.h>
@@ -1078,6 +1079,10 @@ uint8_t s4415_paso(void)
     }
 
     /* 2. desensanchar si estamos en datos */
+    /* Un latido del tactil: este bucle puede tardar decenas de
+     * milisegundos con señal, y mientras tanto nadie mira el dedo.
+     * Ver User/pump.h. */
+    pump();
     while (s_st->en_datos &&
            s_st->n >= (s_st->t_dat + SIM_MUE + S4415_SPS)) {
         uint8_t m = 0U, bl[2];
@@ -1171,7 +1176,12 @@ uint8_t s4415_paso(void)
         s_st->visto = objetivo;
     }
 
+    /* Un latido del tactil: este bucle puede tardar decenas de
+     * milisegundos con señal, y mientras tanto nadie mira el dedo.
+     * Ver User/pump.h. */
+    pump();
     while ((s_st->visto + PLANT_MUE) <= s_st->n) {
+        pump();
         uint32_t t0 = s_st->visto;
 
         if (s_st->pend) { break; }      /* uno cada vez */

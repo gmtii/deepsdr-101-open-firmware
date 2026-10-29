@@ -214,7 +214,17 @@ static const char *const k_extra_claves[] = {
     "iq_inv",           /* SET_X_IQ_INV      */
     "cw_bw_hz",         /* SET_X_CW_BW       */
     "squelch_wfm_db",   /* SET_X_SQL_WFM     */
-    "pga_wfm_db_x2"     /* SET_X_PGA_WFM     */
+    "pga_wfm_db_x2",    /* SET_X_PGA_WFM     */
+    /* Los ocho de panel entero, en el orden de pga_digi_t - ver
+     * settings.h. */
+    "pga_ft8_db_x2",    /* SET_X_PGA_FT8     */
+    "pga_hfdl_db_x2",   /* SET_X_PGA_HFDL    */
+    "pga_wspr_db_x2",   /* SET_X_PGA_WSPR    */
+    "pga_ais_db_x2",    /* SET_X_PGA_AIS     */
+    "pga_ale_db_x2",    /* SET_X_PGA_ALE     */
+    "pga_jtty_db_x2",   /* SET_X_PGA_JTTY    */
+    "pga_stanag_db_x2", /* SET_X_PGA_STANAG  */
+    "pga_ident_db_x2"   /* SET_X_PGA_IDENT   */
 };
 _Static_assert(sizeof(k_extra_claves) / sizeof(k_extra_claves[0]) == (size_t)SET_X_N,
                "k_extra_claves[] y settings_extra_id_t se han desincronizado");

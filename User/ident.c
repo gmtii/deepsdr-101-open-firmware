@@ -1,4 +1,5 @@
 #include "ident.h"
+#include "pump.h"   /* pump(): ver su cabecera */
 #include "idioma.h"
 #include "hfdl_ram.h"
 #include <stdio.h>
@@ -1779,6 +1780,10 @@ void ident_modo_stop(void)
     if (!s_activo) { return; }
     s_activo = 0U;          /* PRIMERO: calla a la interrupcion */
     s_cad = 0;              /* y el cuaderno, que vive en ese prestamo */
+    /* Y el detector, que es el otro que vive ahi dentro. Ver
+     * stanag_det_fin(): hasta hoy se quedaba con sus seis punteros y su
+     * bandera de "esto vale" apuntando a memoria ya devuelta. */
+    stanag_det_fin();
     hfdl_ram_suelta();
 }
 
@@ -2042,7 +2047,12 @@ void ident_modo_poll(void)
      */
     if (s_cad_desde >= 8U) {
         s_cad_desde = 0U;
+        /* Un latido del tactil a cada lado de lo caro: son 512 logaritmos
+         * y una autocorrelacion de 256 retardos, y durante todo eso nadie
+         * mira el dedo. Ver User/pump.h. */
+        pump();
         cad_calcula();
+        pump();
         escribe();
         return;
     }

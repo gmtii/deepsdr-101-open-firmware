@@ -1080,6 +1080,12 @@ float demod_am_get_mix_hz(void);
  * señal da igual; no daria igual el dia que algo quisiera mirar dos trozos
  * lejanos a la vez.
  */
+/* Pone a cero las colas de la cadena diezmada (los dos diezmadores de
+ * banda lateral, el Hilbert, el interpolador y el par del reductor de
+ * ruido). Lo llama cadena_olvida() en cada cambio de modo y en cada
+ * escalon de ganancia: ver su cabecera en el .c para el por que. */
+void demod_am_decim_olvida(void);
+
 void demod_am_set_rf_doble(uint8_t doble);
 uint8_t demod_am_get_rf_doble(void);
 

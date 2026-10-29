@@ -254,10 +254,15 @@ static void borra_linea(uint16_t y)
  * lo dice: "v2.16 470" o "v2.16" a secas. Una palabra en pantalla contra
  * tener que acordarse de cual se arrastro.
  */
+/* Y la etiqueta tambien se puede dar desde fuera, para que un cargador de
+ * prueba se identifique en la ficha sin tocar este fichero. Ver la regla
+ * `rama` de reglas.mk. */
+#ifndef CARGADOR_VARIANTE
 #ifdef CHIP_F470VG
 #define CARGADOR_VARIANTE " 470"
 #else
 #define CARGADOR_VARIANTE ""
+#endif
 #endif
 
 
@@ -964,6 +969,328 @@ static void modo_actualizacion(void)
     while (1) { }
 }
 
+/* =====================================================================
+ * EL CARGADOR DE DIAGNOSTICO DEL PANEL - 29/10/2026
+ * =====================================================================
+ *
+ * *** Un usuario con la pantalla en blanco. El mismo cristal, puesto en
+ * otra radio, se ve perfectamente. Con la rama A clavada sale NEGRO; con
+ * la B y con la C, BLANCO. ***
+ *
+ * Esos tres datos ya dicen mucho y conviene tenerlo escrito antes del
+ * codigo, porque es lo que decide QUE prueba esto:
+ *
+ *   - blanco es el panel SIN GOBERNAR: la retro encendida y el cristal
+ *     sin que nadie le diga que pintar.
+ *   - negro es el panel GOBERNADO y en negro, que es ademas el aspecto
+ *     de un arranque normal nuestro (ver "EL ARRANQUE NORMAL NO ENSEÑA
+ *     NADA" mas arriba).
+ *   - la rama A son DOCE pasos que dan por hecho que el panel ya viene
+ *     arrancado. Las ramas B y C son la puesta en marcha COMPLETA.
+ *
+ * O sea: lo que NO toca el panel funciona, y lo que lo arranca entero lo
+ * deja mudo. Eso apunta a que la secuencia larga se esta ejecutando sobre
+ * un panel que no esta donde ella cree - y el sospechoso natural es el
+ * RESET, que es lo unico que se hace antes y lo unico que pone al panel
+ * en el estado del que parte la secuencia. Un reset que no llega explica
+ * las tres observaciones a la vez.
+ *
+ * POR ESO ESTO PRUEBA SEIS COMBINACIONES y no tres: las tres ramas CON
+ * reset y las tres SIN el. Si alguna de las de "sin reset" habla, el
+ * reset es el culpable y no hay que seguir buscando.
+ *
+ * Y ANTES DE TODO, LA LECTURA CRUDA. Los identificadores se leen con el
+ * bus recien montado y sin inicializar nada, tres veces cada uno. Si eso
+ * contesta, el bus EXMC y la alimentacion del panel estan bien y el
+ * problema es de secuencia; si contesta 0000 o FFFF siempre, no hay
+ * panel al otro lado y lo demas sobra.
+ *
+ * LA RETROILUMINACION ES EL SEGUNDO CANAL. Toda esta ficha se pinta en
+ * una pantalla que puede estar muda, asi que el veredicto sale TAMBIEN en
+ * parpadeos de la retro, que se ven con el cristal apagado:
+ *
+ *     1 parpadeo   el panel no contesta a la lectura
+ *     2 parpadeos  contesta y es estable
+ *     3 parpadeos  contesta pero baila
+ *
+ * NO VUELVE. Es un cargador de prueba: no arranca la aplicacion a
+ * proposito, para que se pueda mirar con calma. Se sale apagando. La
+ * salida de emergencia al DFU de fabrica -mando pulsado Y girando- sigue
+ * donde estaba, en SystemInit(), antes que todo esto.
+ */
+#ifdef PRUEBA_PANEL
+
+/* El brillo, a pelo sobre el registro del TIMER4 que monto retro_pwm.h. */
+static void retro_pon(uint32_t v) { TIMER_CH3CV(TIMER4) = v; }
+
+static void retro_parpadea(uint8_t n)
+{
+    uint8_t i;
+
+    for (i = 0U; i < n; i++) {
+        retro_pon(0U);    delay_ms(220U);
+        retro_pon(375U);  delay_ms(220U);
+    }
+    retro_pon(188U);
+    delay_ms(900U);
+}
+
+/*
+ * Los registros que se leen. Los dos primeros son los que deciden la rama
+ * (ver panel_serie.c); los demas son identificadores del controlador, y
+ * estan para contestar a "esto es de verdad un RM68120?" y, sobre todo,
+ * para encontrar UNO QUE NO SEA CAPICUA: con 0x55 y 0x77 no se puede saber
+ * si lo que se pierde es el nibble de arriba o el de abajo, y eso esta
+ * apuntado como pendiente desde el 02/10.
+ */
+static const uint16_t k_regs[] = {
+    0x000AU, 0x3A00U, 0x0400U, 0x0A00U, 0x0B00U, 0x0C00U,
+    0xDA00U, 0xDB00U, 0xDC00U, 0x0500U, 0x0900U, 0x0D00U
+};
+#define N_REGS ((uint8_t)(sizeof k_regs / sizeof k_regs[0]))
+
+/* El informe. 4 kB porque es lo que pide spi_flash_anade_trozo(). */
+static uint8_t s_inf[4096];
+static uint16_t s_inf_n;
+
+static void inf_c(char c)
+{
+    if (s_inf_n < (uint16_t)sizeof s_inf) { s_inf[s_inf_n++] = (uint8_t)c; }
+}
+static void inf_s(const char *t)
+{
+    while (*t != '\0') { inf_c(*t++); }
+}
+/* Fin de linea de Windows: esto lo va a abrir el Bloc de notas. */
+static void inf_nl(void) { inf_c('\r'); inf_c('\n'); }
+
+static void inf_hex(uint32_t v, uint8_t n)
+{
+    static const char hx[] = "0123456789ABCDEF";
+    while (n-- > 0U) { inf_c(hx[(v >> (n * 4U)) & 0xFU]); }
+}
+static void inf_u(uint32_t v)
+{
+    char t[12];
+    uint8_t i = 0U;
+
+    if (v == 0U) { inf_c('0'); return; }
+    while (v != 0U && i < (uint8_t)sizeof t) { t[i++] = (char)('0' + (v % 10U)); v /= 10U; }
+    while (i-- > 0U) { inf_c(t[i]); }
+}
+
+/*
+ * Una tanda de lecturas: cada registro TRES veces, y las tres se escriben.
+ * No se resume a "firme/baila" porque el resumen ya nos dejo sin dato una
+ * vez: lo que hace falta ver son los numeros.
+ */
+static void tanda(const char *titulo)
+{
+    uint8_t i;
+
+    inf_s(titulo); inf_nl();
+    for (i = 0U; i < N_REGS; i++) {
+        uint16_t a = rm68120_read_status(k_regs[i]);
+        uint16_t b = rm68120_read_status(k_regs[i]);
+        uint16_t c = rm68120_read_status(k_regs[i]);
+
+        inf_s("  0x"); inf_hex(k_regs[i], 4); inf_s(" = ");
+        inf_hex(a, 4); inf_c(' '); inf_hex(b, 4); inf_c(' '); inf_hex(c, 4);
+        if (a != b || b != c) { inf_s("   <- BAILA"); }
+        inf_nl();
+    }
+    inf_nl();
+}
+
+/*
+ * Una combinacion: reset si/no, y una rama. Pinta tres bandas y un rotulo
+ * -se reconocen de lejos aunque los colores salgan cambiados- y deja
+ * apuntado en el informe que se probo.
+ */
+static void combina(uint8_t con_reset, uint8_t rama, uint8_t n)
+{
+    char l[64];
+    char *p;
+
+    if (con_reset) { rm68120_hw_reset(); }
+
+    g_panel_forzar = rama;
+    panel_serie_init();
+
+    inf_s("  prueba "); inf_u((uint32_t)n);
+    inf_s("  rama "); inf_c((char)rama);
+    inf_s(con_reset ? "  CON reset" : "  SIN reset");
+    inf_s("   tras arrancar: 0x000A=");
+    inf_hex(rm68120_read_status(0x000AU), 4);
+    inf_s(" 0x3A00=");
+    inf_hex(rm68120_read_status(0x3A00U), 4);
+    inf_nl();
+
+    rm68120_fill_screen(FONDO);
+    rect(0U,   0U,   800U, 60U, ROJO);
+    rect(0U,   60U,  800U, 60U, VERDE);
+    rect(0U,   120U, 800U, 60U, BLANCO);
+
+    p = pega(l, "PRUEBA ");
+    p = u2s(p, (uint32_t)n);
+    p = pega(p, " de 6   rama ");
+    *p++ = (char)rama;
+    p = pega(p, con_reset ? "   CON reset" : "   SIN reset");
+    *p = '\0';
+    texto(24U, 210U, l, AMBAR);
+    texto(24U, (uint16_t)(210U + ALTO_LIN + 6U),
+          "Si lees esto, ESTA es la buena. Apunta el numero.", BLANCO);
+
+    delay_ms(5000U);
+}
+
+/*
+ * =====================================================================
+ * EL CARGADOR DE DIAGNOSTICO DEL PANEL - 29/10/2026
+ * =====================================================================
+ *
+ * *** Un usuario con la pantalla en blanco. El mismo cristal en otra radio
+ * se ve perfectamente. Con la rama A clavada sale NEGRO; con la B y con la
+ * C, BLANCO. Y la primera version de esta prueba saco DOS parpadeos, o sea
+ * que el panel contesta a la lectura y contesta estable. ***
+ *
+ * Blanco es el panel SIN GOBERNAR; negro es el panel gobernado y en negro
+ * -que es ademas el aspecto de un arranque normal nuestro-. La rama A son
+ * doce pasos que dan por hecho que el panel ya viene arrancado; la B y la
+ * C son la puesta en marcha COMPLETA. O sea: lo que NO toca el panel
+ * funciona, y lo que lo arranca entero lo deja mudo. El sospechoso es el
+ * RESET, que es lo unico que se hace antes y lo unico que pone al panel en
+ * el estado del que esa secuencia parte. Por eso se prueban SEIS
+ * combinaciones: las tres ramas con reset y las tres sin el.
+ *
+ * Y LO QUE CAMBIA EN ESTA VERSION, pedido por el usuario: el informe sale
+ * por el USB. Los parpadeos de la retro fueron un mal canal -un bit, y
+ * encima hubo que contarlos en un video-; aqui se escribe PANEL.TXT en el
+ * disco de la radio y al final se entra en modo actualizacion, que es lo
+ * que levanta el USB. Se enchufa al PC y se lee con el Bloc de notas.
+ *
+ * EL ORDEN IMPORTA: primero medir, luego ESCRIBIR EL FICHERO, y solo
+ * despues las pruebas visuales. Si algo se cuelga pintando, el informe ya
+ * esta grabado.
+ */
+static void prueba_panel(void)
+{
+    spi_anade_r_t porque = SPI_ANADE_OK;
+    uint8_t escrito;
+    uint8_t i;
+    uint16_t v;
+    static const uint8_t k_ramas[3] = { 'A', 'B', 'C' };
+
+    s_inf_n = 0U;
+    inf_s("DEEPSDR 101 - prueba del panel"); inf_nl();
+    { static char sel[40]; inf_s("cargador "); inf_s(cargador_sello(sel)); inf_nl(); }
+    inf_nl();
+
+    /* 1. Lectura cruda, con el bus recien montado y sin inicializar nada. */
+    tanda("1) SIN inicializar, bus tal como arranca:");
+
+    /* 2. Lo mismo despues de un reset por hardware. Si el reset llega, el
+     *    panel vuelve a sus valores de fabrica y estos numeros CAMBIAN. Si
+     *    salen identicos a los de arriba, el reset no esta llegando - que
+     *    es la hipotesis que explica las tres observaciones. */
+    rm68120_hw_reset();
+    tanda("2) despues de rm68120_hw_reset():");
+
+    /* 3. Barrido del tiempo de dato del bus. Si la lectura depende de la
+     *    velocidad, el bus va justo; si no se mueve, el bus esta de sobra. */
+    inf_s("3) barrido del bus (tiempo de dato en ciclos):"); inf_nl();
+    inf_s("   de arranque = "); inf_u((uint32_t)rm68120_bus_dato_arranque()); inf_nl();
+    for (v = 1U; v <= 15U; v += 2U) {
+        rm68120_bus_dato_pon(v);
+        inf_s("   dato="); inf_u((uint32_t)v);
+        inf_s("  0x000A="); inf_hex(rm68120_read_status(0x000AU), 4);
+        inf_s(" 0x3A00="); inf_hex(rm68120_read_status(0x3A00U), 4);
+        inf_nl();
+    }
+    rm68120_bus_dato_pon(rm68120_bus_dato_arranque());
+    inf_nl();
+
+    /*
+     * 4. ESCRIBIR Y VOLVER A LEER, que es lo que faltaba.
+     *
+     * Las lecturas salen perfectas y NINGUNA de las tres ramas pinta. Las
+     * ramas son ESCRITURAS. Asi que la pregunta que no habiamos hecho es
+     * si el camino de escritura llega: se le mete un valor conocido a un
+     * registro que se puede releer y se mira si se quedo.
+     *
+     * Si no se queda, el panel nunca se inicializa por mucho que se le
+     * mande, y eso explica de golpe las lecturas buenas y las tres ramas
+     * mudas.
+     */
+    inf_s("4) escribir y releer (0x3A00, formato de pixel):"); inf_nl();
+    {
+        static const uint16_t k_val[] = { 0x55U, 0x66U, 0x77U, 0x03U };
+        uint8_t j;
+        uint16_t orig = rm68120_read_status(0x3A00U);
+
+        for (j = 0U; j < 4U; j++) {
+            uint16_t leido;
+
+            rm68120_write_cmd_data(0x3A00U, k_val[j]);
+            delay_ms(5U);
+            leido = rm68120_read_status(0x3A00U);
+            inf_s("   escrito "); inf_hex(k_val[j], 2);
+            inf_s("  leido "); inf_hex(leido, 4);
+            inf_s((leido == k_val[j]) ? "   <- SE QUEDO" : "   <- NO");
+            inf_nl();
+        }
+        rm68120_write_cmd_data(0x3A00U, orig);
+        inf_s("   (devuelto a "); inf_hex(orig, 4); inf_s(")"); inf_nl();
+    }
+    inf_nl();
+
+    /* 5. Las seis combinaciones. Lo que cada una lee DESPUES de arrancar
+     *    va al informe; lo que pinta lo tiene que mirar el usuario. */
+    inf_s("5) las seis combinaciones:"); inf_nl();
+
+    /* El fichero se escribe ANTES de las pruebas visuales: ver arriba. */
+    inf_s("   (el resto se anade segun se prueban)"); inf_nl();
+    spi_flash_init();
+    {
+        /*
+         * EL LARGO SE GUARDA ANTES DE RELLENAR - 29/10/2026.
+         *
+         * La primera version rellenaba hasta 4096 para escribir el trozo y
+         * seguia escribiendo en el mismo buffer despues... que ya estaba
+         * lleno, asi que inf_s() lo tiraba todo. Resultado: PANEL2.TXT
+         * salio siendo una copia exacta de PANEL.TXT y las seis
+         * combinaciones no se apuntaron en ninguno de los dos. Mio, y lo
+         * vio el usuario antes que yo.
+         */
+        uint16_t n_antes = s_inf_n;
+
+        while (s_inf_n < (uint16_t)sizeof s_inf) { s_inf[s_inf_n++] = (uint8_t)' '; }
+        escrito = spi_flash_puede_escribir()
+                ? spi_flash_anade_trozo("PANEL   ", "TXT", s_inf, &porque) : 0U;
+        s_inf_n = n_antes;   /* y se sigue escribiendo donde se iba */
+    }
+
+    /* Cinco parpadeos = informe grabado; cuatro = no se pudo. Es el unico
+     * aviso que llega si la pantalla sigue muda. */
+    retro_parpadea(escrito ? 5U : 4U);
+
+    for (i = 0U; i < 3U; i++) { combina(1U, k_ramas[i], (uint8_t)(i + 1U)); }
+    for (i = 0U; i < 3U; i++) { combina(0U, k_ramas[i], (uint8_t)(i + 4U)); }
+
+    /* Y el informe otra vez, ya con las seis combinaciones dentro. Si la
+     * primera escritura fue bien, esta deja un segundo fichero con mas
+     * cosas; si fue mal, esta es la que puede salvarlo. */
+    while (s_inf_n < (uint16_t)sizeof s_inf) { s_inf[s_inf_n++] = (uint8_t)' '; }
+    (void)spi_flash_anade_trozo("PANEL2  ", "TXT", s_inf, &porque);
+
+    /*
+     * Y a modo actualizacion, que es lo que levanta el USB: con la radio
+     * enchufada al PC salen PANEL.TXT y PANEL2.TXT en el disco. No vuelve.
+     */
+    modo_actualizacion();
+}
+#endif /* PRUEBA_PANEL */
+
 /* --- el salto -------------------------------------------------------- */
 
 /*
@@ -1066,6 +1393,11 @@ int main(void)
     rm68120_exmc_gpio_init();
     rm68120_exmc_bus_init();
     rm68120_hw_reset();
+#ifdef PRUEBA_PANEL
+    /* El cargador de diagnostico se queda aqui y no vuelve. Ver su
+     * cabecera, justo encima de salta_a_la_app(). */
+    prueba_panel();
+#endif
     /*
      * La puesta en marcha del panel va por panel_serie.c, NO por
      * rm68120_init(). Ver la cabecera de panel_serie.c: la secuencia del

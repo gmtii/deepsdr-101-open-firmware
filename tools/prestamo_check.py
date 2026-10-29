@@ -110,6 +110,21 @@ DUENOS_CONOCIDOS = {
     # modos - el mismo fallo que ya habia pasado con el DSC-.
     ('User/ident.c', 'ram_coge'),          # ident_modo_start(); suelta en stop()
     #
+    # EL FAX ENTRA EL 29/10/2026, Y LLEVABA UN DIA PONIENDO ESTO EN ROJO.
+    #
+    # wefax_start() lleva la marca de dueño desde que el fax entro en el
+    # reparto de esta memoria -la V6.10- y nadie lo apunto aqui. Este guion
+    # decia en rojo, con razon, que alguien se habia puesto la marca sin
+    # pasar por la lista. Y como no cuelga de "comprueba", nadie lo leyo.
+    #
+    # Es dueño de verdad: su hfdl_ram_coge() se llama una vez, desde
+    # wefax_start(), y no se suelta hasta wefax_stop(). Lo que SI estaba mal
+    # era el sitio de ese arranque dentro de la rejilla de modos -cogia la
+    # memoria antes de que el modo anterior la soltara-, y eso se arreglo
+    # hoy bajandolo con los demas. Ser dueño y estar en el sitio correcto
+    # son dos cosas distintas y las dos hacian falta.
+    ('User/wefax.c', 'wefax_start'),       # wefax_start(); suelta en wefax_stop()
+    #
     # STANAG NO ENTRA, y es util saber por que: su ram_coge() tambien se
     # llama solo desde stanag_modo_start(), o sea que tambien es dueño,
     # pero ADEMAS lleva la consulta puesta de antes. Con ella pasa este

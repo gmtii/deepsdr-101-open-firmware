@@ -306,6 +306,30 @@ static uint32_t s_tri_n;
 static uint32_t s_elem_ultimo_ms;
 
 /*
+ * EL BORDE DE MINUTO LO CRONOMETRA main.c, NO ESTE FICHERO - 29/10/2026.
+ *
+ * *** Avisado por un probador: tras sincronizar con ALS162, la pantalla
+ * ensena HH.MM y se enciende "Aplicar", pero los segundos no corren, asi
+ * que al pulsar Aplicar el reloj se pone con los segundos a cero. ***
+ *
+ * Y tenia razon. La hora que sale de aqui no vale "cuando la mires": vale
+ * EN EL INSTANTE del borde de minuto, y eso lo dice la cabecera de este
+ * fichero desde que existe. Entre ese instante y el dedo del usuario pasan
+ * los segundos que tarde en leer la pantalla y pulsar, y hasta hoy se
+ * tiraban: el reloj se quedaba atrasado justo eso.
+ *
+ * El RDS ya lo hacia bien desde el 24/09, con reloj_anclar() y
+ * rds_hora_atraso_ms(). Esto es lo mismo para las cinco emisoras horarias.
+ *
+ * El cronometro NO vive aqui: este fichero no conoce el reloj de la radio
+ * -trabaja con cuentas de muestras y su propia tasa- y sus cinco bancos del
+ * simulador no enlazan g_msticks. Lo apunta main.c en cuanto ve el estado
+ * pasar a LISTO, que a un poll de distancia es exacto de sobra para algo
+ * que se mide en segundos. Ver s_hora_listo_ms alli.
+ */
+
+
+/*
  * *** LOS 100 ms DE SILENCIO DE DELANTE - 10/10/2026, Y ES EL FALLO ENTERO
  * DE ALS162. ***
  *
@@ -1012,7 +1036,9 @@ static void cierra_minuto_msf(void)
     }
 
     s_ok++;
-    if (s_prev_valida && es_el_minuto_siguiente()) { s_estado = DCF_LISTO; }
+    if (s_prev_valida && es_el_minuto_siguiente()) {
+        s_estado = DCF_LISTO;
+    }
     else                                          { s_estado = DCF_CONFIRMANDO; }
     s_prev_valida = 1U;
     s_prev_h = s_h; s_prev_m = s_m; s_prev_d = s_d;
@@ -1670,6 +1696,7 @@ void dcf77_feed(float muestra)
     else if (s_emisora == HORA_ALS162) { feed_fase(muestra); }
     else                             { feed_envolvente(muestra); }
 }
+
 
 void dcf77_info(dcf_info_t *out)
 {

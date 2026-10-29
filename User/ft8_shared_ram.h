@@ -222,7 +222,7 @@ typedef union
         float   ldpc_tov[174][3];    /* FTX_LDPC_N x 3  - ldpc.c  */
         float   ldpc_toc[83][7];     /* FTX_LDPC_M x 7  - ldpc.c  */
         int16_t deci_out[2][FT8_ADAPTER_SUBBLOCK_SIZE];  /* ft8_decimator.c */
-        uint8_t cola[3520];          /* s_queue       - ft8_decoder.c (40 x 88) */
+        uint8_t cola[4224];          /* s_queue       - ft8_decoder.c (48 x 88) */
         uint8_t cands[1120];         /* candidate_list- ft8_decoder.c */
         char    lineas[48][88];      /* s_lin         - ft8_modo.c */
     } ft8;

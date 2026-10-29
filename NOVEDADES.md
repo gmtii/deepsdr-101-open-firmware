@@ -18,6 +18,341 @@ ordered by date, does not spare the detail, and is not published.
 
 ---
 
+## V6.22 · 2026-10-29
+
+### Qué cambia
+
+- **La lista de FT8 ya no pierde mensajes en una ranura llena.** La cola del
+  decodificador admitía 40 y la lista guarda 48: una ranura de banda abierta
+  con 45 mensajes perdía cinco **antes** de llegar a la lista, que tenía sitio
+  de sobra, y los perdía en silencio. Ahora la cola es tan larga como la
+  lista, y un `_Static_assert` impide que se vuelvan a separar.
+- **Y con el dedo subido la lista ya no se descoloca.** Al entrar mensajes
+  nuevos, la ventana subía tantos renglones como había visto el
+  decodificador, no los que de verdad entraron en la lista. Si la cola se
+  desbordaba, lo que estabas leyendo se te iba hacia abajo.
+
+*Recordatorio de cómo es la lista: guarda **48** mensajes y el panel enseña
+**15**. A los otros 33 se llega arrastrando con el dedo hacia abajo sobre la
+lista; cuando vuelves al final se queda otra vez pegada a lo nuevo.*
+
+### What's new
+
+- **The FT8 list no longer loses messages on a busy slot.** The decoder queue
+  held 40 while the list holds 48, so a wide-open slot with 45 messages lost
+  five **before** they ever reached the list, which had room for them — and it
+  lost them silently. The queue is now as long as the list, and a
+  `_Static_assert` stops the two drifting apart again.
+- **And the list no longer slips when you have scrolled it up.** As new
+  messages arrived the window advanced by however many the *decoder* had seen
+  rather than however many actually went into the list, so a queue overflow
+  dragged what you were reading off the bottom.
+
+*As a reminder: the list holds **48** messages and the panel shows **15**.
+The other 33 are reached by dragging down over the list; back at the end it
+sticks to the newest again.*
+
+---
+
+## V6.21 · 2026-10-29
+
+### Qué cambia
+
+- **Doce palabras que se quedaban en castellano con la radio en inglés.** En
+  la pantalla de hora por radio: los rótulos «marca», «ciclo», «raras»,
+  «mal» y «código», y los siete motivos por los que se descarta una trama de
+  MSF («corta», «rango», «patrón», «par-min»…). No los veía el guardián de
+  idioma porque no eran cadenas: se escribían **letra a letra**, carácter a
+  carácter, y eso no es un texto que se pueda buscar. Ahora pasan por el
+  traductor como todo lo demás, y el guardián junta esas rachas y las mira
+  como palabras.
+- Y cambiar de idioma repinta la cabecera entera, no tres cuartos de ella.
+
+### What's new
+
+- **Twelve words that stayed in Spanish with the radio set to English.** On
+  the radio-clock screen: the labels "marca", "ciclo", "raras", "mal" and
+  "código", and the seven reasons an MSF frame gets rejected ("corta",
+  "rango", "patrón", "par-min"…). The language guard never saw them because
+  they were not strings: they were written **letter by letter**, character by
+  character, which is not text anything can search for. They now go through
+  the translator like everything else, and the guard joins those runs up and
+  reads them as words.
+- And switching languages now repaints the whole header, not three quarters
+  of it.
+
+---
+
+## V6.20 · 2026-10-29
+
+### Qué cambia
+
+- **Cambiar de tema ya no deja un trozo del tema anterior.** Al cambiar la
+  paleta se repintaba «la cabecera entera»… que no lo era: desde el 05/10 esa
+  función sólo pinta la frecuencia y la pastilla de banda. La esquina del
+  reloj y de la batería se quedaba con los colores viejos —un rectángulo gris
+  con el tema claro puesto— hasta el siguiente cambio de minuto, que es quien
+  la repinta. Ahora se repinta la cabecera de verdad entera.
+
+### What's new
+
+- **Switching themes no longer leaves a patch of the old one.** Changing the
+  palette repainted "the whole header" — except it didn't: since 5 Oct that
+  function only paints the frequency and the band pill. The clock and battery
+  corner kept the old colours — a grey rectangle under a light theme — until
+  the next minute change, which is what repaints it. The header is now
+  repainted in full.
+
+---
+
+## V6.19 · 2026-10-29
+
+### Qué cambia
+
+- **El cartel de la emisora ya no se queda cortado al abrir un menú.** Con
+  Ajustes —o la rejilla, o el teclado, o el localizador— abiertos, el nombre
+  y el horario de la emisora dejaban de correr y se veía sólo el principio:
+  «China National Rad», «CHN - UI - 11:00-14:0». Ninguna de esas pantallas
+  tapa la cabecera —todas empiezan por debajo—, así que el texto seguía a la
+  vista, recortado y quieto. Y al cambiar de minuto volvía a empezar por el
+  principio y ahí se quedaba. Ahora corre siempre que se ve. Lo mismo para la
+  marquesina del RDS, que tenía la misma parada.
+
+### What's new
+
+- **The station caption no longer freezes half-read when a menu is open.**
+  With Settings — or the mode grid, the keypad or the locator — open, the
+  station name and schedule stopped scrolling and you only ever saw the
+  start: "China National Rad", "CHN - UI - 11:00-14:0". None of those screens
+  covers the header — they all start below it — so the text stayed visible,
+  clipped and still. And on each minute change it restarted from the
+  beginning and stayed there. It now scrolls whenever it is visible. Same for
+  the RDS marquee, which had the identical stop.
+
+---
+
+## V6.18 · 2026-10-29
+
+### Qué cambia
+
+- **La hora por radio se pone con su segundo.** Avisado por un probador: tras
+  sincronizar con ALS162 se enseñaba HH.MM, se encendía «Aplicar» y los
+  segundos no avanzaban, así que al pulsar el reloj se quedaba con los
+  segundos a cero. La hora de estas emisoras vale en el instante de su borde
+  de minuto, no cuando la miras: entre ese instante y el dedo se tiraban los
+  veinte o treinta segundos que cuesta leer la pantalla y decidirse. Ahora la
+  pantalla enseña **HH:MM:SS corriendo** —que es exactamente lo que se va a
+  poner— y «Aplicar» ancla el reloj a ese borde. Vale para las cinco
+  emisoras: DCF77, MSF, ALS162, RBU y WWV/BPM. El RDS ya lo hacía así.
+
+### What's new
+
+- **The radio clock now sets the seconds too.** Reported by a tester: after
+  syncing to ALS162 the screen showed HH.MM with "Apply" lit, but the seconds
+  never advanced, so pressing Apply left the clock at zero seconds. The time
+  these stations send is valid **at its minute edge**, not when you look at
+  it, and the twenty or thirty seconds it takes to read the screen and decide
+  were being thrown away. The screen now shows **a running HH:MM:SS** — which
+  is exactly what Apply will set — and Apply anchors the clock to that edge.
+  This covers all five stations: DCF77, MSF, ALS162, RBU and WWV/BPM. RDS
+  already worked this way.
+
+---
+
+## V6.17 · 2026-10-29
+
+### Qué cambia
+
+- **HFDL vuelve a enganchar.** La V6.16 traía un cambio en el corrector de
+  imagen —tirar también la corrección «plana» al cambiar de banda— que en
+  antena resultó ser malo: en 11.184 kHz con señales fuertes el embudo se
+  quedaba en 8>3>3 y ninguna trama pasaba el CRC. Revertido. El corrector
+  plano es el grande, y olvidarlo en una banda donde no puede volver a
+  medirse no lo deja corrigiendo de menos: lo deja sin corregir.
+
+### What's new
+
+- **HFDL locks again.** V6.16 carried a change to the image corrector —also
+  dropping the "flat" correction on a band change— which turned out to be
+  wrong on air: at 11,184 kHz with strong signals the funnel stalled at
+  8>3>3 and no frame passed its CRC. Reverted. The flat corrector is the big
+  one, and forgetting it in a band where it cannot measure itself again does
+  not leave it under-correcting: it leaves it not correcting at all.
+
+---
+
+## V6.16 · 2026-10-29
+
+### Qué cambia
+
+- **El táctil de STANAG y de IDENT ya no se hace de rogar.** En esos dos
+  modos había que insistir para que entrara un toque, con el mando
+  funcionando bien. El motivo: un toque necesita dos lecturas con el dedo
+  puesto, y el bucle principal mira el táctil sólo entre decodificador y
+  decodificador. La propia radio lo midió —«181 ms poll» en el panel de
+  STANAG con señal—, y 181 ms es una ventana de 181 ms sin mirar el dedo.
+  Ahora los decodificadores largos miran el táctil **desde dentro**, con el
+  mismo mecanismo que ya usaban los repintados largos.
+
+- **Y si aun así no responde, se sale con el mando.** Una pulsación larga
+  dentro de uno de los ocho modos de panel entero apaga el modo digital y
+  devuelve el espectro. Hasta hoy, sin táctil no se salía de ahí más que
+  apagando la radio.
+
+- **El panel ya no se queda en blanco al pasar de un modo digital a otro.**
+  De DSC a FT8, de PSK31 a JTTY y cualquier otra pareja de distinto tipo: la
+  mitad de los botones no aparecían.
+
+- **HFDL: once cosas arregladas**, de cinco pasadas de revisión. Las que se
+  notan en antena: el corrector de imagen dejaba de medirse al abrir un menú
+  y se quedaba congelado corrigiendo mal; el corrector plano seguía aplicando
+  lo aprendido en otra banda; y al entrar en HFDL el silenciador del modo se
+  abría de par en par durante tres segundos y medio por el salto de ganancia
+  de la versión anterior.
+
+- **Y seis que se notan en la pantalla**: las estaciones de tierra salían
+  como un avión fantasma «ID 255»; una trama dirigida a varios aviones ponía
+  el vuelo y la posición de uno en la ficha de otro —y el mapa lo pintaba
+  donde no estaba—; el contador de posiciones no se veía en las frecuencias
+  de puros LOGON; los contadores no se reiniciaban al entrar; la vista de
+  bytes mezclaba mensajes de sesiones anteriores; y de las tramas con más de
+  cuatro mensajes dentro sólo se miraban los cuatro primeros.
+
+- **El CAT ya no deja la radio a medias.** Si un programa del ordenador
+  cambiaba el modo estando en un modo digital, el decodificador se quedaba
+  vivo, la cascada congelada y el botón Modo en «?».
+
+- **Las memorias guardadas con firmwares anteriores vuelven con su paso
+  correcto.** Desde la V6.05 se leían corridas: la de marina de 12,5 kHz
+  volvía en 10 kHz.
+
+- **El barrido de memorias se para solo** al entrar en un modo de panel
+  entero, en vez de seguir moviéndole el dial al decodificador.
+
+### What's new
+
+- **Touch in STANAG and IDENT no longer needs coaxing.** In those two modes
+  you had to insist before a tap registered, while the knob worked fine. The
+  reason: a tap needs two readings with the finger down, and the main loop
+  only looked at the touch panel between decoders. The radio measured it
+  itself —«181 ms poll» on the STANAG panel with a signal— and 181 ms is a
+  181 ms window with nobody watching the finger. The long decoders now check
+  the touch panel **from the inside**, with the same mechanism long repaints
+  already used.
+
+- **And if it still does not answer, the knob gets you out.** A long press
+  inside any of the eight full-panel modes turns the digital mode off and
+  brings the spectrum back. Until today, no touch meant no way out short of
+  powering the radio down.
+
+- **The panel no longer goes blank when switching between two digital
+  modes.** DSC to FT8, PSK31 to JTTY and any other pair of different type:
+  half the buttons simply did not appear.
+
+- **HFDL: eleven fixes**, from five review passes. The ones that show on air:
+  the image corrector stopped being measured as soon as a menu opened and
+  froze while still correcting wrongly; the flat corrector kept applying what
+  it had learnt in another band; and entering HFDL left the mode's own gate
+  wide open for three and a half seconds because of the previous release's
+  gain step.
+
+- **And six that show on screen**: ground stations appeared as a phantom
+  aircraft «ID 255»; a frame addressed to several aircraft put one's flight
+  and position on another's row —and the map drew it in the wrong place—; the
+  position counter was hidden on LOGON-only frequencies; counters were not
+  reset on entry; the byte view mixed messages from earlier sessions; and
+  frames carrying more than four messages only had the first four read.
+
+- **CAT no longer leaves the radio half-switched.** A program on the computer
+  changing the mode while a digital mode was running left the decoder alive,
+  the waterfall frozen and the Mode button showing «?».
+
+- **Memories stored by earlier firmware come back with the right tuning
+  step.** Since V6.05 they were read one position off: the 12.5 kHz marine
+  memory came back as 10 kHz.
+
+- **The memory scan now stops by itself** when a full-panel mode is selected,
+  instead of retuning the radio under the decoder.
+
+---
+
+## V6.15 · 2026-10-29
+
+### Qué cambia
+
+- **Cada modo digital tiene ya su propia ganancia de entrada, y HFDL arranca
+  en 35 dB.** Avisado por el usuario con la medida hecha en antena: «he
+  entrado a HFDL con 20 dB y parecía perder paquetes, la he subido a 35 y
+  parece ir mejor».
+
+  Los 20 dB eran el valor de fábrica, así que quien entraba en HFDL sin haber
+  tocado nunca el mando entraba con ellos. Y el AGC interno de HFDL —que
+  tiene 100 dB de margen— no lo tapa, porque actúa **después del
+  convertidor**: un AGC digital arregla la amplitud, no la relación
+  señal/ruido. Con la ganancia analógica baja, una ráfaga floja mueve pocos
+  códigos del conversor y el ruido de cuantización ya está dentro;
+  multiplicar por mil no devuelve los bits que el conversor no llegó a usar.
+
+  Ahora **FT8, HFDL, WSPR, AIS, ALE, JTTY, STANAG e IDENT tienen cada uno la
+  suya**, guardada en `CONFIG.CSV`. Lo que gires dentro de un modo se queda
+  en ese modo y no te mueve la de escuchar. El pie del ajuste lo dice: «sólo
+  para este modo».
+
+  **De serie, HFDL en 35,0 dB y los otros siete en los 20,0 de siempre.** El
+  35 es un número medido; en los otros siete no hay medida, y cambiar el
+  arranque de un modo que hoy funciona apoyándose en la observación de otro
+  sería justo lo que no se hace aquí.
+
+- **Y por dentro, diez ganancias dejan de ser diez ramas.** Había cuatro
+  condiciones encadenadas para repartir dos ganancias, y meter ocho más
+  habría multiplicado los casos. En su lugar hay **zonas**: escuchar, FM
+  ancha y cada uno de los ocho digitales, con **una sola función** que guarda
+  lo vivo donde estabas y carga lo de donde estás.
+
+  No es cosmética: este fichero ya tenía dos averías escritas con esa misma
+  variable, las dos por ramas que se miraban entre ellas. El guardián
+  `pga_check.py` se ha reescrito para vigilar la propiedad nueva —que el
+  cambio de zona tenga **un solo dueño**— y se ha comprobado que se pone rojo
+  con tres averías inventadas a propósito.
+
+### What's new
+
+- **Every digital mode now has its own input gain, and HFDL starts at
+  35 dB.** Reported by the user, measured on air: "I went into HFDL at 20 dB
+  and it seemed to drop packets, I raised it to 35 and it seems better".
+
+  20 dB was the factory value, so anyone entering HFDL without ever having
+  touched the knob entered with it. And HFDL's internal AGC — which has
+  100 dB of range — does not cover for it, because it acts **after the
+  converter**: a digital AGC fixes amplitude, not signal-to-noise. With the
+  analogue gain low, a weak burst moves only a few converter codes and the
+  quantisation noise is already inside; multiplying by a thousand does not
+  give back the bits the converter never used.
+
+  Now **FT8, HFDL, WSPR, AIS, ALE, JTTY, STANAG and IDENT each have their
+  own**, saved in `CONFIG.CSV`. What you turn inside a mode stays in that
+  mode and does not move your listening gain. The setting's footer says so:
+  "this mode only".
+
+  **Factory: HFDL at 35.0 dB and the other seven at the usual 20.0.** The 35
+  is a measured number; for the other seven there is no measurement, and
+  changing the start value of a mode that works today on the strength of an
+  observation about another one is exactly what is not done here.
+
+- **And inside, ten gains stop being ten branches.** There were four chained
+  conditions sharing two gains, and adding eight more would have multiplied
+  the cases. Instead there are **zones**: listening, wide FM and each of the
+  eight digital modes, with **one single function** that saves the live value
+  where you were and loads the one where you are.
+
+  This is not cosmetic: this file already had two faults written with that
+  same variable, both of them caused by branches looking at each other. The
+  `pga_check.py` guard has been rewritten to watch the new property — that
+  the zone change has **one single owner** — and checked to go red against
+  three faults introduced on purpose.
+
+---
+
 ## V6.14 · 2026-10-28
 
 ### Qué cambia

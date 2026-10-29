@@ -109,3 +109,73 @@ customboot_470.bin: customboot_470.elf
 
 clean: ; rm -f customboot.elf customboot.bin customboot.map \
                 customboot_470.elf customboot_470.bin customboot_470.map
+
+# ---------------------------------------------------------------------
+# LOS CARGADORES DE PRUEBA DE LAS TRES RAMAS DEL PANEL - 29/10/2026.
+#
+# *** Un usuario con la pantalla en blanco SIEMPRE, en todos los modos. ***
+#
+# El cargador elige la rama de arranque del panel leyendo dos registros
+# (ver panel_serie.c). Si esa eleccion sale mal, la pantalla se queda en
+# blanco y no hay forma de leer la ficha que dice por que - porque la
+# ficha se pinta en la pantalla que no se ve.
+#
+# Asi que se prueba al reves: tres cargadores, cada uno con una rama
+# clavada, y se graban de uno en uno hasta que la pantalla hable.
+#
+#   make -C boot rama RAMA=A   ->  boot/customboot_rama_A.bin
+#   make -C boot rama RAMA=B   ->  (lo mismo con la B)
+#   make -C boot rama RAMA=C   ->  (y con la C)
+#
+# NO SE COPIAN A LA RAIZ, igual que el del 470: son de prueba y la de la
+# raiz tiene que seguir siendo la buena.
+#
+# La ficha pone "v2.19 rama A / <crc>", asi que en cuanto una funcione se
+# sabe cual es sin preguntar, y el CRC dice que binario es exactamente.
+#
+# Hubo una pantalla de prueba DENTRO del cargador que cambiaba de rama con
+# el mando, y se quito el 05/10/2026: reiniciaba el panel vivo y no es lo
+# mismo que arrancarlo en frio - costo cuatro versiones y seguia saliendo
+# mal -. Por eso esto son tres binarios y no un menu: cada rama tiene que
+# correr desde el arranque, que es la unica forma en que corre de verdad.
+#
+.PHONY: rama
+rama:
+	@test -n "$(RAMA)" || { echo "  usa: make -C boot rama RAMA=A|B|C"; exit 1; }
+	$(CC) $(CFLAGS) -DPANEL_RAMA_FORZADA="'$(RAMA)'" \
+	      -DCARGADOR_VARIANTE='" rama $(RAMA)"' \
+	      $(LDFLAGS) -Wl,-Map=customboot_rama_$(RAMA).map \
+	      $(SRC) $(ASM) -o customboot_rama_$(RAMA).elf
+	$(OBJCOPY) -O binary customboot_rama_$(RAMA).elf customboot_rama_$(RAMA).bin
+	@python3 ../tools/bootsello.py customboot_rama_$(RAMA).bin boot_main.c \
+	         customboot_rama_$(RAMA).map " rama $(RAMA)"
+
+# EL CARGADOR DE DIAGNOSTICO DEL PANEL - 29/10/2026. Ver su cabecera en
+# boot_main.c (#ifdef PRUEBA_PANEL): seis combinaciones de rama y reset,
+# la lectura cruda de nueve registros y el veredicto por parpadeos de la
+# retroiluminacion, que es el unico canal que queda si el cristal no
+# pinta. NO arranca la aplicacion: se sale apagando.
+.PHONY: prueba
+prueba:
+	$(CC) $(CFLAGS) -DPRUEBA_PANEL \
+	      -DCARGADOR_VARIANTE='" PRUEBA"' \
+	      $(LDFLAGS) -Wl,-Map=customboot_prueba.map \
+	      $(SRC) $(ASM) -o customboot_prueba.elf
+	$(OBJCOPY) -O binary customboot_prueba.elf customboot_prueba.bin
+	@python3 ../tools/bootsello.py customboot_prueba.bin boot_main.c \
+	         customboot_prueba.map " PRUEBA"
+
+# La rama B CAPTURADA (k_rama_B, 375 pasos) en vez de la v22 (367). Ver el
+# #ifdef RAMA_B_CAPTURADA en panel_serie.c: son dos tablas distintas y la
+# capturada -la que de verdad hace el cargador de serie- no ha corrido
+# nunca en una radio.
+#   make -C boot bcap   ->  boot/customboot_bcap.bin
+.PHONY: bcap
+bcap:
+	$(CC) $(CFLAGS) -DPANEL_RAMA_FORZADA="'B'" -DRAMA_B_CAPTURADA \
+	      -DCARGADOR_VARIANTE='" rama Bcap"' \
+	      $(LDFLAGS) -Wl,-Map=customboot_bcap.map \
+	      $(SRC) $(ASM) -o customboot_bcap.elf
+	$(OBJCOPY) -O binary customboot_bcap.elf customboot_bcap.bin
+	@python3 ../tools/bootsello.py customboot_bcap.bin boot_main.c \
+	         customboot_bcap.map " rama Bcap"

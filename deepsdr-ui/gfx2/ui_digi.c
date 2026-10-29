@@ -1374,6 +1374,35 @@ void ui_digi_olvida(void)
     s_fir_hay = 0U;
 }
 
+
+/*
+ * ======================================================================
+ * LO QUE NO SE PINTA NO SE APUNTA, TAMBIEN AQUI - 29/10/2026.
+ * ======================================================================
+ *
+ * El bucle de renglones de ui_digi_draw_cambios() ya respeta esa regla:
+ * fila_pinta() devuelve lo que devuelve gfx2_render() y, si no ha pintado,
+ * no se apunta la huella. La chapa y los tres botones no: devolvian void,
+ * se tiraba el resultado y la huella se escribia igual.
+ *
+ * gfx2_render() devuelve 0 cuando la banda compositora esta cogida por
+ * otro, que es justo lo que pasa durante una captura de pantalla -
+ * veinticinco segundos-. El cuadro: en HFDL, con una captura en marcha,
+ * tocas el boton que pasa de Lista a Bytes. La huella pasa a "Bytes", el
+ * dibujo no sale, y el rotulo se queda diciendo "Lista" encima de un panel
+ * que esta en bytes PARA SIEMPRE, porque la huella ya coincide con el
+ * estado y nadie va a volver a intentarlo.
+ *
+ * Y DE PASO, EL ROTULO QUE DESAPARECE. Las cuatro funciones salian por la
+ * puerta de atras cuando el rotulo es nulo -"no hay boton"- sin borrar
+ * nada, dejando el boton anterior pintado. Eso le pasa a STANAG, que
+ * enciende y apaga btn3 y btn4 dentro del mismo modo. Ahora, cuando el
+ * rotulo se va, se borra su hueco: eso SI es pintar, y se apunta.
+ */
+uint8_t ui_digi_pinta_chip(const ui_digi_state_t *st);
+uint8_t ui_digi_pinta_boton(const ui_digi_state_t *st);
+uint8_t ui_digi_pinta_boton2(const ui_digi_state_t *st);
+uint8_t ui_digi_pinta_boton3(const ui_digi_state_t *st);
 uint8_t ui_digi_draw_cambios(const ui_digi_state_t *st)
 {
     uint32_t caja = firma_caja(st);
@@ -1403,19 +1432,19 @@ uint8_t ui_digi_draw_cambios(const ui_digi_state_t *st)
      */
     {
         uint32_t f = firma_chapa(st);
-        if (f != s_fir_chapa) { ui_digi_draw_chip(st); s_fir_chapa = f; }
+        if (f != s_fir_chapa && ui_digi_pinta_chip(st)) { s_fir_chapa = f; }
     }
     {
         uint32_t f = firma_rotulo(st->btn, st->btn_press);
-        if (f != s_fir_btn[0]) { ui_digi_draw_boton(st);  s_fir_btn[0] = f; }
+        if (f != s_fir_btn[0] && ui_digi_pinta_boton(st))  { s_fir_btn[0] = f; }
     }
     {
         uint32_t f = firma_rotulo(st->btn2, st->btn2_press);
-        if (f != s_fir_btn[1]) { ui_digi_draw_boton2(st); s_fir_btn[1] = f; }
+        if (f != s_fir_btn[1] && ui_digi_pinta_boton2(st)) { s_fir_btn[1] = f; }
     }
     {
         uint32_t f = firma_rotulo(st->btn3, st->btn3_press);
-        if (f != s_fir_btn[2]) { ui_digi_draw_boton3(st); s_fir_btn[2] = f; }
+        if (f != s_fir_btn[2] && ui_digi_pinta_boton3(st)) { s_fir_btn[2] = f; }
     }
 
     for (i = 0U; i < n; i++) {
@@ -1501,11 +1530,43 @@ static void solo_chip(gfx2_surf_t *s, void *ctx)
     pinta_chip(s, st);
 }
 
+static void borra_franja(gfx2_surf_t *s, void *ctx)
+{
+    (void)ctx;
+    gfx2_fill(s, 0, 0, GFX2_W, GFX2_H, gfx2_rgb(PAL_SURF_0));
+}
+
+uint8_t ui_digi_pinta_chip(const ui_digi_state_t *st)
+{
+    /*
+     * SIN CHAPA NO SE BORRA SI LA BARRA VIVE EN ESTA FRANJA - 29/10/2026,
+     * quinta pasada, y esto ya costo una averia el 13/10.
+     *
+     * La franja de la chapa va de 430 a 793. Con la barra a la derecha
+     * -que es como va FT8- la barra ocupa de 458 a 793, o sea ENTERA
+     * dentro. Por eso FT8 pone la chapa a nula a proposito contando con
+     * que esta funcion no haga nada: el 13/10, el repintado por segundo
+     * borraba la barra completa y dejaba un hueco liso, cada segundo.
+     *
+     * Asi que el borrado nuevo -que esta para que un rotulo que
+     * desaparece no deje el anterior pintado- solo corre cuando no hay
+     * barra que llevarse por delante. Y cuando corre, va por solo_chip(),
+     * no por un relleno a secas: esa funcion repinta detras el cuarto y el
+     * quinto boton, que tambien viven aqui dentro y que ya han
+     * desaparecido tres veces por este mismo sitio.
+     */
+    if (!st->chip) {
+        if (st->barra_on && st->barra_dcha) { return 1U; }
+        return gfx2_render(chip_franja_x(st), btn_y(st), chip_franja_w(st),
+                           UDG_BTN_H, solo_chip, (void *)st);
+    }
+    return gfx2_render(chip_franja_x(st), btn_y(st), chip_franja_w(st),
+                       UDG_BTN_H, solo_chip, (void *)st);
+}
+
 void ui_digi_draw_chip(const ui_digi_state_t *st)
 {
-    if (!st->chip) { return; }
-    gfx2_render(chip_franja_x(st), btn_y(st), chip_franja_w(st), UDG_BTN_H,
-                solo_chip, (void *)st);
+    (void)ui_digi_pinta_chip(st);
 }
 
 static void solo_boton(gfx2_surf_t *s, void *ctx)
@@ -1515,10 +1576,19 @@ static void solo_boton(gfx2_surf_t *s, void *ctx)
     pinta_boton(s, st);
 }
 
+uint8_t ui_digi_pinta_boton(const ui_digi_state_t *st)
+{
+    if (!st->btn) {
+        return gfx2_render(UDG_BTN_X, btn_y(st), UDG_BTN_W, UDG_BTN_H,
+                           borra_franja, (void *)0);
+    }
+    return gfx2_render(UDG_BTN_X, btn_y(st), UDG_BTN_W, UDG_BTN_H,
+                       solo_boton, (void *)st);
+}
+
 void ui_digi_draw_boton(const ui_digi_state_t *st)
 {
-    if (!st->btn) { return; }
-    gfx2_render(UDG_BTN_X, btn_y(st), UDG_BTN_W, UDG_BTN_H, solo_boton, (void *)st);
+    (void)ui_digi_pinta_boton(st);
 }
 
 static void solo_boton3(gfx2_surf_t *s, void *ctx)
@@ -1533,12 +1603,22 @@ static void solo_boton3(gfx2_surf_t *s, void *ctx)
     pinta_boton3(s, st);
 }
 
-void ui_digi_draw_boton3(const ui_digi_state_t *st)
+uint8_t ui_digi_pinta_boton3(const ui_digi_state_t *st)
 {
     int16_t w = btn3_w(st);
 
-    if (!st->btn3 || w == 0) { return; }
-    gfx2_render(btn3_x(st), btn_y(st), w, UDG_BTN_H, solo_boton3, (void *)st);
+    if (w == 0) { return 1U; }   /* no hay hueco: nada que pintar ni que borrar */
+    if (!st->btn3) {
+        return gfx2_render(btn3_x(st), btn_y(st), w, UDG_BTN_H,
+                           borra_franja, (void *)0);
+    }
+    return gfx2_render(btn3_x(st), btn_y(st), w, UDG_BTN_H,
+                       solo_boton3, (void *)st);
+}
+
+void ui_digi_draw_boton3(const ui_digi_state_t *st)
+{
+    (void)ui_digi_pinta_boton3(st);
 }
 
 uint8_t ui_digi_boton3_hit(const ui_digi_state_t *st, uint16_t x, uint16_t y)
@@ -1640,10 +1720,23 @@ static void solo_boton2(gfx2_surf_t *s, void *ctx)
     pinta_boton2(s, st);
 }
 
+uint8_t ui_digi_pinta_boton2(const ui_digi_state_t *st)
+{
+    if (!st->btn2) {
+        /* Y aqui lo mismo que en la chapa: el hueco del segundo boton
+         * (120..259) es el arranque de la barra, asi que con barra puesta
+         * no se borra nada. Ver ui_digi_pinta_chip(). */
+        if (st->barra_on) { return 1U; }
+        return gfx2_render(UDG_BTN2_X, btn_y(st), UDG_BTN2_W, UDG_BTN_H,
+                           borra_franja, (void *)0);
+    }
+    return gfx2_render(UDG_BTN2_X, btn_y(st), UDG_BTN2_W, UDG_BTN_H,
+                       solo_boton2, (void *)st);
+}
+
 void ui_digi_draw_boton2(const ui_digi_state_t *st)
 {
-    if (!st->btn2) { return; }
-    gfx2_render(UDG_BTN2_X, btn_y(st), UDG_BTN2_W, UDG_BTN_H, solo_boton2, (void *)st);
+    (void)ui_digi_pinta_boton2(st);
 }
 
 uint8_t ui_digi_boton2_hit(const ui_digi_state_t *st, uint16_t x, uint16_t y)

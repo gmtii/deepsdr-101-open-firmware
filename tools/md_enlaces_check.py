@@ -51,7 +51,12 @@ from urllib.parse import unquote
 # propio: los tres sitios donde mira alguien que llega de fuera. El
 # tercero ademas no es opcional, que la MIT de Ft8Lib pide que el aviso
 # viaje CON el codigo y el repositorio es AGPL-3.0.
-ARRIBA = ('README.md', 'NOVEDADES.md', 'PROCEDENCIA.md')
+# Y CADENA.md DESDE EL 29/10/2026. Es el mapa de la cadena de la antena
+# al altavoz, y tiene que estar DENTRO del repositorio por dos motivos:
+# tools/alcance_check.py lo exige en cada entrega, y docs/ no viaja en
+# un clon. Un mapa que no esta donde se clona es un mapa que nadie mira,
+# y de eso iba precisamente el fallo que lo hizo nacer.
+ARRIBA = ('README.md', 'NOVEDADES.md', 'PROCEDENCIA.md', 'CADENA.md')
 
 
 def sin_codigo(texto):

@@ -1,4 +1,5 @@
 #include "stanag_det.h"
+#include "pump.h"   /* pump(): ver su cabecera */
 
 #include <math.h>
 
@@ -325,6 +326,36 @@ static stanag_det_t s_r;
 #define R2  0.70710678f
 static const float k_osc_r[8] = { 1.0f,  R2,  0.0f, -R2, -1.0f, -R2,  0.0f,  R2 };
 static const float k_osc_i[8] = { 0.0f, -R2, -1.0f, -R2,  0.0f,  R2,  1.0f,  R2 };
+
+/*
+ * SOLTAR LOS PUNTEROS ANTES DE DEVOLVER LA MEMORIA - 29/10/2026.
+ *
+ * Los seis punteros de arriba apuntan DENTRO de la region prestada, y
+ * s_vale dice que valen. STANAG e IDENT la devuelven al salir del modo
+ * -y devolverla la borra entera-, pero no habia nada que los soltara:
+ * stanag_modo_stop() llama a stanag_rx_fin() y a s4415_fin(), que si
+ * anulan los suyos, y stanag_det no tenia fin() ninguno. ident_modo_stop()
+ * tampoco.
+ *
+ * Hoy no es alcanzable: todos los que entran -stanag_det_mete(),
+ * stanag_det_paso()- salen antes por s_vale o por el s_activo de su modo.
+ * Lo que delata que falta es la asimetria: de los tres modulos que se
+ * reparten esa region, dos limpian y este no.
+ *
+ * Con s_vale a cero, ademas, lo peor que puede pasar si alguien entra es
+ * que no haga nada, en vez de leer y escribir pixeles de la cascada.
+ */
+void stanag_det_fin(void)
+{
+    s_anillo = (float *)0;
+    s_fft    = (float *)0;
+    s_acf    = (float *)0;
+    s_cos    = (float *)0;
+    s_coh    = (float *)0;
+    s_simbac = (float *)0;
+    s_vale   = 0U;
+    s_listo  = 0U;
+}
 
 uint8_t stanag_det_init(float *trabajo, uint32_t n_floats)
 {
@@ -1728,8 +1759,10 @@ uint8_t stanag_det_paso(stanag_det_t *out)
      * sigue detras.
      */
     simb_acumula();
+    pump();   /* las dos transformadas tardan: ver User/pump.h */
 
     fft(s_fft, 0U);
+    pump();
     for (i = 0U; i < NFFT; i++) {
         float xr = s_fft[2U*i], xi = s_fft[2U*i+1U];
         s_fft[2U*i]    = xr*xr + xi*xi;
@@ -1747,6 +1780,7 @@ uint8_t stanag_det_paso(stanag_det_t *out)
     mide_rachas();
 
     fft(s_fft, 1U);
+    pump();
 
     /*
      * UNA PASADA ES UNA PASADA, HAYA SEÑAL O NO - 02/10/2026.

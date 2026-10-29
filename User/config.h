@@ -245,7 +245,7 @@
  * El _Static_assert de abajo es el que obliga a que el menor lleve
  * siempre sus dos cifras: "5" no pasa, "05" si. */
 #define CONFIG_FW_MAYOR    "6"
-#define CONFIG_FW_MENOR "14"   /* SIEMPRE dos cifras: 00..99 */
+#define CONFIG_FW_MENOR "22"   /* SIEMPRE dos cifras: 00..99 */
 #define CONFIG_FW_VERSION  "V" CONFIG_FW_MAYOR "." CONFIG_FW_MENOR
 
 _Static_assert(sizeof(CONFIG_FW_MENOR) == 3,

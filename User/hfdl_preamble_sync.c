@@ -79,6 +79,29 @@ static void build_refs_once(void)
 	s_refs_ok = 1u;
 }
 
+/*
+ * SOLTAR LAS REFERENCIAS ANTES DE DEVOLVER LA MEMORIA - 29/10/2026.
+ *
+ * s_a_ref y s_m1_ref apuntan DENTRO de la region prestada -los primeros
+ * 4.608 bytes-, y s_refs_ok dice que valen. Al salir del modo esa region se
+ * devuelve y se borra entera, pero estos tres se quedaban como estaban: dos
+ * punteros a lo que ya son pixeles de la cascada, con la bandera diciendo
+ * que son buenos.
+ *
+ * Hoy no es alcanzable -process_symbol() no corre con el modo apagado- pero
+ * es exactamente la misma forma del fallo que hfdl_modo_stop() arreglo a
+ * mano para s_tabla.rec el 28/10, y los otros nueve que usan esa memoria si
+ * limpian sus punteros. La asimetria es la que delata.
+ *
+ * Lo llama hfdl_modo_stop(), ANTES de hfdl_ram_suelta().
+ */
+void hfdl_preamble_sync_fin(void)
+{
+	s_a_ref  = (float32_t *)0;
+	s_m1_ref = (float32_t (*)[HFDL_M1_LEN])0;
+	s_refs_ok = 0u;
+}
+
 void hfdl_preamble_sync_init(hfdl_preamble_sync_t *p)
 {
 	build_refs_once();

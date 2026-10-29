@@ -287,4 +287,11 @@ uint8_t hfdl_modo_estado(void);
  */
 void hfdl_modo_datos(uint32_t *ud, uint32_t *pos);
 
+/*
+ * El nivel de entrada acaba de cambiar por una decision de la radio (un
+ * cruce de zona del PGA), asi que el suelo de ruido que el portero habia
+ * aprendido ya no vale: vuelve a cebarse. Ver su cabecera en el .c.
+ */
+void hfdl_modo_nivel_cambiado(void);
+
 #endif /* HFDL_MODO_H */

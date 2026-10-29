@@ -84,7 +84,22 @@ static void reproduce(const paso_t *p, unsigned n)
 /* 'A', 'B' o 'C' para forzar una rama; 0 para decidirla leyendo el panel,
  * que es lo que hace el de serie y lo que hacemos ya. Esto queda como
  * salida de emergencia, no como lo normal. */
+/*
+ * SE PUEDE FORZAR DESDE LA LINEA DE ORDENES - 29/10/2026.
+ *
+ * Un usuario con la pantalla en blanco SIEMPRE. Para saber si es la rama
+ * elegida hay que probar las tres, y para probarlas hay que compilar tres
+ * cargadores. Con el #define a pelo habia que editar este fichero entre
+ * compilacion y compilacion, que es como se acaba entregando dos veces el
+ * mismo binario con nombres distintos.
+ *
+ *   make -C boot rama RAMA=A    ->  boot/customboot_rama_A.bin
+ *
+ * Ver la regla `rama` de reglas.mk.
+ */
+#ifndef PANEL_RAMA_FORZADA
 #define PANEL_RAMA_FORZADA  0
+#endif
 
 /* Cuantas veces se lee cada identificador antes de fiarse de el. Ver
  * panel_serie_init: una lectura que cambia no es una lectura. */
@@ -355,8 +370,27 @@ void panel_serie_init(void)
     switch (g_panel_rama) {
     case 'A': reproduce(k_rama_A, sizeof k_rama_A / sizeof k_rama_A[0]); break;
     case 'C': reproduce(k_rama_C, sizeof k_rama_C / sizeof k_rama_C[0]); break;
+#ifdef RAMA_B_CAPTURADA
+    /*
+     * LA RAMA B DEL EMULADOR, QUE NUNCA HA CORRIDO - 29/10/2026.
+     *
+     * Hay DOS tablas de rama B y solo una se usa:
+     *
+     *   k_rama_B      375 pasos   sacada del boot.bin de serie por
+     *                             tools/captura_panel.py, ejecutandolo
+     *   k_rama_B_v22  367 pasos   la de siempre, la que corre
+     *
+     * Ocho pasos de diferencia, y la capturada no se ha probado jamas en
+     * una radio. Mientras la v22 funcionara no habia por que tocarlo; con
+     * una radio donde NINGUNA rama pinta, es lo primero que hay que
+     * probar, porque es la unica de las cuatro que sabemos que es
+     * literalmente lo que hace el cargador de fabrica.
+     */
+    default:  reproduce(k_rama_B, sizeof k_rama_B / sizeof k_rama_B[0]); break;
+#else
     default:  reproduce_v22(k_rama_B_v22,
                         sizeof k_rama_B_v22 / sizeof k_rama_B_v22[0]); break;
+#endif
     }
 
     /* Arrancado el panel, el bus vuelve a lo rapido: es lo que hereda la

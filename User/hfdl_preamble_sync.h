@@ -131,6 +131,10 @@ typedef struct {
  * callers don't need to manage that. Call once at startup, or again
  * on a hard reset (e.g. hfdl_scope_burst_active()'s rising edge, same
  * spot hfdl_demod_chain_init() is already called from). */
+/* Suelta las referencias de preambulo, que viven en la memoria prestada.
+ * La llama hfdl_modo_stop() antes de devolverla: ver el .c. */
+void hfdl_preamble_sync_fin(void);
+
 void hfdl_preamble_sync_init(hfdl_preamble_sync_t *p);
 
 /* Same as hfdl_preamble_sync_init() but does NOT rebuild the

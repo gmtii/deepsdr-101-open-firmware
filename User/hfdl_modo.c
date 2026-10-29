@@ -262,6 +262,32 @@ static void crudo_texto(char *d, const uint8_t *b, uint32_t n)
     d[p] = '\0';
 }
 
+/*
+ * VACIA EL ANILLO DE CARGAS CRUDAS - 29/10/2026, revision a fondo.
+ *
+ * No lo vaciaba nadie: ni start(), ni stop(), ni borra(). Vive en .bss, o
+ * sea que sobrevive a todo mientras la radio este encendida. Y desde la
+ * V6.12 la tabla de aviones SI se borra al salir -vive en la memoria
+ * prestada-, asi que las dos mitades del mismo renglon dejaron de ir
+ * juntas.
+ *
+ * El cuadro: crudo_de() empareja renglon y volcado por OACI, y si no la
+ * hay por el par (estacion, identificador). Ese identificador lo reparte
+ * la estacion de tierra por sesion y LO RECICLA. Asi que el avion 59 de
+ * la estacion 7 de hace media hora le deja su texto ACARS pegado al avion
+ * 59 de la estacion 7 de ahora, que es otro. En la vista de Bytes, que es
+ * justo la pantalla que se abre para no adivinar.
+ *
+ * La regla, otra vez: lo que borra hfdl_modo_borra() lo tiene que borrar
+ * tambien hfdl_modo_start(), y lo que vive en la memoria prestada obliga a
+ * mirar quien mas guarda lo mismo fuera de ella.
+ */
+static void crudo_vacia(void)
+{
+    memset(s_crudo, 0, sizeof s_crudo);
+    s_crudo_sig = 0U;
+}
+
 /* Guarda una carga. La clave es la OACI si se sabe, y si no el par
  * (estacion, identificador), que es exactamente como empareja
  * hfdl_ac_update(): asi la fila y su volcado hablan del mismo avion. */
@@ -366,7 +392,19 @@ typedef struct {
     uint8_t              decodificando;   /* ver simbolo_de_segmento() */
 } hfdl_estado_t;
 
-static uint8_t  s_activo;
+/*
+ * VOLATIL DESDE EL 29/10/2026. El comentario que viene justo debajo dice
+ * que todo lo que cruza con la interrupcion de audio va marcado volatile
+ * 'y aqui faltaba casi todo' - y esta, que es la que decide si la
+ * interrupcion entra o no, se quedo fuera una linea por encima de su
+ * propia regla. La escribe el bucle principal (start/stop) y la leen
+ * hfdl_modo_mete() y hfdl_modo_simbolo(), que corren en la interrupcion.
+ *
+ * En el binario de hoy no hace daño -hfdl_modo_stop() escribe el cero
+ * antes de soltar la memoria y el compilador no lo reordena- pero es la
+ * misma clase de contrato no escrito que s_hay en iqbal.c.
+ */
+static volatile uint8_t  s_activo;
 static uint32_t s_total;
 /*
  * REVISION A FONDO DEL 08/10/2026: TODO LO QUE CRUZA CON LA INTERRUPCION
@@ -575,11 +613,20 @@ static volatile uint32_t s_pisada;    /* rafagas descartadas por eso */
  * -LOGON, RESUME, CONFIRM, LOGOFF- es gestion del enlace. Asi que:
  *
  *   s_ud   cuantos LPDU de datos de usuario han entrado
- *   s_pos  de esos, cuantos han dado una posicion
+ *   s_pos  cuantas posiciones se han sacado, VENGAN DE DONDE VENGAN
  *
  * Con los dos delante: 0 y 0 es "no ha llegado nada que pueda llevar
  * posicion, ten paciencia o cambia de frecuencia"; 12 y 0 es "estan
  * llegando y no se estan leyendo", que es un fallo nuestro.
+ *
+ * Y EL SEGUNDO NO ES UN SUBCONJUNTO DEL PRIMERO - corregido el
+ * 29/10/2026, revision a fondo. Este comentario decia "de esos, cuantos
+ * han dado una posicion", y era verdad el dia que se escribio. Hoy s_pos
+ * sube en CUATRO sitios y solo uno de ellos es un LPDU de datos de
+ * usuario: tambien suben la posicion rescatada de un LPDU con el CRC malo
+ * y la que viene dentro de un LOGON REQUEST -que es, dicho por el propio
+ * codigo, la trama mas frecuente que manda un avion-. Asi que s_pos puede
+ * ser MAYOR que s_ud, y leerlo como una razon no significa nada.
  */
 static volatile uint32_t s_ud;
 static volatile uint32_t s_pos;
@@ -669,8 +716,74 @@ static volatile uint8_t s_gs_ultima = 0xFFU;
  */
 #define HFDL_SQ_ABRE      3.0f    /* veces sobre el suelo para abrir */
 #define HFDL_SQ_CIERRA    2.0f    /* y para cerrar - histeresis */
-#define HFDL_SQ_CEBADO    200U    /* bloques mirando antes de fiarse del suelo */
-#define HFDL_SQ_HARTO   20000U    /* bloques cerrado seguidos -> abre solo */
+/*
+ * ======================================================================
+ * Y EL RELOJ DEL PORTERO SE MIDE EN TIEMPO, NO EN BLOQUES - 29/10/2026,
+ * revision a fondo.
+ * ======================================================================
+ *
+ * Estas cuatro constantes estaban en BLOQUES, y el bloque no dura siempre
+ * lo mismo: son 32 muestras a 12 kHz cuando la radio va a 96 o 192 kHz
+ * -2,667 ms- y 64 cuando va a 48 kHz -5,333 ms-. O sea que el portero que
+ * protege al buscador de preambulo tenia DOS comportamientos distintos
+ * segun un ajuste que no es de HFDL, y el doble de lento en el peor caso:
+ *
+ *                       96/192 kHz      48 kHz
+ *   cebado                 0,53 s       1,07 s
+ *   el suelo baja        tau  53 ms   tau 107 ms
+ *   el suelo sube        tau 5,3 s    tau 10,7 s
+ *   harto (abre solo)       53 s        107 s
+ *
+ * Los numeros de la columna de la izquierda son los que se midieron y los
+ * que funcionan, asi que se quedan EXACTAMENTE como estaban: lo que se
+ * hace es escribirlos en milisegundos y derivar los bloques del tamaño de
+ * bloque que llega de verdad. A 96 kHz sale el mismo numero entero que
+ * habia; a 48 kHz, por fin, el mismo TIEMPO.
+ *
+ * El tamaño de bloque lo trae hfdl_modo_mete() en su parametro n, asi que
+ * no hay que preguntarle a nadie ni duplicar una constante de demod_am.c.
+ */
+#define HFDL_SQ_CEBADO_MS    533U   /* mirando antes de fiarse del suelo */
+#define HFDL_SQ_HARTO_MS   53333U   /* cerrado seguidos -> abre solo */
+#define HFDL_SQ_FS_HZ      12000U   /* la tasa a la que entra I/Q en HFDL */
+
+/*
+ * Y LA VALVULA ABRE DE VERDAD, NO UN BLOQUE - 29/10/2026.
+ *
+ * La cabecera promete que si lleva mucho rato sin dejar pasar a nadie,
+ * abre solo, y que uno que se queda abierto devuelve el ruido que habia
+ * antes. No se quedaba abierto: al bloque siguiente entraba por la rama de
+ * "estoy abierto" y, con la razon por debajo del umbral, volvia a cerrar;
+ * y s_sq_cerrado ya se habia puesto a cero, asi que arrancaba otros 53
+ * segundos. O sea una ventana de 2,67 ms cada 53 s: la valvula estaba
+ * practicamente muerta y no cubria el fallo que dice cubrir.
+ *
+ * CUANTO SE QUEDA ABIERTA, Y POR QUE NO MEDIO SEGUNDO. La primera version
+ * de esta tarde puso 533 ms razonando que "lo unico que pasa es que entra
+ * medio segundo de ruido". Eso choca de frente con la unica medida que
+ * este fichero tiene sobre el asunto, sesenta lineas mas abajo, del banco
+ * de aire real:
+ *
+ *     sin portero:  11 enganches, 11 tramas, 2 buenas, 1 renglon
+ *
+ * y la conclusion que va con ella: lo que el portero tira ES ruido, y
+ * dejarlo pasar no solo gasta tiempo, se come rafagas BUENAS que llegan
+ * mientras la cadena esta ocupada con la basura - apagarlo costaba cuatro
+ * buenas de seis. Y peor: si el ruido engancha en falso, la cadena entra
+ * en segmento y el portero YA NO la puede abortar, por decision escrita.
+ *
+ * Ademas, medio segundo no sirve para lo que se decia: una rafaga de HFDL
+ * dura de 1,2 a 2,8 s, asi que no cabe entera de todos modos; y el suelo
+ * se actualiza en CADA bloque, este el porton abierto o cerrado, asi que
+ * la valvula no hace falta para que el suelo se ponga al dia.
+ *
+ * O sea que la valvula solo existe para "mejor abierto que mudo", y para
+ * eso basta con que dure mas de un bloque. Se le dan 150 ms -unas tres
+ * constantes de tiempo del suelo bajando- que es bastante para que se note
+ * y poco para lo que cuesta. Si alguna vez el porton se queda cerrado de
+ * verdad, lo que hay que arreglar es el umbral, no la valvula.
+ */
+#define HFDL_SQ_FORZADO_MS   150U
 
 static volatile float    s_suelo;
 static volatile float    s_razon;
@@ -680,6 +793,80 @@ static volatile uint8_t  s_sq_abierto;
 static volatile uint8_t  s_sq_forzado;  /* 1 = se abrio por hartazgo, no por senal */
 
 /* Devuelve 1 si hay que dejar pasar el bloque al sincronismo. */
+/*
+ * Los relojes del portero en bloques, derivados del tamaño de bloque que
+ * llega. Se recalculan solo cuando n cambia, que es casi nunca.
+ */
+static uint32_t s_sq_cebado  = 200U;    /* 533 ms con bloques de 32 */
+static uint32_t s_sq_harto   = 20000U;  /* 53,3 s idem */
+static uint32_t s_sq_forzado_n = 200U;  /* lo que dura la valvula abierta */
+static uint32_t s_sq_bloque    = 0U;    /* el ultimo n visto */
+static uint32_t s_sq_abierta_n = 0U;    /* bloques que lleva forzada */
+
+static void porton_relojes(uint32_t n)
+{
+    uint32_t por_s;
+
+    if (n == 0U || n == s_sq_bloque) { return; }
+    s_sq_bloque = n;
+    por_s = HFDL_SQ_FS_HZ / n;                 /* bloques por segundo */
+    /* Redondeando, no truncando: con bloques de 32 los milisegundos de
+     * arriba tienen que devolver EXACTAMENTE los 200 y los 20.000 que
+     * habia escritos, no 199 y 19.999. Asi este cambio no mueve ni un
+     * bloque el comportamiento que esta medido. */
+    s_sq_cebado    = (HFDL_SQ_CEBADO_MS  * por_s + 500U) / 1000U;
+    s_sq_harto     = (HFDL_SQ_HARTO_MS   * por_s + 500U) / 1000U;
+    s_sq_forzado_n = (HFDL_SQ_FORZADO_MS * por_s + 500U) / 1000U;
+    if (s_sq_cebado    == 0U) { s_sq_cebado    = 1U; }
+    if (s_sq_harto     == 0U) { s_sq_harto     = 1U; }
+    if (s_sq_forzado_n == 0U) { s_sq_forzado_n = 1U; }
+}
+
+/*
+ * EL NIVEL DE ENTRADA HA CAMBIADO: EL SUELO QUE HABIA YA NO VALE.
+ * 29/10/2026, cuarta pasada.
+ *
+ * Desde la V6.15 entrar en HFDL sube el PGA de 20,0 a 35,0 dB. Y el orden
+ * real de la rejilla de modos es:
+ *
+ *   1. apply_demod_mode(USB)      todavia a 20,0 dB
+ *   2. hfdl_modo_start()          el portero siembra su suelo A 20,0 dB
+ *   3. pga_zona_sync()            +15 dB de golpe
+ *
+ * El portero mide la potencia ANTES del AGC del modo -eso esta escrito en
+ * hfdl_agc.h-, asi que esos 15 dB multiplican p por treinta y uno mientras
+ * el suelo sigue siendo el de antes. s_razon se va a treinta, el porton se
+ * queda abierto de par en par, y el suelo solo sube con alfa 0,0005 por
+ * bloque: hacen falta unos mil trescientos bloques, o sea TRES SEGUNDOS Y
+ * MEDIO a 96 kHz y SIETE a 48, con todo el ruido entrando al buscador de
+ * preambulo. Justo al entrar en el modo, que es cuando uno mira si la
+ * frecuencia tiene trafico.
+ *
+ * Y lo que cuesta dejar pasar ruido esta medido aqui mismo: sin portero,
+ * once enganches para dos tramas buenas y un renglon.
+ *
+ * Esto lo arregla por donde hay que arreglarlo: cuando el nivel de entrada
+ * cambia por una decision de la radio, el suelo aprendido deja de valer y
+ * el portero vuelve a su estado de cebado -pasa todo medio segundo y
+ * vuelve a aprender-, que es exactamente lo que hace al arrancar y por el
+ * mismo motivo: todavia no se sabe donde esta el suelo.
+ *
+ * NO se llama desde el lazo del AGC de radiofrecuencia, que mueve la
+ * ganancia cada 50 ms: eso dejaria el portero cebandose para siempre. Solo
+ * desde pga_zona_sync(), o sea cuando se cruza de zona.
+ */
+void hfdl_modo_nivel_cambiado(void)
+{
+    if (!s_activo) { return; }
+    s_suelo   = 0.0f;
+    s_razon   = 0.0f;
+    s_sq_visto = 0U;
+    s_sq_cerrado = 0U;
+    s_sq_abierto = 1U;
+    s_sq_forzado = 0U;
+    s_sq_abierta_n = 0U;
+}
+
 static uint8_t porton(float p)
 {
     if (p <= 0.0f) { p = 1e-12f; }
@@ -692,7 +879,7 @@ static uint8_t porton(float p)
 
     s_razon = p / (s_suelo + 1e-12f);
 
-    if (s_sq_visto < HFDL_SQ_CEBADO) {
+    if (s_sq_visto < s_sq_cebado) {
         /* Todavia no se sabe donde esta el suelo: pasa todo. Cerrar aqui
          * seria decidir con lo que no se sabe. */
         s_sq_visto++;
@@ -701,17 +888,30 @@ static uint8_t porton(float p)
     }
 
     if (s_sq_abierto) {
-        if (s_razon < HFDL_SQ_CIERRA) { s_sq_abierto = 0U; }
+        /*
+         * Y si esta abierta A LA FUERZA, se le respeta su medio segundo:
+         * cerrar al bloque siguiente es lo que dejaba la valvula en una
+         * ventana de 2,67 ms. Ver HFDL_SQ_FORZADO_MS.
+         */
+        if (s_sq_forzado) {
+            if (++s_sq_abierta_n >= s_sq_forzado_n) {
+                s_sq_forzado = 0U;
+                s_sq_abierta_n = 0U;
+            }
+        } else if (s_razon < HFDL_SQ_CIERRA) {
+            s_sq_abierto = 0U;
+        }
     } else {
         if (s_razon > HFDL_SQ_ABRE)   { s_sq_abierto = 1U; s_sq_forzado = 0U; }
     }
 
     if (s_sq_abierto) {
         s_sq_cerrado = 0U;
-    } else if (++s_sq_cerrado > HFDL_SQ_HARTO) {
+    } else if (++s_sq_cerrado > s_sq_harto) {
         /* Ver la cabecera: mejor abierto de mas que mudo. */
         s_sq_abierto = 1U;
         s_sq_forzado = 1U;
+        s_sq_abierta_n = 0U;
         s_sq_cerrado = 0U;
     }
     return s_sq_abierto;
@@ -1038,6 +1238,24 @@ uint8_t hfdl_modo_start(void)
     s_dg_n_lista = 0U; s_dg_dur_vivo = 0U; s_dg_idx_vivo = -1;
 #endif
     { uint8_t z; for (z = 0U; z < 4U; z++) { s_crc_ok[z] = 0U; s_crc_tot[z] = 0U; } }
+    /*
+     * Y LOS DOS DE LA U, QUE SE QUEDARON FUERA POR TERCERA VEZ -
+     * 29/10/2026, revision a fondo.
+     *
+     * hfdl_modo_borra() si los reinicia; esta funcion no. O sea que salias
+     * de HFDL, volvias a entrar en otra frecuencia, y en cuanto enganchaba
+     * el primer A1 la barra decia "1>0>0 U37/4": treinta y siete LPDU de
+     * datos y cuatro posiciones de la SESION ANTERIOR, pegados a un embudo
+     * que empieza de cero. Dos numeros de escalas distintas en el mismo
+     * renglon.
+     *
+     * Es el mismo olvido que este fichero ya arreglo con s_total y con los
+     * contadores P/D//n/!. La regla es: lo que borra hfdl_modo_borra()
+     * tiene que borrarlo tambien hfdl_modo_start().
+     */
+    s_ud = 0U;
+    s_pos = 0U;
+    crudo_vacia();
     s_suelo = 0.0f; s_razon = 0.0f;
     s_sq_visto = 0U; s_sq_cerrado = 0U; s_sq_abierto = 1U; s_sq_forzado = 0U;
     s_finish_pendiente = 0U;
@@ -1065,6 +1283,12 @@ void hfdl_modo_stop(void)
     s_tabla.count = 0;
     s_tabla.cap = 0;
     s_nlineas = 0U;
+    /* Y el anillo de cargas crudas, que vive FUERA del prestamo y por eso
+     * sobrevivia a esta funcion: ver crudo_vacia(). */
+    crudo_vacia();
+    /* Y las referencias de preambulo, que SI viven dentro: ver
+     * hfdl_preamble_sync_fin(). Mismo motivo que s_tabla.rec de arriba. */
+    hfdl_preamble_sync_fin();
     hfdl_ram_suelta();
 }
 
@@ -1751,12 +1975,38 @@ static uint8_t posicion_de_confianza(const uint8_t *carga, uint32_t n,
 static void apunta_trama(const uint8_t *datos, uint32_t largo)
 {
     hfdl_mpdu_header_t hdr;
-    hfdl_lpdu_result_t lpdu[4];
+    /*
+     * QUINCE Y NO CUATRO - 29/10/2026, revision a fondo.
+     *
+     * El campo lpdu_cnt de la cabecera son CUATRO BITS (ver hfdl_pdu.h),
+     * o sea hasta quince LPDU en una trama. Aqui habia sitio para cuatro
+     * y hfdl_mpdu_extract_lpdus() recibia ese 4 como capacidad: a partir
+     * del quinto no se apuntaba ni la posicion, ni el tipo de suceso, ni
+     * el volcado en crudo. No habia desborde -extract_lpdu_list() respeta
+     * la capacidad que le dan- pero se perdia en silencio, y la fila del
+     * avion decia "lo ultimo que hizo" mirando solo el principio de la
+     * trama.
+     *
+     * Quince es el maximo EXACTO que permite el formato, no un numero
+     * redondeado: el mismo razonamiento que hay escrito encima de
+     * HFDL_MAX_LPDUS_TOTAL. Cuesta 352 bytes mas de pila en el peor caso
+     * (32 bytes por entrada en el ARM), y esta funcion la llama
+     * hfdl_modo_poll() desde el BUCLE PRINCIPAL, no desde la
+     * interrupcion. El margen de pila se mide en el banco.
+     */
+    hfdl_lpdu_result_t lpdu[15];
     hfdl_ac_event_t ev;
     hfdl_hfnpdu_perf_data_t pd;
     rtc_hw_datetime_t h;
     uint32_t nl = 0U, k;
     uint8_t  pide_modelo = 0U;
+    /* Subida con mas de un avion: no se sabe de quien es cada LPDU, asi que
+     * no se le cuelga nada a nadie. Ver la rama de la cabecera de subida. */
+    uint8_t  varios = 0U;
+    /* Cuantos LPDU de esta trama traen identificacion PROPIA (direccion
+     * OACI). Con uno solo no hay ambiguedad posible; con dos o mas, el
+     * unico ev de la trama los mezcla. Ver la salida de abajo. */
+    uint8_t  n_ident = 0U;
 
     /*
      * EL SQUITTER VA A SU PROPIO RENGLON - 14/10/2026.
@@ -1784,6 +2034,22 @@ static void apunta_trama(const uint8_t *datos, uint32_t largo)
             rtc_hw_get(&hs);
             evs.hh = hs.hour; evs.mm = hs.minute; evs.ss = hs.second;
             { uint8_t sin_modelo = 0U; hfdl_ac_update(&s_tabla, &evs, &sin_modelo); }
+            /*
+             * Y LA CABECERA DICE QUE ESTACION ES - 29/10/2026.
+             *
+             * Esta rama sale con return antes de la linea que alimenta a
+             * hfdl_modo_estacion(), que es lo que pinta "> SHANNON" arriba
+             * del panel. Y el squitter es EL mensaje en el que la estacion
+             * dice quien es -es literalmente sq.gs_id, ya validado con un
+             * CRC de 16 bits- y lo unico que se oye en una frecuencia
+             * tranquila.
+             *
+             * O sea que en una frecuencia donde llegaban squitters pero
+             * todavia ninguna trama, la lista ya enseñaba renglones de esa
+             * estacion y la cabecera seguia con el texto de relleno. Dos
+             * partes de la misma pantalla diciendo cosas distintas.
+             */
+            s_gs_ultima = sq.gs_id;
 #if HFDL_DIAG
             s_dg_squit++;
 #endif
@@ -1824,9 +2090,49 @@ static void apunta_trama(const uint8_t *datos, uint32_t largo)
     } else {
         ev.flags |= HFDL_AC_EV_UPLINK;
         ev.gs_id = hdr.src_gs_id;
-        /* En subida el destino es el avion; si hay varios se apunta el
-         * primero, que es de quien habla el primer LPDU. */
-        if (hdr.aircraft_cnt != 0U) { ev.ac_id = hdr.aircraft[0].dst_id; }
+        /*
+         * ==================================================================
+         * EN SUBIDA, CON VARIOS AVIONES NO SE ATRIBUYE NADA - 29/10/2026,
+         * revision a fondo de HFDL.
+         * ==================================================================
+         *
+         * Aqui ponia "si hay varios se apunta el primero, que es de quien
+         * habla el primer LPDU", y eso era verdad del PRIMER LPDU y de
+         * ninguno mas. Un MPDU de subida admite hasta OCHO aviones y la
+         * estacion de tierra junta varios destinatarios en la misma ranura
+         * como cosa normal.
+         *
+         * Y la informacion se pierde una capa mas abajo:
+         * hfdl_lpdu_result_t no lleva ningun campo que diga a que avion
+         * pertenece el LPDU, y hfdl_mpdu_extract_lpdus() APLANA los
+         * segmentos por avion en una sola lista. Desde aqui no hay forma de
+         * saber cual es de quien.
+         *
+         * El cuadro, con dos aviones A y B en la misma trama: ev.ac_id
+         * queda en A; el LPDU de datos de usuario de B archiva su volcado
+         * bajo A y rellena ev.lat/lon/vuelo con los de B; y al salir del
+         * bucle hay UNA sola hfdl_ac_update() que lo funde todo en la ficha
+         * de A. Resultado: la fila de A sale con el distintivo, la posicion
+         * y el texto de B, y el mapa pinta a A donde esta B. No es un
+         * renglon de mas: es un dato FALSO que no se distingue de uno
+         * bueno.
+         *
+         * Hasta que haya un suceso por avion -que pide cambiar hfdl_pdu.c
+         * para que cada LPDU diga de quien es-, con varios aviones NO se
+         * atribuye a nadie: ev.ac_id se queda en HFDL_AC_ID_NONE y la
+         * guarda de trama anonima de mas abajo tira el renglon. Lo que SI
+         * sigue entrando es lo que viene identificado dentro de su propio
+         * LPDU -los LOGON_* traen su ac_id y su OACI-, que es el unico dato
+         * de esa trama del que se sabe el dueño.
+         *
+         * Se pierde un renglon de "a este avion le han mandado algo". Se
+         * gana no inventarse donde esta.
+         */
+        if (hdr.aircraft_cnt == 1U) {
+            ev.ac_id = hdr.aircraft[0].dst_id;
+        } else if (hdr.aircraft_cnt > 1U) {
+            varios = 1U;
+        }
     }
 
     for (k = 0U; k < nl; k++) {
@@ -1841,7 +2147,7 @@ static void apunta_trama(const uint8_t *datos, uint32_t largo)
                                       lpdu[k].datos_crudos_len,
                                       ev.gs_id, &pdx)) {
                 uint8_t c2;
-                s_pos++;
+                if (!varios) { s_pos++; }
                 s_pos_sin_crc++;
                 ev.lat_e4 = (int32_t)(pdx.location.lat * 10000.0);
                 ev.lon_e4 = (int32_t)(pdx.location.lon * 10000.0);
@@ -1859,11 +2165,11 @@ static void apunta_trama(const uint8_t *datos, uint32_t largo)
              * anonimos. */
             ev.icao = lpdu[k].icao_address;
             ev.ac_id = lpdu[k].ac_id;
-            ev.flags |= (uint8_t)(HFDL_AC_EV_ICAO | HFDL_AC_EV_ASSIGN);
+            ev.flags |= (uint8_t)(HFDL_AC_EV_ICAO | HFDL_AC_EV_ASSIGN); n_ident++;
             break;
         case HFDL_LPDU_KIND_LOGON_REQUEST:
             ev.icao = lpdu[k].icao_address;
-            ev.flags |= HFDL_AC_EV_ICAO;
+            ev.flags |= HFDL_AC_EV_ICAO; n_ident++;
             /*
              * Y LA POSICION QUE VIENE DENTRO DEL LOGON. Ver hfdl_pdu.c,
              * "Y DETRAS DE LA DIRECCION OACI VIENE UN HFNPDU": el logon
@@ -1875,7 +2181,7 @@ static void apunta_trama(const uint8_t *datos, uint32_t largo)
                 hfdl_hfnpdu_parse_performance_data(lpdu[k].user_data,
                                                    lpdu[k].user_data_len, &pd)) {
                 uint8_t cl;
-                s_pos++;
+                if (!varios) { s_pos++; }
                 s_d1_vistos++;
                 ev.lat_e4 = (int32_t)(pd.location.lat * 10000.0);
                 ev.lon_e4 = (int32_t)(pd.location.lon * 10000.0);
@@ -1887,7 +2193,7 @@ static void apunta_trama(const uint8_t *datos, uint32_t largo)
             break;
         case HFDL_LPDU_KIND_LOGOFF_OR_DENIED:
             ev.icao = lpdu[k].icao_address;
-            ev.flags |= HFDL_AC_EV_ICAO;
+            ev.flags |= HFDL_AC_EV_ICAO; n_ident++;
             break;
         case HFDL_LPDU_KIND_USER_DATA:
             s_ud++;        /* ver hfdl_modo_datos() */
@@ -1906,6 +2212,10 @@ static void apunta_trama(const uint8_t *datos, uint32_t largo)
                     s_d1_vistos++;
                 }
             }
+            /* Con varios aviones en la trama no se sabe de quien es esta
+             * carga: archivarla bajo el primero es la mitad del mismo
+             * fallo. Ver la variable "varios". */
+            if (!varios)
             crudo_pon(((ev.flags & HFDL_AC_EV_ICAO) != 0U) ? ev.icao : 0UL,
                       ev.ac_id, ev.gs_id,
                       lpdu[k].user_data, lpdu[k].user_data_len);
@@ -1919,7 +2229,7 @@ static void apunta_trama(const uint8_t *datos, uint32_t largo)
                                                    lpdu[k].user_data_len, &pd)) {
                 uint8_t c;
 
-                s_pos++;
+                if (!varios) { s_pos++; }
 
                 ev.lat_e4 = (int32_t)(pd.location.lat * 10000.0);
                 ev.lon_e4 = (int32_t)(pd.location.lon * 10000.0);
@@ -1959,7 +2269,7 @@ static void apunta_trama(const uint8_t *datos, uint32_t largo)
                     }
 #endif
                     if (leido && hfdl_acars_posicion(&ac, &la, &lo)) {
-                        s_pos++;
+                        if (!varios) { s_pos++; }
                         ev.lat_e4 = la;
                         ev.lon_e4 = lo;
                         ev.flags |= HFDL_AC_EV_POS;
@@ -1996,6 +2306,10 @@ static void apunta_trama(const uint8_t *datos, uint32_t largo)
              * debajo y la posicion con sus pruebas aparte.
              */
             if (lpdu[k].datos_crudos != (const uint8_t *)0) {
+                /* Con varios aviones en la trama no se sabe de quien es esta
+                 * carga: archivarla bajo el primero es la mitad del mismo
+                 * fallo. Ver la variable "varios". */
+                if (!varios)
                 crudo_pon(((ev.flags & HFDL_AC_EV_ICAO) != 0U) ? ev.icao : 0UL,
                           ev.ac_id, ev.gs_id,
                           lpdu[k].datos_crudos, lpdu[k].datos_crudos_len);
@@ -2062,7 +2376,100 @@ static void apunta_trama(const uint8_t *datos, uint32_t largo)
     }
 
     {
-        hfdl_ac_rec_t *r = hfdl_ac_update(&s_tabla, &ev, &pide_modelo);
+        hfdl_ac_rec_t *r;
+
+        /*
+         * ==================================================================
+         * CON VARIOS AVIONES, NI POSICION NI DISTINTIVO - 29/10/2026, tarde,
+         * tercera pasada. ESTO LE FALTABA AL ARREGLO DE ESTA MISMA TARDE.
+         * ==================================================================
+         *
+         * La version de hace un rato dejaba ev.ac_id en HFDL_AC_ID_NONE y se
+         * apoyaba ENTERA en que la guarda de trama anonima de arriba tirara
+         * el evento. Y esa guarda es una Y:
+         *
+         *     sin OACI  Y  sin identificador  ->  se tira
+         *
+         * asi que basta con que UN LPDU de la trama levante HFDL_AC_EV_ICAO
+         * -y lo levantan LOGON_CONFIRM, LOGON_REQUEST y LOGOFF- para que la
+         * guarda no salte y vuelva a pasar exactamente lo que se queria
+         * evitar: una subida con un LOGON para el avion A y datos de usuario
+         * para el B funde la posicion de B en la ficha de A, y el mapa pinta
+         * a A donde esta B.
+         *
+         * Y no es rebuscado: un LOGON CONFIRM en una trama de subida es el
+         * mensaje mas natural que hay.
+         *
+         * *** Y LA SEGUNDA VERSION, DE HACE UN RATO, TAMPOCO BASTABA. ***
+         *
+         * Aquella quitaba las banderas de posicion y de distintivo pero
+         * dejaba pasar ev.icao y ev.ac_id, razonando que "lo identificado
+         * viene DENTRO de su propio LPDU". Eso es cierto POR LPDU y falso
+         * para el evento: no hay un ev por avion, hay UNO para la trama, y
+         * el bucle va escribiendo encima.
+         *
+         * El cuadro que faltaba: un LOGON CONFIRM del avion A pone
+         * ev.icao = OACI de A y ev.ac_id = 5; un LOGOFF del avion B, dos
+         * LPDU mas adelante, pone ev.icao = OACI de B y NO toca ev.ac_id.
+         * El evento sale con la OACI de B y el identificador de A, y
+         * hfdl_ac_update() hace dos destrozos con eso: le estampa la OACI
+         * -y despues el MODELO- de B a la ficha de A, y de paso le quita el
+         * identificador 5 a la ficha legitima de A, con lo que las bajadas
+         * siguientes de A abren renglon nuevo.
+         *
+         * O sea que lo que hay que aceptar es mas simple de lo que me
+         * costo verlo: **con varios aviones en la trama, esa trama no
+         * entra en la tabla**. Ni posicion, ni distintivo, ni OACI, ni
+         * identificador. No hay en ella un solo dato del que se sepa el
+         * dueño sin ambiguedad, porque la lista de LPDU viene aplanada y
+         * nadie dice de quien es cada uno.
+         *
+         * Lo que SI se queda es s_gs_ultima, que se apunta mas arriba: la
+         * estacion emisora si es inequivoca, viene en la cabecera.
+         *
+         * El dia que hfdl_pdu.c diga de que avion es cada LPDU, esto se
+         * convierte en un suceso por avion y se recupera todo. Hasta
+         * entonces, un renglon de menos antes que un renglon falso.
+         */
+        /*
+         * *** Y LA TERCERA VERSION, QUE ES LA BUENA - 29/10/2026, quinta
+         * pasada. La de hace un rato se pasaba de frenada en dos sitios. ***
+         *
+         * 1. SE TIRABA TAMBIEN LO QUE SI ESTABA IDENTIFICADO. El LOGON
+         *    CONFIRM lleva la direccion OACI *y* el identificador DENTRO DE
+         *    SU PROPIA CARGA (ver hfdl_lpdu_result_t: icao_address y ac_id,
+         *    "valid when kind == LOGON_CONFIRM only"). Ese par es
+         *    inequivoco vaya la trama dirigida a uno o a ocho aviones: no
+         *    sale de la lista de la cabecera, sale de dentro del LPDU.
+         *
+         *    El riesgo que describe el comentario de arriba -un LOGOFF de B
+         *    pisa ev.icao y deja el ev.ac_id de A- no nace de que el dato
+         *    sea ambiguo: nace de que hay UN SOLO ev por trama. O sea que
+         *    solo se materializa si en la misma trama hay DOS O MAS LPDU
+         *    identificadores. Con uno, no hay nada que mezclar.
+         *
+         *    Y tirarlo cuesta caro: esa confirmacion es la que ata la OACI
+         *    con el identificador. Sin ella, todas las bajadas de ese avion
+         *    salen como "ID 5" en vez de con su direccion, no se consulta
+         *    la base de aviones y la columna del modelo se queda vacia toda
+         *    la sesion.
+         *
+         *    Asi que el criterio es contar: n_ident == 1 entra, y entra sin
+         *    posicion ni distintivo, que la mascara de arriba sigue puesta.
+         *
+         * 2. Y NO SE SUMA A "/n". s_sin_renglon cuenta, con todas las
+         *    letras, tramas que PASARON EL CRC y venian ROTAS -"si esto
+         *    sale, hay algo que mirar"-. Una subida a varios aviones es
+         *    cosa normal, no una averia; lo dice el comentario de la propia
+         *    cabecera de subida. Sumarla ahi vuelve a juntar una averia con
+         *    algo perfectamente normal, que es el reparto que se deshizo a
+         *    proposito el 15/10. Un numero en esa casilla tiene que seguir
+         *    queriendo decir UNA sola cosa.
+         */
+        if (varios && (n_ident != 1U)) {
+            return;
+        }
+        r = hfdl_ac_update(&s_tabla, &ev, &pide_modelo);
 
         /*
          * EL MODELO, UNA VEZ POR AVION. hfdl_ac_update() levanta
@@ -2094,7 +2501,42 @@ static const char *fila_avion(uint32_t i)
     if (l == (char *)0) { return ""; }
 
     /* --- quien es: la OACI si se sabe, y si no el identificador --- */
-    if ((r->flags & HFDL_AC_R_ICAO) != 0U) {
+    /*
+     * Y SI EL RENGLON ES UNA ESTACION DE TIERRA, SU NOMBRE - 29/10/2026,
+     * revision a fondo de HFDL.
+     *
+     * HFDL_AC_R_GS existe desde el 14/10 con el comentario "este renglon ES
+     * una estacion de tierra, no un avion", lo escribe hfdl_ac_update()...
+     * y NO LO LEIA NADIE en todo el arbol. Los squitters entran en la misma
+     * tabla que los aviones con ac_id = HFDL_AC_ID_NONE, o sea 255, asi que
+     * la fila salia como
+     *
+     *     ID 255 | - | - | - | < SQUITTER | 142
+     *
+     * En el aire el squitter es lo mas frecuente que hay -una ranura cada
+     * 32 segundos por estacion-, asi que ese avion fantasma esta SIEMPRE,
+     * se lleva uno de los renglones visibles y uno de los 48 huecos de la
+     * tabla por cada estacion que se oiga.
+     *
+     * Y es justo lo que apunta_trama() dice haber arreglado en su propio
+     * comentario -"lo unico que no pasa es que aparezca un avion que no
+     * existe"-: el squitter entra por otra puerta, antes de esa guarda.
+     *
+     * El nombre ya estaba a mano, en estacion_nombre().
+     */
+    if ((r->flags & HFDL_AC_R_GS) != 0U) {
+        const char *nom = estacion_nombre(r->gs_id);
+
+        if (nom != 0 && nom[0] != '\0') {
+            while ((nom[0] != '\0') && (p < (uint8_t)(HFDL_MODO_LARGO - 12U))) {
+                l[p++] = *nom++;
+            }
+        } else {
+            l[p++] = 'G'; l[p++] = 'S'; l[p++] = ' ';
+            aj_u2s_local(&l[p], r->gs_id);
+            while (l[p] != '\0') { p++; }
+        }
+    } else if ((r->flags & HFDL_AC_R_ICAO) != 0U) {
         p = (uint8_t)(p + hex24(&l[p], r->icao));
     } else {
         l[p++] = 'I'; l[p++] = 'D'; l[p++] = ' ';
@@ -2571,6 +3013,7 @@ void hfdl_modo_borra(void)
     s_buenas  = 0U;
     s_ud      = 0U;
     s_pos     = 0U;
+    crudo_vacia();   /* las dos mitades del renglon van juntas - ver su cabecera */
     { uint8_t z; for (z = 0U; z < 4U; z++) { s_crc_ok[z] = 0U; s_crc_tot[z] = 0U; } }
     s_rechazadas = 0U;
     s_pos_sin_crc = 0U;
@@ -2627,7 +3070,12 @@ void hfdl_modo_mete(const float *i_in, const float *q_in, uint32_t n)
      * los simbolos que faltan no vuelven.
      */
     {
-        uint8_t pasa = porton(hfdl_demod_chain_get_agc_power_avg(&e->cadena));
+        uint8_t pasa;
+
+        /* Los relojes del portero, en tiempo y no en bloques: el bloque
+         * mide 32 muestras a 96/192 kHz y 64 a 48. Ver porton_relojes(). */
+        porton_relojes(n);
+        pasa = porton(hfdl_demod_chain_get_agc_power_avg(&e->cadena));
 
         if (!pasa && !e->en_segmento) { return; }
     }

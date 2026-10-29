@@ -526,6 +526,29 @@ void hfdl_payload_decode_finish_ex(uint8_t *ram, const uint8_t **decoded_out, ui
     s_hfdl_crc_status_bits = HFDL_CRC_STATUS_VALID_BIT | (hdr.crc_ok ? HFDL_CRC_STATUS_OK_BIT : 0u);
     debug_print_dec_always("  MPDU direction (0=down,1=up)", (uint32_t)hdr.direction);
 
+    /*
+     * ESTE BLOQUE SOLO EXISTE PARA EL PUERTO SERIE - acotado el 29/10/2026,
+     * revision a fondo de HFDL.
+     *
+     * Desmenuza los LPDU de la trama ENTERA -con su CRC-16 por LPDU- para
+     * imprimir dos numeros por cada uno. Con DEBUG_UART_ENABLED a 0, que es
+     * como se compila la radio (ver reglas.mk), los debug_print_dec_always()
+     * se convierten en ((void)0)... pero la llamada a
+     * hfdl_mpdu_extract_lpdus() NO, porque no esta dentro de la macro.
+     *
+     * O sea que la radio repetia ese trabajo en cada trama buena, y lo hacia
+     * en el peor sitio posible: dentro de la ventana de s_remate, que es
+     * exactamente cuando simbolo_de_segmento() tira la rafaga que esta
+     * entrando y la cuenta como pisada. Son 948 bytes de pila ademas,
+     * medidos en el .su.
+     *
+     * Al lado de los 10-23 ms del Viterbi es poco. Pero es trabajo que no
+     * hace nada, en la unica ventana del modo donde se pierden rafagas.
+     *
+     * Se queda escrito y disponible -para eso esta el puerto serie- pero
+     * solo se compila cuando el puerto serie esta compilado.
+     */
+#if DEBUG_UART_ENABLED
     if (hdr.crc_ok) {
         hfdl_lpdu_result_t lpdus[HFDL_MAX_LPDUS_TOTAL];
         uint32_t n = hfdl_mpdu_extract_lpdus(out_buf, out_octets, &hdr, lpdus, HFDL_MAX_LPDUS_TOTAL);
@@ -535,6 +558,7 @@ void hfdl_payload_decode_finish_ex(uint8_t *ram, const uint8_t **decoded_out, ui
             debug_print_dec_always("    LPDU crc_ok", lpdus[i].crc_ok ? 1u : 0u);
         }
     }
+#endif
 
     st->rate = (void *)0; /* segment consumed - next begin_segment() starts fresh */
 }

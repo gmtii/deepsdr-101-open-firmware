@@ -27,6 +27,7 @@
 #include "ident.h"
 #include "stanag_det.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -36,6 +37,25 @@
 #endif
 
 static int fallos = 0;
+
+/*
+ * LO QUE EL BANCO LE PRESTA AL MODO. 29/10/2026, al engancharlo por fin a
+ * "comprueba": ident.c pide la memoria compartida al arrancar, igual que
+ * en la radio. Los mismos tres apanyos que lleva sim/stanag_latido.c.
+ */
+/* El motor MAS el cuaderno de la cadencia: ident_modo_start() pide
+ * STANAG_DET_FLOATS + CAD_N de una vez. Pedir solo el motor hacia que
+ * ram_coge() devolviera 0 y el modo no arrancara. */
+static float g_ram[STANAG_DET_FLOATS + 4096U];
+static int   g_prestada;
+void hfdl_ram_coge(void)   { g_prestada = 1; }
+void hfdl_ram_suelta(void) { g_prestada = 0; }
+uint8_t *hfdl_ram_todo(uint32_t *cap)
+{
+    if (!g_prestada) { if (cap) { *cap = 0U; } return 0; }
+    if (cap) { *cap = (uint32_t)sizeof g_ram; }
+    return (uint8_t *)(void *)g_ram;
+}
 
 static void di(const char *que, int ok, const char *det)
 {

@@ -41,6 +41,7 @@
 #include "ui_cfg.h"
 #include "palette.h"
 #include "touch.h"
+#include "pump.h"   /* pump_pon(): el latido dentro de los polls largos */
 #include "touch_calib.h"
 #include "spi_flash.h"
 #include "formato.h"
@@ -366,6 +367,29 @@ static void act_una(const ui_button_t *b);
 static void mode_display_draw(void);
 static void sam_calib_display_draw(void);
 static uint8_t modo_panel_entero(void); /* los modos sin osciloscopio - ver su definicion */
+/*
+ * LAS TRES CLASES DE PANEL QUE CABEN EN EL MISMO HUECO - 29/10/2026.
+ *
+ * El hueco de la pantalla que hay entre la franja de arriba y la barra de
+ * abajo lo pintan tres cosas distintas, y nunca dos a la vez:
+ *
+ *   NADA      el espectro y la cascada (modos analogicos)
+ *   OSC       el osciloscopio de tono mas la rejilla de texto
+ *             (RTTY, CW, NAVTEX, PSK31, DSC, APRS...)
+ *   IMAGEN    una cinta de pixeles, pintada renglon a renglon por su
+ *             propio poll (SSTV, WEFAX, Hell)
+ *   PANEL     el panel entero con su tabla y sus botones, por
+ *             ft8_panel_draw() (los ocho de modo_panel_entero())
+ *
+ * Cambiar de clase obliga a repintar el hueco entero: lo que hay debajo es
+ * de otro dueño y el repintado por renglones sucios no lo va a tapar. Ver
+ * el bloque del bucle principal que reparte el dibujo, y panel_clase().
+ */
+#define PANEL_CLASE_NADA    0U
+#define PANEL_CLASE_OSC     1U
+#define PANEL_CLASE_IMAGEN  2U
+#define PANEL_CLASE_PANEL   3U
+static uint8_t panel_clase(uint8_t activo, uint8_t imagen);
 static void capt_poll(void);     /* la captura de pantalla - ver capt_pide() */
 static uint8_t capt_pide(void);
 static void capt_aviso_tick(void);
@@ -1703,9 +1727,17 @@ static uint8_t s_ft8_solo_cq;
  * entrado. Y CUANTO HA ENTRADO NO ES LA DIFERENCIA DE RENGLONES: con la
  * lista llena entran dos y se caen dos, el numero de renglones no se mueve
  * y la ventana resbala igual. Lo que cuenta es el contador de
- * decodificaciones -ft8_modo_total()-, que no miente aunque la lista este
+ * inserciones -ft8_modo_metidas()-, que no miente aunque la lista este
  * llena; de ahi salen cuantos mensajes son nuevos, y ft8_lista_nuevos()
  * dice cuantos de ellos se enseñan de verdad con el filtro puesto.
+ *
+ * Y ES metidas() Y NO total() - 29/10/2026. total() lo lleva el
+ * decodificador y cuenta tambien las decodificaciones que se le caen de la
+ * cola cuando una ranura trae mas de las que admite. Con ese numero, un
+ * desborde de la cola subia la ventana mas renglones de los que habian
+ * entrado y lo que estabas leyendo se iba hacia abajo. Lo que mueve la
+ * ventana es lo que entra POR ARRIBA DE LA LISTA, que es justo lo que
+ * cuenta metidas().
  *
  * Y vuelve solo: en cuanto el dedo baja hasta cero, la lista queda otra
  * vez pegada a lo nuevo sin que haya que apretar nada.
@@ -1895,6 +1927,18 @@ int main(void)
      * mientras dibuja. Ver touch_latido().
      */
     gfx2_set_pump(touch_latido);
+    /*
+     * Y EL MISMO LATIDO DENTRO DE LOS DECODIFICADORES QUE TARDAN -
+     * 29/10/2026.
+     *
+     * gfx2_set_pump() cubre los repintados largos. Lo que no cubria nadie
+     * era un POLL largo: la propia radio midio "BUCLE 999 ms la vuelta,
+     * 181 ms poll" en STANAG con señal, y un poll de 181 ms es una ventana
+     * de 181 ms sin mirar el tactil. De ahi que en STANAG y en IDENT el
+     * dedo haya que insistirlo. Ver User/pump.h, que lleva la cuenta
+     * entera.
+     */
+    pump_pon(touch_latido);
     /* Y que lo que empuje el compositor al panel se le cuente al chivato del
      * repintado parcial del espectro: gfx2.c no pasa por gfx.c, asi que
      * hasta hoy todo lo que pintaba era invisible para esa cuenta. Ver
@@ -2651,6 +2695,41 @@ int main(void)
              * los dos lados.
              */
             static uint8_t s_img_was = 0U;
+            /*
+             * Y UNA CUARTA: QUE CLASE DE PANEL HABIA - 29/10/2026.
+             *
+             * *** Reportado por el usuario con tres ejemplos: de DSC a FT8
+             * la mitad de los botones no se ven, de PSK31 a JTTY no se ve
+             * nada, y el panel se queda en blanco. ***
+             *
+             * Y el motivo es que la condicion de repintar era
+             *
+             *     drawing_now && (!s_rtty_scope_was_active || img_now != s_img_was)
+             *
+             * o sea: repinta al ENTRAR en un panel digital viniendo de uno
+             * analogico, o al cruzar la frontera de las imagenes. Entre DOS
+             * modos digitales que NO son imagen, las dos partes son falsas:
+             * s_rtty_scope_was_active ya valia 1 en el modo anterior y
+             * img_now sigue valiendo 0. Nadie repinta.
+             *
+             * Pero DSC pinta con el osciloscopio y la rejilla de texto, y
+             * FT8 pinta con ft8_panel_draw(). Son DOS PANELES DISTINTOS en
+             * el mismo hueco de pantalla. Lo que quedaba era el panel del
+             * modo anterior, con el del modo nuevo repintando solo los
+             * renglones que cambian - de ahi "la mitad de los botones".
+             *
+             * El fallo lo destapo el repintado por renglones sucios: antes
+             * el panel entero se redibujaba en cuanto cambiaba cualquier
+             * cosa, asi que la transicion se arreglaba sola una decima
+             * despues y no se veia. Otro fallo escondido detras de un
+             * derroche, como el de la rama de las imagenes.
+             *
+             * Asi que la bandera no es "habia imagen", es QUE CLASE de
+             * panel habia: ver panel_clase(). Tres clases, y cambiar de
+             * clase repinta. Lo vigila tools/panel_check.py.
+             */
+            static uint8_t s_clase_was = PANEL_CLASE_NADA;
+            uint8_t clase_now;
 
             /* La franja de arriba, ANTES de repartir entre espectro y panel
              * digital: es de los dos, no de uno. Ver franja_arriba_tick(). */
@@ -2744,6 +2823,8 @@ int main(void)
             uint8_t img_now = (uint8_t)(sstv_activo() || wefax_activo()
                                         || hell_activo());
 
+            clase_now = panel_clase(active_now, img_now);
+
             /* Only actually DRAW the scope when the settings menu
              * isn't covering the panel - added 08/08/2026, per the
              * project owner: the scope never checked s_menu_open at
@@ -2756,7 +2837,8 @@ int main(void)
              * which occupies the identical screen region. */
             uint8_t drawing_now = (uint8_t)(active_now && !s_menu_open);
 
-            if (drawing_now && (!s_rtty_scope_was_active || img_now != s_img_was)) {
+            if (drawing_now && (!s_rtty_scope_was_active
+                                || clase_now != s_clase_was)) {
                 /* Fires on EITHER transition into showing the scope:
                  * switching into RTTY-L/RTTY-U from elsewhere, OR the
                  * menu just closing while RTTY was already the active
@@ -2847,6 +2929,12 @@ int main(void)
             s_rtty_scope_was_active = drawing_now;
             s_rtty_mode_was_active = active_now;
             s_img_was = img_now;
+            /* Y la clase SOLO si se ha dibujado: con el menu abierto no se
+             * repinta nada, asi que apuntarla aqui haria que al cerrar el
+             * menu la transicion ya pareciera hecha. Es la misma razon por
+             * la que s_rtty_scope_was_active guarda drawing_now y no
+             * active_now. */
+            if (drawing_now) { s_clase_was = clase_now; }
 
             /*
              * LA CUARTA LISTA A MANO DEL MISMO DIA - 02/10/2026.
@@ -3044,8 +3132,49 @@ int main(void)
         ident_modo_frec_pon(s_tune_hz / 1000UL);
         ale_modo_poll();
         jtty_modo_poll();
+        /*
+         * ==============================================================
+         * Y EL LATIDO DEL TACTIL ENTRE LOS DOS CAROS - 29/10/2026.
+         * ==============================================================
+         *
+         * *** El usuario, hoy: que en STANAG y en IDENT el tactil responde
+         * LENTAMENTE y que insistiendo acaba entrando. ***
+         *
+         * Eso dice que el tactil lee y confirma: lo que falla es CADA
+         * CUANTO se mira. Un toque necesita DOS lecturas con el dedo
+         * puesto, y la segunda solo cuenta si han pasado TOUCH_CONF_MS
+         * desde que se poso. Con un toque de 150 ms eso da un techo duro:
+         * si entre dos miradas pasan mas de 75 ms, el dedo se levanta
+         * antes de la segunda y el toque no existe. Medido con el banco
+         * contra el touch.c de verdad: a 75 ms entran los 20 de 20, a 80
+         * entran 18, a 100 entran 10.
+         *
+         * Y estos dos son los unicos modos que meten dos transformadas de
+         * 2.048 puntos AQUI, en el bucle principal, entre la mirada de
+         * antes y la de despues.
+         *
+         * touch_latido() es justo la pieza que hace falta y ya existe:
+         * adelanta el filtro de confirmacion con su propio reloj de 8 ms y
+         * deja el contacto apuntado para que demo_touch_poll() lo recoja
+         * -ver touch_pendiente(), que ya se consulta ahi-. Lo que le
+         * pasaba es que SOLO se llamaba desde dentro de un repintado de
+         * gfx2, y estos dos modos casi no repintan: el panel de IDENT se
+         * redibuja 0,05 veces por segundo. O sea que el latido no latia
+         * precisamente donde hacia falta. Los otros seis modos de panel
+         * entero repintan a cada rato, y por eso en ellos el tactil va
+         * bien - esa es la diferencia entre los seis que funcionan y los
+         * dos que no.
+         *
+         * Se cuela entre los dos pollers caros y detras del ultimo. No
+         * cuesta nada cuando no toca -se sale sola si no han pasado sus 8
+         * ms- y no toca el bus del tactil si no hay dedo, porque
+         * touch_read_una() mira primero la patilla de aviso.
+         */
+        touch_latido();
         stanag_modo_poll();  /* las dos transformadas del identificador */
+        touch_latido();
         ident_modo_poll();   /* y las del "¿que señal es?", que es el mismo motor */
+        touch_latido();
         /*
          * ==============================================================
          * EL CRONOMETRO CIERRA AQUI, Y NO SEIS LLAMADAS ANTES - 18/10/2026
@@ -9080,6 +9209,26 @@ static void cadena_olvida(void)
      * a mano contra la que avisa el comentario de arriba.
      */
     semibanda_reset();
+    /*
+     * Y AQUI NO VA EL DIEZMADOR DE BANDA LATERAL, aunque la primera version
+     * de esta tarde lo puso - 29/10/2026, tercera pasada.
+     *
+     * demod_am_decim_olvida() hace falta al CAMBIAR DE MODO, que es lo que
+     * esta medido y razonado en su cabecera. Pero cadena_olvida() tiene DOS
+     * llamadores, y el otro es tras_cambio_de_ganancia(), que corre en cada
+     * escalon del atenuador y del PGA -y a proposito CON EL GANCHO DEL
+     * BLOQUE PUESTO, segun su propio comentario-.
+     *
+     * O sea que metido aqui, un escalon del automatico a mitad de una
+     * rafaga de HFDL borraba las 95 muestras de historia del diezmador que
+     * alimenta a hfdl_modo_mete(): un milisegundo a 12 kHz, casi dos
+     * simbolos de basura dentro de la trama. Y encima con la interrupcion
+     * viva, capaz de leer el buffer a medio barrer.
+     *
+     * Beneficio medido: ninguno para ese caso. Riesgo: una rafaga. Asi que
+     * la llamada se queda donde si hace falta y donde el gancho esta suelto:
+     * en apply_demod_mode(), al lado de esta.
+     */
 }
 
 /*
@@ -10001,6 +10150,187 @@ static int16_t s_pga_hf_x2 = -1;   /* -1 = aun sin inicializar */
  */
 static int16_t s_pga_wfm_x2 = CONFIG_PGA_WFM_DB_X2;
 
+
+/*
+ * ======================================================================
+ * Y UNA POR CADA UNO DE LOS OCHO DE PANEL ENTERO - 29/10/2026
+ * ======================================================================
+ *
+ * *** Pedido por el usuario, con la medida delante: "he entrado a hfdl
+ * con 20 dB y parecia perder paquetes, la he subido a 35 y parece ir
+ * mejor". Y pedido explicitamente UNA POR MODO: "no no uno para cada uno
+ * de los 8". ***
+ *
+ * POR QUE NO UNA COMPARTIDA, que es lo que yo propuse primero: porque no
+ * son el mismo problema. FT8 y WSPR son señales continuas de ancho
+ * estrecho que se promedian quince segundos o dos minutos; HFDL son
+ * rafagas de 1,8 kHz que duran un segundo y hay que cogerlas a la
+ * primera; AIS es NFM a 9.600 baudios; STANAG e IDENT van en banda
+ * lateral ancha. El punto donde cada uno aprovecha mejor el convertidor
+ * no tiene por que ser el mismo, y el usuario es quien lo va a medir en
+ * antena modo por modo.
+ *
+ * DE SERIE, LOS 20 dB DE FABRICA EN SIETE Y 35 EN HFDL. El 35 es el
+ * numero que el usuario midio; en los otros siete no hay medida, y
+ * cambiar el valor de arranque de un modo que hoy funciona apoyandose en
+ * una sola observacion de otro modo seria justo lo que este cuaderno
+ * lleva dos dias cazandome. Quien quiera subirlos, los sube una vez y se
+ * quedan.
+ */
+#define PGA_DIGI_HFDL_X2  70   /* 35,0 dB - medido por el usuario */
+
+typedef enum {
+    PGA_DIGI_FT8 = 0,
+    PGA_DIGI_HFDL,
+    PGA_DIGI_WSPR,
+    PGA_DIGI_AIS,
+    PGA_DIGI_ALE,
+    PGA_DIGI_JTTY,
+    PGA_DIGI_STANAG,
+    PGA_DIGI_IDENT,
+    PGA_DIGI_N
+} pga_digi_t;
+
+static int16_t s_pga_digi_x2[PGA_DIGI_N] = {
+    CONFIG_PGA_START_DB_X2,   /* FT8    */
+    PGA_DIGI_HFDL_X2,         /* HFDL   */
+    CONFIG_PGA_START_DB_X2,   /* WSPR   */
+    CONFIG_PGA_START_DB_X2,   /* AIS    */
+    CONFIG_PGA_START_DB_X2,   /* ALE    */
+    CONFIG_PGA_START_DB_X2,   /* JTTY   */
+    CONFIG_PGA_START_DB_X2,   /* STANAG */
+    CONFIG_PGA_START_DB_X2    /* IDENT  */
+};
+
+/*
+ * CUAL DE LOS OCHO ESTA PUESTO, o PGA_DIGI_N si ninguno.
+ *
+ * El orden es el mismo que el de modo_panel_entero(), y eso NO es
+ * casualidad decorativa: si algun dia se añade un noveno modo de panel
+ * entero y se olvida aqui, esta funcion devuelve PGA_DIGI_N, la zona sale
+ * HF y ese modo se queda con la ganancia de escuchar. No revienta, pero
+ * tampoco avisa; por eso el _Static_assert de abajo ata la cuenta.
+ */
+static pga_digi_t pga_digi_cual(void)
+{
+    if (ft8_modo_activo())    { return PGA_DIGI_FT8; }
+    if (hfdl_modo_activo())   { return PGA_DIGI_HFDL; }
+    if (wspr_modo_activo())   { return PGA_DIGI_WSPR; }
+    if (ais_modo_activo())    { return PGA_DIGI_AIS; }
+    if (ale_modo_activo())    { return PGA_DIGI_ALE; }
+    if (jtty_modo_activo())   { return PGA_DIGI_JTTY; }
+    if (stanag_modo_activo()) { return PGA_DIGI_STANAG; }
+    if (ident_modo_activo())  { return PGA_DIGI_IDENT; }
+    return PGA_DIGI_N;
+}
+
+_Static_assert((int)PGA_DIGI_N == 8,
+               "los modos de panel entero y las ganancias digitales se han "
+               "desincronizado: ver modo_panel_entero()");
+
+/*
+ * LAS ZONAS. Ver el bloque de apply_demod_mode() para por que esto es una
+ * zona y no una rama por transicion.
+ *
+ * Se guarda como un numero y no como un enum de tres: 0 escuchar, 1 FM
+ * ancha, y 2+i cada uno de los ocho digitales. Asi "en que zona estoy" y
+ * "cual es mi variable" son la misma pregunta y no pueden discrepar.
+ */
+#define PGA_ZONA_HF    0
+#define PGA_ZONA_WFM   1
+#define PGA_ZONA_DIGI  2        /* 2 + pga_digi_t */
+#define PGA_ZONA_N     (PGA_ZONA_DIGI + (int)PGA_DIGI_N)
+
+static uint8_t s_pga_zona = PGA_ZONA_HF;
+
+static uint8_t pga_zona_ahora(void)
+{
+    pga_digi_t d;
+
+    /*
+     * EL ORDEN IMPORTA Y NO ES ARBITRARIO: FM ancha primero. Los ocho
+     * digitales son de onda corta, asi que las dos condiciones no pueden
+     * ser ciertas a la vez; preguntar por FM ancha antes deja esto en
+     * verde aunque algun dia alguien monte un digital sobre FM.
+     */
+    if (demod_am_get_mode() == (uint8_t)DEMOD_MODE_WFM) { return PGA_ZONA_WFM; }
+    d = pga_digi_cual();
+    if (d != PGA_DIGI_N) { return (uint8_t)(PGA_ZONA_DIGI + (int)d); }
+    return PGA_ZONA_HF;
+}
+
+static int16_t *pga_mio(uint8_t z)
+{
+    if (z == PGA_ZONA_WFM) { return &s_pga_wfm_x2; }
+    if (z >= PGA_ZONA_DIGI && z < (uint8_t)PGA_ZONA_N) {
+        return &s_pga_digi_x2[z - PGA_ZONA_DIGI];
+    }
+    return &s_pga_hf_x2;
+}
+
+/*
+ * Guarda lo vivo donde estabas y carga lo de donde estas. Si no has
+ * cruzado, lo vivo ES tu ajuste de esta zona y se apunta - esa rama es la
+ * que arregla el fallo viejo del mando: girarlo marcaba sucio y el
+ * autoguardado escribia el valor de antes.
+ *
+ * Es IDEMPOTENTE a proposito: se llama desde apply_demod_mode() y otra vez
+ * despues de arrancar los modos digitales, porque en la primera llamada
+ * todavia no estan arrancados y pga_digi_cual() diria que ninguno.
+ */
+static void pga_zona_sync(void)
+{
+    uint8_t z = pga_zona_ahora();
+
+    if (z == s_pga_zona) {
+        *pga_mio(z) = s_pga_gain_db_x2;
+        return;
+    }
+    *pga_mio(s_pga_zona) = s_pga_gain_db_x2;
+    s_pga_zona = z;
+    s_pga_gain_db_x2 = *pga_mio(z);
+    /*
+     * Y EL RECORTE DEL AUTOMATICO A CERO, QUE SE QUEDO FUERA -
+     * 29/10/2026, tarde, revision a fondo de HFDL.
+     *
+     * rf_agc_apply_pga() solo recorta el recorte HACIA ABAJO, contra el
+     * techo nuevo. Subir el techo no lo toca, y entrar en HFDL lo sube de
+     * 40 a 70 (de 20,0 a 35,0 dB). Si venias de escuchar con el
+     * automatico de radiofrecuencia puesto y una emisora fuerte al lado,
+     * el recorte valia 40 -su tope con el techo viejo- y sigue valiendo
+     * 40: la ganancia efectiva sale 70-40 = 30, o sea 15,0 dB en vez de
+     * los 35,0 que el usuario midio. Y de ahi se recupera a 2 dB cada
+     * RF_AGC_RELEASE_COOLDOWN_MS, que son TREINTA SEGUNDOS, y solo si no
+     * vuelve a recortar ni una vez - en los canales de HFDL de noche, con
+     * radiodifusion al lado, no sube nunca.
+     *
+     * Es el mismo razonamiento que la rama de FM ancha de abajo lleva
+     * escrito desde el 26/10. Lo que no se traslada aqui es el ATENUADOR,
+     * y la diferencia no es un olvido: el recorte es RELATIVO al techo y
+     * el techo acaba de cambiar, mientras que el atenuador son 6 o 12 dB
+     * de atenuacion de verdad contra una señal que sigue estando ahi -
+     * entrar en HFDL no cambia de banda ni de antena. Quitarlo seria
+     * inventarse margen que el frontal no tiene.
+     */
+    s_rf_agc_backoff_x2 = 0;
+    rf_agc_apply_pga();
+    /*
+     * Y EL PORTERO DE HFDL, QUE ACABA DE PERDER SU SUELO - 29/10/2026,
+     * cuarta pasada.
+     *
+     * Entrar en HFDL sube el PGA quince decibelios, y el portero del modo
+     * mide la potencia ANTES de su propio AGC: el suelo que sembro al
+     * arrancar se queda treinta y una veces por debajo de lo que ve, el
+     * porton se abre de par en par y tarda tres segundos y medio en
+     * cerrarse. Ver hfdl_modo_nivel_cambiado().
+     *
+     * Aqui y no en rf_agc_apply_pga(), que la llama el lazo del automatico
+     * cada 50 ms: alli dejaria al portero cebandose para siempre.
+     */
+    if (hfdl_modo_activo()) { hfdl_modo_nivel_cambiado(); }
+    debug_print_dec("pga: zona nueva, ganancia x2", (uint32_t)s_pga_gain_db_x2);
+}
+
 /*
  * El unico valor del PGA que puede acabar en CONFIG.CSV.
  *
@@ -10169,30 +10499,52 @@ static void apply_demod_mode(demod_mode_t mode)
         rin_pon(s_att_suelo);
     }
 
-    if (will_be_wfm && !era_wfm) {
-        s_pga_hf_x2 = s_pga_gain_db_x2;   /* guarda lo tuyo antes de pisarlo */
-        /*
-         * LA DE FM ANCHA, NO EL TOPE - 28/10/2026. Aqui ponia PGA_MAX_X2
-         * y el mando no servia de nada dentro del modo: lo que girabas se
-         * tiraba al salir. Ver s_pga_wfm_x2.
-         */
-        s_pga_gain_db_x2 = s_pga_wfm_x2;
-        rf_agc_apply_pga();
-        debug_print_dec("pga: WFM, a su ganancia x2", (uint32_t)s_pga_gain_db_x2);
-    } else if (!will_be_wfm && era_wfm) {
-        s_pga_gain_db_x2 = s_pga_hf_x2;
-        rf_agc_apply_pga();
-        debug_print_dec("pga: fuera de WFM, restaurado a x2", (uint32_t)s_pga_gain_db_x2);
-    } else if (!will_be_wfm) {
-        s_pga_hf_x2 = s_pga_gain_db_x2;   /* fuera de WFM, lo vivo ES lo tuyo */
-    } else {
-        /* Sigues en FM ancha -cambio de modo que no cruza la frontera-:
-         * entonces el vivo ES tu ajuste de FM ancha. Sin esta rama, un
-         * reentrar en el modo sin salir dejaria s_pga_wfm_x2 viejo y el
-         * autoguardado escribiria el valor de antes, que es el mismo fallo
-         * que el mando tenia con s_pga_hf_x2. */
-        s_pga_wfm_x2 = s_pga_gain_db_x2;
-    }
+    /*
+     * ======================================================================
+     * TRES ZONAS, UN SOLO DUEÑO - 29/10/2026
+     * ======================================================================
+     *
+     * *** Pedido por el usuario: "he entrado a hfdl con 20 dB y parecia
+     * perder paquetes, la he subido a 35 y parece ir mejor". Y lo quiere
+     * para los ocho modos de panel entero, con HFDL en 35 de serie. ***
+     *
+     * POR QUE PASABA. Los 20 dB son el valor de FABRICA
+     * (CONFIG_PGA_START_DB_X2), asi que quien entra en HFDL sin haber
+     * tocado nunca el mando entra con ellos. Y el AGC interno de HFDL
+     * -100 dB de margen- no lo tapa, porque actua DESPUES del convertidor:
+     * un AGC digital arregla la AMPLITUD, no la relacion señal/ruido. Con
+     * la ganancia analogica baja, una rafaga floja mueve pocos codigos del
+     * ADC y el ruido de cuantizacion ya esta dentro; multiplicar por mil
+     * no devuelve los bits que el convertidor no llego a usar.
+     *
+     * No es que 20 dB este mal elegido: para escuchar AM va bien. Es que
+     * los modos debiles quieren OTRO punto de trabajo, igual que le pasaba
+     * a la FM ancha.
+     *
+     * AQUI HABIA CUATRO RAMAS ENCADENADAS y meter una tercera zona dentro
+     * habria sido pasar de cuatro casos a nueve. Este fichero ya tiene DOS
+     * averias escritas con esta misma variable -el mando que marcaba sucio
+     * y guardaba el valor viejo, y el recorte del AGC que no se recortaba
+     * al bajar el techo-, las dos por ramas que se miraban entre ellas.
+     *
+     * Asi que se da la vuelta: NO hay ramas por transicion. Hay tres
+     * ZONAS, cada una con su variable, y una sola funcion que mira donde
+     * estas AHORA y hace lo unico que hay que hacer: guardar lo vivo en la
+     * zona de la que vienes y cargar lo de la zona a la que vas. Si no has
+     * cruzado, lo vivo ES tu ajuste de esta zona y se apunta.
+     *
+     * Es la leccion de la V5.88 escrita otra vez -"el conmutador sigue al
+     * modo y a nada mas"-: no se mira que ha cambiado, se mira donde se
+     * esta.
+     *
+     * Y SE LLAMA DOS VECES A PROPOSITO, aqui y despues de arrancar los
+     * modos digitales (ver la lista de arranques): cuando se entra en FT8
+     * o en HFDL, en ESTE punto todavia no estan arrancados y
+     * modo_panel_entero() diria que no. La funcion es idempotente -si la
+     * zona no ha cambiado solo apunta lo vivo- asi que llamarla de mas no
+     * cuesta nada y llamarla de menos deja la ganancia de la zona
+     * anterior puesta.
+     */
     aic3204_rate_t desired_rate = (will_be_wfm || s_rf_doble) ? AIC3204_RATE_192K :
         (s_nonwfm_use_48k ? AIC3204_RATE_48K : AIC3204_RATE_96K);
 
@@ -10200,6 +10552,36 @@ static void apply_demod_mode(demod_mode_t mode)
      * anything touches the DMA avoids a real race where the ISR could
      * read a stale mode for the first several blocks after a switch. */
     demod_am_set_mode(mode);
+
+    /*
+     * ==================================================================
+     * Y VA DESPUES DE demod_am_set_mode(), NO ANTES - 29/10/2026, tarde.
+     * ==================================================================
+     *
+     * Entrego la V6.15 por la mañana con esta llamada SIETE LINEAS mas
+     * arriba, delante de demod_am_set_mode(). Y pga_zona_ahora() pregunta
+     * por demod_am_get_mode(), o sea por el modo VIVO: puesta ahi, veia
+     * siempre el modo anterior.
+     *
+     * Para los ocho digitales no se notaba, porque su zona la carga la
+     * SEGUNDA llamada, la de detras de los arranques. Para FM ancha no hay
+     * segunda llamada, y el resultado era:
+     *
+     *   - entrando en FM ancha, la zona no cruzaba y los 25,0 dB de la
+     *     V6.11 no se cargaban NUNCA;
+     *   - saliendo, cruzaba al reves y escribia la ganancia que hubiera
+     *     viva en FM dentro de s_pga_hf_x2, que es justo lo unico que
+     *     pga_para_guardar() deja llegar a CONFIG.CSV.
+     *
+     * O sea el fallo que la cabecera de s_pga_hf_x2 dice estar evitando,
+     * reintroducido el mismo dia por otra puerta. Las cuatro ramas viejas
+     * no tenian el problema porque usaban el PARAMETRO -will_be_wfm-, y al
+     * cambiarlas por una funcion que mira el modo vivo habia que mover la
+     * llamada. No se movio.
+     *
+     * Lo vigila ahora tools/pga_check.py, que exige este orden.
+     */
+    pga_zona_sync();
 
     if (desired_rate != s_current_rate) {
         aic3204_rate_t rate = desired_rate;
@@ -10562,6 +10944,17 @@ static void apply_demod_mode(demod_mode_t mode)
      */
     cadena_olvida();
     /*
+     * Y EL DIEZMADOR DE BANDA LATERAL, QUE ES EL QUE ALIMENTA A HFDL -
+     * 29/10/2026.
+     *
+     * Aqui y no dentro de cadena_olvida(): ver el comentario del final de
+     * aquella funcion para por que, y la cabecera de
+     * demod_am_decim_olvida() para que arregla. En este punto el gancho del
+     * bloque esta suelto, que es lo que hace falta para barrer un buffer
+     * que lee la interrupcion.
+     */
+    demod_am_decim_olvida();
+    /*
      * PERO NO SI YA ESTABAS EN FM ANCHA Y NADA HA CAMBIADO - 26/10/2026,
      * revision a fondo de WFM.
      *
@@ -10779,6 +11172,31 @@ static void digi_todo_apagado(void)
     /* Y el mapa, que lo que tenga pintado es de las estaciones del modo que
      * acabamos de apagar. */
     s_ft8_mapa = 0U;
+    /*
+     * ==================================================================
+     * Y LA ZONA DE GANANCIA, AQUI Y NO EN CADA LLAMADOR - 29/10/2026,
+     * tarde, tercera pasada sobre HFDL.
+     * ==================================================================
+     *
+     * Quien apaga un modo digital cambia de zona de ganancia por
+     * definicion: pga_zona_ahora() pregunta por *_modo_activo() y acaba de
+     * decir que no a los ocho. Hasta hoy eso lo arreglaba el
+     * apply_demod_mode() que viene detras en los cuatro llamadores... y la
+     * salida de emergencia por pulsacion larga, que entro hoy mismo, no
+     * tiene apply_demod_mode() detras.
+     *
+     * El cuadro sin esta linea: sales de HFDL con el mando, pga_zona_ahora()
+     * ya dice HF y s_pga_zona sigue diciendo DIGI_HFDL. La radio se queda
+     * escuchando con los 35,0 dB de HFDL en vez de con los tuyos; y la
+     * siguiente vez que se cruce de zona, pga_zona_sync() guarda lo vivo en
+     * la casilla de la zona de la que CREE venir, o sea machaca los 35,0
+     * medidos con lo que hubiera.
+     *
+     * Puesta aqui vale para los cinco llamadores y para el sexto que venga.
+     * Es idempotente, asi que el pga_zona_sync() de apply_demod_mode() que
+     * viene detras no cuesta nada. Lo exige tools/pga_check.py.
+     */
+    pga_zona_sync();
 }
 
 static void menu_band_preset_callback(void *widget, ui_event_t event, void *user_data)
@@ -12591,6 +13009,34 @@ static audio_bw_t  s_hora_bw;
  * fondo del 08/10/2026; ver hora_sintoniza() y menu_screen_close(). */
 static uint8_t     s_hora_rds_mio;
 static uint32_t    s_hora_ult_ms;
+/* El instante en que la hora de radio quedo LISTA, o sea su borde de
+ * minuto. Cero si no hay ninguna. Lo apunta hora_poll() y lo usa la rama de
+ * Aplicar para anclar el reloj con su segundo en vez de con un cero. */
+static uint32_t s_hora_listo_ms;
+/*
+ * CUANTO HACE DE ESE BORDE, o cero si no se sabe.
+ *
+ * El limite de un minuto no es un redondeo: mientras el decodificador este
+ * en LISTO le entra una trama cada minuto y el cronometro se rearma, asi
+ * que el valor normal vive en 0..59 s. Pasar de ahi significa que la trama
+ * que se esta ensenando ya no es la de este minuto, y entonces el segundo
+ * NO SE SABE y no se finge que si.
+ *
+ * Y ademas asi la cuenta nunca cruza un minuto, con lo que ni la hora ni la
+ * fecha que se ensenan pueden adelantarse a la trama que las trajo. Un
+ * reloj que ensena las 00:00 del dia de ayer seria peor que el fallo que
+ * esto arregla.
+ */
+#define HORA_FRESCA_MS 60000UL
+
+static uint32_t hora_atraso_ms(void)
+{
+    uint32_t d;
+
+    if (s_hora_listo_ms == 0U) { return 0U; }
+    d = (uint32_t)(g_msticks - s_hora_listo_ms);
+    return (d < HORA_FRESCA_MS) ? d : 0U;
+}
 static hora_emisora_t s_hora_emisora = HORA_DCF77;
 
 /*
@@ -12700,6 +13146,29 @@ static char *hora_u4(char *b, uint32_t v)
 }
 
 /*
+ * Y UN ROTULO, QUE ES LO QUE FALTABA - 29/10/2026.
+ *
+ * *** El usuario: que revise que TODAS las palabras cambien de castellano
+ * a ingles al cambiar el idioma. ***
+ *
+ * Los rotulos de esta pantalla -"marca", "ciclo", "raras", "mal",
+ * "codigo"- se escribian LETRA A LETRA:
+ *
+ *     *p++ = 'm'; *p++ = 'a'; *p++ = 'r'; *p++ = 'c'; *p++ = 'a';
+ *
+ * y asi no son una cadena, asi que tools/idioma_check.py -que recorre los
+ * literales del fichero- no los veia. Guardian en verde y cinco palabras
+ * en castellano en la radio inglesa.
+ *
+ * Con esto pasan por tr() como todo lo demas, y de paso la linea se lee.
+ */
+static char *hora_rot(char *p, const char *t)
+{
+    while (*t != '\0') { *p++ = *t++; }
+    return p;
+}
+
+/*
  * Sintoniza la emisora elegida y arranca el decodificador de cero. Se llama
  * al abrir la pantalla y cada vez que se cambia de emisora con el boton: las
  * dos cosas son lo mismo, y tenerlo en una sola funcion es lo que impide que
@@ -12707,6 +13176,10 @@ static char *hora_u4(char *b, uint32_t v)
  */
 static void hora_sintoniza(void)
 {
+    /* Cambiar de emisora reinicia el decodificador, asi que el cronometro
+     * del borde de minuto anterior ya no describe nada. Ver hora_atraso_ms(). */
+    s_hora_listo_ms = 0U;
+
     /*
      * EL RDS ES OTRA COSA - 24/09/2026, pedido por el usuario.
      *
@@ -12999,6 +13472,7 @@ static void hora_show(void)
     s_menu_hora_active = 1U;
     s_menu_open = 1U;
     s_hora_ult_ms = 0U;
+    s_hora_listo_ms = 0U;
 
     ui_hora_draw(&s_hora);
     act_draw();
@@ -13198,7 +13672,7 @@ static void hora_poll_rds(void)
         if (in.tiene_pi && !rds_pi_nombre(in.pi)) {
             static const char hx[] = "0123456789ABCDEF";
             p = s_hora_det;
-            *p++ = 'c'; *p++ = 'o'; *p++ = 'd'; *p++ = 'i'; *p++ = 'g'; *p++ = 'o';
+            p = hora_rot(p, tr("codigo", "code"));
             *p++ = ' ';
             *p++ = hx[(in.pi >> 12) & 0xFU];
             *p++ = hx[(in.pi >> 8) & 0xFU];
@@ -13371,9 +13845,16 @@ static void hora_poll(void)
      * tener, o los segundos no significan nada. A diez por segundo el retraso
      * de pantalla queda por debajo del error de la fuente, que es donde tiene
      * que estar.
+     *
+     * Y desde el 29/10/2026 lo mismo para las cinco emisoras horarias en
+     * cuanto hay cronometro: tambien ensenan segundos, y las suyas son mas
+     * exactas que el RDS, no menos.
      */
     {
-        uint32_t cada = (s_hora_emisora == HORA_RDS && s_hora_anclada) ? 100U : 200U;
+        uint8_t con_segundos = (s_hora_emisora == HORA_RDS)
+                                 ? s_hora_anclada
+                                 : (uint8_t)(s_hora_listo_ms != 0U);
+        uint32_t cada = con_segundos ? 100U : 200U;
         if ((uint32_t)(g_msticks - s_hora_ult_ms) < cada) { return; }
     }
     s_hora_ult_ms = g_msticks;
@@ -13386,6 +13867,55 @@ static void hora_poll(void)
     }
 
     dcf77_info(&inf);
+
+    /*
+     * ======================================================================
+     * EL CRONOMETRO DEL BORDE DE MINUTO - 29/10/2026
+     * ======================================================================
+     *
+     * *** Avisado por un probador: tras sincronizar con ALS162 se ensena
+     * HH.MM y se enciende Aplicar, pero los segundos no corren, asi que al
+     * pulsar el reloj se queda con los segundos a cero. ***
+     *
+     * La hora de estas emisoras vale EN EL INSTANTE del borde de minuto, no
+     * cuando la miras - lo dice la cabecera de dcf77.h desde que existe -.
+     * Entre ese instante y el dedo pasan los segundos que uno tarde en leer
+     * la pantalla y decidirse, y se tiraban todos.
+     *
+     * Aqui se apunta CUANDO quedo lista, y la rama de Aplicar resta. El
+     * cronometro vive en main.c y no en dcf77.c a proposito: el modulo no
+     * tiene reloj del sistema -sus cinco bancos no enlazan g_msticks- y
+     * meterselo le costaria la independencia que tiene.
+     *
+     * SE REARMA EN CADA TRAMA NUEVA, no solo la primera vez que llega a
+     * LISTO: el decodificador sigue corriendo y cada minuto trae una hora
+     * nueva. Si solo se apuntase la transicion, a los cinco minutos el
+     * atraso serian cinco minutos y el arreglo seria peor que el fallo. La
+     * trama nueva se reconoce porque la hora o el minuto cambian, que es lo
+     * unico que distingue un borde de minuto del siguiente.
+     *
+     * La pasada es de 200 ms, asi que el instante que se apunta llega con
+     * hasta 200 ms de retraso. Sobre un campo que se ensena en segundos eso
+     * no se ve, y es mil veces menos que los veinte o treinta segundos que
+     * se tiraban antes.
+     */
+    {
+        static uint8_t s_listo_ant = 0U;
+        static uint8_t s_hh_ant = 0xFFU;
+        static uint8_t s_mm_ant = 0xFFU;
+        uint8_t listo = (uint8_t)(inf.estado == DCF_LISTO);
+
+        if (listo) {
+            if (!s_listo_ant || inf.hora != s_hh_ant || inf.minuto != s_mm_ant) {
+                s_hora_listo_ms = g_msticks;
+            }
+            s_hh_ant = inf.hora;
+            s_mm_ant = inf.minuto;
+        } else {
+            s_hora_listo_ms = 0U;
+        }
+        s_listo_ant = listo;
+    }
 
     /* El barrido se lleva la pantalla mientras dura: lo que interesa ahi es
      * la tabla comparativa, no el estado del decodificador -que con 25
@@ -13464,8 +13994,8 @@ static void hora_poll(void)
             *p++ = ',';
             p = hora_u2(p, c100 % 100U);
         }
-        *p++ = ' '; *p++ = 'd'; *p++ = 'e'; *p++ = ' ';
-        *p++ = 'm'; *p++ = 'a'; *p++ = 'r'; *p++ = 'c'; *p++ = 'a';
+        *p++ = ' ';
+        p = hora_rot(p, tr("de marca", "of mark"));
         *p = '\0';
         s_hora.detalle = s_hora_det;
         break;
@@ -13485,10 +14015,12 @@ static void hora_poll(void)
          * Si el ciclo no es de un segundo, el problema esta en los flancos;
          * si las marcas son absurdas, en el nivel o en el filtro. Sin estos
          * dos numeros solo se puede adivinar, y adivinar ya costo una tarde. */
-        *p++ = ' '; *p++ = 'm'; *p++ = 'a'; *p++ = 'r'; *p++ = 'c'; *p++ = 'a';
+        *p++ = ' ';
+        p = hora_rot(p, tr("marca", "mark"));
         *p++ = ' ';
         p = hora_u3(p, inf.ms_marca);
-        *p++ = ' '; *p++ = 'c'; *p++ = 'i'; *p++ = 'c'; *p++ = 'l'; *p++ = 'o';
+        *p++ = ' ';
+        p = hora_rot(p, tr("ciclo", "cycle"));
         *p++ = ' ';
         p = hora_u4(p, inf.ms_ciclo);
         /*
@@ -13515,26 +14047,56 @@ static void hora_poll(void)
          * decirme cual ha salido. Ver DCF_MOT_* en dcf77.h.
          */
         if (inf.tramas_malas == 0U) {
-            *p++ = ' '; *p++ = 'r'; *p++ = 'a'; *p++ = 'r'; *p++ = 'a'; *p++ = 's';
+            *p++ = ' ';
+            p = hora_rot(p, tr("raras", "odd"));
             *p++ = ' ';
             p = hora_u3(p, (inf.marcas_raras > 999U) ? 999U : inf.marcas_raras);
         } else {
             /* Los dos ultimos son de MSF - 28/10/2026, ver DCF_MOT_MSF_PAT
              * en dcf77.h-. Siguen siendo cortos por lo mismo: caben al lado
              * de los otros dos numeros. */
-            static const char *const k_mot[] = {
+            /*
+             * DOS TABLAS Y NO tr() - 29/10/2026.
+             *
+             * tr() es una llamada y esto es una tabla estatica, asi que
+             * las dos mitades van en dos tablas, como k_fase_es/k_fase_en
+             * de hfdl_chapa(). El _Static_assert ata las TRES cuentas: si
+             * aparece un motivo nuevo y se olvida una de las dos tablas,
+             * no compila.
+             *
+             * Siguen siendo cortos por lo que ya decia el comentario de
+             * arriba: caben al lado de los otros dos numeros. El peor caso
+             * en ingles -" bad 999 pattern"- mide menos que el peor caso
+             * en castellano -" mal 999 par-anno"-, asi que el ancho que se
+             * midio en su dia sigue valiendo.
+             *
+             * b0, b20 y z1z2 son NOMBRES DE BIT de la norma, no palabras:
+             * no se traducen, igual que no se traduce "UTC".
+             */
+            static const char *const k_mot_es[] = {
                 "", "corta", "b0", "b20", "z1z2", "par-min", "par-hor",
                 "par-fec", "rango", "patron", "par-anno"
             };
-            _Static_assert((int)(sizeof k_mot / sizeof k_mot[0])
+            static const char *const k_mot_en[] = {
+                "", "short", "b0", "b20", "z1z2", "par-min", "par-hour",
+                "par-date", "range", "pattern", "par-year"
+            };
+            _Static_assert((int)(sizeof k_mot_es / sizeof k_mot_es[0])
                                == (int)DCF_MOT_MSF_PAR_ANNO + 1,
-                           "k_mot[] y los DCF_MOT_* se han desincronizado");
+                           "k_mot_es[] y los DCF_MOT_* se han desincronizado");
+            _Static_assert((int)(sizeof k_mot_en / sizeof k_mot_en[0])
+                               == (int)(sizeof k_mot_es / sizeof k_mot_es[0]),
+                           "k_mot_es[] y k_mot_en[] no tienen el mismo tamano");
+            const char *const *k_mot = (idioma() == IDIOMA_EN) ? k_mot_en
+                                                               : k_mot_es;
             uint8_t mt = dcf77_motivo();
             const char *t;
 
-            if (mt >= (uint8_t)(sizeof k_mot / sizeof k_mot[0])) { mt = 0U; }
+            if (mt >= (uint8_t)(sizeof k_mot_es / sizeof k_mot_es[0])) { mt = 0U; }
             t = k_mot[mt];
-            *p++ = ' '; *p++ = 'm'; *p++ = 'a'; *p++ = 'l'; *p++ = ' ';
+            *p++ = ' ';
+            p = hora_rot(p, tr("mal", "bad"));
+            *p++ = ' ';
             p = hora_u3(p, (inf.tramas_malas > 999U) ? 999U : inf.tramas_malas);
             if (*t != '\0') {
                 *p++ = ' ';
@@ -13557,9 +14119,34 @@ static void hora_poll(void)
     }
 
     if (inf.estado == DCF_LISTO) {
+        /*
+         * CON LOS SEGUNDOS CORRIENDO - 29/10/2026.
+         *
+         * El probador lo conto asi: "se ensena HH.MM y los segundos no
+         * avanzan". Y tenia razon en lo que veia, aunque el fallo de verdad
+         * estuviera debajo: la hora de la trama vale en su borde de minuto
+         * y aqui se quedaba congelada, de modo que no habia forma de saber
+         * -ni mirando- que hora se iba a poner al pulsar Aplicar.
+         *
+         * Ahora se ensena el segundo que lleva corrido desde ese borde, que
+         * es EXACTAMENTE lo que se va a aplicar. Es el mismo criterio que
+         * ya tenia la rama del RDS anclado un poco mas arriba: lo que se
+         * ensena es lo que se pone, para poder ponerlo al lado de otro
+         * reloj y mirar si el segundo salta a la vez.
+         *
+         * Sin cronometro fresco se vuelve a HH:MM a secas. Un reloj parado
+         * se ve; un reloj que anda y miente, no.
+         */
+        uint32_t atr = hora_atraso_ms();
+
         p = s_hora_txt;
         p = hora_u2(p, inf.hora); *p++ = ':';
-        p = hora_u2(p, inf.minuto); *p = '\0';
+        p = hora_u2(p, inf.minuto);
+        if (atr != 0U) {
+            *p++ = ':';
+            p = hora_u2(p, (uint8_t)(atr / 1000UL));
+        }
+        *p = '\0';
         s_hora.hora = s_hora_txt;
 
         p = s_hora_fecha;
@@ -13694,10 +14281,41 @@ static void hora_touch(uint16_t x, uint16_t y, uint8_t pressed)
                      * convertido con hora_huso()-, asi que la fecha de aqui
                      * es la local y se escribe tal cual.
                      */
-                    reloj_poner(inf.hora, inf.minuto);
+                    /*
+                     * ==================================================
+                     * Y CON SU SEGUNDO, NO CON UN CERO - 29/10/2026.
+                     * ==================================================
+                     *
+                     * *** Avisado por un probador: tras sincronizar con
+                     * ALS162 se ensena HH.MM y se enciende Aplicar, pero
+                     * los segundos no corren, asi que al pulsar el reloj se
+                     * pone con los segundos a cero. ***
+                     *
+                     * La hora de estas emisoras vale EN EL INSTANTE del
+                     * borde de minuto, no cuando la miras: lo dice la
+                     * cabecera de dcf77.h desde que existe. Entre ese
+                     * instante y el dedo pasan los segundos que uno tarde
+                     * en leer la pantalla y pulsar, y se tiraban todos. El
+                     * reloj quedaba atrasado justo eso, que con alguien que
+                     * se lo piensa son veinte o treinta segundos.
+                     *
+                     * El RDS ya lo hacia bien desde el 24/09 con
+                     * reloj_anclar(). Esto es lo mismo para las cinco
+                     * emisoras horarias; el cronometro lo lleva
+                     * hora_poll(), ver s_hora_listo_ms.
+                     *
+                     * EL ORDEN IMPORTA: la fecha PRIMERO. rtc_pon_fecha_hora()
+                     * escribe la hora entera con los segundos a cero, asi
+                     * que si fuera detras desharia el anclaje. Es el mismo
+                     * cuidado que lleva escrito la rama del RDS de arriba.
+                     */
+                    uint32_t atr = hora_atraso_ms();
+
                     rtc_pon_fecha_hora(inf.dia, inf.mes, inf.anno,
                                        inf.hora, inf.minuto, 0U);
-                    debug_print("dcf77: hora y fecha aplicadas al reloj\n");
+                    reloj_anclar((int16_t)((int16_t)inf.hora * 60
+                                           + (int16_t)inf.minuto), atr);
+                    debug_print_dec("dcf77: hora aplicada, atraso (ms)", atr);
                 }
             }
             hora_cerrar();
@@ -14042,6 +14660,46 @@ static void extras_leer(settings_extra_t *e)
      * y guardarla aqui te cambiaria la de FM sin tocarla. Es el mismo
      * reparto que ya protege pga_para_guardar() en la otra direccion. */
     e->v[SET_X_PGA_WFM]    = (int32_t)s_pga_wfm_x2;
+    /*
+     * Y LAS OCHO DE PANEL ENTERO, EN UN BUCLE - 29/10/2026.
+     *
+     * Ocho lineas copiadas serian ocho sitios donde escribir el indice
+     * equivocado y que la ganancia de HFDL acabe guardada como la de
+     * WSPR, sin que nada lo cante. El bucle lo hace imposible, y el
+     * _Static_assert de abajo ata las dos cuentas: si alguien añade un
+     * noveno modo digital y se olvida de la clave, no compila.
+     */
+    {
+        /*
+         * LOS OCHO NOMBRES, A MANO Y AQUI DENTRO.
+         *
+         * Se podria recorrer con SET_X_PGA_FT8 + i y ahorrar la tabla. No
+         * se hace, y no es por gusto: tools/persist_check.py exige que
+         * cada clave se NOMBRE en los cuatro sitios, y esa exigencia es
+         * justo el punto. El compilador no puede cruzar el enum, la tabla
+         * de nombres, esta funcion y extras_aplicar(); olvidar una linea
+         * aqui guarda basura sin avisar y olvidarla alli guarda bien y no
+         * restaura nada. Ninguna de las dos da error de compilacion, y en
+         * este proyecto esa clase de fallo ya ha mordido cinco veces.
+         *
+         * Un bucle sobre un rango se lee bonito y deja al guardian ciego.
+         * Asi que la tabla se escribe, y se escribe DOS veces -aqui y en
+         * extras_aplicar()- porque dos veces es lo que el guardian puede
+         * comprobar. El orden lo ata el _Static_assert de abajo.
+         */
+        static const uint8_t k_clave[PGA_DIGI_N] = {
+            SET_X_PGA_FT8,  SET_X_PGA_HFDL, SET_X_PGA_WSPR,   SET_X_PGA_AIS,
+            SET_X_PGA_ALE,  SET_X_PGA_JTTY, SET_X_PGA_STANAG, SET_X_PGA_IDENT
+        };
+        int i;
+
+        for (i = 0; i < (int)PGA_DIGI_N; i++) {
+            e->v[k_clave[i]] = (int32_t)s_pga_digi_x2[i];
+        }
+    }
+    _Static_assert((int)SET_X_PGA_IDENT - (int)SET_X_PGA_FT8 + 1
+                       == (int)PGA_DIGI_N,
+                   "las claves pga_*_db_x2 y pga_digi_t se han desincronizado");
     e->v[SET_X_NR]         = (int32_t)s_nr_strength;
     e->v[SET_X_NR_ON]      = (int32_t)s_nr_on;
     e->v[SET_X_RTTY_AUTO]  = (int32_t)rtty_auto_get();
@@ -14188,6 +14846,39 @@ static void extras_aplicar(const settings_extra_t *e)
             rf_agc_apply_pga();
             debug_print_dec("pga: arranque en WFM, tu ganancia guardada x2",
                             (uint32_t)s_pga_wfm_x2);
+        }
+    }
+
+    /*
+     * Y LAS OCHO DE PANEL ENTERO - 29/10/2026.
+     *
+     * Mismo bucle y mismo motivo que en extras_leer(). Y la misma red que
+     * la de FM ancha de aqui arriba: si estas ARRANCANDO ya dentro de uno
+     * de los ocho, apply_demod_mode() corrio antes que esta funcion y se
+     * llevo el valor de serie, asi que hay que ponerlo tambien al vivo.
+     * Sin esto, arrancar la radio en HFDL te daria los 35 de fabrica
+     * aunque tuvieras otra cosa guardada, y bastaria salir y volver para
+     * que apareciera la tuya - que es exactamente el fallo que la FM
+     * ancha ya tuvo y que su comentario de arriba cuenta.
+     */
+    {
+        /* La misma tabla y el mismo motivo que en extras_leer(): ver alli. */
+        static const uint8_t k_clave[PGA_DIGI_N] = {
+            SET_X_PGA_FT8,  SET_X_PGA_HFDL, SET_X_PGA_WSPR,   SET_X_PGA_AIS,
+            SET_X_PGA_ALE,  SET_X_PGA_JTTY, SET_X_PGA_STANAG, SET_X_PGA_IDENT
+        };
+        int i;
+        pga_digi_t d = pga_digi_cual();
+
+        for (i = 0; i < (int)PGA_DIGI_N; i++) {
+            if (EX_HAY(k_clave[i])) {
+                s_pga_digi_x2[i] = (int16_t)ex_rec(e->v[k_clave[i]],
+                                                   PGA_MIN_X2, PGA_MAX_X2);
+                if (d != PGA_DIGI_N && (int)d == i) {
+                    s_pga_gain_db_x2 = s_pga_digi_x2[i];
+                    rf_agc_apply_pga();
+                }
+            }
         }
     }
 
@@ -14987,9 +15678,48 @@ static void tema_aplicar(uint8_t i)
      * cada pantalla sabe repintarse a si misma y desde aqui no se sabe cual
      * hay puesta.
      */
+    /*
+     * ==================================================================
+     * Y "LA CABECERA ENTERA" NO ERA ENTERA - 29/10/2026
+     * ==================================================================
+     *
+     * *** El usuario, con una foto del tema claro puesto: que se ha
+     * quedado un trozo gris al cambiar de tema. ***
+     *
+     * Y se quedaba. Aqui ponia freq_display_draw() con el comentario "la
+     * cabecera entera", y esa funcion NO pinta la cabecera entera: pinta
+     * de 0 a rds_x1(), o sea la frecuencia y la pastilla de banda, y nada
+     * mas. Lo dice su propio cuerpo desde el 05/10/2026, cuando se
+     * recorto a proposito para no gastar 32.000 accesos de bus en cada
+     * clic del mando. El comentario de aqui se quedo describiendo lo que
+     * la funcion hacia ANTES de aquel recorte.
+     *
+     * Lo que quedaba fuera son los dos trozos de la derecha:
+     *
+     *   rds_x1()..620   el fondo de la franja de la marquesina
+     *   620..800        la pastilla MEM, el reloj y la bateria
+     *
+     * El primero se curaba solo en cuanto corriera la marquesina. El
+     * segundo solo lo repinta time_display_draw(), o sea AL CAMBIAR DE
+     * MINUTO: hasta un minuto entero con la esquina del reloj del tema
+     * anterior, que con un tema claro encima de uno oscuro es un
+     * rectangulo gris en la esquina. Exactamente lo de la foto.
+     *
+     * Asi que se pinta la cabecera DE VERDAD entera: ui_top_draw() son los
+     * 800 px con el mismo draw_header -la esquina del reloj incluida, ver
+     * ui_top_draw_hora()-, mas la franja de la marquesina, mas la franja
+     * de estado. Con eso badges_draw() sobra, porque esa franja ya va
+     * dentro.
+     *
+     * No es caro donde importa: esto corre cuando alguien toca el tema, no
+     * en el bucle. El recorte de freq_display_draw() sigue donde tiene que
+     * estar, que es en el camino del mando.
+     *
+     * Lo vigila tools/tema_check.py.
+     */
     if (s_pantalla_pintada && !s_screen_asleep) {
-        freq_display_draw();   /* la cabecera entera - ver su cuerpo */
-        badges_draw();         /* la barra de estado entera */
+        top_sync();
+        ui_top_draw(&s_top);   /* los 800 px: cabecera, marquesina y estado */
         act_draw();            /* la barra de acciones de abajo */
     }
 }
@@ -15072,9 +15802,23 @@ static void idioma_cambiar(void)
 
     if (s_settings_ready_for_autosave) { settings_mark_dirty(); }
 
+    /*
+     * LA MISMA CABECERA ENTERA QUE tema_aplicar() - 29/10/2026.
+     *
+     * Esta funcion copio la solucion del tema el 06/10, y copio tambien su
+     * agujero: freq_display_draw() pinta de 0 a rds_x1(), no los 800 px.
+     * Lo de la derecha -la pastilla MEM, el reloj y la bateria- se quedaba
+     * sin repintar hasta el siguiente cambio de minuto.
+     *
+     * Hoy ahi no hay ninguna palabra que cambie con el idioma, asi que no
+     * se veia. Pero las dos funciones son gemelas A PROPOSITO -lo dice el
+     * comentario de arriba- y dejar una arreglada y la otra no es
+     * exactamente como vuelven a separarse. Ver tools/tema_check.py, que
+     * ahora mira las dos.
+     */
     if (s_pantalla_pintada && !s_screen_asleep) {
-        freq_display_draw();   /* la cabecera entera */
-        badges_draw();         /* la barra de estado entera */
+        top_sync();
+        ui_top_draw(&s_top);   /* los 800 px: cabecera, marquesina y estado */
         act_draw();            /* la barra de acciones de abajo */
     }
     if (s_menu_cfg_active) {
@@ -16694,6 +17438,29 @@ static void cat_modo_pon(uint8_t m)
          * apply_demod_mode() llama a settings_mark_dirty() por su cuenta
          * (ver su comentario), asi que aqui ya no hace falta.
          */
+        /*
+         * Y LOS DIGITALES APAGADOS ANTES - 29/10/2026, revision a fondo.
+         *
+         * EL CUARTO CAMINO QUE FUERZA UN CAMBIO DE MODO, y el ultimo que
+         * quedaba sin esto. Los otros tres lo recibieron de uno en uno: las
+         * presintonias de banda el 08/10, la pantalla de hora el 09/10 y el
+         * banco de memorias hoy mismo. El comentario de ese ultimo dice "de
+         * los TRES caminos que fuerzan un cambio de modo" y no contaba este.
+         *
+         * El cuadro, si no se apaga: la radio esta en HFDL, el ordenador
+         * manda MD5 (AM) por el puerto serie, y apply_demod_mode() rehace
+         * la cadena entera mientras hfdl_modo_activo() sigue diciendo que
+         * si. El decodificador se queda vivo pidiendo muestras de una rama
+         * que ya no existe, LA MEMORIA PRESTADA SIGUE PRESTADA -o sea que
+         * la cascada no vuelve a pintar en toda la sesion- y
+         * demod_mode_entry_active() no casa ninguna fila, con lo que el
+         * boton Modo pone "?" y la rejilla no marca nada.
+         *
+         * Y no es rebuscado: un WSJT-X o un fldigi ponen el modo al
+         * arrancar, que es lo que dice el comentario del fax unas lineas
+         * mas abajo.
+         */
+        digi_todo_apagado();
         apply_demod_mode(d);
         /* El modo sale en la cabecera y en la barra de abajo. Por la misma
          * razon que la frecuencia: si lo cambia un programa del ordenador y
@@ -20517,7 +21284,30 @@ static uint8_t mem_recupera(uint8_t bk, uint8_t c)
      * operacion: mover la frecuencia dentro del mismo modo. Asi que aqui
      * tampoco.
      */
-    if (cambia_modo) { apply_demod_mode((demod_mode_t)m.modo); }
+    if (cambia_modo) {
+        /*
+         * Y LOS DIGITALES APAGADOS ANTES - 29/10/2026, tarde, revision a
+         * fondo de HFDL.
+         *
+         * De los tres caminos que fuerzan un cambio de modo, este era el
+         * unico que no lo hacia: las presintonias de banda lo recibieron
+         * el 08/10 y la pantalla de hora el 09/10, y el banco de memorias
+         * se quedo fuera. Estando en HFDL, recuperar una memoria de AM
+         * cambiaba la cadena entera por debajo mientras hfdl_modo_activo()
+         * seguia diciendo que si: el boton Modo se quedaba en "?", la
+         * memoria prestada seguia prestada, y el decodificador seguia
+         * pidiendo muestras de una rama que ya no existia.
+         *
+         * Va DENTRO del "if (cambia_modo)" a proposito. Recuperar una
+         * memoria del MISMO modo -una frecuencia de HFDL estando en
+         * HFDL- es mover el dial, igual que girar el mando, y ahi no hay
+         * nada que apagar.
+         *
+         * Ver digi_todo_apagado(), que lleva el cuadro escrito.
+         */
+        digi_todo_apagado();
+        apply_demod_mode((demod_mode_t)m.modo);
+    }
     s_tune_hz = m.hz;
     apply_lo_tune(s_tune_hz);
     if (m.paso < (uint8_t)TUNE_STEP_COUNT) { set_tune_step_idx(m.paso); }
@@ -21132,6 +21922,32 @@ static void mem_scan_poll(void)
     uint8_t hay;
 
     if (!s_scan_on) { return; }
+
+    /*
+     * Y SE PARA SOLO EN LOS MODOS DE PANEL ENTERO - 29/10/2026, tarde,
+     * revision a fondo de HFDL.
+     *
+     * No habia ni una llamada a mem_scan_para() en ningun camino de
+     * cambio de modo: los unicos frenos eran tocar MEM, reconmutar el
+     * mismo banco y quedarse el banco sin memorias. Asi que arrancabas el
+     * barrido, elegias HFDL en la rejilla de modos y el barrido seguia
+     * vivo, saltando de memoria cada SCAN_ESPERA_MS + SCAN_MIRA_MS. El
+     * dial se iba de la frecuencia DOS VECES Y MEDIA POR SEGUNDO, y una
+     * rafaga de HFDL dura un segundo. Lo mismo al reves: desde HFDL se
+     * puede abrir el banco y arrancarlo desde dentro.
+     *
+     * La guarda va AQUI y no en los sitios que cambian de modo, y es
+     * deliberado: en el latido no hay forma de rodearla. Poniendola en
+     * los cambios de modo habria que acordarse en cada camino nuevo, que
+     * es exactamente como se escapo esto.
+     *
+     * Barrer no tiene sentido en estos ocho: todos viven en un canal
+     * fijo, el panel ocupa la pantalla entera y el nivel que mira el
+     * barrido -demod_am_set_nivel_medir()- cuesta 256 multiplicaciones y
+     * un logaritmo por bloque, que es lo que ya ahogo a la radio en
+     * STANAG.
+     */
+    if (modo_panel_entero()) { mem_scan_para(); return; }
     /* Un rato de gracia para que el silenciador decida: la cadena acaba de
      * cambiar de frecuencia y de modo, y el silencio de entrada de FM ancha
      * son doscientos bloques. Preguntar antes es preguntar al transitorio. */
@@ -22019,12 +22835,30 @@ static void menu_mode_preset_callback(void *widget, ui_event_t event, void *user
          * lleva la misma guarda; su arranque vive ahora mas abajo, con los
          * demas que piden la memoria prestada.
          */
-        if (k_demod_modes[idx].fax) {
-            if (!wefax_activo()) {
-                wefax_start(DEMOD_DEC_FS_HZ);
-                fax_panel_reinicia();
-            }
-        } else {
+        /*
+         * EL FAX: AQUI SOLO LA PARADA - 29/10/2026, tarde, revision a
+         * fondo de HFDL. El arranque se ha bajado con los demas que piden
+         * la memoria prestada.
+         *
+         * Estaba arriba, CIENTO CINCUENTA LINEAS antes de la lista de
+         * paradas, y eso es el fallo que el bloque de "PRIMERO TODAS LAS
+         * PARADAS" describe y arregla para SSTV, Hell y DSC el 24/10. El
+         * fax entro en el reparto de esta memoria despues y se quedo en su
+         * sitio viejo.
+         *
+         * El cuadro, de HFDL a FAX: wefax_start() llama a hfdl_ram_coge()
+         * y monta su anillo sobre la union, con HFDL TODAVIA VIVO
+         * metiendole simbolos encima; y despues hfdl_modo_stop() llama a
+         * hfdl_ram_suelta(), que es waterfall_presta(0) mas
+         * waterfall_init(), o sea un memset de los 69.852 bytes sobre el
+         * anillo recien montado. Y a partir de ahi el fax corre con la
+         * memoria SIN marcar como prestada, asi que la cascada vuelve a
+         * escribir filas de pixeles dentro de sus renglones.
+         *
+         * La parada se queda aqui -con su guarda- porque parar es lo que
+         * tiene que pasar ANTES de que nadie coja nada.
+         */
+        if (!k_demod_modes[idx].fax) {
             wefax_stop();
         }
         /* SSTV: aqui SOLO la parada. El arranque se ha bajado con los de
@@ -22285,12 +23119,21 @@ static void menu_mode_preset_callback(void *widget, ui_event_t event, void *user
         if (k_demod_modes[idx].dsc) {
             dsc_start(DEMOD_DEC_FS_HZ);
         }
+        /* El fax, bajado aqui el 29/10/2026 desde donde estaba: ver la
+         * parada, mas arriba. Coge la memoria prestada, asi que su sitio
+         * es este y no antes de la lista de paradas. */
+        if (k_demod_modes[idx].fax) {
+            if (!wefax_activo()) {
+                wefax_start(DEMOD_DEC_FS_HZ);
+                fax_panel_reinicia();
+            }
+        }
 
         if (k_demod_modes[idx].ft8)   { ft8_modo_start(DEMOD_DEC_FS_HZ); }
         /* La lista de FT8 empieza pegada a lo nuevo, que es donde no hay
          * nada todavia. Ver s_ft8_subidos. */
         s_ft8_subidos   = 0U;
-        s_ft8_total_ant = ft8_modo_total();
+        s_ft8_total_ant = ft8_modo_metidas();
         if (k_demod_modes[idx].ais)   { ais_modo_tasa_pon(demod_am_get_active_fs_hz());
                                         (void)ais_modo_start(); }
         if (k_demod_modes[idx].ale)   { (void)ale_modo_start(); ale_reloj_borra(); }
@@ -22348,13 +23191,37 @@ static void menu_mode_preset_callback(void *widget, ui_event_t event, void *user
          * Y AQUI w NO SE PUEDE REVALIDAR. El estimador vive dentro de
          * sdr_spectrum_waterfall_tick() -las ranuras las llena la FFT del
          * panadaptador y iqbal_resuelve() corre cada dos segundos desde
-         * alli-. Esa funcion NO SE LLAMA en los ocho modos de panel entero
-         * (ver modo_panel_entero(): FT8, HFDL, WSPR, AIS, ALE, JTTY,
-         * STANAG e IDENT), porque se quedan la pantalla y no pintan
-         * espectro. O sea que mientras estas en uno de ellos las tomas
-         * estan congeladas en lo que aprendieron EN OTRO MODO Y EN OTRA
-         * BANDA, y alli siguen corrigiendo sin que nada pueda medir si lo
-         * que hacen es bueno.
+         * alli-. En los ocho modos de panel entero (ver
+         * modo_panel_entero(): FT8, HFDL, WSPR, AIS, ALE, JTTY, STANAG e
+         * IDENT) no hay espectro que pintar, asi que lo que mida ahi no
+         * vale: las tomas se quedan congeladas en lo que aprendieron EN
+         * OTRO MODO Y EN OTRA BANDA, y alli siguen corrigiendo sin que
+         * nada pueda medir si lo que hacen es bueno.
+         *
+         * *** Y ESTE PARRAFO DECIA UNA COSA FALSA HASTA EL 29/10/2026. ***
+         *
+         * Decia que sdr_spectrum_waterfall_tick() NO SE LLAMA en esos
+         * ocho modos, y sobre esa frase se construyo el arreglo de abajo.
+         * Si se llama: el reparto del dibujo es
+         *
+         *     } else if (drawing_now && modo_panel_entero()) { ...
+         *     } else                                         { tick(); }
+         *
+         * con drawing_now = activo && !s_menu_open, asi que basta abrir
+         * cualquier menu para caer al else. Y es deliberado -el
+         * comentario de ese else lo dice-, porque el tick ya se salta su
+         * propio DIBUJO con el menu abierto. Lo que no se salta es la FFT
+         * cruda ni iqbal_resuelve(), que quedan por delante de esa guarda.
+         *
+         * Resultado, hasta hoy: entrabas en HFDL y el FIR se borraba;
+         * abrias Ajustes para subir la ganancia -que es lo que el manual
+         * te dice que hagas en HFDL-; el lazo instalaba tomas nuevas a
+         * medio converger; cerrabas el menu y ahi se quedaban, dentro de
+         * la interrupcion, el resto de la sesion.
+         *
+         * Por eso el arreglo son DOS cosas y no una: este olvido, y la
+         * guarda !modo_panel_entero() que lleva ahora la propia llamada a
+         * iqbal_resuelve(). Las dos las exige tools/espejo_check.py.
          *
          * Y solo se olvidaban al cambiar la tasa o al mover el oscilador
          * mas de un octavo de la frecuencia: a 11.184 kHz, 1,4 MHz.
@@ -22391,6 +23258,17 @@ static void menu_mode_preset_callback(void *widget, ui_event_t event, void *user
         if (modo_panel_entero()) {
             iqbal_fir_olvida();
         }
+
+        /*
+         * Y LA GANANCIA DE LA ZONA, AHORA QUE YA SE CUAL ES - 29/10/2026.
+         *
+         * apply_demod_mode() ya la llamo, pero en aquel punto los ocho
+         * modos digitales todavia no estaban arrancados y
+         * pga_digi_cual() devolvia "ninguno". Esta es la llamada que de
+         * verdad carga la de HFDL cuando entras en HFDL. Es idempotente:
+         * si no se ha cruzado de zona solo apunta lo vivo.
+         */
+        pga_zona_sync();
 
         switch (k_demod_modes[idx].rtty_variant) {
         case RTTY_VARIANT_NORMAL:
@@ -23369,7 +24247,24 @@ static void det_sync(void)
     case ENCODER_TARGET_PGA:
         s_det.titulo = tr("Ganancia de entrada", "Input gain");
         s_det.valor  = ajuste_valor(AJ_PGA, s_det_val);
-        s_det.pie    = tr("PGA del códec, 0 a 47,5 dB", "codec PGA, 0 to 47,5 dB");
+        /*
+         * Y EL PIE DICE DE QUE ZONA ES - 29/10/2026.
+         *
+         * Desde que hay diez ganancias -escuchar, FM ancha y una por cada
+         * uno de los ocho modos de panel entero- un pie que solo dice
+         * "PGA del codec" esconde lo unico que el usuario necesita saber
+         * aqui: que lo que gire se queda en ESTE modo y no le mueve la de
+         * escuchar. Sin eso, el reparto es invisible y parece que el
+         * ajuste no se guarda.
+         */
+        s_det.pie    = (s_pga_zona >= PGA_ZONA_DIGI)
+                         ? tr("PGA del códec · sólo para este modo",
+                              "codec PGA - this mode only")
+                         : ((s_pga_zona == PGA_ZONA_WFM)
+                            ? tr("PGA del códec · sólo para FM ancha",
+                                 "codec PGA - wide FM only")
+                            : tr("PGA del códec, 0 a 47,5 dB",
+                                 "codec PGA, 0 to 47,5 dB"));
         break;
     case ENCODER_TARGET_NR:
         s_det.titulo = tr("Reducción de ruido", "Noise reduction");
@@ -24227,6 +25122,38 @@ static void apply_lo_tune(uint32_t freq_hz)
              * verdad ha pasado.
              */
             iqbal_fir_olvida();
+            /*
+             * *** Y EL CORRECTOR PLANO NO SE TOCA. REVERTIDO EL MISMO DIA,
+             * 29/10/2026, CON LA RADIO DELANTE. ***
+             *
+             * Esta tarde puse aqui un iqbal_plano_olvida(), razonando que
+             * el motivo escrito para tirar el FIR -el desequilibrio depende
+             * de la frecuencia del oscilador- vale igual para el plano, y
+             * que en banda poblada su estimador se queda quieto aplicando
+             * el theta/g de la banda anterior.
+             *
+             * El argumento sigue pareciendome correcto. LA RADIO DICE QUE
+             * NO. Con ese cambio puesto, en 11.184 kHz y con señales
+             * fuertes, el embudo se quedaba en 8>3>3 con 0 tramas buenas
+             * de 2: engancha, sincroniza y NINGUNA pasa el CRC, que es la
+             * firma de una banda con el espejo encima.
+             *
+             * Y tiene explicacion: el plano es el corrector GRANDE -de 25 a
+             * 86 dB de rechazo, segun iqbal.h-, y olvidarlo en una banda
+             * donde su estimador no puede volver a medir no lo deja
+             * "sin corregir de mas", lo deja SIN CORREGIR. El theta de la
+             * banda de al lado, aunque sea aproximado, quita mas espejo que
+             * cero. Eso no se me ocurrio y la antena me lo ha dicho en
+             * veinte minutos.
+             *
+             * El FIR si se tira, y eso se queda: es el corrector pequeño y
+             * su estimador si puede volver a medir donde corre.
+             *
+             * REGLA QUE ME LLEVO: un argumento sobre el camino de
+             * radiofrecuencia no entra sin una medida en antena, por bien
+             * que suene. Los bancos no lo cazaron porque ninguno inyecta un
+             * espejo real sobre una banda poblada.
+             */
             s_iqfir_lo_hz = s_lo_hz;
         } else {
             uint32_t dif = (s_lo_hz > s_iqfir_lo_hz)
@@ -24238,6 +25165,8 @@ static void apply_lo_tune(uint32_t freq_hz)
 
             if (dif > lim) {
                 iqbal_fir_olvida();
+                /* Y el plano NO: ver la rama de arriba, revertido el
+                 * 29/10/2026 con la radio delante. */
                 s_iqfir_lo_hz = s_lo_hz;
             }
         }
@@ -24932,8 +25861,10 @@ static void rds_marq_sync(void)
 
 static void rds_marq_poll(void)
 {
+    /* Sin `s_menu_open`: ningun menu tapa esta franja. Ver la cabecera de
+     * emis_marq_poll(), que lo cuenta con las coordenadas. */
     if (!rds_activo() || demod_am_get_mode() != DEMOD_MODE_WFM
-        || s_menu_open || s_screen_asleep || !s_pantalla_pintada) {
+        || s_screen_asleep || !s_pantalla_pintada) {
         return;
     }
     if ((int32_t)(g_msticks - s_rds_next_ms) < 0) { return; }
@@ -25398,7 +26329,23 @@ static void hfdl_chapa(void)
              * entrando o no", no una cuenta que nadie vaya a sumar. */
             if (ud  > 99U) { ud  = 99U; }
             if (pos > 99U) { pos = 99U; }
-            if (ud != 0U) {
+            /*
+             * Y SALE TAMBIEN CON ud A CERO SI HAY POSICIONES -
+             * 29/10/2026, revision a fondo de HFDL.
+             *
+             * Decia "if (ud != 0U)" porque se escribio cuando la posicion
+             * solo podia venir dentro de un LPDU de datos de usuario. Hoy
+             * no: hfdl_modo.c saca posicion tambien del LOGON REQUEST -la
+             * trama mas frecuente que manda un avion- y de los LPDU con el
+             * CRC malo que pasan las pruebas independientes, y ninguno de
+             * los dos sube ud.
+             *
+             * Asi que en una frecuencia donde solo pasan LOGON las
+             * coordenadas se sacaban, se pintaban en el mapa, y la barra
+             * NO ENSEÑABA NADA. Justo el numero que se mira para saber si
+             * el camino de posicion funciona.
+             */
+            if (ud != 0U || pos != 0U) {
                 emb[i++] = ' '; emb[i++] = 'U';
                 EMB_NUM(ud); emb[i++] = '/'; EMB_NUM(pos);
             }
@@ -27745,13 +28692,18 @@ static void digi_sync(void)
              * CON EL FILTRO DE CQ PUESTO SE MIRAN TODOS LOS GUARDADOS, NO
              * LOS QUE CABEN - 13/10/2026.
              *
-             * Sin filtro da igual: la lista tiene dieciseis mensajes y en
-             * el panel caben quince, asi que recorrer hasta `n` deja fuera
-             * el mas viejo y ya esta. Con el filtro NO da igual: si de los
-             * dieciseis solo tres son CQ y se mira unicamente hasta el
-             * decimoquinto, el panel se queda con las CQ que hubiera ahi
-             * dentro y se pierde las que estan mas abajo. Un filtro que
-             * busca en media lista no filtra: recorta y despues filtra.
+             * Sin filtro da igual: en el panel caben quince y a los
+             * demas se llega con el dedo. Con el filtro NO da igual: si
+             * de los cuarenta y ocho guardados solo tres son CQ y se mira
+             * unicamente hasta el decimoquinto, el panel se queda con las
+             * CQ que hubiera ahi dentro y se pierde las que estan mas
+             * abajo. Un filtro que busca en media lista no filtra:
+             * recorta y despues filtra.
+             *
+             * (Este parrafo decia "dieciseis mensajes" hasta el
+             * 29/10/2026: se escribio cuando la lista media dieciseis y se
+             * quedo ahi al crecer a cuarenta y ocho. El razonamiento no
+             * cambiaba; la cuenta si.)
              *
              * Asi que se recorren TODOS, se apuntan los que pasan -del mas
              * viejo al mas nuevo- y, si salen mas de los que caben, se
@@ -27772,7 +28724,7 @@ static void digi_sync(void)
                  * AL FINAL DE LA LISTA. Ver s_ft8_subidos alla arriba y
                  * ft8_lista_nuevos(), que es donde esta la trampa.
                  */
-                uint32_t total = ft8_modo_total();
+                uint32_t total = ft8_modo_metidas();
 
                 if (s_ft8_subidos != 0U && total > s_ft8_total_ant) {
                     uint32_t ins = total - s_ft8_total_ant;
@@ -32358,6 +33310,22 @@ static uint8_t digi_panel_active(void)
     return 0U;
 }
 
+/*
+ * QUE CLASE DE PANEL HAY AHORA. Ver PANEL_CLASE_* arriba.
+ *
+ * El orden importa: la imagen antes que el panel entero porque ninguno de
+ * los ocho de modo_panel_entero() pinta imagen, pero si algun dia lo
+ * hiciera, lo que manda es QUIEN PINTA el hueco y ahi gana su propio poll.
+ */
+static uint8_t panel_clase(uint8_t activo, uint8_t imagen)
+{
+    if (!activo)               { return PANEL_CLASE_NADA; }
+    if (imagen)                { return PANEL_CLASE_IMAGEN; }
+    if (modo_panel_entero())   { return PANEL_CLASE_PANEL; }
+    return PANEL_CLASE_OSC;
+}
+
+
 
 /*
  * 1 cuando el MANDO deja de sintonizar y pasa a mover las dos
@@ -33146,13 +34114,49 @@ static void tune_encoder_poll(void)
      * and shouldn't also be evaluated as a turn against a target
      * we're leaving in the same poll. */
     if (long_press) {
+        uint8_t habia_que_deshacer = 0U;
+
         if (s_encoder_target != ENCODER_TARGET_TUNE) {
             s_encoder_target = ENCODER_TARGET_TUNE;
+            habia_que_deshacer = 1U;
             debug_print("encoder: long-press - knob back to TUNE\n");
             aux_row_display_draw(); /* clear the stale LO/HI/SQL/BL/... row - always visible, menu or not, see s_btn_vol's callback for the same unconditional call */
         }
         if (s_menu_open) {
             menu_screen_close();
+            habia_que_deshacer = 1U;
+        }
+        /*
+         * ==================================================================
+         * Y LA SALIDA DE EMERGENCIA DE UN MODO DE PANEL ENTERO - 29/10/2026.
+         * ==================================================================
+         *
+         * *** El usuario, hoy: que el modo IDENT le deja la radio tostada,
+         * que no va el tactil, y que el encoder si va. ***
+         *
+         * Sea cual sea el motivo de que el tactil no responda ahi -que a
+         * esta hora todavia no lo se-, hay una consecuencia que es PEOR que
+         * el fallo: de esos ocho modos no se sale. El boton Modo esta en la
+         * barra de abajo, la rejilla de modos se abre con el dedo y los
+         * modos se eligen con el dedo. Sin tactil, la unica salida es
+         * apagar la radio.
+         *
+         * Una pulsacion larga del mando ya quiere decir "sacame de aqui":
+         * devuelve el mando a la sintonia y cierra el menu. Esto es lo mismo
+         * un escalon mas arriba, y solo cuando no habia nada mas que
+         * deshacer -asi no le quita su gesto a quien tenia el menu abierto o
+         * el mando enganchado a un ajuste-: apaga el modo digital y te deja
+         * escuchando en banda lateral, con el espectro otra vez delante.
+         *
+         * No arregla el tactil. Hace que no haga falta apagar la radio.
+         *
+         * Lo vigila tools/salida_check.py.
+         */
+        if (!habia_que_deshacer && modo_panel_entero()) {
+            digi_todo_apagado();
+            s_ft8_todo = 1U;        /* que el panel no se de por pintado */
+            radio_screen_draw();    /* el espectro vuelve a su sitio */
+            debug_print("encoder: pulsacion larga - fuera del modo digital\n");
         }
         return;
     }
@@ -33254,11 +34258,18 @@ static void tune_encoder_poll(void)
                  * ganancia guardada (ver s_pga_wfm_x2), y lo que se gira
                  * dentro del modo es tan tuyo como lo que se gira fuera.
                  */
-                if (demod_am_get_mode() != DEMOD_MODE_WFM) {
-                    s_pga_hf_x2 = s_pga_gain_db_x2;
-                } else {
-                    s_pga_wfm_x2 = s_pga_gain_db_x2;
-                }
+                /*
+                 * Y LO VIVO ES EL AJUSTE DE LA ZONA EN LA QUE ESTES
+                 * 29/10/2026, al darle su ganancia a cada uno de los ocho
+                 * modos de panel entero.
+                 *
+                 * Aqui habia un if por DEMOD_MODE_WFM, que valia mientras
+                 * las zonas eran dos. Con diez -escuchar, FM ancha y los
+                 * ocho digitales- un if por cada una seria diez sitios
+                 * donde olvidarse de uno. Lo pregunta quien lo sabe:
+                 * pga_mio(), que es el mismo que usa el cambio de modo.
+                 */
+                *pga_mio(pga_zona_ahora()) = s_pga_gain_db_x2;
                 /* rf_agc_apply_pga() (07/08/2026), not a direct
                  * aic3204_set_pga_gain_db() call - the encoder now
                  * moves the CEILING, and this recomputes/applies the
@@ -35481,7 +36492,7 @@ static void demo_touch_poll(void)
              * lista vacia enseñaria un panel en blanco con mensajes
              * entrando por abajo. Ver s_ft8_subidos. */
             s_ft8_subidos   = 0U;
-            s_ft8_total_ant = ft8_modo_total();
+            s_ft8_total_ant = ft8_modo_metidas();
             ft8_panel_reinicia();
             debug_print("ft8: lista borrada\n");
         } else if (sstv_activo()) {
@@ -36168,12 +37179,50 @@ static int16_t emis_recorrido(int16_t w)
     return (int16_t)(w + 8);
 }
 
+/*
+ * ======================================================================
+ * LA MARQUESINA NO SE PARA PORQUE HAYA UN MENU ABIERTO - 29/10/2026
+ * ======================================================================
+ *
+ * *** El usuario, con la pantalla de Ajustes abierta y una foto del
+ * cartel rodeado: "China National Rad" y "CHN - UI - 11:00-14:0",
+ * cortados los dos y quietos. ***
+ *
+ * Las dos marquesinas se iban en la primera linea con `s_menu_open`. El
+ * razonamiento tenia sentido -con un menu encima nadie mira la cabecera,
+ * asi que no se gasta bus en repintarla- salvo por una cosa: NINGUN menu
+ * de esta radio tapa la cabecera. Las seis pantallas que ponen
+ * s_menu_open empiezan en Y=104 -UIG_Y, UIH_Y, UIK_Y, UIQ_Y y las dos de
+ * ui_cfg.h/ui_det.h, que salen de UIG_Y- y la franja de la marquesina
+ * vive en 10..54 (UI_TOP_RDS_Y + UI_TOP_RDS_H). No se solapan ni en un
+ * pixel.
+ *
+ * O sea que el texto se quedaba a la vista, cortado por la derecha y
+ * parado, mientras la pantalla que de verdad tapa algo estaba abajo. Y
+ * encima emisoras_tick() SI repinta al cambiar de minuto, y pone los dos
+ * desplazamientos a cero: con un menu abierto un rato largo, el cartel se
+ * reiniciaba cada minuto al principio del nombre y ahi se quedaba.
+ *
+ * LO QUE CUESTA, que es la pregunta que motivaba la guarda: la franja son
+ * 610x44 pixeles cada 40 ms. Es EXACTAMENTE lo que ya se gasta con el
+ * menu cerrado, y con el menu abierto no hay espectro ni cascada
+ * pintando, asi que la carga total es menor que la normal. La guarda no
+ * ahorraba en el caso caro; ahorraba en el barato.
+ *
+ * Se quedan las otras tres condiciones, que si dicen algo: dormida no se
+ * pinta, sin la primera pintada no hay donde pintar, y cada marquesina
+ * sigue siendo de su modo.
+ *
+ * Lo vigila tools/marquesina_check.py: las dos funciones, y ademas que
+ * ninguna pantalla de menu baje de UI_TOP_H. El dia que alguien haga una
+ * a pantalla completa, la guarda tiene que volver - y entonces saltara.
+ */
 static void emis_marq_poll(void)
 {
     int16_t rn, rt;
 
     if (!emisoras_hay() || demod_am_get_mode() == DEMOD_MODE_WFM
-        || s_menu_open || s_screen_asleep || !s_pantalla_pintada) {
+        || s_screen_asleep || !s_pantalla_pintada) {
         return;
     }
     if (s_emis_nom[0] == '\0' && s_emis_txt[0] == '\0') { return; }
@@ -36963,7 +38012,41 @@ static void sdr_spectrum_waterfall_tick(void)
         static uint8_t s_iqfir_cuenta = 0U;
         if (++s_iqfir_cuenta >= 60U) {
             s_iqfir_cuenta = 0U;
-            (void)iqbal_resuelve();
+            /*
+             * Y NO EN LOS MODOS DE PANEL ENTERO, NI CON EL MENU ABIERTO -
+             * 29/10/2026, tarde. ESTE ES EL AGUJERO DEL ARREGLO DEL 28/10.
+             *
+             * Aquel arreglo -iqbal_fir_olvida() al entrar en
+             * modo_panel_entero()- se apoyaba en que esta funcion no se
+             * llama en esos ocho modos. Y es FALSO: el reparto del dibujo
+             * es "else if (drawing_now && modo_panel_entero())" con
+             * drawing_now = activo && !s_menu_open, asi que en cuanto se
+             * abre cualquier menu se cae al else y esto corre. A proposito,
+             * ademas: el comentario de ese else dice que se llama con el
+             * menu abierto porque ya se salta su dibujo por dentro.
+             *
+             * Lo que se salta por dentro es SOLO el dibujo. Esta linea y
+             * la FFT cruda que alimenta a iqbal_calibra() quedan por
+             * DELANTE de esa guarda.
+             *
+             * El recorrido completo: entras en HFDL y el FIR se borra;
+             * abres Ajustes para subir la ganancia -que es justo lo que el
+             * manual dice que hagas en HFDL-; mientras el menu esta
+             * abierto el lazo instala tomas nuevas; cierras el menu y el
+             * tick deja de llamarse. El FIR se queda CONGELADO a medio
+             * converger -el lazo suma medio paso por vuelta- y
+             * aplicandose a todas las muestras dentro de la interrupcion
+             * del ADC durante el resto de la sesion. Segun el banco del
+             * 28/10, una toma de 0,05 baja de 17/30 rafagas buenas a
+             * 13/30, y 0,20 a 10/30.
+             *
+             * Asi que el estimador no instala nada donde no puede medir, y
+             * da igual por que se haya entrado en este else. Ver
+             * tools/espejo_check.py, que ahora exige las dos cosas.
+             */
+            if (!modo_panel_entero()) {
+                (void)iqbal_resuelve();
+            }
         }
     }
 

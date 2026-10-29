@@ -49,7 +49,32 @@
  * abierta de verdad da del orden de veinte a cuarenta mensajes por ranura
  * en 3 kHz, o sea la mitad de eso en los 1.600 Hz que se miran.
  */
-#define FT8_DECODER_MSG_QUEUE_SIZE 40
+/*
+ * ======================================================================
+ * Y QUE SEAN LAS MISMAS QUE GUARDA LA LISTA - 29/10/2026
+ * ======================================================================
+ *
+ * Eran cuarenta mientras la lista guardaba cuarenta y ocho, y esa
+ * diferencia de ocho no era inocente: la cola se vacia entera nada mas
+ * decodificar -ver el bucle de ft8_modo_tick()-, asi que lo unico que
+ * tiene que caber aqui es UNA RANURA. Con cuarenta, una ranura de banda
+ * abierta que trajera cuarenta y cinco mensajes perdia cinco AQUI, antes
+ * de llegar a la lista... que tenia sitio de sobra para ellos.
+ *
+ * O sea que el limite que recortaba no era el que el usuario puede ver y
+ * subir con el dedo, sino uno escondido ocho renglones mas abajo. Y
+ * ademas se los tragaba en silencio: queue_push() los cuenta en
+ * s_total_decoded_count y los tira.
+ *
+ * Ahora son las mismas que la lista, con el _Static_assert de abajo para
+ * que no se vuelvan a separar. Si una ranura trae mas de cuarenta y ocho,
+ * lo que sobra se pierde en la lista -el sitio donde se ve que se pierde-
+ * y no aqui.
+ *
+ * Cuesta 704 bytes mas dentro de la union (8 x 88). Medido en
+ * ft8_shared_ram.h.
+ */
+#define FT8_DECODER_MSG_QUEUE_SIZE 48
 #define FT8_DECODER_LINE_LEN       88   /* + la columna de pais, 25/09/2026 */  /* "HH:MM " (6) + "0169Hz -05dB ~ " (15) + message (up to 35) + " 1234km" (7) + NUL, rounded up (09/2026 #2: was 56, before the distance-to-grid suffix) */
 
 /* One decoded message, already formatted as a display-ready line
