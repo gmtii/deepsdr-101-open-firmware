@@ -355,6 +355,17 @@ typedef enum {
     SET_X_PGA_JTTY,
     SET_X_PGA_STANAG,
     SET_X_PGA_IDENT,
+    /*
+     * LOS MILISEGUNDOS DE CADA CUADRO DEL PANADAPTADOR, Y EL CERO QUE LO
+     * PARA - 30/10/2026, del usuario: "no puede ser que en el menu se
+     * escuche mejor y sin interferencias".
+     *
+     * Se guarda porque es un ajuste de RUIDO, no de gusto: el repintado
+     * mete hasta 10 dB de siseo en el audio -medido- y quien lo baja o lo
+     * congela no quiere volver a hacerlo en cada arranque. Antes no se
+     * guardaba y la fila lo decia: "se toca para bajarlo; no se guarda".
+     */
+    SET_X_FPS_MS,
     SET_X_N
 } settings_extra_id_t;
 

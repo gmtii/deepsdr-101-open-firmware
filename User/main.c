@@ -1274,7 +1274,13 @@ static uint32_t demod_if_offset_hz(void)
  * Entre los dos queda el recorrido que se puede hacer sin que el panorama se
  * mueva: 38 kHz a 96 kHz de muestreo, 16 kHz a 48.
  */
-#define NCO_OFF_MIN_HZ    6000UL
+/*
+ * EL NUMERO SE MUDO A nco.h - 30/10/2026. Lo necesitan tres ficheros
+ * -este, demod_am.c y nco.c- desde que el dial puede cruzar el centro, y
+ * un #define de main.c no lo pueden ver los otros dos. Aqui se queda el
+ * nombre de siempre para no tocar los seis sitios que lo usan.
+ */
+#define NCO_OFF_MIN_HZ    NCO_CENTRO_HZ
 /*
  * CUARENTA, QUE ES LO QUE DICE EL COMENTARIO DE ARRIBA - 09/10/2026.
  *
@@ -1363,6 +1369,54 @@ static uint32_t nco_off_max_hz(void)
 {
     if (s_nonwfm_use_48k) { return NCO_OFF_MAX_48K; }
     return s_rf_doble ? NCO_OFF_MAX_192K : NCO_OFF_MAX_96K;
+}
+
+/*
+ * ======================================================================
+ * CUANDO PUEDE APRENDER EL CORRECTOR DE ESPEJO - 30/10/2026.
+ * ======================================================================
+ *
+ * iqbal.c lo dice con todas las letras delante de iqbal_aprende(): el
+ * estimador plano se apoya en que E[x^2] promedia a cero, y eso solo es
+ * cierto SI LA SEÑAL ESTA DESPLAZADA del oscilador. Si no lo esta, x^2 no
+ * gira, el estimador se inventa un desequilibrio y -lo peor- se lo lleva
+ * puesto a la banda siguiente, porque las medias tienen diez segundos de
+ * memoria. Medido alli: un paseo por la FM comercial costaba de 42 a 55 dB
+ * de rechazo de imagen en onda corta.
+ *
+ * HASTA HOY ESA CONDICION SE ESCRIBIA COMO "no es FM ancha", que era un
+ * apaño correcto mientras FM ancha fuese el UNICO sitio donde la señal cae
+ * en continua. Con el agujero del centro del NCO quitado ya no lo es: con
+ * el NCO puesto, el dial pasa por encima del oscilador y durante esos doce
+ * kilohercios la señal esta en continua en CUALQUIER modo.
+ *
+ * Asi que la puerta pasa a mirar lo que de verdad importa, que son dos
+ * cosas y no una:
+ *
+ *   - que no sea FM ancha (ahi no hay mezclador y punto), y
+ *   - que el desplazamiento digital este fuera de la ventana del centro,
+ *     que es el mismo NCO_CENTRO_HZ que usa el lazo de continua de
+ *     demod_am.c y la propia regla de aparcado.
+ *
+ * Y SE REFRESCA EN DOS SITIOS, porque las dos entradas cambian en sitios
+ * distintos: apply_demod_mode() cuando cambia el modo, y apply_lo_tune()
+ * cuando cambia la sintonia. Tener una sola llamada en el cambio de modo
+ * era justo el agujero.
+ *
+ * LO QUE NO HACE: apagar el corrector. Lo aprendido sigue aplicandose
+ * mientras se cruza -ver el revertido del 29/10/2026 en apply_lo_tune():
+ * el theta de al lado, aunque sea aproximado, quita mas espejo que cero-.
+ * Lo unico que se congela es el aprendizaje.
+ */
+static uint8_t s_espejo_wfm = 0U;
+
+static void espejo_aprende_refresca(void)
+{
+    float   off   = demod_am_get_mix_hz();
+    uint8_t lejos = (uint8_t)(off >=  (float)NCO_CENTRO_HZ ||
+                              off <= -(float)NCO_CENTRO_HZ);
+
+    iqbal_aprende((uint8_t)(!s_espejo_wfm && lejos));
 }
 
 /*
@@ -1946,6 +2000,32 @@ int main(void)
     gfx2_set_chivato(gfx_chiva);
 
     spi_flash_init(); /* unconditional - settings_load()/settings_poll() need this every boot, not just under the SPI_FLASH_PROBE_TEST diagnostics below */
+
+    /*
+     * ==================================================================
+     * Y LO PRIMERO QUE SE HACE CON EL DISCO: REPARARLO SI HACE FALTA.
+     * 30/10/2026.
+     * ==================================================================
+     *
+     * Un usuario apago la radio mientras guardaba los ajustes y perdio
+     * 124 nombres de fichero de golpe: para cambiar una entrada hay que
+     * borrar los 4 kB del directorio en los que vive, y en esos 4 kB
+     * caben 128 entradas de otros ficheros. La imagen de su disco esta
+     * contada entera delante de respaldo_guarda() en spi_flash.c.
+     *
+     * Desde entonces, antes de borrar ese bloque se guarda una copia de
+     * lo que va a quedar en el. Esta llamada es la que la usa: si la hay
+     * y el bloque no dice lo mismo, lo regraba.
+     *
+     * VA AQUI Y NO MAS ABAJO, y es lo unico con miga del sitio: tiene que
+     * correr ANTES de que nadie lea del disco -los ajustes, el banco de
+     * memorias, la base de aviones- porque si el directorio esta a medias
+     * todos ellos leerian "no hay fichero" y, lo que es peor, el guardado
+     * siguiente escribiria encima dando por hecho que no habia nada.
+     */
+    if (spi_flash_respaldo_repara()) {
+        debug_print("main: el apagon anterior pillo un guardado a medias - directorio reparado\n");
+    }
 
     /* El banco de memorias, del mismo disco y por el mismo camino que
      * CONFIG.CSV. Si no hay fichero -radio nueva- se queda vacio y ya.
@@ -3926,6 +4006,15 @@ static uint8_t s_nr_on = 0U;
 static uint8_t s_spec_smooth_passes = 0U;
 
 /*
+ * Los milisegundos de cada cuadro del panadaptador, y el 0 que lo congela.
+ * El valor de verdad se pone mucho mas abajo, junto a
+ * SPECTRUM_FRAME_MS_DEF; esto es solo para que settings_extra_pon() y
+ * settings_extra_toma() -que estan antes en el fichero- lo puedan guardar y
+ * leer. Ver SET_X_FPS_MS en settings.h.
+ */
+static uint32_t s_frame_ms;
+
+/*
  * --- Encoder-driven tuning state -----------------------------------
  *
  * s_tune_hz starts at 7.150.000MHz (40m band, AM/general-coverage
@@ -5621,7 +5710,19 @@ static uint32_t       s_bd_visto_tune = 0UL;
  * stops short of 1.0 deliberately - true 1.0 would freeze the display
  * forever, never blending in a new frame at all.
  */
-static float s_spectrum_smooth_alpha = 0.75f; /* same default the #define always used */
+/*
+ * VEINTICINCO POR CIENTO - 30/10/2026, pedido por el usuario.
+ *
+ * Eran 75, que es el valor con el que nacio el #define. Con tres cuartas
+ * partes de peso en lo viejo, la traza tarda en bajar: una rafaga corta
+ * deja estela y el suelo de ruido se queda redondeado. Con 25 la pantalla
+ * sigue a lo que hay en antena y el promediado se nota solo en el
+ * temblor, que es para lo que esta.
+ *
+ * Es el valor POR DEFECTO: una radio con CONFIG.CSV guardado se queda con
+ * lo que tenga puesto, y el mando sigue moviendolo de 5 en 5.
+ */
+static float s_spectrum_smooth_alpha = 0.25f;
 #define SPECTRUM_SMOOTH_STEP 0.05f /* 5 percentage points per encoder detent */
 #define SPECTRUM_SMOOTH_MIN 0.0f
 #define SPECTRUM_SMOOTH_MAX 0.95f
@@ -11062,7 +11163,8 @@ static void apply_demod_mode(demod_mode_t mode)
      * Va aqui, con el gancho suelto, por si algun dia el estimador llevara
      * estado que la interrupcion escriba a medias.
      */
-    iqbal_aprende((uint8_t)(!will_be_wfm));
+    s_espejo_wfm = (uint8_t)will_be_wfm;
+    espejo_aprende_refresca();
     sdr_rx_set_block_hook(will_be_wfm ? demod_wfm_process_raw
                                       : demod_am_process_raw);
     /*
@@ -14716,6 +14818,7 @@ static void extras_leer(settings_extra_t *e)
     e->v[SET_X_AUTOESC]    = (int32_t)s_spec_agc_enabled;
     e->v[SET_X_ZOOM]       = (int32_t)s_spec_zoom;
     e->v[SET_X_CONTORNO]   = (int32_t)s_spec_smooth_passes;
+    e->v[SET_X_FPS_MS]     = (int32_t)s_frame_ms;
     e->v[SET_X_WFVEL]      = (int32_t)k_wf[s_wf_vel].clave;
     e->v[SET_X_ANALIZ]     = (int32_t)s_analiz;
     e->v[SET_X_NCO]        = (int32_t)s_nco_on;
@@ -15027,6 +15130,11 @@ static void extras_aplicar(const settings_extra_t *e)
     if (EX_HAY(SET_X_WFVEL)) {
         s_wf_vel = wf_vel_por_clave((uint8_t)ex_rec(e->v[SET_X_WFVEL], 0, 255));
         s_wf_frames = 0U;
+    }
+    if (EX_HAY(SET_X_FPS_MS)) {
+        /* Cero es el panadaptador congelado y vale; por arriba se recorta a
+         * lo que ofrece la fila. Ver su comentario en settings.h. */
+        s_frame_ms = (uint32_t)ex_rec(e->v[SET_X_FPS_MS], 0, 250);
     }
     if (EX_HAY(SET_X_CONTORNO)) {
         s_spec_smooth_passes = (uint8_t)ex_rec(e->v[SET_X_CONTORNO], 0, SPECTRUM_LINE_SMOOTH_MAX);
@@ -18699,7 +18807,10 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
         buf[i++] = ' '; buf[i++] = 'm'; buf[i++] = 's';
         buf[i++] = ' '; buf[i++] = '\xE2'; buf[i++] = '\x86'; buf[i++] = '\x92';
         buf[i++] = ' ';
-        aj_u2s(&buf[i], 1000UL / (s_frame_ms ? s_frame_ms : 1UL));
+        /* Cero es el panadaptador PARADO, y la fila lo dice sola: "0 ms
+         * -> 0 fps". Sin rotulo aparte, que en esta radio cada byte de
+         * flash cuenta. Ver la guarda de sdr_spectrum_waterfall_tick(). */
+        aj_u2s(&buf[i], s_frame_ms ? (1000UL / s_frame_ms) : 0UL);
         while (buf[i] != '\0') { i++; }
         buf[i++] = 'f'; buf[i++] = 'p'; buf[i++] = 's';
         buf[i] = '\0';
@@ -22396,7 +22507,17 @@ static void grid_apply(uint8_t cel)
                 /* 33 es el de siempre (30 fps), 16 son 60. Por debajo de lo
                  * que cuesta dibujar no sirve de nada: el limitador deja de
                  * limitar y lo que sale es lo que de verdad da tiempo. */
-                static const uint16_t k_ms[] = { 33U, 28U, 25U, 22U, 20U, 18U, 16U };
+                /*
+                 * Y AHORA TAMBIEN HACIA ARRIBA, HASTA PARARLO
+                 * 30/10/2026. Ver el bloque de "se puede congelar el
+                 * panadaptador" en sdr_spectrum_waterfall_tick(): el
+                 * ruido que mete el repintado es electrico y el firmware
+                 * solo puede pintar menos. Menos cuadros es menos ruido
+                 * en la misma proporcion, y 0 es el silencio del menu
+                 * sin tener que estar en el menu.
+                 */
+                static const uint16_t k_ms[] = { 33U, 28U, 25U, 22U, 20U,
+                                                 18U, 16U, 100U, 0U };
                 uint8_t j;
 
                 for (j = 0U; j < (uint8_t)((sizeof k_ms / sizeof k_ms[0]) - 1U); j++) {
@@ -25183,6 +25304,17 @@ static void apply_lo_tune(uint32_t freq_hz)
     if (ok) {
         demod_am_set_mix_hz(is_wfm ? 0.0f
                                    : (float)((int64_t)freq_hz - (int64_t)s_lo_hz));
+        /*
+         * Y EL APRENDIZAJE DEL CORRECTOR DE ESPEJO, AQUI TAMBIEN
+         * 30/10/2026, con el agujero del centro del NCO ya quitado.
+         *
+         * Hasta hoy esto solo se decidia al cambiar de MODO, porque la
+         * unica condicion era "FM ancha si o no". Desde que el dial puede
+         * pasar por encima del oscilador, la otra condicion -que la señal
+         * este desplazada- cambia al SINTONIZAR, o sea aqui. Ver
+         * espejo_aprende_refresca().
+         */
+        espejo_aprende_refresca();
     }
 
     /*
@@ -38050,7 +38182,50 @@ static void sdr_spectrum_waterfall_tick(void)
         }
     }
 
-    if (!s_menu_open) {
+    /*
+     * ==================================================================
+     * Y AQUI SE PUEDE CONGELAR EL PANADAPTADOR - 30/10/2026, del usuario:
+     * "no puede ser que en el menu se escuche mejor y sin interferencias".
+     * ==================================================================
+     *
+     * Y tiene razon, y esta medido sobre el audio de su propio video,
+     * comparando los tramos con el menu abierto contra los que tienen el
+     * espectro en pantalla:
+     *
+     *     banda          pantalla   menu    diferencia
+     *        300-700        93.6    83.6    +10.0 dB
+     *        700-1500       99.9    95.4     +4.5 dB
+     *       3000-5000       85.5    79.4     +6.1 dB
+     *       5000-8000       70.5    62.7     +7.8 dB
+     *
+     * Y lo que lo ata al dibujo sin lugar a dudas: mirando COMO LATE el
+     * siseo -el espectro de la envolvente de 4 a 10 kHz- con el espectro
+     * en pantalla salen dos rayas que con el menu abierto NO EXISTEN:
+     * 374,8 Hz -que es 96.000/256, o sea el ritmo del bloque de audio- y
+     * 42-44 Hz, el ritmo del cuadro.
+     *
+     * EL ACOPLO ES ELECTRICO Y NO LO ARREGLA NINGUN FIRMWARE. Ya estaba
+     * escrito arriba, en EL VAIVEN DEL FOTOGRAMA: el usuario midio en su
+     * dia que el ruido sube con la ganancia de entrada, o sea que entra
+     * ANTES del PGA. Y hoy ha comprobado que NO baja con el brillo, asi
+     * que tampoco es la retroiluminacion: es el repintado en si.
+     *
+     * El vaiven del fotograma lo convirtio de tono en suelo -de +60 a
+     * +34 dB de concentracion- y eso se queda. Pero la energia es la
+     * misma, y la unica palanca que le queda al firmware es PINTAR MENOS.
+     *
+     * Asi que se le da el interruptor: con el panadaptador congelado, la
+     * pantalla principal se calla exactamente igual que con el menu
+     * abierto -es el mismo bloque de codigo el que se salta- y el dial,
+     * la ese, el audio y los decodificadores siguen vivos. Ver la fila de
+     * los milisegundos de fotograma en Informacion.
+     *
+     * LO QUE SIGUE CORRIENDO: todo lo de arriba de esta guarda -la media
+     * de las FFT, las dos medidas del espejo y la prueba A/B-, que es
+     * barato y tiene que estar al dia para cuando se descongele. Lo que
+     * se salta es DIBUJAR, que es lo caro y lo que mete el ruido.
+     */
+    if (!s_menu_open && (SPECTRUM_FRAME_MS != 0U)) {
 
     /*
      * TEMPORAL smoothing ACROSS display frames - added 31/07/2026 per

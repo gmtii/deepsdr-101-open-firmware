@@ -107,10 +107,20 @@ static unsigned long recorre(int nco, int bajando, unsigned long *peor_f,
              * siendo lo mismo: una emisora que se quede FUERA de la
              * ventana. Lo que cambia es que la ventana tiene dos lados.
              */
+            /*
+             * *** Y EL SUELO SE CAYO EL 30/10/2026. *** Aqui tambien se
+             * exigia que la distancia no bajara de OFF_MIN, y eso dejo de
+             * ser cierto al quitar el agujero del centro de
+             * nco_lo_aparcado(): el dial PUEDE pasar por encima del
+             * oscilador, y debe, o el panorama pega un salto de once
+             * kilohercios. Lo que este banco busca -una emisora que se
+             * quede FUERA de la ventana- es el techo, y el techo se
+             * queda.
+             */
             long tol = (long)escalon_de(lo);
             long a   = (off < 0) ? -off : off;
 
-            if (a <= (long)OFF_MAX + tol && a >= (long)OFF_MIN - tol) {
+            if (a <= (long)OFF_MAX + tol) {
                 continue;
             }
         }
@@ -172,8 +182,11 @@ int main(void)
             if (ideal != lo) { lo = real; }
             off = (long)f - (long)lo;
             {
+                /* Solo el techo, y en valor absoluto: ver el comentario
+                 * del suelo caido unas lineas mas arriba. */
                 long tol = (long)escalon_de(lo);
-                if (off > (long)OFF_MAX + tol || off < (long)OFF_MIN - tol) {
+                long a   = (off < 0) ? -off : off;
+                if (a > (long)OFF_MAX + tol) {
                     malas2++;
                 }
             }

@@ -498,6 +498,7 @@ comprueba-fw:
 	@python3 tools/rds_coste_check.py
 	@python3 tools/mapa.py
 	@python3 tools/mando_check.py User/main.c
+	@python3 tools/nco_centro_check.py
 	@python3 tools/panel_check.py
 	@python3 tools/osci_check.py .
 	@python3 tools/tactil_check.py User/main.c

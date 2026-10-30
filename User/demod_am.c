@@ -5409,13 +5409,36 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
         float sum_i = 0.0f;
         float sum_q = 0.0f;
         /*
-         * Y SOLO SI HAY MEZCLADOR. Sin desplazamiento la señal buena estaria
-         * justo en continua y esto se la comeria: es la ambiguedad que la
-         * cadena de WFM resuelve con un tope. Aqui no hace falta tope porque
-         * no hace falta la rama: con el oscilador aparcado el desplazamiento
-         * nunca es cero (NCO_OFF_MIN_HZ), y sin NCO vale Fs/4.
+         * ==============================================================
+         * Y SOLO SI LA EMISORA ESTA LEJOS DEL CENTRO - 30/10/2026.
+         * ==============================================================
+         *
+         * Aqui ponia "solo si hay mezclador", y se justificaba asi: "con
+         * el oscilador aparcado el desplazamiento nunca es cero
+         * (NCO_OFF_MIN_HZ), y sin NCO vale Fs/4". ESA PREMISA SE CAYO el
+         * 30/10/2026, cuando nco_lo_aparcado() dejo de reaparcar en el
+         * centro para que el panorama no pegue el salto de once
+         * kilohercios que el usuario pidio quitar. Ahora el dial SI puede
+         * pasar por encima del oscilador, y con `!= 0.0f` como unica
+         * guarda este lazo mediria la emisora, la tomaria por fuga y se la
+         * restaria: la señal buena desapareciendo justo donde mas se la
+         * mira.
+         *
+         * Y EL TOPE NO ES "DISTINTO DE CERO" SINO NCO_CENTRO_HZ, porque lo
+         * que rompe el lazo no es que el desplazamiento sea exactamente
+         * cero: es que la emisora caiga dentro de lo que este promedio ve
+         * como continua. El promedio es de un bloque -2,67 ms-, asi que
+         * una señal a 200 Hz del centro tampoco promedia a cero.
+         *
+         * QUE SE HACE EN VEZ DE MEDIR: CONGELAR. No poner a cero. La fuga
+         * sigue ahi mientras se cruza, y el mejor numero que hay de ella es
+         * el que se midio hace dos detentes a seis kilohercios de
+         * distancia. Ponerlo a cero seria destapar la fuga entera justo en
+         * el sitio donde cae encima de la emisora, que es exactamente lo
+         * contrario de lo que hace falta.
          */
-        uint8_t quita_dc = (uint8_t)((s_mix_fino != 0.0f) || (s_mix_grueso != 0));
+        uint8_t mide_dc = (uint8_t)(s_mix_hz >= (float)NCO_CENTRO_HZ ||
+                                    s_mix_hz <= -(float)NCO_CENTRO_HZ);
 
         for (n = 0; n < n_crudo; n++) {
             int16_t vi = raw_interleaved[2U * n];
@@ -5434,7 +5457,7 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
         }
         rf_clip_veredicto(hits);
 
-        if (quita_dc && n_crudo != 0U) {
+        if (mide_dc && n_crudo != 0U) {
             /* Media corriente los primeros bloques -alfa = 1/n, la
              * convergencia mas rapida que hay sin sesgo- y seguimiento lento
              * despues. Igual que s_wfm_dc_n. */
@@ -5471,14 +5494,21 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
              * deja continua. Ver el final del bloqueador de continua de
              * demod_wfm_process_raw().
              */
-        } else if (!quita_dc) {
-            /* Sin mezclador no se corrige y ademas se olvida: si vuelve a
-             * haberlo, la fuga se vuelve a medir desde cero en vez de
-             * arrastrar la de hace diez minutos. */
-            s_rf_dc_i = 0.0f;
-            s_rf_dc_q = 0.0f;
-            s_rf_dc_n = 0U;
         }
+        /*
+         * Y AQUI HABIA UN `else` QUE PONIA LAS TRES A CERO, con el motivo
+         * "sin mezclador no se corrige y ademas se olvida". Quitado el
+         * 30/10/2026 y escrito para que nadie lo reponga: desde que el
+         * dial puede cruzar el centro, "sin mezclador" ya no quiere decir
+         * "esta cadena no esta en uso" sino "estamos pasando por encima
+         * del oscilador", que es justo cuando hace mas falta seguir
+         * restando. Se conserva lo medido y se vuelve a medir solo al
+         * salir de la ventana, que es donde la medida significa algo.
+         *
+         * Lo que aquel olvido protegia -no arrastrar la fuga de hace diez
+         * minutos- lo sigue dando el seguimiento lento: en cuanto se sale
+         * del centro, alfa vuelve a correr y el lazo se recoloca.
+         */
 
         /* 0a-bis y 0a-ter, en este orden y no en el otro: ver mas abajo. */
         (void)nb_process(s_i_buf, s_q_buf, n_crudo);

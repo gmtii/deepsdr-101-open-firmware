@@ -224,7 +224,8 @@ static const char *const k_extra_claves[] = {
     "pga_ale_db_x2",    /* SET_X_PGA_ALE     */
     "pga_jtty_db_x2",   /* SET_X_PGA_JTTY    */
     "pga_stanag_db_x2", /* SET_X_PGA_STANAG  */
-    "pga_ident_db_x2"   /* SET_X_PGA_IDENT   */
+    "pga_ident_db_x2",  /* SET_X_PGA_IDENT   */
+    "spec_frame_ms"     /* SET_X_FPS_MS      */
 };
 _Static_assert(sizeof(k_extra_claves) / sizeof(k_extra_claves[0]) == (size_t)SET_X_N,
                "k_extra_claves[] y settings_extra_id_t se han desincronizado");

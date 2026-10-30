@@ -124,13 +124,31 @@ static int     s_dcf_submuestras = 1;
 void cons_dcf77_fase(uint8_t si) { s_dcf_fase = si ? 1u : 0u; }
 void cons_dcf77_submuestras(int n) { s_dcf_submuestras = n; }
 
+/*
+ * CON -DDCF77_REAL ESTOS DOS NO SE DEFINEN - 30/10/2026.
+ *
+ * sim/msf_cadena.c enlaza el User/dcf77.c DE VERDAD detras de este
+ * demod_am.c para medir la cadena ENTERA: del I/Q crudo del ADC a la
+ * hora decodificada. Con los sucedaneos de aqui eso no se puede, porque
+ * dcf77_feed() tira la muestra y solo la cuenta.
+ *
+ * Lo demas del fichero se queda igual: lo unico que cambia es quien pone
+ * estos dos simbolos.
+ */
+#ifndef DCF77_REAL
 uint8_t dcf77_activo(void) { return g_cons[CONS_DCF77].activo; }
 void    dcf77_feed(float m) { anota(CONS_DCF77, (const void *)0, 1u); (void)m; }
+#endif
+/* Con DCF77_REAL los pone el dcf77.c de verdad, los dos: el banco enciende
+ * el decodificador con dcf77_start() y eso ya hace que dcf77_activo()
+ * conteste que si. */
+#ifndef DCF77_REAL
 float   dcf77_fase_iq(float i, float q) { (void)i; (void)q; return 0.0f; }
 uint8_t dcf77_usa_fase(hora_emisora_t e) { (void)e; return s_dcf_fase; }
 uint8_t dcf77_submuestras(hora_emisora_t e)
 { (void)e; return (uint8_t)s_dcf_submuestras; }
 hora_emisora_t dcf77_emisora(void) { return (hora_emisora_t)0; }
+#endif
 
 /*
  * EL SUMIDERO DE AUDIO, QUE ES EL PUNTO DE OBSERVACION BUENO.

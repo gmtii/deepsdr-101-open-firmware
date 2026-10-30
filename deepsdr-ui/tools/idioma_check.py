@@ -86,6 +86,9 @@ DATOS = {
 
 # Lo que queda, una por una y con su motivo.
 BLANCA = {
+    ('spi_flash.c', 'respaldo: el directorio no cuadra - se repara el bloque'):
+        'etiqueta de debug_print_hex32 por el puerto serie; no llega a '
+        'ninguna pantalla. Ver spi_flash_respaldo_repara()',
     ('main.c', 'espectro: sin señal, Hz'):
         'texto de depuracion por serie, lo come debug_print_dec en dos ramas',
     ('main.c', 'Se ha perdido - reintentando'):

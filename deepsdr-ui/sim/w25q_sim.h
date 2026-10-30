@@ -1,6 +1,7 @@
 #ifndef W25Q_SIM_H
 #define W25Q_SIM_H
 #include <stdint.h>
+#include <setjmp.h>
 
 void    w25q_reset(void);
 void    w25q_cs(uint8_t nivel);
@@ -43,5 +44,19 @@ extern uint32_t g_intocable_ini, g_intocable_fin;
  */
 extern int      g_chip_espera;
 extern uint32_t g_chip_sueltas;
+
+/*
+ * EL CORTE DE CORRIENTE. Ver el comentario de w25q_corta_en() en
+ * w25q_sim.c. Uso:
+ *
+ *     if (setjmp(*w25q_salto()) == 0) {
+ *         w25q_corta_en(k);
+ *         ...lo que se quiera interrumpir...
+ *     }
+ *     // aqui el chip esta como lo deja un corte en la operacion k
+ */
+void      w25q_corta_en(uint32_t n);
+jmp_buf  *w25q_salto(void);
+extern uint32_t g_ops_escritura;
 
 #endif

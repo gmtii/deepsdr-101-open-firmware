@@ -109,13 +109,45 @@ int main(void)
     di(s_igual > 0U && s_igual < tot,
        "se salta el cielo de encima de las señales, y solo eso",
        "si se saltara todo o nada, el parcial no estaria haciendo su trabajo");
-    di(s_poco == s_mucho,
-       "y saltarse bandas NO depende de cuanto se movio el dial",
-       "si dependiera, el repintado si explicaria la cascada lenta al saltar");
+    /*
+     * ==================================================================
+     * AQUI SE EXIGIA IGUALDAD EXACTA, Y SE AFLOJA A UNA BANDA - 30/10/2026.
+     * ==================================================================
+     *
+     * `s_poco == s_mucho` se cumplia -9 y 9 de 52- mientras el contorno
+     * venia de fabrica con TRES pasadas de suavizado: tres pasadas
+     * ensanchan los picos lo bastante como para que el borde del cielo
+     * caiga en la misma banda de 16 filas con la traza movida un bin o
+     * movida sesenta. Bajado el contorno a UNA pasada -30/10/2026, pedido
+     * por el usuario- la traza es mas afilada y el borde del cielo cae una
+     * banda mas arriba en uno de los dos casos: 8 y 7.
+     *
+     * LO QUE ESTE BANCO DEFIENDE no es la igualdad al bit, es que el
+     * ahorro NO SEA PROPORCIONAL al salto del dial, porque esa era la
+     * hipotesis que mato: si lo fuera, el repintado explicaria que la
+     * cascada vaya lenta al saltar de emisora. Y sigue muerta, con el
+     * numero delante: mover la traza SESENTA veces mas cuesta UNA banda
+     * mas de 52, o sea un 2 %. Proporcional seria sesenta veces.
+     *
+     * Por eso lo que se exige ahora es eso mismo escrito como numero, y no
+     * un "casi igual" a ojo.
+     */
+    {
+        int dif = (int)s_poco - (int)s_mucho;
+        char d[120];
+        if (dif < 0) { dif = -dif; }
+        snprintf(d, sizeof d,
+                 "mover la traza 60 veces mas cuesta %d banda(s) de %u, "
+                 "no 60 veces mas", dif, (unsigned)tot);
+        printf("    %-52s %s\n", "cuanto depende del salto del dial", d);
+        di(dif <= 1,
+           "y saltarse bandas NO depende de cuanto se movio el dial",
+           "si dependiera, el repintado si explicaria la cascada lenta al saltar");
+    }
     {
         char d[110];
         snprintf(d, sizeof d,
-                 "un salto repinta %u bandas y un paso %u: las mismas",
+                 "un salto repinta %u bandas y un paso %u",
                  (unsigned)(tot - s_mucho), (unsigned)(tot - s_poco));
         printf("    %-52s %s\n", "lo que cuesta de pintar cada uno", d);
     }

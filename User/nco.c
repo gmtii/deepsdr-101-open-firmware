@@ -201,6 +201,7 @@ uint32_t nco_lo_aparcado(uint32_t freq_hz, uint32_t lo_actual_hz,
                          uint32_t off_max_hz)
 {
     int64_t off;
+    uint32_t salto;
 
     /*
      * PRIMERO, QUE LA CUENTA QUEPA - 09/10/2026.
@@ -235,17 +236,49 @@ uint32_t nco_lo_aparcado(uint32_t freq_hz, uint32_t lo_actual_hz,
 
     off = (int64_t)freq_hz - (int64_t)lo_actual_hz;
 
+    /* Lo que se recorre de un reaparcado al siguiente deja el aterrizaje a
+     * off_min del borde: ver la rama de "se ha salido por arriba". Con un
+     * off_max mal puesto -mas pequeño que el margen- esto se quedaria en
+     * off_min, que es el comportamiento de antes y nunca es peor. */
+    salto = (off_max_hz > off_min_hz) ? (off_max_hz - off_min_hz) : off_min_hz;
+
     /*
-     * Se ha salido por ARRIBA: venia subiendo. Se reaparca dejando la
-     * distancia en el MINIMO, no en la de siempre, para que quede toda la
-     * ventana por delante en el sentido en que se estaba yendo. Reaparcar al
-     * valor clasico seria dejarlo en medio y volver a saltar a la mitad de
-     * camino: con Fs/4 = 24 kHz y un tope de 44, subir daria un salto cada
-     * 20 kHz en vez de cada 38. Lo midio sim/ncotest.c - la primera version
-     * hacia justo eso.
+     * ==================================================================
+     * SE HA SALIDO POR ARRIBA: VENIA SUBIENDO.
+     * ==================================================================
+     *
+     * Se reaparca dejando la distancia en el extremo CONTRARIO, para que
+     * quede toda la ventana por delante en el sentido en que se estaba
+     * yendo. Reaparcar al valor clasico seria dejarlo en medio y volver a
+     * saltar a la mitad de camino: con Fs/4 = 24 kHz y un tope de 44,
+     * subir daria un salto cada 20 kHz en vez de cada 38. Lo midio
+     * sim/ncotest.c - la primera version hacia justo eso.
+     *
+     * *** Y EL EXTREMO CONTRARIO ES -(off_max - off_min), NO +off_min.
+     * 30/10/2026, con el agujero del centro ya quitado. ***
+     *
+     * Mientras el centro estaba cerrado, subiendo solo se podia volver a
+     * entrar por +off_min y el recorrido entre saltos era off_max -
+     * off_min: 84 kHz a 192 kHz de muestreo. Abierto el centro, el sitio
+     * que deja mas ventana por delante es el otro extremo, y el recorrido
+     * pasa a ser off_max + (off_max - off_min) = 174 kHz. El panorama
+     * enseña 192 y el salto queda en el borde, que es donde el usuario lo
+     * pidio.
+     *
+     * EL MARGEN DE BORDE SE RESPETA, y no es un adorno: off_max ya esta
+     * puesto donde el filtro antialias del conversor sigue plano, y
+     * aterrizar a off_max EXACTOS fue el fallo del 09/10/2026 -la emisora
+     * que acabas de perseguir aparece justo donde el codec ya no entrega
+     * nivel-. Por eso se descuenta off_min, que es el mismo margen que el
+     * resto del fichero usa para hablar del borde.
+     *
+     * Y la cuenta se protege: `freq + salto` no se puede desbordar en
+     * uint32 con las frecuencias de esta radio, pero `freq - salto` si se
+     * iria por debajo de cero en onda larga, que es exactamente el fallo
+     * que arreglo lo del 09/10/2026 y que no puede volver.
      */
     if (off > (int64_t)off_max_hz) {
-        return freq_hz - off_min_hz;
+        return freq_hz + salto;               /* venia subiendo: sitio arriba */
     }
 
     /*
@@ -268,35 +301,40 @@ uint32_t nco_lo_aparcado(uint32_t freq_hz, uint32_t lo_actual_hz,
      * cuadratura eso le da igual-, y el giro grueso de demod_am.c ya la
      * admite con signo.
      *
-     * AHORA LO QUE SE EXIGE ES |distancia| entre min y max, no la
-     * distancia a secas. Lo que no cambia es el AGUJERO DEL MEDIO: por
-     * debajo de off_min de cualquiera de los dos lados, la señal se sienta
-     * encima de la fuga del oscilador y de la continua, y eso no se
-     * arregla con signos. Cruzar el centro sigue pidiendo un reaparcado,
-     * pero es UNO y pequeño -el oscilador se mueve dos veces off_min- en
-     * vez de uno grande cada vez que se llegaba al centro.
+     * AHORA LO QUE SE EXIGE ES |distancia| por debajo de max, y nada mas.
+     *
+     * *** EL AGUJERO DEL MEDIO SE QUITO EL 30/10/2026. *** Aqui ponia que
+     * por debajo de off_min la señal se sienta encima de la fuga del
+     * oscilador y que cruzar el centro seguia pidiendo un reaparcado. Lo
+     * primero dejo de ser cierto el 25/10/2026 -demod_am.c resta la
+     * continua de I y de Q antes de bajar en frecuencia- y lo segundo era
+     * justo el salto que el usuario pidio quitar. El razonamiento entero,
+     * y lo que SI se pierde al pasar por el centro, estan en la cabecera
+     * de esta funcion, en nco.h.
      *
      * HACIA DONDE SE REAPARCA, que es lo unico con miga: al salirse por
-     * arriba se deja en +min, con toda la ventana por delante hacia
-     * arriba; al salirse por abajo, en -min, con toda la ventana por
-     * delante hacia abajo. Y al caer DENTRO del agujero se sale por el
-     * lado contrario al que se venia, que es el sentido en el que se
-     * estaba yendo: llegando desde arriba (off >= 0) se sale a -min.
+     * arriba se deja en el extremo de ABAJO, con toda la ventana por
+     * delante hacia arriba; al salirse por abajo, al reves. Ya no hay
+     * tercera rama.
      *
-     * Y las dos salidas usan SUMA o una resta ya protegida por la guarda
-     * de arriba, asi que la cuenta de onda larga que arreglo lo de
-     * 09/10/2026 no puede volver: `freq + off_min` no se desborda nunca y
-     * `freq - off_min` solo corre con freq > off_min.
+     * Y las dos salidas usan SUMA o una resta protegida, asi que la cuenta
+     * de onda larga que arreglo lo de 09/10/2026 no puede volver.
      */
     if (off < -(int64_t)off_max_hz) {
-        return freq_hz + off_min_hz;          /* venia bajando: sitio abajo */
+        /* Venia bajando: sitio abajo. Y aqui si hay que mirar que la resta
+         * quepa; ver la guarda de onda larga del principio. */
+        return (freq_hz > salto) ? (freq_hz - salto) : (freq_hz - off_min_hz);
     }
-    if (off < (int64_t)off_min_hz && off > -(int64_t)off_min_hz) {
-        /* Dentro del agujero del medio: se sale por el lado hacia el que
-         * se iba. */
-        return (off >= 0) ? (freq_hz + off_min_hz)   /* bajando */
-                          : (freq_hz - off_min_hz);  /* subiendo */
-    }
+    /*
+     * Y EL AGUJERO DEL MEDIO YA NO ESTA. Aqui habia una tercera rama que
+     * reaparcaba en cuanto |off| bajaba de off_min, y es la que pegaba el
+     * salto de once kilohercios al cruzar el centro. Ver la cabecera de
+     * esta funcion en nco.h: lo que protegia -la fuga del oscilador
+     * sentandose encima de la emisora- lo resuelve desde el 25/10/2026 la
+     * resta de continua de demod_am.c, y lo que queda dentro de esos doce
+     * kilohercios -la emisora encima de su propia imagen- es de nacimiento
+     * y no se arregla moviendo el oscilador.
+     */
 
     return lo_actual_hz;                      /* cabe: no se toca nada */
 }

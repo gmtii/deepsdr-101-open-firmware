@@ -228,6 +228,23 @@ void spi_flash_block_read_modify_write(uint32_t any_addr_in_block,
  * added. Requires DEBUG_UART_ENABLED=1 to actually produce output
  * (see debug_uart.h) - safe to call either way, just a no-op when
  * that's 0. */
+/*
+ * ======================================================================
+ * REPARAR EL DIRECTORIO DESPUES DE UN APAGON - 30/10/2026.
+ * ======================================================================
+ *
+ * Se llama UNA VEZ al arrancar, antes de leer nada del disco. Mira si hay
+ * un respaldo del directorio raiz sin anular; si lo hay y el bloque de
+ * verdad no dice lo mismo, lo regraba.
+ *
+ * Devuelve 1 solo si ha tenido que reparar algo, que es lo que interesa
+ * saber: significa que el apagon anterior cayo en mitad de un guardado.
+ *
+ * El porque entero -y la imagen del disco del usuario que lo trajo- esta
+ * delante de respaldo_guarda() en spi_flash.c.
+ */
+uint8_t spi_flash_respaldo_repara(void);
+
 void spi_flash_probe_dump(void);
 
 /* Diagnostic bring-up probe #2 - dumps the first sector of the root

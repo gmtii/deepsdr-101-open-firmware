@@ -295,8 +295,8 @@ static void prueba_aparcado_lf(void)
                    f, lo, (long long)d);
             if (lo == 0U) {
                 printf("   <- IMPOSIBLE\n");
-            } else if (a < (int64_t)MIN) {
-                printf("   <- la fuga del oscilador se cuela\n");
+            } else if (a > (int64_t)(MAX - MIN)) {
+                printf("   <- aterriza pegado al borde de la ventana\n");
             } else {
                 printf("\n");
             }
@@ -308,19 +308,28 @@ static void prueba_aparcado_lf(void)
              * significa que el oscilador esta por encima de lo que se
              * escucha, y a un receptor en cuadratura eso le da igual. Lo
              * que SI importa, y es lo que se exige ahora, es el VALOR
-             * ABSOLUTO: la fuga del oscilador -que se auto-mezcla a cero-
-             * tiene que quedar fuera del filtro de canal por el lado que
-             * sea, y el paseo tiene que caber en la ventana.
+             * ABSOLUTO: el paseo tiene que caber en la ventana.
              *
              * El aserto viejo era la razon de que el NCO solo barriera
              * media pantalla: con el oscilador siempre debajo, la mitad
              * izquierda de lo que se ve no era alcanzable.
+             *
+             * *** Y EL SUELO SE CAYO EL 30/10/2026. *** Aqui tambien se
+             * exigia que la distancia no bajara de MIN, y eso dejo de ser
+             * verdad al quitar el agujero del centro: el dial PUEDE pasar
+             * por encima del oscilador, y debe, o el panorama pega un
+             * salto. Lo que se exige donde el reaparcado manda -o sea
+             * JUSTO DESPUES de uno- es que no aterrice pegado al borde,
+             * que es el fallo que costo lo del 09/10/2026.
              */
             comprueba(lo > 0U, "sale un oscilador que existe");
-            comprueba(a >= (int64_t)MIN,
-                      "la distancia, en valor absoluto, no baja del minimo");
             comprueba(a <= (int64_t)MAX,
                       "la distancia, en valor absoluto, no pasa del maximo");
+            /* Todas las llamadas de este bloque vienen con un oscilador
+             * 200 kHz por encima, o sea que TODAS reaparcan: el margen del
+             * borde se puede exigir sin condiciones. */
+            comprueba(a <= (int64_t)(MAX - MIN),
+                      "y al reaparcar deja el margen del borde");
         }
     }
     }
@@ -338,9 +347,8 @@ static void prueba_aparcado_lf(void)
  * saltando.
  *
  * A 192 kHz la pantalla son 192 kHz: 96 a cada lado del oscilador. Con el
- * tope en 90 kHz y el agujero del medio en 6, lo que se puede pedir es un
- * solo salto -el del centro, que no se puede evitar: ahi la señal se
- * sienta sobre la fuga del propio oscilador-.
+ * tope en 90 kHz y SIN agujero en el medio -quitado el 30/10/2026- lo que
+ * se puede pedir es CERO saltos de borde a borde de la ventana del NCO.
  * ---------------------------------------------------------------------- */
 static void prueba_barrido_pantalla(void)
 {
@@ -357,9 +365,9 @@ static void prueba_barrido_pantalla(void)
      * sobre una pregunta mal hecha.
      *
      * Lo que hay que medir es lo que el NCO PROMETE: de -MAX a +MAX sin
-     * mas salto que el del agujero del centro. Los seis kilohercios que
-     * quedan a cada borde de la pantalla son el precio de no sentar la
-     * señal encima del propio oscilador, y se dicen en vez de esconderlos.
+     * un solo salto. Los seis kilohercios que quedan a cada borde de la
+     * pantalla son el borde del filtro antialias del conversor -ver
+     * NCO_OFF_MAX_192K- y se dicen en vez de esconderlos.
      */
     const int32_t  MEDIA = 90000;    /* = MAX: la ventana del NCO */
     const uint32_t F0 = 7150000U;
@@ -392,8 +400,8 @@ static void prueba_barrido_pantalla(void)
 
     printf("    barrido de %+d a %+d kHz del centro, de 1 en 1\n",
            -MEDIA / 1000, MEDIA / 1000);
-    printf("    (la pantalla son +/-96; los 6 de cada borde son el agujero\n");
-    printf("     que hace falta para no sentar la señal sobre el oscilador)\n");
+    printf("    (la pantalla son +/-96; los 6 de cada borde son el filtro\n");
+    printf("     antialias del conversor, no una limitacion del NCO)\n");
     printf("    reaparcados: %u", saltos);
     if (saltos != 0U) {
         printf("   (el primero a %+d kHz del centro)", primero / 1000);
@@ -403,31 +411,26 @@ static void prueba_barrido_pantalla(void)
     (void)ultimo;
 
     /*
-     * LO QUE SE PUEDE PROMETER, Y NO MAS.
+     * ==================================================================
+     * LO QUE SE PROMETE DESDE EL 30/10/2026: NI UN SALTO. Con sus
+     * palabras: "quiero que recorra los 192 sin saltar en absolutamente
+     * nada".
+     * ==================================================================
      *
-     * DOS saltos en el barrido entero, y el primero EN EL CENTRO. El
-     * segundo es aritmetica: al cruzar el centro el oscilador se mueve
-     * once kilohercios, asi que el final del barrido -medido desde el
-     * centro de ANTES- se sale de la ventana por esos once. Tunando de
-     * verdad eso no es un salto extra: es el siguiente, que llega once
-     * kilohercios antes.
+     * Aqui se exigian DOS saltos como mucho y que el primero cayera en el
+     * centro, porque el centro estaba cerrado y cruzarlo obligaba a mover
+     * el oscilador once kilohercios. Quitado el agujero, el barrido entero
+     * de -MAX a +MAX no toca el hardware NI UNA VEZ, y eso es lo que se
+     * exige: cero.
      *
-     * Y LO QUE DE VERDAD IMPORTA ES `mejor`: cuantos kilohercios seguidos
-     * se recorren sin que la imagen se mueva. Son 84 -de MIN a MAX-, a
-     * cada lado del centro. Antes eran 34 Y SOLO POR LA DERECHA: con las
-     * distancias negativas prohibidas, la mitad izquierda de la pantalla
-     * no se alcanzaba nunca.
-     *
-     * Lo que NO se puede hacer es que los 192 kHz sean un solo tramo: la
-     * señal no puede sentarse encima del oscilador, y cruzar el centro
-     * obliga a moverlo. Un salto pequeño y en un sitio predecible es lo
-     * mejor que hay.
+     * Y `mejor` -cuantos kilohercios seguidos se recorren sin que la
+     * imagen se mueva- pasa de 84 a los 180 de la ventana entera. El
+     * barrido mide uno mas que los tramos porque cuenta los dos extremos.
      */
-    comprueba(saltos <= 2U, "dos saltos como mucho en la ventana entera");
-    comprueba(primero > -(int32_t)(MIN + 2000) && primero < (int32_t)(MIN + 2000),
-              "y el primero cae en el centro, no a mitad de camino");
-    comprueba(mejor >= 84U,
-              "se recorren 84 kHz seguidos sin mover el oscilador");
+    comprueba(saltos == 0U, "ni un solo reaparcado en la ventana entera");
+    comprueba(primero == 0, "y por tanto no hay un primer salto que situar");
+    comprueba(mejor >= (unsigned)(2 * MEDIA / 1000),
+              "se recorre la ventana entera sin mover el oscilador");
 }
 
 /* --- 4. la regla de aparcado del oscilador ----------------------------- */
@@ -460,10 +463,31 @@ static void prueba_aparcado(void)
               "justo en el borde de arriba: todavia no se mueve");
     comprueba(nco_lo_aparcado(lo0 + MAX + 1U, lo0, OFF, MIN, MAX) != lo0,
               "un hercio mas alla: reaparca");
+    /*
+     * ==================================================================
+     * Y EL CENTRO SE CRUZA SIN TOCAR EL OSCILADOR - 30/10/2026.
+     * ==================================================================
+     *
+     * Aqui se exigia lo contrario: "un hercio por debajo de la minima:
+     * reaparca". Ese reaparcado es el salto de once kilohercios que pega
+     * el panorama al pasar por el centro, y es justo lo que el usuario
+     * pidio quitar. Lo que lo justificaba -la fuga del oscilador cayendo
+     * encima de la emisora- lo resuelve desde el 25/10/2026 la resta de
+     * continua de demod_am.c. Ver la cabecera de nco_lo_aparcado().
+     *
+     * Asi que ahora se exige que NO se mueva, y se exige en los cuatro
+     * sitios que antes eran frontera: a la distancia minima, por debajo de
+     * ella, en el centro EXACTO y del otro lado. Si alguien repone el
+     * agujero, esto se pone rojo.
+     */
     comprueba(nco_lo_aparcado(lo0 + MIN, lo0, OFF, MIN, MAX) == lo0,
-              "justo en la distancia minima: todavia no se mueve");
-    comprueba(nco_lo_aparcado(lo0 + MIN - 1U, lo0, OFF, MIN, MAX) != lo0,
-              "un hercio por debajo de la minima: reaparca");
+              "justo en la distancia minima: no se mueve");
+    comprueba(nco_lo_aparcado(lo0 + MIN - 1U, lo0, OFF, MIN, MAX) == lo0,
+              "un hercio por debajo de la minima: TAMPOCO se mueve");
+    comprueba(nco_lo_aparcado(lo0, lo0, OFF, MIN, MAX) == lo0,
+              "con el dial EN el oscilador: no se mueve");
+    comprueba(nco_lo_aparcado(lo0 - MIN + 1U, lo0, OFF, MIN, MAX) == lo0,
+              "y un hercio al otro lado del centro: no se mueve");
 
     /*
      * LA PRUEBA QUE IMPORTA. Barrer 30 kHz en pasos de 100 Hz -300 clics del
@@ -502,10 +526,28 @@ static void prueba_aparcado(void)
     }
     printf("    2000 clics (200 kHz): se reprograma %d veces, o sea cada %.0f kHz\n",
            cambios, cambios ? 200.0 / cambios : 0.0);
-    printf("    (la ventana util es de %u kHz: de %u a %u kHz por encima del oscilador)\n",
-           (MAX - MIN) / 1000U, MIN / 1000U, MAX / 1000U);
-    comprueba(cambios >= 4 && cambios <= 7,
-              "en un barrido largo salta cada ~38 kHz, no en cada clic");
+    printf("    (la ventana util va de -%u a +%u kHz del oscilador, %u kHz\n",
+           MAX / 1000U, MAX / 1000U, 2U * MAX / 1000U);
+    printf("     seguidos; el reaparcado deja %u kHz por delante)\n",
+           (MAX + (MAX - MIN)) / 1000U);
+    /*
+     * EL NUMERO CAMBIO EL 30/10/2026, Y HACIA ARRIBA. Antes se exigia un
+     * salto cada ~38 kHz -de MIN a MAX- porque el centro estaba cerrado y
+     * subiendo solo se podia volver a entrar por +MIN. Abierto el centro,
+     * el reaparcado deja la sintonia en el extremo CONTRARIO y el
+     * recorrido entre saltos pasa a ser MAX + (MAX - MIN): 74 kHz con los
+     * topes de 96 kHz de muestreo, 174 kHz con los de 192.
+     *
+     * Se comprueba contra la cuenta y no contra un numero escrito a mano,
+     * que es lo que hace que esto siga valiendo si alguien toca los topes.
+     */
+    {
+        double tramo = (double)(MAX + (MAX - MIN)) / 1000.0;
+        double esperados = 200.0 / tramo;
+        comprueba(cambios >= (int)(esperados - 1.0) &&
+                  cambios <= (int)(esperados + 2.0),
+                  "en un barrido largo salta una vez por ventana entera");
+    }
 }
 
 int main(void)

@@ -237,8 +237,25 @@ uint8_t spi_flash_bus_rapido(void)
 }
 #endif
 
+/* Quien tiene cogido cada borrador comun. Ver borrador_coge(), mucho mas
+ * abajo; viven aqui arriba porque spi_flash_init() los suelta. */
+static uint8_t  s_borrador_cogido[2];
+
 void spi_flash_init(void)
 {
+    /*
+     * LOS BORRADORES, SUELTOS - 30/10/2026.
+     *
+     * En la radio esto es un adorno: un apagon pone .bss a cero y nadie
+     * los tiene cogidos al arrancar. Pero inicializar quiere decir "aqui
+     * no hay nadie dentro", y el banco del apagon (sim/apagon.c) corta la
+     * corriente en mitad de una escritura y vuelve a entrar por aqui: sin
+     * esto, el borrador se queda cogido para siempre y lo que falla
+     * despues no se parece en nada a su causa.
+     */
+    s_borrador_cogido[0] = 0U;
+    s_borrador_cogido[1] = 0U;
+
     rcu_periph_clock_enable(RCU_GPIOB);
 
     /* SCLK/MOSI/MISO: same mode/speed touch_init() already configures
@@ -841,7 +858,7 @@ void spi_flash_write_block_4k(uint32_t block_addr, const uint8_t *data4k)
 
 static uint8_t  s_sector[FLASH_SECTOR_SIZE];
 static uint8_t  s_fat[FAT_BYTES_MAX];
-static uint8_t  s_borrador_cogido[2];
+/* Declarados arriba, antes de spi_flash_init(), que los suelta. */
 static uint16_t s_borrador_choques;
 
 /* Devuelve 0 si el borrador ya estaba cogido: el que llama TIENE que
@@ -919,6 +936,21 @@ static void escribe_datos_fichero(uint32_t addr, const uint8_t *data, uint32_t l
     }
 }
 
+/* El respaldo del directorio raiz vive mas abajo, con el resto de lo que
+ * necesita la geometria del volumen. Aqui solo las tres que usa
+ * spi_flash_block_read_modify_write(); el porque entero esta delante de
+ * respaldo_guarda(). */
+static uint8_t respaldo_hace_falta(const uint8_t *bloque, uint32_t salta_off);
+static uint8_t respaldo_guarda(uint32_t destino, const uint8_t *contenido4k);
+static void    respaldo_anula(void);
+static uint8_t respaldo_es_raiz(uint32_t block_addr);
+
+/* Donde esta RESPALDO.BIN, en bytes del chip. 0 = no se sabe todavia o no
+ * hay. Viven aqui arriba porque spi_flash_geo_olvida() las borra y esa
+ * esta antes en el fichero que el resto del respaldo. */
+static uint32_t s_respaldo_addr;
+static uint8_t  s_respaldo_mirado;
+
 void spi_flash_block_read_modify_write(uint32_t any_addr_in_block,
                                         uint32_t modify_offset_in_block,
                                         const uint8_t *new_bytes,
@@ -953,7 +985,37 @@ void spi_flash_block_read_modify_write(uint32_t any_addr_in_block,
     for (i = 0U; i < new_len; i++) {
         s_sector[modify_offset_in_block + i] = new_bytes[i];
     }
-    spi_flash_write_block_4k(block_addr, s_sector);
+    /*
+     * ==================================================================
+     * Y SI ESTO ES EL DIRECTORIO RAIZ, CON RED - 30/10/2026.
+     * ==================================================================
+     *
+     * La linea de abajo BORRA 4 kB y los vuelve a grabar. Entre una cosa
+     * y la otra hay unas decenas de milisegundos en los que el bloque no
+     * existe, y en esos 4 kB caben 128 entradas de directorio que son de
+     * otros ficheros. Un usuario apago la radio justo ahi y perdio 124
+     * nombres; la imagen de su disco esta contada entera delante de
+     * respaldo_guarda().
+     *
+     * Asi que antes de borrar se guarda lo que va a quedar, y despues se
+     * anula la copia. Si la corriente se va en medio, el arranque
+     * siguiente lo repara -ver spi_flash_respaldo_repara()-.
+     *
+     * Solo para el directorio, y solo si hay entradas ajenas que perder:
+     * en un disco recien formateado esto no cuesta nada. Y si no hay
+     * donde guardar la copia, se sigue igual que antes: sin red, pero sin
+     * romper nada.
+     */
+    {
+        uint8_t con_red = 0U;
+
+        if (respaldo_es_raiz(block_addr) &&
+            respaldo_hace_falta(s_sector, modify_offset_in_block)) {
+            con_red = respaldo_guarda(block_addr, s_sector);
+        }
+        spi_flash_write_block_4k(block_addr, s_sector);
+        if (con_red) { respaldo_anula(); }
+    }
     borrador_suelta(BORRADOR_SECTOR);
 }
 
@@ -1711,6 +1773,11 @@ void spi_flash_geo_olvida(void)
     s_geo.mirado = 0U;
     s_geo.vale   = 0U;
     s_geo.lee    = 0U;
+    /* Y donde esta RESPALDO.BIN, que se calculo de ESTA geometria: con el
+     * volumen cambiado por USB, su direccion ya no tiene por que valer.
+     * Ver respaldo_donde(). */
+    s_respaldo_addr   = 0UL;
+    s_respaldo_mirado = 0U;
 }
 
 uint8_t spi_flash_geometria_lectura(uint32_t *fat1_lba, uint32_t *raiz_lba,
@@ -2245,6 +2312,72 @@ static void sello_pega(uint8_t *e)
  * CUATRO VECES mas clusters de los que el fichero ocupa, encadenandolos
  * encima de los del vecino. Cada sitio lleva ahora CLUSTER_BYTES.
  */
+/*
+ * ======================================================================
+ * ¿HACE FALTA TOCAR LA ENTRADA? - 30/10/2026, DESPUES DE PERDER 124
+ * NOMBRES DE UN USUARIO.
+ * ======================================================================
+ *
+ * LO QUE PASO, con la imagen del disco delante. El directorio raiz de ese
+ * volumen son 256 entradas en DOS bloques de borrado de 4 kB. El bloque 0
+ * aparecio con 3.968 de sus 4.096 bytes a 0xFF -flash recien borrada y
+ * nunca regrabada- y el bloque 1 intacto. Las cuatro entradas que si
+ * habia en el bloque 0 eran POSTERIORES: el CONFIG.CSV que escribio la
+ * radio al arrancar sin ajustes y lo que puso Windows despues.
+ *
+ * O sea: se borro el bloque para actualizar UNA entrada, se apago la
+ * radio en esa ventana, y se fueron por delante las 124 entradas de los
+ * demas ficheros que vivian en el mismo bloque de borrado.
+ *
+ * Y LA VENTANA SE ABRIA EN CADA GUARDADO DE AJUSTES. El camino rapido de
+ * spi_flash_write_or_update_file() ya se ahorra la FAT -misma cadena,
+ * mismo cluster- y aun asi reescribia la entrada, porque sello_pega() le
+ * mete la hora y la hora cambia siempre. Un campo cosmetico costaba un
+ * borrado de 4 kB del directorio cada vez.
+ *
+ * LO QUE SE HACE AHORA: si la entrada que hay YA DICE lo mismo -mismo
+ * nombre, misma extension, mismo primer cluster y mismo tamaño- no se
+ * toca. Ni se borra el bloque ni se reprograma. El guardado de ajustes
+ * pasa de dos borrados a UNO, y el que se quita es justamente el que se
+ * lleva por delante los nombres de los demas.
+ *
+ * LO QUE SE PIERDE, Y SE DICE: la fecha y la hora de la entrada se quedan
+ * en las de la primera vez que se creo el fichero. Para CONFIG.CSV, que
+ * es quien pasa por aqui en cada guardado, eso es un adorno; lo otro era
+ * perder ficheros ajenos.
+ *
+ * Esto NO es toda la red. El resto de caminos -crear, borrar, y el
+ * tamaño de un fichero que crece a trozos- siguen teniendo que tocar el
+ * directorio, y para esos esta el respaldo: ver respaldo_guarda().
+ */
+static uint8_t entrada_ya_dice_lo_mismo(uint32_t dir_off,
+                                        const char name8[8], const char ext3[3],
+                                        uint32_t first_cluster, uint32_t len)
+{
+    uint8_t e[32];
+    uint32_t i;
+
+    if ((dir_off + 32U) > ROOT_DIR_BYTES) { return 0U; }
+    spi_flash_read(RAIZ_ABS + dir_off, e, 32U);
+
+    for (i = 0U; i < 8U; i++) {
+        if (e[i] != (uint8_t)name8[i]) { return 0U; }
+    }
+    for (i = 0U; i < 3U; i++) {
+        if (e[8U + i] != (uint8_t)ext3[i]) { return 0U; }
+    }
+    /* El atributo tambien: si alguien la marco de solo lectura o de
+     * sistema, escribirla otra vez como 0x20 SI seria un cambio. */
+    if (e[11] != 0x20U) { return 0U; }
+    if (e[26] != (uint8_t)(first_cluster & 0xFFU))          { return 0U; }
+    if (e[27] != (uint8_t)((first_cluster >> 8) & 0xFFU))   { return 0U; }
+    if (e[28] != (uint8_t)(len & 0xFFU))                    { return 0U; }
+    if (e[29] != (uint8_t)((len >> 8) & 0xFFU))             { return 0U; }
+    if (e[30] != (uint8_t)((len >> 16) & 0xFFU))            { return 0U; }
+    if (e[31] != (uint8_t)((len >> 24) & 0xFFU))            { return 0U; }
+    return 1U;
+}
+
 static int write_file_data_and_entry(uint32_t dir_off, uint8_t write_terminator, uint8_t write_fat_chain,
                                       const spi_flash_fat_scan_t *scan,
                                       const char name8[8], const char ext3[3],
@@ -2289,6 +2422,20 @@ static int write_file_data_and_entry(uint32_t dir_off, uint8_t write_terminator,
     entry_buf[30] = (uint8_t)((len >> 16) & 0xFFU);
     entry_buf[31] = (uint8_t)((len >> 24) & 0xFFU);
     /* entry_buf[32..63] (if included) stays all-zero: the fresh end-of-directory terminator. */
+
+    /*
+     * Y SOLO SI HACE FALTA. Ver entrada_ya_dice_lo_mismo(): un guardado
+     * que no cambia ni el cluster ni el tamaño no tiene por que borrar
+     * 4 kB del directorio, y ese borrado es el que costo 124 nombres.
+     *
+     * El terminador NO entra en el trato: si hay que escribirlo es que la
+     * entrada es nueva, y entonces nada de lo de arriba cuadra.
+     */
+    if (!write_terminator &&
+        entrada_ya_dice_lo_mismo(dir_off, name8, ext3, first_cluster, len)) {
+        debug_print("write_file_data_and_entry: la entrada ya dice lo mismo - no se toca el directorio\n");
+        return 1;
+    }
 
     escribe_datos_fichero((ROOT_DIR_LBA * ROOT_DIR_SECTOR_BYTES) + dir_off,
                           entry_buf, entry_write_len);
@@ -3004,6 +3151,27 @@ spi_flash_async_status_t spi_flash_async_save_poll(void)
             uint32_t off_in_block = entrada_abs - dir_block_addr;
             uint8_t *e;
             uint32_t i;
+
+            /*
+             * Y LO PRIMERO: ¿HACE FALTA TOCARLA? - 30/10/2026.
+             *
+             * El mismo trato que el camino bloqueante, y por el mismo
+             * motivo: este es el guardado que de verdad corre en cada
+             * cambio de ajustes, y borrar 4 kB del directorio para
+             * reescribir una entrada identica es lo que le costo 124
+             * nombres a un usuario. Ver entrada_ya_dice_lo_mismo().
+             *
+             * Aqui se nota el doble, ademas: este camino existe para no
+             * congelar el bucle principal, y lo que se quita es un
+             * borrado entero de los dos que hacia.
+             */
+            if (entrada_ya_dice_lo_mismo(s_async_dir_off, s_async_name8,
+                                         s_async_ext3, s_async_cluster,
+                                         s_async_data_len)) {
+                debug_print("spi_flash_async_save: la entrada ya dice lo mismo - done sin tocar el directorio\n");
+                s_async_phase = (uint8_t)ASAVE_IDLE;
+                return SPI_FLASH_ASYNC_DONE;
+            }
 
             if ((off_in_block + 32U) > (uint32_t)FLASH_SECTOR_SIZE) {
                 debug_print("spi_flash_async_save: la entrada de directorio no cabe en su bloque - se abandona el camino asincrono, hay que guardar por el bloqueante\n");
@@ -5230,6 +5398,342 @@ static uint8_t recorta_interno(const char name8[8], const char ext3[3], uint32_t
     return 1U;
 }
 #undef fat
+
+/*
+ * ======================================================================
+ * EL RESPALDO DEL DIRECTORIO - 30/10/2026, pedido por el usuario:
+ * "que me da igual rescatar lo de dentro, lo que quiero es que no vuelva
+ * a ocurrir".
+ * ======================================================================
+ *
+ * QUE PASO. Un usuario apago la radio mientras guardaba y perdio 124
+ * nombres de fichero. La imagen del disco lo dijo sin margen de duda: el
+ * primer bloque de 4 kB del directorio raiz, a 0xFF -flash recien borrada
+ * y nunca regrabada-; el segundo, intacto. Para cambiar UNA entrada hay
+ * que borrar los 4 kB en los que vive, y en esos 4 kB caben 128 entradas
+ * de OTROS ficheros.
+ *
+ * LA MITAD DEL ARREGLO esta unas funciones mas arriba: el guardado de
+ * ajustes ya no toca el directorio cuando la entrada no cambia (ver
+ * entrada_ya_dice_lo_mismo). Eso quita la ventana del camino que corre
+ * cada dos por tres, que es el que le toco.
+ *
+ * ESTA ES LA OTRA MITAD, para los caminos que SI tienen que tocarlo:
+ * crear un fichero, borrarlo, y el tamaño de uno que crece a trozos -una
+ * carta de fax actualiza el suyo cada dos segundos y medio-. Ahi el
+ * borrado es inevitable, asi que lo que se hace es poder DESHACERLO:
+ *
+ *   1. antes de borrar el bloque del directorio, se guarda una copia de
+ *      lo que va a quedar en el, en un fichero del propio disco;
+ *   2. se borra y se graba el bloque de verdad;
+ *   3. se anula la copia.
+ *
+ * Si la corriente se va en el paso 2, al arrancar la copia sigue viva y
+ * el bloque no cuadra con ella: se regraba y no se ha perdido nada. Si se
+ * va en el 1, el directorio no se ha tocado todavia. Si se va en el 3, la
+ * copia dice exactamente lo que ya hay y no se hace nada.
+ *
+ * POR QUE NO LLEVA CRC. No hace falta, y uno de mas seria otra verdad que
+ * mantener. La cabecera vive en un bloque DISTINTO del de los datos y se
+ * graba DESPUES de que los datos esten enteros: una copia a medias no
+ * llega a tener cabecera, y sin cabecera no existe. La suma que si lleva
+ * es para cazar un disco movido por el PC, no un corte de corriente.
+ *
+ * DONDE VIVE. En un fichero normal del volumen, RESPALDO.BIN, de dos
+ * bloques: el primero para la copia y el segundo para la cabecera. Se
+ * crea solo la primera vez que hace falta. Si no se puede crear -disco
+ * lleno, volumen que este driver no sabe escribir- el resto sigue
+ * funcionando exactamente como antes: sin red, pero sin romper nada.
+ *
+ * Y SU PROPIA ENTRADA NO SE TOCA NUNCA: tamaño fijo y cluster fijo, o sea
+ * que entrada_ya_dice_lo_mismo() la deja en paz. Si no fuera asi, escribir
+ * el respaldo pediria respaldo, y eso no acaba.
+ */
+#define RESPALDO_N8      "RESPALDO"
+#define RESPALDO_E3      "BIN"
+#define RESPALDO_BYTES   (2U * FLASH_SECTOR_SIZE)
+#define RESPALDO_CAB_N   17U
+
+static const uint8_t k_respaldo_magia[8] = {
+    'R', 'S', 'P', 'L', 'D', 'O', '1', 0x00U
+};
+
+/* s_respaldo_addr y s_respaldo_mirado viven mucho mas arriba, junto a las
+ * declaraciones adelantadas: las borra spi_flash_geo_olvida(), que esta
+ * antes en el fichero. Se olvidan con la geometria porque la direccion
+ * sale de ella y el volumen puede cambiar por USB. */
+
+/* ¿Es este bloque parte del directorio raiz? Lo pregunta
+ * spi_flash_block_read_modify_write(), que esta antes de que existan las
+ * macros de la geometria. */
+static uint8_t respaldo_es_raiz(uint32_t block_addr)
+{
+    if (!geo_lee()) { return 0U; }
+    if (block_addr < RAIZ_ABS) { return 0U; }
+    return (uint8_t)(block_addr < (RAIZ_ABS + ROOT_DIR_BYTES));
+}
+
+static uint32_t respaldo_suma(const uint8_t *d, uint32_t n)
+{
+    uint32_t s = 0x1234ABCDUL;
+    uint32_t i;
+
+    for (i = 0U; i < n; i++) {
+        s = (s << 1) | (s >> 31);     /* una vuelta, para que el orden cuente */
+        s += (uint32_t)d[i];
+    }
+    return s;
+}
+
+/*
+ * SOLO BUSCA. NO CREA, Y ESTO NO ES UN DETALLE - 30/10/2026, lo cazo
+ * sim/fatanade.c la misma tarde.
+ *
+ * La primera version creaba el fichero aqui mismo, "la primera vez que
+ * haga falta". Y hacer falta, hace falta DENTRO de
+ * spi_flash_block_read_modify_write(), con el borrador comun COGIDO. Crear
+ * un fichero vuelve a entrar por ahi, el borrador ya esta pillado,
+ * borrador_coge() dice que no... y esa funcion se vuelve SIN ESCRIBIR, en
+ * silencio. Resultado: el directorio no se actualiza y el banco de la
+ * carta de fax sale con "se ha estropeado WFAX001 BMP".
+ *
+ * O sea que el remedio se estaba llevando por delante justo lo que venia a
+ * proteger. Crear el fichero es cosa del arranque, donde no hay nada
+ * cogido: ver spi_flash_respaldo_repara().
+ */
+static uint32_t respaldo_donde(void)
+{
+    uint32_t dir_off = 0UL, viejo = 0UL;
+    uint16_t primero = 0U;
+
+    if (s_respaldo_addr != 0UL) { return s_respaldo_addr; }
+    if (s_respaldo_mirado)      { return 0UL; }
+    s_respaldo_mirado = 1U;
+
+    /* dir_find_entry() solo LEE: no coge ningun borrador, asi que se puede
+     * llamar desde dentro de una escritura. */
+    if (dir_find_entry(RESPALDO_N8, RESPALDO_E3, &dir_off, &primero, &viejo)) {
+        if ((viejo == RESPALDO_BYTES) &&
+            (primero >= 2U) && (primero < (2U + DATA_CLUSTER_COUNT))) {
+            s_respaldo_addr = SECTOR_DE_CLUSTER(primero) * ROOT_DIR_SECTOR_BYTES;
+            return s_respaldo_addr;
+        }
+        /* Existe pero no es el nuestro -otro tamaño, otro sitio-. No se
+         * toca: borrarlo seria tocar el directorio, que es justo lo que
+         * esto intenta proteger. Sin red. */
+        debug_print("respaldo: RESPALDO.BIN existe pero no cuadra - sin red\n");
+    }
+    return 0UL;
+}
+
+/*
+ * Y crearlo, que es cosa del arranque y de nadie mas. Ver respaldo_donde().
+ * Sin el fichero no hay red, y el resto del driver sigue exactamente como
+ * estaba antes de que esto existiera.
+ */
+static void respaldo_crea_si_falta(void)
+{
+    spi_anade_r_t porque;
+    uint32_t addr = 0UL;
+
+    if (respaldo_donde() != 0UL) { return; }
+    if (s_respaldo_addr != 0UL)  { return; }
+
+    if (!spi_flash_reserva(RESPALDO_N8, RESPALDO_E3, RESPALDO_BYTES,
+                           &addr, &porque)) {
+        debug_print("respaldo: no se ha podido reservar RESPALDO.BIN - sin red\n");
+        return;
+    }
+    s_respaldo_addr   = addr;
+    s_respaldo_mirado = 1U;
+    debug_print_hex32("respaldo: RESPALDO.BIN creado en", addr);
+}
+
+/* ¿Hay algo que perder en este bloque? Entradas vivas que NO son la que
+ * se va a tocar. Si no hay ninguna, el borrado no se lleva nada de nadie
+ * y no hace falta pagar el respaldo. */
+static uint8_t respaldo_hace_falta(const uint8_t *bloque, uint32_t salta_off)
+{
+    uint32_t i;
+    uint32_t vivas = 0U;
+
+    for (i = 0U; i + 32U <= (uint32_t)FLASH_SECTOR_SIZE; i += 32U) {
+        uint8_t b0 = bloque[i];
+
+        if (i == (salta_off & ~31UL)) { continue; }
+        if (b0 == 0x00U || b0 == 0xE5U || b0 == 0xFFU) { continue; }
+        vivas++;
+    }
+    return (uint8_t)(vivas != 0U);
+}
+
+/* Guarda la copia de lo que va a quedar en `destino`. Devuelve 1 si la
+ * red esta puesta. */
+static uint8_t respaldo_guarda(uint32_t destino, const uint8_t *contenido4k)
+{
+    uint32_t base = respaldo_donde();
+    uint8_t  cab[RESPALDO_CAB_N];
+    uint32_t suma;
+    uint32_t i;
+
+    if (base == 0UL) { return 0U; }
+
+    /* Los dos bloques, en blanco. La cabecera PRIMERO: asi, si la
+     * corriente se va entre medias, lo que queda es una copia sin
+     * cabecera, o sea ninguna. */
+    spi_flash_sector_erase_4k(base + FLASH_SECTOR_SIZE);
+    spi_flash_write_block_4k(base, contenido4k);
+
+    suma = respaldo_suma(contenido4k, FLASH_SECTOR_SIZE);
+    for (i = 0U; i < 8U; i++) { cab[i] = k_respaldo_magia[i]; }
+    cab[8]  = (uint8_t)(destino & 0xFFU);
+    cab[9]  = (uint8_t)((destino >> 8) & 0xFFU);
+    cab[10] = (uint8_t)((destino >> 16) & 0xFFU);
+    cab[11] = (uint8_t)((destino >> 24) & 0xFFU);
+    cab[12] = (uint8_t)(suma & 0xFFU);
+    cab[13] = (uint8_t)((suma >> 8) & 0xFFU);
+    cab[14] = (uint8_t)((suma >> 16) & 0xFFU);
+    cab[15] = (uint8_t)((suma >> 24) & 0xFFU);
+    cab[16] = 0xFFU;                  /* viva; se apaga a 0x00 al acabar */
+    spi_flash_page_program(base + FLASH_SECTOR_SIZE, cab, RESPALDO_CAB_N);
+    return 1U;
+}
+
+/*
+ * Anula la copia. UN BYTE, y sin borrar nada: una flash NOR puede pasar
+ * bits de 1 a 0 sin borrado, y 0xFF -> 0x00 solo apaga bits. Por eso esto
+ * no abre otra ventana: no hay nada que interrumpir.
+ */
+static void respaldo_anula(void)
+{
+    uint8_t cero = 0x00U;
+
+    if (s_respaldo_addr == 0UL) { return; }
+    spi_flash_page_program(s_respaldo_addr + FLASH_SECTOR_SIZE + 16U, &cero, 1U);
+}
+
+uint8_t spi_flash_respaldo_repara(void)
+{
+    uint32_t base;
+    uint8_t  cab[RESPALDO_CAB_N];
+    uint32_t destino, suma, i;
+
+    if (!geo_lee()) { return 0U; }
+    base = respaldo_donde();
+    if (base == 0UL) {
+        /*
+         * ==============================================================
+         * Y SI NO APARECE EN EL DIRECTORIO, SE BUSCA A MANO.
+         * 30/10/2026, y esto lo cazo el propio banco del apagon.
+         * ==============================================================
+         *
+         * LA PESCADILLA. Donde esta la copia se averigua leyendo la
+         * entrada de RESPALDO.BIN... que vive en el mismo bloque de 4 kB
+         * que se acaba de borrar. O sea que justo en el caso que esto
+         * existe para arreglar, la copia no se puede encontrar.
+         *
+         * El banco lo dijo con todas las letras: copia valida -magia,
+         * destino y suma cuadrando- y la reparacion sin hacerse, porque
+         * dir_find_entry() no encontraba el fichero en un directorio en
+         * blanco.
+         *
+         * Asi que si el directorio no la da, se barre la zona de datos
+         * bloque a bloque buscando la magia. Son ocho bytes por bloque de
+         * 4 kB -unos 1.800 bloques en este volumen- y solo corre cuando ha
+         * habido un apagon de los malos; en un arranque normal la entrada
+         * esta y esto no se toca.
+         */
+        uint32_t b;
+
+        for (b = DATA_START_SECTOR * ROOT_DIR_SECTOR_BYTES;
+             (b + 2U * FLASH_SECTOR_SIZE) <= (geo()->sectores * ROOT_DIR_SECTOR_BYTES);
+             b += FLASH_SECTOR_SIZE) {
+            uint8_t m[8];
+            uint32_t j;
+            uint8_t  vale = 1U;
+
+            spi_flash_read(b + FLASH_SECTOR_SIZE, m, sizeof m);
+            for (j = 0U; j < sizeof m; j++) {
+                if (m[j] != k_respaldo_magia[j]) { vale = 0U; break; }
+            }
+            if (vale) { base = b; break; }
+        }
+        if (base == 0UL) {
+            /* No hay copia en ningun sitio: o nunca la hubo, o el fichero
+             * no existe todavia. Se crea AQUI, en el arranque, que es el
+             * unico sitio donde no hay nada cogido. Ver respaldo_donde(). */
+            respaldo_crea_si_falta();
+            return 0U;
+        }
+        debug_print_hex32("respaldo: la copia no estaba en el directorio, "
+                          "barrida y encontrada en", base);
+        s_respaldo_addr = base;
+    }
+
+    spi_flash_read(base + FLASH_SECTOR_SIZE, cab, RESPALDO_CAB_N);
+    for (i = 0U; i < 8U; i++) {
+        if (cab[i] != k_respaldo_magia[i]) { return 0U; }
+    }
+    if (cab[16] != 0xFFU) { return 0U; }      /* ya anulada: nada que hacer */
+
+    destino = (uint32_t)cab[8] | ((uint32_t)cab[9] << 8)
+              | ((uint32_t)cab[10] << 16) | ((uint32_t)cab[11] << 24);
+    suma    = (uint32_t)cab[12] | ((uint32_t)cab[13] << 8)
+              | ((uint32_t)cab[14] << 16) | ((uint32_t)cab[15] << 24);
+
+    /*
+     * Y QUE EL DESTINO SEA DEL DIRECTORIO RAIZ. La cabecera la escribe
+     * este driver, pero el disco pasa por un PC: una copia de otro volumen
+     * no puede acabar grabada sobre un sitio cualquiera del chip.
+     */
+    if (destino < RAIZ_ABS) { return 0U; }
+    if (destino >= (RAIZ_ABS + ROOT_DIR_BYTES)) { return 0U; }
+    if ((destino & (uint32_t)(FLASH_SECTOR_SIZE - 1U)) != 0U) { return 0U; }
+
+    if (!borrador_coge(BORRADOR_SECTOR)) { return 0U; }
+    spi_flash_read(base, s_sector, FLASH_SECTOR_SIZE);
+    if (respaldo_suma(s_sector, FLASH_SECTOR_SIZE) != suma) {
+        /* Copia a medias o disco movido: no vale, y no se toca nada. */
+        borrador_suelta(BORRADOR_SECTOR);
+        respaldo_anula();
+        return 0U;
+    }
+
+    /*
+     * ¿HACE FALTA? Solo si lo que hay no es lo que tendria que haber. Se
+     * compara de 64 en 64 bytes contra la copia y se sale en cuanto algo
+     * no cuadra: con el bloque borrado a 0xFF eso pasa en la primera
+     * vuelta, que es el caso que de verdad importa.
+     *
+     * Y comparar es mas fuerte que mirar si esta en blanco: un corte EN
+     * MITAD de la grabacion deja el bloque ni borrado ni bueno, y asi
+     * tambien se repara.
+     */
+    {
+        uint8_t  trozo[64];
+        uint32_t off;
+        uint8_t  igual = 1U;
+
+        for (off = 0U; off < (uint32_t)FLASH_SECTOR_SIZE; off += sizeof trozo) {
+            spi_flash_read(destino + off, trozo, sizeof trozo);
+            for (i = 0U; i < sizeof trozo; i++) {
+                if (trozo[i] != s_sector[off + i]) { igual = 0U; break; }
+            }
+            if (!igual) { break; }
+        }
+        if (igual) {
+            borrador_suelta(BORRADOR_SECTOR);
+            respaldo_anula();
+            return 0U;               /* el guardado si termino */
+        }
+    }
+
+    debug_print_hex32("respaldo: el directorio no cuadra - se repara el bloque", destino);
+    spi_flash_write_block_4k(destino, s_sector);
+    borrador_suelta(BORRADOR_SECTOR);
+    respaldo_anula();
+    return 1U;
+}
 
 /* =======================================================================
  * EL FICHERO QUE CRECE A TRAMOS - 20/10/2026

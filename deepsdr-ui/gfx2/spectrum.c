@@ -900,11 +900,24 @@ static uint8_t  s_col_grid[SPEC_MAX_W] TCMRAM_BSS;  /* 1 = vertical gridline on 
  * la pila y donde cada byte cuenta (ver tools/pila.py). */
 static uint16_t s_prev_w = 0;            /* detect geometry change      */
 
-/* See spectrum_set_line_smooth()'s comment in spectrum.h. Defaults to
- * 0 (disabled, original bin-sharp look) - main.c's repurposed NB tile
- * sets its own starting value on the first menu draw, this is just
- * the safe fallback if spectrum_draw() ever runs before that. */
-static uint8_t s_line_smooth_passes = 3U;
+/*
+ * EL VALOR POR DEFECTO DEL CONTORNO, Y VIVE AQUI SOLO. Ver
+ * spectrum_set_line_smooth() en spectrum.h y el comentario de
+ * s_spec_smooth_passes en main.c: alli hubo dos defectos para el mismo
+ * ajuste -uno a 0 y otro a 3- y la pantalla de Ajustes decia uno mientras
+ * el espectro dibujaba el otro. Desde el 23/09/2026 main.c arranca
+ * leyendo el getter, asi que este numero es EL numero.
+ *
+ * *** UNA PASADA - 30/10/2026, pedido por el usuario. *** Eran tres, y
+ * tres pasadas seguidas del mismo suavizado redondean los picos
+ * estrechos: una portadora de un solo bin sale mas baja y mas ancha de lo
+ * que es. Con una se quita el dentado y la traza sigue midiendo.
+ *
+ * Y aqui ponia "Defaults to 0 (disabled, original bin-sharp look)" con un
+ * 3 debajo. Corregido de paso: el comentario llevaba mintiendo desde que
+ * alguien subio el numero y no lo leyo.
+ */
+static uint8_t s_line_smooth_passes = 1U;
 
 void spectrum_set_line_smooth(uint8_t passes)
 {
@@ -1861,78 +1874,120 @@ void spectrum_draw(const float *db, uint32_t n_bins,
 
         for (row = 0; row < h; row = (uint16_t)(row + nb)) {
             uint16_t nf = (uint16_t)(h - row);
-            uint16_t c0 = 0U, c1 = (uint16_t)(w - 1U);
 
             if (nf > nb) { nf = nb; }
 
             s_bandas++;
-            if (s_parcial_hay) {
-                uint16_t t;
+            /*
+             * ==========================================================
+             * LAS RACHAS, NO EL TRAMO ENTERO - 30/10/2026, del usuario:
+             * "no puede ser que en el menu se escuche mejor y sin
+             * interferencias", y van tres veces que lo dice.
+             * ==========================================================
+             *
+             * LO QUE HABIA. De cada banda se buscaba el PRIMER segmento
+             * que pinta algo y el ULTIMO, y se mandaba todo lo que hay
+             * entre los dos de una sola vez. Con una traza de ruido -que
+             * se mueve por todas partes- el primero esta pegado al borde
+             * izquierdo y el ultimo al derecho, asi que se mandaba la
+             * banda ENTERA aunque entre medias no hubiera nada que
+             * repintar.
+             *
+             * CUANTO COSTABA ESO, medido por sim/pixeles.c sobre este
+             * mismo fichero: 124.939 pixeles por cuadro de los 157.248
+             * que tiene el panel, o sea el 79,5 %. A 45 cuadros por
+             * segundo, 5,6 Mpixel/s por el bus del panel.
+             *
+             * POR QUE IMPORTA Y NO ES UNA OPTIMIZACION CUALQUIERA. Ese
+             * bus es lo que mete el siseo en el audio. Medido sobre el
+             * audio del usuario, con el espectro en pantalla contra el
+             * menu abierto: hasta 10 dB mas de ruido, latiendo a 374,8 Hz
+             * -que es 96.000/256, el ritmo del bloque de audio- y a 42-44
+             * Hz, el del cuadro. Con el menu abierto esas rayas no
+             * existen. Y el acoplo es ELECTRICO: sube con la ganancia de
+             * entrada -o sea que entra antes del PGA- y no baja con el
+             * brillo, asi que tampoco es la retroiluminacion. La unica
+             * palanca que le queda al firmware es empujar menos pixeles.
+             *
+             * LO QUE SE HACE AHORA: mandar cada RACHA de segmentos que
+             * pintan por separado. En las bandas de arriba -donde solo
+             * asoman unas puntas- eso son dos o tres trozos estrechos en
+             * vez del ancho entero; en las de abajo, donde la traza ocupa
+             * todo, sale una sola racha y es lo mismo que antes.
+             *
+             * EL HUECO MINIMO, QUE NO ES UN ADORNO: abrir una ventana en
+             * el panel cuesta su puñado de bytes de orden por el bus, asi
+             * que partir en dos por un hueco de un segmento es pagar mas
+             * de lo que se ahorra. Dos segmentos seguidos sin pintar -32
+             * columnas, que a 16 filas son 512 pixeles- es de sobra para
+             * que compense. Por debajo de eso, se sigue de largo.
+             *
+             * Y QUE NO CAMBIE NI UN PIXEL lo vigila sim/espectro_oro.c,
+             * que compara contra una imagen patron y salta si se mueve
+             * uno solo.
+             */
+            {
                 uint16_t fin = (uint16_t)(row + nf);   /* primera fila de fuera */
-                uint16_t pri = s_n_tramos, ult = 0U;
+                uint16_t t = 0U;
+                uint8_t  nada = 1U;
 
-                for (t = 0; t < s_n_tramos; t++) {
-                    if (s_tramo_techo[t] < fin) {
-                        if (pri == s_n_tramos) { pri = t; }
-                        ult = t;
+                /* Sin parcial, TODOS los segmentos cuentan como que pintan:
+                 * asi sale una sola racha de borde a borde y este bucle
+                 * hace exactamente lo de siempre, sin una rama aparte. */
+#define PINTA(k)  ((!s_parcial_hay) || (s_tramo_techo[k] < fin))
+                while (t < s_n_tramos) {
+                    uint16_t ini_t, hueco, c0r, c1r;
+
+                    if (!PINTA(t)) { t++; continue; }
+                    ini_t = t;
+                    for (;;) {
+                        while (t < s_n_tramos && PINTA(t)) { t++; }
+                        hueco = t;
+                        while (hueco < s_n_tramos && !PINTA(hueco)) { hueco++; }
+                        if ((hueco - t) == 1U && hueco < s_n_tramos) {
+                            t = hueco;     /* un solo segmento de hueco: se sigue */
+                            continue;
+                        }
+                        break;
                     }
+                    c0r = (uint16_t)(ini_t * SPEC_TRAMO);
+                    c1r = (uint16_t)(t * SPEC_TRAMO - 1U);
+                    if (c1r > (uint16_t)(w - 1U)) { c1r = (uint16_t)(w - 1U); }
+
+                    nada = 0U;
+                    compon(buf[cual], (uint32_t)(c1r - c0r + 1U), row, nf,
+                           c0r, c1r);
+                    /* Y lo que vaya encima, en ESTE buffer y antes de
+                     * volcarlo. */
+                    encima(buf[cual], (int16_t)(x + c0r), (int16_t)(y + row),
+                           (int16_t)(c1r - c0r + 1U), (int16_t)nf);
+
+                    /* Un solo volcado por trozo, y sin esperarlo: se espera
+                     * al ANTERIOR justo antes de abrir la ventana del
+                     * siguiente, que es lo ultimo posible. */
+                    if (vuela) { (void)gfx_blit_espera(); vuela = 0U; }
+                    vuela = gfx_blit_arranca((uint16_t)(x + c0r),
+                                             (uint16_t)(y + row),
+                                             (uint16_t)(c1r - c0r + 1U),
+                                             nf, buf[cual]);
+                    cual = (uint8_t)(cual ^ 1U);
+                    /*
+                     * Y EL TACTIL, ENTRE TROZO Y TROZO - 19/10/2026.
+                     *
+                     * Va DESPUES de arrancar el volcado y no antes: asi la
+                     * mirada al tactil cae mientras el DMA esta empujando
+                     * por el bus, que es tiempo en el que la CPU no tiene
+                     * nada que hacer. Sale gratis.
+                     */
+                    gfx2_pump();
                 }
-                /*
-                 * LA FRANJA DEL GANCHO YA NO ES INTOCABLE - 19/10/2026.
-                 *
-                 * Aqui habia un "no se salta nunca y va de ancho completo"
-                 * por lo que cuenta spectrum.h en "se mueven con retraso":
-                 * los carteles se repintaban tarde porque estas bandas se
-                 * saltaban casi siempre. Costaba el 16 % del espectro en
-                 * cada cuadro, y medido en antena con la lista llena eran
-                 * NUEVE milisegundos de los 38 de la traza.
-                 *
-                 * Ya no hace falta: quien pone los carteles invalida el
-                 * cuadro entero cada vez que toca la lista o la posicion
-                 * (ver bd_rotulos_refresca() en main.c), que es lo unico
-                 * que puede moverlos. Si no ha cambiado nada, estas bandas
-                 * son como las demas y se saltan igual.
-                 */
-                if (pri == s_n_tramos) {
+#undef PINTA
+                if (nada) {
                     /* Ningun tramo pinta nada en estas filas: la banda
                      * entera es la misma plantilla que el cuadro anterior. */
                     s_saltadas++;
-                    continue;
-                } else {
-                    c0 = (uint16_t)(pri * SPEC_TRAMO);
-                    c1 = (uint16_t)((ult + 1U) * SPEC_TRAMO - 1U);
-                    if (c1 > (uint16_t)(w - 1U)) { c1 = (uint16_t)(w - 1U); }
                 }
             }
-
-            compon(buf[cual], (uint32_t)(c1 - c0 + 1U), row, nf, c0, c1);
-            /* Y lo que vaya encima, en ESTE buffer y antes de volcarlo. */
-            encima(buf[cual], (int16_t)(x + c0), (int16_t)(y + row),
-                   (int16_t)(c1 - c0 + 1U), (int16_t)nf);
-
-            /* 3. un solo volcado por banda, y sin esperarlo: se espera al
-             * ANTERIOR justo antes de abrir la ventana del siguiente, que es
-             * lo ultimo posible. Entre medias ha cabido el montaje entero de
-             * esta banda. */
-            if (vuela) { (void)gfx_blit_espera(); vuela = 0U; }
-            vuela = gfx_blit_arranca((uint16_t)(x + c0), (uint16_t)(y + row),
-                                     (uint16_t)(c1 - c0 + 1U), nf, buf[cual]);
-            cual = (uint8_t)(cual ^ 1U);
-            /*
-             * Y EL TACTIL, ENTRE BANDA Y BANDA - 19/10/2026.
-             *
-             * Este bucle se lleva de siete a once milisegundos de cada
-             * fotograma. Hasta hoy, durante todo ese rato el tactil no se
-             * miraba: gfx2_render() tiene su gancho para esto desde hace
-             * meses (ver gfx2_set_pump()), pero el espectro se monta las
-             * bandas el solo y no pasa por alli.
-             *
-             * Va DESPUES de arrancar el volcado y no antes: asi la mirada
-             * al tactil cae mientras el DMA esta empujando la banda por el
-             * bus, que es tiempo en el que la CPU no tiene nada que hacer.
-             * Sale gratis.
-             */
-            gfx2_pump();
         }
         if (vuela) { (void)gfx_blit_espera(); }
         gfx2_banda_suelta();

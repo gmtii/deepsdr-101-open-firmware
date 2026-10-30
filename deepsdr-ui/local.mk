@@ -479,6 +479,59 @@ msf: out/msftest ; ./out/msftest
 
 comprueba: msf
 
+# ---------------------------------------------------------------------
+# MSF DE VERDAD - 30/10/2026. Ver la cabecera de sim/msf_real.c.
+#
+# El banco de arriba mide el FORMATO contra una señal que fabrica el propio
+# banco, y pasa. Y aun asi un probador decia que MSF no decodificaba nada.
+# Con señal sintetica eso no se puede investigar: la que entra es la que yo
+# creo que entra.
+#
+# Esto mide la de verdad: la envolvente de una grabacion de 60 kHz, a 375
+# muestras por segundo, que es EXACTAMENTE el ritmo al que main.c llama a
+# dcf77_feed() en MSF. Lo que entra aqui es, muestra a muestra, lo mismo
+# que le entra a la radio.
+#
+# La muestra vive en sim/muestras/, que esta en .gitignore, asi que el
+# banco se salta diciendolo cuando no esta - como alsreal.
+out/msfreal: sim/msf_real.c $(FIRMWARE)/User/dcf77.c $(FIRMWARE)/User/rapido.c \
+             $(FIRMWARE)/User/hora_rbu.c $(FIRMWARE)/User/hora_wwv.c \
+             $(FIRMWARE)/User/hora_comun.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ sim/msf_real.c \
+	      $(FIRMWARE)/User/dcf77.c $(FIRMWARE)/User/rapido.c \
+	      $(FIRMWARE)/User/hora_rbu.c $(FIRMWARE)/User/hora_wwv.c \
+	      $(FIRMWARE)/User/hora_comun.c $(LDLIBS)
+
+.PHONY: msfreal
+msfreal: out/msfreal ; ./out/msfreal
+
+comprueba: msfreal
+
+# ---------------------------------------------------------------------
+# LA CADENA DE MSF, DEL I/Q DEL ADC A dcf77_feed() - 30/10/2026.
+#
+# Ver la cabecera de sim/msf_cadena.c. Los otros dos bancos de MSF entran
+# por dcf77_feed(), o sea por el final; este mide lo que hay ANTES -el
+# desplazamiento de Fs/4, el filtro de canal, el detector de envolvente y
+# el promediado por bloque- metiendo la señal por demod_am_process_raw(),
+# que es la misma puerta por la que entra la radio.
+#
+# Se compila con -DDCF77_REAL para que demod_stubs.c no ponga sus
+# sucedaneos de dcf77: aqui los pone el propio banco, que es quien captura
+# lo que llega.
+out/msfcadena: sim/msf_cadena.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c \
+               $(DEMOD_REALES)
+	@mkdir -p out
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -DDCF77_REAL -I$(FIRMWARE)/User -o $@ \
+	      sim/msf_cadena.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c \
+	      $(DEMOD_REALES) $(LDLIBS)
+
+.PHONY: msfcadena
+msfcadena: out/msfcadena ; ./out/msfcadena
+
+comprueba: msfcadena
+
 # Render del trazo del espectro compilando el User/spectrum.c DE VERDAD, no
 # la copia de vendor/. Esa copia lleva ahi desde antes y hoy solo se
 # diferencia en un comentario, pero eso es suerte: una copia que nadie
@@ -1576,6 +1629,14 @@ out/fat12_vacio.img:
 # Y el mismo volumen con la distribucion que pone un PC al formatearlo: 1
 # sector reservado en vez de 4, con lo que el area de datos deja de caer en
 # frontera de bloque de borrado. El driver tiene que NEGARSE a escribir ahi.
+# Y LOS 7 MB DEL DISCO DE LA RADIO, con el reparto que tiene el de verdad:
+# 256 entradas de raiz en DOS bloques de borrado, que es justo lo que hace
+# que un apagon se lleve 128 nombres de golpe. Ver sim/apagon.c.
+out/fat12_7m.img:
+	@mkdir -p out
+	dd if=/dev/zero of=$@ bs=512 count=14336 status=none
+	mkfs.fat -F 12 -R 4 -f 2 -r 256 -s 8 -S 512 -n DEEPSDR $@ >/dev/null
+
 out/fat12_pc.img:
 	@mkdir -p out
 	dd if=/dev/zero of=$@ bs=512 count=2048 status=none
@@ -1678,6 +1739,25 @@ out/fattroceado: sim/fat_troceado.c sim/w25q_sim.c sim/gd32_pines.c $(FIRMWARE)/
 
 # El mismo cuidado que fatanade con el arbol: ver alli el porque.
 .PHONY: fattroceado
+# ----------------------------------------------------------------------
+# APAGAR LA RADIO EN MITAD DE UN GUARDADO - 30/10/2026.
+#
+# El banco que faltaba el dia que un usuario perdio 124 nombres de fichero
+# por apagar la radio mientras guardaba. Corta la corriente en cada
+# operacion de escritura del chip, una por una, y exige que al arrancar no
+# falte ni una entrada del directorio. Ver la cabecera de sim/apagon.c.
+# ----------------------------------------------------------------------
+out/apagon: sim/apagon.c sim/w25q_sim.c sim/gd32_pines.c $(FIRMWARE)/User/spi_flash.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -Ihostinc -Isim -o $@ \
+	      sim/apagon.c sim/w25q_sim.c sim/gd32_pines.c \
+	      $(FIRMWARE)/User/spi_flash.c $(LDLIBS)
+
+.PHONY: apagon
+apagon: out/apagon out/fat12_7m.img ; ./out/apagon out/fat12_7m.img
+
+comprueba: apagon
+
 fattroceado: out/fat12_vacio.img
 	@if [ "$$(cat out/fattroceado.arbol 2>/dev/null)" != "$(FIRMWARE)" ]; then \
 	   rm -f out/fattroceado; fi
@@ -4414,6 +4494,30 @@ iqancho: out/iqanchotest ; ./out/iqanchotest
 
 comprueba: iqancho
 
+# ----------------------------------------------------------------------
+# EL ESPEJO EN VHF Y EL PASO POR EL CENTRO - 30/10/2026.
+#
+# iqbaltest.c mide el corrector plano a 96 kHz con una portadora limpia y
+# llamando a iqbal_mide()/iqbal_aplica(). Este mide a 192 kHz, con FM
+# estrecha y una sola señal en toda la banda -la escena de 2 metros- y por
+# el camino que de verdad corre la radio, que es iqbal_bloque() dentro de
+# la interrupcion del DMA. Ese camino no lo pisaba ningun banco.
+#
+# Y mide lo que cuesta cruzar el centro del NCO con el estimador
+# aprendiendo, que es la razon de que exista espejo_aprende_refresca() en
+# main.c. Ver la cabecera de sim/vhf_espejo.c.
+# ----------------------------------------------------------------------
+out/vhfesp: sim/vhf_espejo.c $(FIRMWARE)/User/iqbal.c $(FIRMWARE)/User/iqbal.h \
+            $(FIRMWARE)/User/iqancho.h
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ sim/vhf_espejo.c \
+	      $(FIRMWARE)/User/iqbal.c -lm
+
+.PHONY: vhfesp
+vhfesp: out/vhfesp ; ./out/vhfesp
+
+comprueba: vhfesp
+
 # ---------------------------------------------------------------------------
 # EL AVISADOR DE ARMONICOS. Ver la cabecera de sim/armonicotest.c: la prueba
 # principal es el caso de verdad del 07/10, dial 3.411 kHz oyendo el FT8 de
@@ -5277,6 +5381,24 @@ rotbanda: out/rotulos_banda ; ./out/rotulos_banda
 # cuentas de lecturas no lo explican. Esto mide el REPINTADO: cuantas
 # bandas se salta spectrum_draw() con un paso de 1 kHz y cuantas con un
 # salto de emisora. Ver sim/salto_pinta.c.
+# ----------------------------------------------------------------------
+# CUANTO BUS GASTA CADA ESTILO DE TRAZA - 30/10/2026.
+# Ver la cabecera de sim/pixeles.c: el ruido que el repintado mete en el
+# audio es electrico y proporcional a los pixeles empujados.
+# ----------------------------------------------------------------------
+out/pixeles: sim/pixeles.c sim/lcd_sim.c vendor/gfx.c \
+             $(FIRMWARE)/User/spectrum.c gfx2/gfx2.c gfx2/fonts_data.c
+	@mkdir -p out
+	$(CC) -O2 -Wall -I hostinc -I sim -I gfx2 -I $(FIRMWARE)/User -I vendor \
+	      -o $@ $(filter %.c,$^) $(LDLIBS)
+
+.PHONY: pixeles
+pixeles: out/pixeles ; ./out/pixeles
+
+ifneq ($(wildcard vendor/gfx.c),)
+comprueba: pixeles
+endif
+
 out/salto_pinta: sim/salto_pinta.c sim/lcd_sim.c vendor/gfx.c \
                  $(FIRMWARE)/User/spectrum.c gfx2/gfx2.c gfx2/fonts_data.c
 	@mkdir -p out

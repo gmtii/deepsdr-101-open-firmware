@@ -182,8 +182,34 @@ DEFS += -DARM_MATH_LOOPUNROLL
 #
 #   anotch.o (336), audiofil.o (224) y nb.o (120) corren por bloque.
 # ----------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Y spectrum.o SE SALE DE LA LISTA - 30/10/2026.
+# ---------------------------------------------------------------------
+#
+# Estaba aqui porque su bucle de componer decide el color de cada pixel y
+# eso se lleva la mayor parte del fotograma: "el espectro, que tiene
+# 157.248 pixeles, cuesta 65 ms; los otros 53 se van en DECIDIR que color
+# lleva cada pixel" (ver la cabecera de sim/espectro_oro.c).
+#
+# LO QUE CAMBIA HOY: ese bucle ya no recorre el panel entero. Desde que la
+# traza se manda por RACHAS de segmentos que pintan -y no del primero al
+# ultimo de una tirada- compon() solo compone lo que de verdad se envia.
+# Medido por sim/pixeles.c sobre el mismo fichero:
+#
+#     antes   124.939 pixeles por cuadro   (79,5 % del panel)
+#     ahora    52.132 pixeles por cuadro   (33,2 % del panel)
+#
+# O sea que el trabajo de ese bucle cae a MENOS DE LA MITAD. La diferencia
+# entre -O2 y -Os en el, medida compilando el fichero de las dos maneras,
+# son 717 bytes de .text (9.206 contra 8.489) a cambio de un porcentaje
+# sobre un trabajo que acaba de bajar 2,4 veces. Sale a cuenta con mucho,
+# y hacian falta: con las rachas puestas, el 450VET6 se pasaba de la
+# flash por 100 bytes.
+#
+# Lo vigilan sim/espectro_oro.c -ni un pixel distinto- y
+# tools/espectro_coste_check.py.
 CALIENTES = demod_am.o nr_ss.o anotch.o audiofil.o sam.o disc_fm.o nco.o \
-            fft.o spectrum.o waterfall.o gd32_i2s.o sdr_rx.o \
+            fft.o waterfall.o gd32_i2s.o sdr_rx.o \
             nb.o \
             arm_biquad_cascade_df1_f32.o arm_cmplx_mag_f32.o arm_fir_f32.o \
             arm_fir_decimate_f32.o arm_fir_interpolate_f32.o

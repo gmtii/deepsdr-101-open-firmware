@@ -31,6 +31,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <setjmp.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include "w25q_sim.h"
@@ -105,6 +106,51 @@ static uint8_t jedec_capacidad(void)
     return n;
 }
 uint32_t g_borrados, g_grabados;
+
+/*
+ * ======================================================================
+ * EL CORTE DE CORRIENTE, A PROPOSITO - 30/10/2026.
+ * ======================================================================
+ *
+ * Un usuario apago la radio mientras guardaba y perdio 124 nombres de
+ * fichero: el bloque de 4 kB del directorio raiz se habia borrado y no
+ * llego a regrabarse. Ningun banco podia ver eso, porque ninguno sabia
+ * apagar la radio.
+ *
+ * Esto lo sabe. `w25q_corta_en(n)` hace que la operacion de escritura
+ * numero n -borrado o grabado, que son las dos que cambian el chip- no
+ * llegue a volver: se sale por longjmp al sitio que dejo w25q_corte_aqui(),
+ * con el chip EXACTAMENTE como lo deja un corte ahi.
+ *
+ * Y se corta DESPUES de aplicar la operacion, no antes, que es el caso
+ * malo de verdad: el borrado ya se ha hecho y la grabacion que venia
+ * detras no va a llegar nunca.
+ */
+uint32_t g_ops_escritura;      /* borrados + grabados desde w25q_corta_en() */
+static uint32_t s_corta_en;    /* 0 = no cortar */
+static jmp_buf  s_salto;
+static uint8_t  s_salto_puesto;
+
+void w25q_corta_en(uint32_t n)
+{
+    s_corta_en = n;
+    g_ops_escritura = 0U;
+}
+
+jmp_buf *w25q_salto(void)
+{
+    s_salto_puesto = 1U;
+    return &s_salto;
+}
+
+static void quiza_corta(void)
+{
+    g_ops_escritura++;
+    if (s_corta_en != 0U && g_ops_escritura >= s_corta_en && s_salto_puesto) {
+        s_corta_en = 0U;       /* una sola vez por carrera */
+        longjmp(s_salto, 1);
+    }
+}
 uint64_t g_bits;   /* bits que han pasado por el bus, para poder cronometrar */
 int      g_fallos_chip;
 uint32_t g_intocable_ini = 0xFFFFFFFFU, g_intocable_fin = 0xFFFFFFFFU;
@@ -227,6 +273,7 @@ static void cierra_orden(void)
             g_chip[a] = nuevo;
         }
         g_grabados++;
+        quiza_corta();
         s_pendiente_us += g_us_pagina;
         s_wel = 0U;
     }
@@ -314,6 +361,7 @@ static void byte_entrado(uint8_t v)
                 mira_intocable(b, 65536U, "BLOCK_ERASE en zona intocable");
                 memset(&g_chip[b % g_chip_bytes], 0xFF, 65536U);
                 g_borrados++;
+                quiza_corta();
                 s_pendiente_us += g_us_bloque;
                 s_wel = 0U;
             }
@@ -334,6 +382,7 @@ static void byte_entrado(uint8_t v)
                 mira_intocable(b, BLOQUE, "SECTOR_ERASE en zona intocable");
                 memset(&g_chip[b % g_chip_bytes], 0xFF, BLOQUE);
                 g_borrados++;
+                quiza_corta();
                 s_pendiente_us += g_us_sector;
                 s_wel = 0U;
             }

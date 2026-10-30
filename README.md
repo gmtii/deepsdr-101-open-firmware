@@ -13,10 +13,10 @@ repositorio se tomó midiendo y no a ojo.
 > grabar este firmware y volver al firmware original en cualquier momento.
 > No secuestramos ni bloqueamos ningún dispositivo.**
 
-`V6.22` · cargador `v2.19` · **dos binarios, uno por chip**:
-`update.bin` 490.272 B CRC `943CA840` (GD32F450VET6, 512 kB) ·
-`update_470.bin` 490.304 B CRC `6D722B16` (GD32F470VGT6, 1024 kB) ·
-**284 comprobaciones en verde, 0 fallos** (`make comprueba`)
+`V6.25` · cargador `v2.19` · **dos binarios, uno por chip**:
+`update.bin` 490.864 B CRC `67ACE16E` (GD32F450VET6, 512 kB) ·
+`update_470.bin` 490.888 B CRC `751F48DE` (GD32F470VGT6, 1024 kB) ·
+**289 comprobaciones en verde, 0 fallos** (`make comprueba`)
 
 🇬🇧 [English below](#deepsdr-101--open-firmware) · 📘
 [Manual de uso (PDF, ES + EN)](DeepSDR_Reload_Manual-ES-EN.pdf)
@@ -458,18 +458,18 @@ comprobar.
 ## Estado
 
 ```
-  VERSION V6.22          CARGADOR v2.19
+  VERSION V6.25          CARGADOR v2.19
   update.bin  +  update_470.bin      <- 450VET6 (512 kB)  /  470VGT6 (1024 kB)
   customboot.bin  +  customboot_470.bin                   BD.BIN
   ZONA ALTA  528.384 de  847.872   libre 319.488  (294.909 aviones,
                                      220.736 emisoras, 5.592 la fuente)
-  FLASH   490.272 de 491.520   libre  1.248   <- UNA region, sin desvan
-  FLASH 470  490.304 de 1.015.808 libre 525.504 <- el mismo codigo, otro .ld
+  FLASH   490.864 de 491.520   libre  656   <- UNA region, sin desvan
+  FLASH 470  490.888 de 1.015.808 libre 524.920 <- el mismo codigo, otro .ld
   CARGADOR 32.008 de  32.768   libre     760   <- DOS sectores, no tres
-  RAM     193.928 de 196.608   libre   2.680   <- .bss + .data + .noinit
-  RAM 470    193.928 de 458.752  libre 264.824  <- 448 kB contiguos
+  RAM     193.940 de 196.608   libre   2.668   <- .bss + .data + .noinit
+  RAM 470    193.940 de 458.752  libre 264.812  <- 448 kB contiguos
   TCM      58.860 de  65.536   libre   6.676   <- y eso ES la pila
-  PILA      4.576 de  6.672    margen  2.096 (31%)  <- CON anidamiento
+  PILA      4.776 de  6.672    margen  1.896 (28%)  <- CON anidamiento
   avisos del compilador  0     comprobaciones  todas en verde
 ```
 
@@ -544,10 +544,10 @@ in this repository was made by measuring rather than by eye.
 > It is also entirely reversible: anyone can flash this firmware and go back
 > to the original one at any time. We do not hold or lock any device.**
 
-`V6.22` · bootloader `v2.19` · **two builds, one per chip**:
-`update.bin` 490,272 B CRC `943CA840` (GD32F450VET6, 512 kB) ·
-`update_470.bin` 490,304 B CRC `6D722B16` (GD32F470VGT6, 1024 kB) ·
-**284 checks green, 0 failures** (`make comprueba`)
+`V6.25` · bootloader `v2.19` · **two builds, one per chip**:
+`update.bin` 490,864 B CRC `67ACE16E` (GD32F450VET6, 512 kB) ·
+`update_470.bin` 490,888 B CRC `751F48DE` (GD32F470VGT6, 1024 kB) ·
+**289 checks green, 0 failures** (`make comprueba`)
 
 📘 [User manual (PDF, ES + EN)](DeepSDR_Reload_Manual-ES-EN.pdf)
 

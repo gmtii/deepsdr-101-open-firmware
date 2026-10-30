@@ -18,6 +18,257 @@ ordered by date, does not spare the detail, and is not published.
 
 ---
 
+## V6.25 · 2026-10-30
+
+### Qué cambia
+
+- **La pantalla principal mete 2,4 veces menos ruido en el audio.** Avisado
+  por el usuario por tercera vez, y con razón: *«no puede ser que en el menú
+  se escuche mejor y sin interferencias»*.
+
+  Medido sobre el audio de su vídeo, comparando los tramos con el menú
+  abierto contra los que tienen el espectro en pantalla: **hasta 10 dB más
+  de siseo**, y latiendo a **374,8 Hz** —que es 96.000/256, el ritmo del
+  bloque de audio— y a 42-44 Hz, el del cuadro. Con el menú abierto esas dos
+  rayas no existen.
+
+  El acoplo es **eléctrico**: sube con la ganancia de entrada —o sea que
+  entra antes del PGA— y **no** baja con el brillo, así que tampoco es la
+  retroiluminación. Es el bus del panel conmutando, y su energía es
+  proporcional a los píxeles que se empujan.
+
+  Y se empujaban de más. El panel se manda por bandas de 16 filas, y de cada
+  banda se enviaba el tramo que va **del primer segmento que cambia al
+  último**, de una tirada: con una traza de ruido, la banda entera. Ahora se
+  manda **cada racha de segmentos que pinta por separado**.
+
+  | | antes | ahora |
+  |---|---|---|
+  | píxeles por cuadro | 124.939 (79,5 % del panel) | **52.132 (33,2 %)** |
+  | a 45 fps | 5,62 Mpixel/s | **2,35 Mpixel/s** |
+
+  **Y no cambia ni un píxel de lo que se ve**: lo compara `sim/espectro_oro.c`
+  contra una imagen patrón, y salta si se mueve uno solo.
+
+- **Y el panadaptador se puede frenar o parar, y ahora se guarda.** La fila de
+  los milisegundos de fotograma baja hasta 100 ms y llega a **0, que lo para
+  del todo**: la pantalla principal se calla exactamente igual que con el menú
+  abierto, y el dial, la ese, el audio y los decodificadores siguen vivos.
+  Antes no se guardaba y había que volver a ponerlo en cada arranque.
+
+### What's new
+
+- **The main screen now injects 2.4 times less noise into the audio.**
+  Reported by the user for the third time, and rightly: *"it cannot be that
+  it sounds better and interference-free in the menu"*.
+
+  Measured on the audio of his video, comparing the stretches with the menu
+  open against those with the spectrum on screen: **up to 10 dB more hiss**,
+  beating at **374.8 Hz** —which is 96,000/256, the audio block rate— and at
+  42-44 Hz, the frame rate. With the menu open neither line exists.
+
+  The coupling is **electrical**: it rises with input gain —so it enters
+  before the PGA— and does **not** drop with the backlight, so it is not the
+  backlight either. It is the panel bus switching, and its energy is
+  proportional to the pixels pushed.
+
+  And too many were being pushed. The panel is sent in bands of 16 rows, and
+  each band was sent as the span from **the first changed segment to the
+  last**, in one go: with a noisy trace, the whole band. Now **each run of
+  painting segments is sent separately**.
+
+  | | before | now |
+  |---|---|---|
+  | pixels per frame | 124,939 (79.5 % of the panel) | **52,132 (33.2 %)** |
+  | at 45 fps | 5.62 Mpixel/s | **2.35 Mpixel/s** |
+
+  **And not one pixel of what you see changes**: `sim/espectro_oro.c` compares
+  against a golden image and trips if a single one moves.
+
+- **And the panadapter can be slowed down or stopped, and it is now saved.**
+  The frame-milliseconds row goes down to 100 ms and reaches **0, which stops
+  it altogether**: the main screen goes as quiet as it does with the menu
+  open, while the dial, the S-meter, the audio and the decoders stay alive.
+  It used not to be saved, so it had to be set again on every boot.
+
+---
+
+## V6.24 · 2026-10-30
+
+### Qué cambia
+
+- **Apagar la radio mientras guarda ya no puede llevarse los ficheros del
+  disco.** Avisado por el usuario, y con la imagen de su disco delante: tras
+  apagarla y encenderla tenía los ajustes de fábrica y **un solo fichero**,
+  con 2,26 MB marcados como ocupados. Sus ficheros seguían dentro; lo que se
+  había perdido era **la lista de nombres**.
+
+  El motivo: para cambiar una entrada del directorio hay que **borrar los
+  4 kB en los que vive**, y en esos 4 kB caben **128 entradas de otros
+  ficheros**. El corte cayó en esa ventana. En su disco, el primer bloque
+  del directorio apareció a `0xFF` —flash recién borrada y nunca
+  regrabada— y el segundo, intacto.
+
+  Son dos arreglos:
+
+  **Guardar los ajustes ya no toca el directorio.** Si la entrada va a decir
+  lo mismo —mismo nombre, mismo cluster, mismo tamaño— no se reescribe. Lo
+  único que cambiaba era la hora de la entrada. Medido: diez guardados, diez
+  borrados de 4 kB en vez de veinte, y ninguno del directorio. **Ése es el
+  camino que se lo hizo.**
+
+  **Y para los que sí tienen que tocarlo** —crear un fichero, borrarlo, o el
+  tamaño de una carta de fax que crece cada dos segundos y medio— ahora hay
+  red: antes de borrar el bloque se guarda una copia de lo que va a quedar
+  en él, y al arrancar, si la copia sigue viva y el bloque no dice lo mismo,
+  se regraba.
+
+  **Y ahora el banco sabe apagar la radio**, que es lo que faltaba para que
+  esto no lo cazara nadie. Se corta la corriente en cada operación de
+  escritura del chip, una por una, y se cuentan los nombres al arrancar:
+
+  | | sin red | con red |
+  |---|---|---|
+  | lo peor que se pierde | **62 entradas de 63** | **0** |
+  | cortes dentro de la ventana | — | 18, los 18 reparados |
+
+  Sin el arreglo, el banco reproduce la avería clavada: una entrada y un
+  bloque del directorio en blanco.
+
+### What's new
+
+- **Switching the radio off mid-save can no longer take the disk's files
+  with it.** Reported by the user, with his disk image in hand: after an
+  off/on he had factory settings and **a single file**, with 2.26 MB still
+  marked as used. His files were still there; what had been lost was **the
+  list of names**.
+
+  Why: changing one directory entry means **erasing the 4 kB it lives in**,
+  and **128 entries belonging to other files** fit in those 4 kB. The cut
+  landed in that window. On his disk the directory's first block came back
+  as `0xFF` —freshly erased flash, never reprogrammed— and the second one
+  intact.
+
+  Two fixes:
+
+  **Saving settings no longer touches the directory.** If the entry would
+  say the same thing —same name, same cluster, same size— it is not
+  rewritten. The only thing that changed was the entry's timestamp.
+  Measured: ten saves, ten 4 kB erases instead of twenty, and none of them
+  the directory. **That is the path that did it to him.**
+
+  **And for the ones that must touch it** —creating a file, deleting one, or
+  the size of a fax growing every two and a half seconds— there is now a
+  safety net: before erasing the block, a copy of what it is about to hold
+  is saved, and at boot, if that copy is still live and the block does not
+  match it, the block is rewritten.
+
+  **And the bench now knows how to switch the radio off**, which is what was
+  missing for anyone to catch this. Power is cut at every single chip write
+  operation, one by one, and the names are counted at the next boot:
+
+  | | without the net | with it |
+  |---|---|---|
+  | worst case lost | **62 entries out of 63** | **0** |
+  | cuts inside the window | — | 18, all 18 repaired |
+
+  Without the fix the bench reproduces the failure exactly: one entry and a
+  blank directory block.
+
+---
+
+## V6.23 · 2026-10-30
+
+### Qué cambia
+
+- **Con el NCO puesto, la pantalla ya no pega el salto al cruzar el centro.**
+  Avisado por el usuario con un vídeo: en 40 m, al pasar de 7.103 a 7.106 kHz,
+  el eje entero se corría once kilohercios. Había un **agujero de ±6 kHz**
+  alrededor del oscilador y cruzarlo obligaba a reaparcar.
+
+  Ese agujero existía porque la fuga del oscilador se automezcla a 0 Hz y se
+  sentaba encima de la emisora. **Eso dejó de ser cierto el 25/10**, cuando el
+  receptor empezó a restar la continua de I y de Q antes de bajar en
+  frecuencia. El agujero era deuda.
+
+  Quitado, y además el reaparcado aterriza ahora en el extremo **contrario**
+  en vez de a +6 kHz, que es lo que deja toda la ventana por delante. Medido:
+  **0 reaparcados y 181 kHz seguidos** de borde a borde. Antes eran 84 kHz y
+  un salto en el centro.
+
+  **Lo que se pierde al cruzar, y se dice:** dentro de esos doce kilohercios
+  la emisora cae encima de su propia imagen. Eso es un receptor de frecuencia
+  intermedia cero y no lo arregla ningún corrector: son doce kilohercios de
+  **paso**, no un sitio donde quedarse a escuchar.
+
+- **Y el corrector de espejo ya no se envenena al pasar por ahí**, que es lo
+  que habría costado abrir el centro sin mirar nada más. Su estimador se apoya
+  en que la señal esté desplazada del oscilador; con la señal en continua se
+  inventa un desequilibrio y se lo lleva puesto a la banda siguiente. La
+  puerta que lo evitaba miraba sólo «¿es FM ancha?», que valía mientras FM
+  ancha fuese el único sitio donde eso pasaba.
+
+  Medido en el camino de verdad, el de la interrupción: una calibración de
+  **59,9 dB** se quedaba en **28,8** después de cuatro segundos cruzando el
+  centro. Con la puerta puesta, **59,3**. Ahora la puerta mira las dos cosas
+  —modo y distancia al oscilador— y se refresca al sintonizar, no sólo al
+  cambiar de modo.
+
+- **El lazo de continua de radiofrecuencia se congela al cruzar** en vez de
+  medir la emisora y restársela. Conserva lo último que midió, que es lo
+  correcto: la fuga sigue ahí mientras se pasa.
+
+- **Dos valores de fábrica, pedidos:** el **suavizado** del espectro pasa de
+  75 a **25 %** y el **contorno** de 3 pasadas a **1**. Con tres cuartas
+  partes de peso en lo viejo la traza dejaba estela; con tres pasadas de
+  contorno, una portadora de un solo bin salía más baja y más ancha de lo que
+  es. Una radio con su `CONFIG.CSV` guardado se queda con lo que tenga puesto.
+
+### What's new
+
+- **With the NCO on, the display no longer jumps when crossing the centre.**
+  Reported by the user with a video: on 40 m, going from 7.103 to 7.106 kHz
+  the whole axis shifted by eleven kilohertz. There was a **±6 kHz hole**
+  around the oscillator, and crossing it forced a re-park.
+
+  That hole existed because the local oscillator's leakage self-mixes to 0 Hz
+  and sat on top of the station. **That stopped being true on 25/10**, when
+  the receiver started subtracting the DC of I and Q before the downconversion.
+  The hole was debt.
+
+  Gone — and the re-park now lands at the **opposite** end instead of at
+  +6 kHz, which is what leaves the whole window ahead. Measured: **0 re-parks
+  and 181 kHz in a row**, edge to edge. It was 84 kHz and a jump in the middle.
+
+  **What is lost when crossing, said plainly:** inside those twelve kilohertz
+  the station lands on top of its own image. That is what a zero-IF receiver
+  is, and no corrector fixes it: twelve kilohertz to **pass through**, not a
+  place to sit and listen.
+
+- **And the image corrector no longer poisons itself going through there**,
+  which is what opening the centre would have cost. Its estimator relies on
+  the signal being offset from the oscillator; with the signal at DC it
+  invents an imbalance and carries it into the next band. The gate that
+  prevented this only asked "is this wide FM?", which held while wide FM was
+  the only place that happened.
+
+  Measured on the real path, the one inside the interrupt: a **59.9 dB**
+  calibration dropped to **28.8** after four seconds crossing the centre. With
+  the gate, **59.3**. The gate now looks at both things — mode and distance to
+  the oscillator — and is refreshed on tuning, not only on a mode change.
+
+- **The RF DC loop freezes while crossing** instead of measuring the station
+  and subtracting it. It keeps its last measurement, which is the right thing:
+  the leakage is still there while you pass.
+
+- **Two factory defaults, as requested:** spectrum **smoothing** goes from 75
+  to **25 %** and **contour** from 3 passes to **1**. With three quarters of
+  the weight on history the trace smeared; with three contour passes a
+  single-bin carrier came out lower and wider than it is. A radio with a saved
+  `CONFIG.CSV` keeps whatever it has.
+
+---
+
 ## V6.22 · 2026-10-29
 
 ### Qué cambia

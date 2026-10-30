@@ -160,6 +160,30 @@ static inline void nco_sen_cos_fase(uint32_t fase, float *sen, float *cos_)
 }
 
 /*
+ * ======================================================================
+ * EL PASO POR EL CENTRO: CUANTO MIDE Y QUIEN TIENE QUE SABERLO
+ * 30/10/2026.
+ * ======================================================================
+ *
+ * La ventana de +-NCO_CENTRO_HZ alrededor del oscilador es el unico sitio
+ * del recorrido donde la emisora cae encima de la continua y encima de su
+ * propia imagen. Ya no se evita -ver nco_lo_aparcado()- asi que hay que
+ * atravesarla sin romper nada, y eso lo tienen que saber TRES sitios:
+ *
+ *   - nco_lo_aparcado(), que ya no reaparca ahi dentro;
+ *   - demod_am.c, que CONGELA el lazo de continua de radiofrecuencia
+ *     mientras se pasa, en vez de dejarlo medir la emisora y restarsela;
+ *   - y main.c, que apaga ahi el aprendizaje del corrector de espejo, por
+ *     la misma razon por la que ya lo apaga en FM ancha: con la señal en
+ *     continua E[x^2] deja de promediar a cero y el estimador se envenena.
+ *
+ * El numero vive AQUI y no en main.c porque esos tres ficheros tienen que
+ * usar el mismo, y hasta hoy era un #define de main.c que los otros dos no
+ * podian ver. Son los mismos 6 kHz de siempre.
+ */
+#define NCO_CENTRO_HZ     6000UL
+
+/*
  * DONDE APARCAR EL OSCILADOR.
  *
  * Esta aqui y no en main.c porque es la unica parte del NCO de sintonia que
@@ -171,19 +195,44 @@ static inline void nco_sen_cos_fase(uint32_t fase, float *sen, float *cos_)
  *   lo_actual_hz  el oscilador que hay programado ahora (0 = ninguno)
  *   off_ini_hz    la distancia con la que se aparca la PRIMERA vez (Fs/4,
  *                 o sea la de siempre: asi encender el NCO no mueve nada)
- *   off_min_hz    la distancia minima admitida
- *   off_max_hz    la maxima
+ *   off_min_hz    el margen que se deja al borde de la ventana al reaparcar
+ *   off_max_hz    la distancia maxima admitida
  *
  * Devuelve el oscilador que hay que programar. Si devuelve lo_actual_hz es
  * que NO hay que tocar el hardware, que es el caso normal con el NCO puesto
  * y lo que hace que el panorama se quede quieto.
  *
- * LA DISTANCIA NUNCA ES NEGATIVA NI PEQUEÑA, y eso no es cosmetico: la fuga
- * del oscilador local se auto-mezcla a 0 Hz siempre, y manteniendo la
- * emisora a off_min o mas de el, esa fuga se queda FUERA del filtro de canal.
- * Es la misma razon por la que existe el desplazamiento de Fs/4 desde julio.
- * Si se permitiera pasear libremente por toda la ventana, al cruzar por
- * encima del oscilador se oiria una portadora que no esta en el aire.
+ * ======================================================================
+ * EL AGUJERO DEL CENTRO YA NO EXISTE - 30/10/2026, pedido por el usuario:
+ * "que recorra los 192 sin saltar en absolutamente nada".
+ * ======================================================================
+ *
+ * Aqui ponia que la distancia no podia ser ni negativa ni pequeña, porque
+ * la fuga del oscilador local se auto-mezcla a 0 Hz y una emisora sentada
+ * encima del centro se la comia. Esa razon SE CAYO EL 25/10/2026, cuando
+ * demod_am.c empezo a RESTAR la continua de I y de Q antes de la bajada en
+ * frecuencia (ver s_rf_dc_i): la fuga deja de estar ahi, y entonces lo
+ * unico que quedaba del agujero era el salto de once kilohercios que pega
+ * el panorama al cruzar el centro -justo lo que el NCO existe para evitar-.
+ *
+ * El comentario de NCO_OFF_MIN_HZ ya lo decia con todas las letras: "no se
+ * arregla ensanchando este agujero... se arregla restando la continua".
+ * Restada esta. Lo que queda del agujero es deuda.
+ *
+ * LO QUE SE PIERDE AL CRUZAR, Y SE DICE: en la ventana de +-off_min
+ * alrededor del centro la emisora cae encima de su propia imagen -eso es
+ * un receptor de frecuencia intermedia cero y no lo arregla ningun
+ * corrector- y el lazo de continua no puede medir. Por eso demod_am.c
+ * CONGELA ese lazo ahi dentro en vez de dejarlo comerse la señal, y por
+ * eso main.c apaga ahi el aprendizaje del corrector de espejo. Son doce
+ * kilohercios de paso, no un sitio donde quedarse a escuchar.
+ *
+ * Y AHORA SE REAPARCA AL OTRO EXTREMO, no a off_min. Con el centro
+ * cerrado, salirse por arriba obligaba a volver a entrar por +off_min y el
+ * recorrido entre saltos era off_max - off_min. Abierto el centro, el
+ * sitio que deja toda la ventana por delante es el extremo CONTRARIO, con
+ * el mismo margen de borde de siempre: el recorrido pasa de 84 kHz a 174
+ * a 192 kHz de muestreo.
  */
 uint32_t nco_lo_aparcado(uint32_t freq_hz, uint32_t lo_actual_hz,
                          uint32_t off_ini_hz, uint32_t off_min_hz,
