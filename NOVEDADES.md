@@ -18,6 +18,449 @@ ordered by date, does not spare the detail, and is not published.
 
 ---
 
+## V6.57 · 2026-11-03
+
+### Qué cambia
+
+**Nada del tacto: el repintado se queda a diez veces por segundo**, como
+estaba. Lo que cambia son dos cosas que faltaban para dejar de adivinar.
+
+- **El arrastre lleva su propio cronómetro.** El tramo del táctil mide
+  `demo_touch_poll()` entera — la lectura del panel, el reparto del gesto
+  y el arrastre — y en la última tanda salen 2.799 µs por vuelta de los
+  que sólo 800 son leer el panel. **Sobran dos mil microsegundos sin
+  nombre**, y no son reprogramar el oscilador: eso salió 1 µs. Ahora el
+  arrastre se cronometra aparte y la siguiente tanda dice si están ahí
+  dentro o en el reparto del gesto.
+
+- **La medida dice si los rótulos de emisoras están puestos sobre el
+  espectro.** Son el sospechoso de los 4.800 µs que crece la traza al
+  arrastrar: se filtran por distancia a la sintonía, así que mover el dial
+  cambia cuáles salen y dónde, y cada cambio ensucia bandas del
+  compositor. Las bandas que el atajo puede saltarse bajan de 26 a 15 de
+  52 mientras arrastras.
+
+- **Y el CSV se escribe según se toma, no al final.** Estaba detrás del
+  resumen, y tres tandas seguidas se quedaron sin fichero porque el guion
+  se corta en cuanto tienes las líneas que querías. Un fichero que sólo
+  existe si el programa termina bien no es un registro. Ahora, además, el
+  resumen sale igual aunque lo cortes.
+
+### What's new
+
+**Nothing about the feel: repaints stay at ten times a second**, as they
+were. What changed is two things that were missing to stop guessing.
+
+- **The drag now has its own stopwatch.** The touch stretch times all of
+  `demo_touch_poll()` — the panel read, the gesture dispatch and the drag —
+  and the last run gives 2,799 µs per turn, of which only 800 is reading
+  the panel. **Two thousand microseconds are unaccounted for**, and they
+  are not retuning the oscillator: that measured 1 µs. The drag is now
+  timed separately and the next run will say whether they are in there or
+  in the gesture dispatch.
+
+- **The measurement now reports whether station labels are on over the
+  spectrum.** They are the suspect for the 4,800 µs the trace grows while
+  dragging: they are filtered by distance to the tuning, so moving the dial
+  changes which ones appear and where, and every change dirties compositor
+  bands. The bands the shortcut can skip drop from 26 to 15 out of 52 while
+  dragging.
+
+- **And the CSV is written as it is sampled, not at the end.** It sat
+  behind the summary, and three runs in a row left no file because the
+  script gets cut short once you have the lines you wanted. A file that
+  only exists if the program finishes is not a record. The summary now
+  prints even if you cut it short.
+
+---
+
+## V6.56 · 2026-11-03
+
+### Qué cambia
+
+**La radio dice ahora lo que cuesta reprogramar el oscilador cuando el que
+mueve el dial es el dedo.** Era el último hueco: el tramo `lot` de la
+medida por cable sólo cronometra las dos llamadas de dentro del camino del
+mando, así que la del arrastre caía dentro del tramo del táctil, revuelta
+con la lectura del panel y con el despacho del toque.
+
+Y hay un motivo concreto para quererlo separado: **reprogramar el
+sintetizador cuesta 1.763 µs medidos**, por I2C a patadas de patilla. Con
+el NCO puesto el oscilador se queda aparcado y eso no se paga; con el NCO
+apagado el oscilador sigue al dial hercio a hercio y **cada paso del
+arrastre lo reprograma**.
+
+En la tanda de la V6.55 sobran unos 1.770 µs por muestra dentro del táctil
+que no son la lectura del panel. Y 1.770 se parece demasiado a 1.763 — pero
+parecerse no es medir, así que ahora se mide.
+
+- **La medida sale con su cuenta al lado**, para poder dividir y saber lo
+  que cuesta CADA reprogramación, no sólo el total.
+- **Y el guion dice en qué estado estaba la radio** en cada tanda: NCO
+  puesto o no, panel entero y zoom. Una medida en la que no consta eso no
+  se puede comparar con otra.
+
+### What's new
+
+**The radio now reports what retuning the oscillator costs when it is a
+finger moving the dial.** It was the last gap: the `lot` stretch of the
+over-the-cable measurement only times the two calls inside the encoder
+path, so the drag's call fell inside the touch stretch, mixed up with the
+panel read and the gesture dispatch.
+
+And there is a concrete reason to want it separated: **retuning the
+synthesiser costs 1,763 µs measured**, over bit-banged I2C. With the NCO
+engaged the oscillator stays parked and that is not paid; with the NCO off
+the oscillator follows the dial hertz by hertz and **every drag step
+retunes it**.
+
+In the V6.55 run there are about 1,770 µs per sample inside the touch
+stretch that are not the panel read. And 1,770 looks far too much like
+1,763 — but looking like it is not measuring it, so now it is measured.
+
+- **The figure comes with its own count**, so it can be divided out to get
+  what EACH retune costs, not just the total.
+- **And the script reports what state the radio was in** for each batch:
+  NCO on or off, full panel and zoom. A measurement that does not record
+  that cannot be compared with another.
+
+---
+
+## V6.55 · 2026-11-03
+
+### Qué cambia
+
+**La regla del marco deja de repintarse treinta veces por segundo mientras
+mueves el dial.** Medido por el cable, arrastrando el dedo:
+
+```
+  quieto        27 us por cuadro
+  arrastrando   4.100 us por cuadro     <- x150
+```
+
+Veintisiete microsegundos quieto significa que la comparación funciona: si
+no cambia nada, no se pinta nada. Y cuatro milisegundos arrastrando
+significa que **sí cambia en todos los cuadros** — la marca de demodulación
+pasea por las cinco etiquetas del eje y la regla entera se repinta, 800×26
+= 20.800 píxeles empujados por la CPU, sin DMA.
+
+Es exactamente lo que la V6.44 hizo con el número de la frecuencia y con la
+fila de etiquetas: diez veces por segundo mientras el dial se mueve, y la
+buena en cuanto para. **Era el único repintado del cuadro que se había
+quedado sin ese freno**, y no se veía porque nadie lo medía por separado.
+
+Lo que cambia en pantalla mientras arrastras es cuál de las cinco etiquetas
+va en color de acento. A diez por segundo se ve igual.
+
+- **`make mando` lo vigila**, con las otras cuatro compuertas. Y exige lo
+  que hay que exigir: que la ficha del marco se ponga al día **siempre** —
+  si no, el cuadro siguiente no vería el cambio que este se dejó sin
+  pintar— y que lo aplazado sea el dibujo, con bandera.
+
+### What's new
+
+**The frame ruler stops repainting thirty times a second while you move the
+dial.** Measured over the cable, dragging a finger:
+
+```
+  still      27 us per frame
+  dragging   4,100 us per frame     <- x150
+```
+
+Twenty-seven microseconds while still means the comparison works: when
+nothing changes, nothing is painted. Four milliseconds while dragging means
+it **does** change on every frame — the demodulation marker walks across
+the five axis labels and the whole ruler is repainted, 800×26 = 20,800
+pixels pushed by the CPU, with no DMA.
+
+This is exactly what V6.44 did for the frequency number and the label row:
+ten times a second while the dial moves, and the right one as soon as it
+stops. **It was the only repaint in the frame left without that brake**,
+and it went unnoticed because nobody measured it separately.
+
+What changes on screen while you drag is which of the five labels is
+accented. At ten a second it looks the same.
+
+- **`make mando` watches it**, alongside the other four gates. And it
+  demands the right thing: that the frame's record is kept up to date
+  **always** — otherwise the next frame would not see the change this one
+  left unpainted — and that what is deferred is the drawing, with a flag.
+
+---
+
+## V6.54 · 2026-11-03
+
+### Qué cambia
+
+**La radio saca por el cable todo lo que hace falta para saber por qué se
+ralentiza, de una vez.** La primera tanda con el dedo dijo que la vuelta
+del bucle pasa de **14–22 ms quieto a 38–45 ms arrastrando**, y que de los
+veintitantos milisegundos que crece, **trece se los lleva el dibujo** — el
+táctil son 2,7 y repintar la frecuencia 2,9.
+
+Y «es el dibujo» no resuelve nada, porque el dibujo son cinco cosas. Así
+que hay una orden nueva, `DD;`, que las da por separado y además:
+
+- **los cinco tiempos**: la transformada, el marco y la regla, la traza,
+  empujar al panel y la cascada;
+- **el atajo del repintado parcial**: cuántas bandas se saltó de cuántas
+  había, y cuántas veces se tiró el atajo. Es el número que más puede
+  explicarlo: con el atajo la traza cuesta 7.524 µs y se salta 28 de 52
+  bandas; sin él, 13.329 µs y cero saltadas;
+- **cuántas veces se bajó de verdad al panel táctil**, que son 775 µs cada
+  una;
+- **cuántas veces se repintó** el número del dial, la regla y la chapa, y
+  cuántos pasos de arrastre hubo;
+- **y en qué estado estaba la radio** — NCO, menú, dedo, zoom — para no
+  tener que acordarse después.
+
+`tools/cat_vuelta.ps1` pregunta las dos órdenes en la misma tanda, lo saca
+todo en una sola tabla y, si el que más crece es el dibujo, **lo abre solo**
+y dice cuál de las cinco partes es y si el atajo se ha muerto.
+
+Una tanda de un minuto: quince segundos quieto, quince arrastrando el dedo,
+quince quieto, quince girando el mando. Y ya está.
+
+### What's new
+
+**The radio now puts everything needed to explain the slowdown on the
+cable, in one go.** The first run with a finger said the loop turn goes
+from **14–22 ms still to 38–45 ms while dragging**, and that of the twenty
+or so milliseconds it grows, **thirteen go to the drawing** — touch is 2.7
+and repainting the frequency 2.9.
+
+And "it's the drawing" settles nothing, because the drawing is five things.
+So there is a new command, `DD;`, that gives them separately, plus:
+
+- **the five timings**: the transform, the frame and ruler, the trace,
+  pushing to the panel and the waterfall;
+- **the state of the partial-repaint shortcut**: how many bands it skipped
+  out of how many there were, and how many times the shortcut was thrown
+  away. That is the number most likely to explain it: with the shortcut the
+  trace costs 7,524 µs and skips 28 of 52 bands; without it, 13,329 µs and
+  nothing skipped;
+- **how many times the touch panel was actually read**, at 775 µs each;
+- **how many repaints** of the dial number, the ruler and the badge, and
+  how many drag steps there were;
+- **and what state the radio was in** — NCO, menu, finger, zoom — so nobody
+  has to remember afterwards.
+
+`tools/cat_vuelta.ps1` asks both commands in the same batch, prints it all
+in one table and, when the drawing is what grows most, **opens it up by
+itself** and says which of the five parts it is and whether the shortcut
+died.
+
+One one-minute run: fifteen seconds still, fifteen dragging a finger,
+fifteen still, fifteen turning the knob. That is all.
+
+---
+
+## V6.53 · 2026-11-03
+
+### Qué cambia
+
+**El táctil deja de leer el panel para tirar lo leído.** Mientras arrastras,
+el *latido* —la mirada al táctil que corre **dentro** del repintado, entre
+banda y banda, para que un toque corto no se pierda— seguía bajando al
+panel. Y lo que apunta se borra sin mirarlo en cuanto hay un dedo puesto:
+con un gesto en marcha manda lo que acaba de leer el bucle, no lo apuntado.
+
+Eso son **775 µs** por lectura (medidos en un Cortex-M4 de verdad), dos o
+tres veces por cuadro, **dentro del tramo más caro de la vuelta** y sólo
+con el dedo apoyado. Entre 1,5 y 2,3 ms de cada cuadro, tirados. El mando
+no paga nada de esto.
+
+El latido sigue existiendo para lo que se inventó: el toque que entra y
+sale entero mientras se repinta. Ahí no hay gesto en marcha y no está en
+pausa.
+
+**Y la radio ya sabe decir si el dial lo mueve el dedo.** Hasta aquí el
+contador que separa «moviendo» de «quieto» en el diagnóstico por cable
+sólo miraba los clics del mando, así que un arrastre con el dedo caía en
+la casilla de «quieto» y se promediaba con las vueltas en las que no pasa
+nada — justo la casilla equivocada cuando lo que se persigue es el dedo.
+Ahora cuenta las dos maneras de mover el dial, y `tools/cat_vuelta.ps1`
+reparte la vuelta en sus dieciocho tramos para el arrastre igual que ya lo
+hacía para el mando.
+
+- **`make tactilarr`, medida 7 nueva.** Cien latidos con el reloj
+  corriendo: **cero** bajadas al panel con la pausa puesta, 25 sin ella. Y
+  comprueba que la pausa se levanta, porque una pausa que no se levanta
+  deja sordo el toque corto de dentro de un repintado.
+
+### What's new
+
+**Touch stops reading the panel just to throw the reading away.** While
+you drag, the *heartbeat* — the touch check that runs **inside** a repaint,
+between bands, so a short tap is not lost — kept going down to the panel.
+And what it records is discarded without being looked at as soon as a
+finger is down: with a gesture in progress what counts is what the main
+loop just read, not what was recorded.
+
+That is **775 µs** per reading (measured on a real Cortex-M4), two or three
+times per frame, **inside the most expensive stretch of the loop**, and
+only with a finger down. Between 1.5 and 2.3 ms of every frame, wasted. The
+encoder pays none of it.
+
+The heartbeat still exists for what it was built for: the tap that starts
+and ends entirely within a repaint. There is no gesture in progress there,
+so it is not paused.
+
+**And the radio can now say when the dial is being moved by a finger.**
+Until now the counter that separates "moving" from "still" in the
+over-the-cable diagnostics only watched encoder clicks, so a finger drag
+landed in the "still" box and got averaged with the turns where nothing
+happens — exactly the wrong box when a finger is what you are chasing. It
+now counts both ways of moving the dial, and `tools/cat_vuelta.ps1` breaks
+the loop turn into its eighteen stretches for a drag just as it already
+did for the encoder.
+
+- **`make tactilarr`, new measure 7.** A hundred heartbeats with the clock
+  running: **zero** trips to the panel with the pause on, 25 without it.
+  And it checks the pause is lifted, because a pause that never lifts makes
+  the radio deaf to the tap that happens inside a repaint.
+
+---
+
+## V6.52 · 2026-11-03
+
+### Qué cambia
+
+**Arrastrar con el dedo ya no ralentiza la radio.** El panel táctil se
+leía **en cada vuelta del bucle principal**, y eso cuesta **775 µs**
+—medidos en un Cortex-M4 de verdad, no estimados—, contra una vuelta que
+dura entre 1.700 y 4.000 µs. O sea que mientras el dedo estaba apoyado,
+leer el panel se llevaba **entre el 20 % y el 45 % de cada vuelta**. El
+mando no paga nada de esto, y por eso el síntoma sólo salía con el dedo.
+
+No es que leer el panel esté mal hecho: el XPT2046 se habla por SPI a
+patadas de patilla, con una espera clavada entre flanco y flanco, y se
+toman **cinco muestras por eje** para filtrar el ruido del panel
+resistivo. Son diez transacciones de 24 bits, y eso es lo que cuesta leer
+**bien**. No se toca.
+
+**Lo que se toca es cada cuánto.** Ahora el panel se mira como mucho una
+vez cada **8 ms**; entre medias se devuelve la última lectura. Y ese ritmo
+no le quita nada a nadie:
+
+- Para **confirmar** un contacto ya no servía mirar más deprisa, y lo
+  decía el propio firmware desde octubre: entre dos lecturas que cuentan
+  tienen que pasar 20 ms.
+- Para **arrastrar** son 125 lecturas por segundo, muy por encima de lo
+  que la pantalla alcanza a repintar.
+- Y los **8 ms son el número que ya estaba elegido y probado**: es el
+  mismo ritmo al que el táctil se mira desde dentro de un repintado.
+
+**Resultado medido: de 775 µs a 194 µs por vuelta.** La calibración no se
+entera —lee el panel por su cuenta, a pleno ritmo— y la suelta se nota
+como mucho 8 ms más tarde, con los toques de dedo durando 50 ms largos.
+
+- **`make tactilarr` cuenta ahora las bajadas al panel.** Cien vueltas de
+  2 ms con el dedo puesto: 25 lecturas en vez de 100, y contacto en las
+  100 vueltas. Si alguien quita la cadencia, el banco lo dice.
+- **`make m4` mide el coste amortizado**, no sólo el de una lectura
+  suelta, y falla si el táctil se pasa de 200 µs por vuelta.
+
+### What's new
+
+**Dragging with a finger no longer slows the radio down.** The touch
+panel was read **on every main-loop turn**, and that costs **775 µs** —
+measured on a real Cortex-M4, not estimated — against a loop turn of
+1,700 to 4,000 µs. So while a finger was down, reading the panel took
+**20 % to 45 % of every turn**. The encoder pays none of this, which is
+why the symptom only showed up with a finger.
+
+Not that the read is badly done: the XPT2046 is bit-banged over SPI with
+a fixed wait between edges, and **five samples per axis** are taken to
+filter the resistive panel's noise. That is ten 24-bit transactions, and
+that is what reading it **properly** costs. It stays.
+
+**What changed is how often.** The panel is now read at most once every
+**8 ms**; in between, the last reading is handed back. That rate costs
+nothing:
+
+- **Confirming** a contact never benefited from looking faster, and the
+  firmware has said so since October: two readings that count must be
+  20 ms apart.
+- **Dragging** gets 125 readings per second, well past what the screen
+  can repaint.
+- And **8 ms is a number already chosen and tested**: it is the same rate
+  at which touch is sampled from inside a repaint.
+
+**Measured result: 775 µs down to 194 µs per turn.** Calibration is
+unaffected — it reads the panel directly, at full rate — and a release is
+noticed at most 8 ms later, against finger taps that last 50 ms and up.
+
+- **`make tactilarr` now counts the trips to the panel.** A hundred 2 ms
+  turns with a finger down: 25 readings instead of 100, with contact
+  reported on all 100 turns. Remove the pacing and the bench says so.
+- **`make m4` measures the amortised cost**, not just a single read, and
+  fails if touch takes more than 200 µs per turn.
+
+---
+
+## V6.51 · 2026-11-03
+
+### Qué cambia
+
+**Con el NCO puesto, la raya del dial ya sigue al dedo.** Deslizar de
+izquierda a derecha la movía al revés.
+
+Y no era un signo puesto al tuntún: las dos conductas son correctas, cada
+una en su sitio, y lo que cambia es **qué se mueve en la pantalla**.
+
+- **Oscilador siguiendo a la sintonía** (NCO apagado, o FM ancha). La raya
+  se queda clavada —el panel se centra en el oscilador— y lo que se mueve
+  es **el espectro entero**. Ahí vale la regla de toda la vida, la del
+  mapa o la foto: arrastrar a la derecha trae lo que había más a la
+  izquierda, o sea frecuencia menor. El contenido va con el dedo.
+- **Oscilador aparcado** (NCO puesto). El espectro **no se mueve** —en el
+  vídeo del fallo las cuatro etiquetas del eje son las mismas antes y
+  después— y lo único que se mueve es la raya, que está en
+  `sintonía − oscilador`. Ahí no hay mapa que arrastrar: hay un marcador,
+  y un marcador va donde va el dedo.
+
+Aplicar la misma resta en los dos casos era el fallo: en el segundo, bajar
+la frecuencia mueve la raya a la izquierda mientras el dedo va a la
+derecha.
+
+**La regla vive en `User/nco.c`**, no en `main.c` donde se usa, por lo
+mismo que la de aparcado: un signo al revés **no rompe nada** —la radio
+sintoniza igual de bien, sólo que hacia el otro lado— así que no hay
+cuelgue, ni ruido, ni número raro que lo delate. Lo único que lo caza es
+un banco o alguien mirando la pantalla. Ahora lo vigila `make nco`, con
+las dos direcciones y los dos casos.
+
+### What's new
+
+**With the NCO engaged, the dial marker now follows your finger.**
+Sliding left to right moved it the other way.
+
+The sign was not arbitrary: both behaviours are correct, each in its own
+case, and what differs is **what actually moves on screen**.
+
+- **Oscillator following the tuning** (NCO off, or wide FM). The marker
+  stays put — the panel is centred on the oscillator — and what moves is
+  **the whole spectrum**. That is the usual map-or-photo rule: dragging
+  right brings in what was further left, i.e. a lower frequency. The
+  content goes with the finger.
+- **Oscillator parked** (NCO on). The spectrum **does not move** — in the
+  bug video the four axis labels are identical before and after — and the
+  only thing moving is the marker, which sits at `tuning − oscillator`.
+  There is no map to drag there: there is a marker, and a marker goes
+  where the finger goes.
+
+Applying the same subtraction in both cases was the bug: in the second,
+lowering the frequency moves the marker left while the finger goes right.
+
+**The rule lives in `User/nco.c`**, not in `main.c` where it is used, for
+the same reason as the parking rule: a flipped sign **breaks nothing** —
+the radio tunes just as well, only the other way — so there is no hang, no
+noise, no odd number to give it away. Only a bench or a pair of eyes
+catches it. `make nco` now watches it, both directions and both cases.
+
+---
+
 ## V6.50 · 2026-11-03
 
 ### Qué cambia

@@ -338,3 +338,13 @@ uint32_t nco_lo_aparcado(uint32_t freq_hz, uint32_t lo_actual_hz,
 
     return lo_actual_hz;                      /* cabe: no se toca nada */
 }
+
+float nco_arrastre_hz(int32_t dx_px, float hz_por_px, uint8_t lo_aparcado)
+{
+    float hz = (float)dx_px * hz_por_px;
+
+    /* Ver la cabecera: con el oscilador aparcado lo que se mueve es la
+     * raya y tiene que ir con el dedo; con el oscilador siguiendo a la
+     * sintonia lo que se mueve es el espectro y va al reves. */
+    return lo_aparcado ? hz : -hz;
+}

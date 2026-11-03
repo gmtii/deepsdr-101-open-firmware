@@ -238,4 +238,44 @@ uint32_t nco_lo_aparcado(uint32_t freq_hz, uint32_t lo_actual_hz,
                          uint32_t off_ini_hz, uint32_t off_min_hz,
                          uint32_t off_max_hz);
 
+/*
+ * ======================================================================
+ * HACIA DONDE SINTONIZA UN ARRASTRE DEL DEDO - 03/11/2026
+ * ======================================================================
+ *
+ * EL FALLO, visto en la radio: con el NCO puesto, deslizar el dedo de
+ * izquierda a derecha movia la raya vertical de DERECHA A IZQUIERDA. Al
+ * reves que el dedo.
+ *
+ * Y LAS DOS CONDUCTAS SON CORRECTAS, cada una en su sitio. Lo que cambia
+ * es QUE SE MUEVE en la pantalla:
+ *
+ *   CON EL OSCILADOR SIGUIENDO A LA SINTONIA (el NCO apagado, o FM
+ *   ancha). La raya se queda clavada donde esta -el panel se centra en el
+ *   oscilador- y lo que se mueve es EL ESPECTRO ENTERO. Entonces vale la
+ *   regla de toda la vida, la del mapa o la foto: arrastrar a la derecha
+ *   trae lo que habia mas a la izquierda, o sea frecuencia MENOR. El
+ *   contenido va con el dedo.
+ *
+ *   CON EL OSCILADOR APARCADO (el NCO puesto). El espectro NO se mueve
+ *   -se ve en el video: las cuatro etiquetas del eje son las mismas antes
+ *   y despues- y lo unico que se mueve es la raya, que esta en
+ *   (sintonia - oscilador). Ahi la regla del mapa no aplica: no hay mapa
+ *   que arrastrar. Lo que hay es un marcador, y un marcador tiene que ir
+ *   DONDE VA EL DEDO.
+ *
+ * Aplicar la misma resta en los dos casos es lo que producia el fallo: en
+ * el segundo, bajar la frecuencia mueve la raya a la izquierda mientras
+ * el dedo va a la derecha.
+ *
+ * POR QUE VIVE AQUI Y NO EN main.c, que es donde se usa: por lo mismo que
+ * nco_lo_aparcado(). Es una regla de un signo que se puede equivocar sin
+ * que nada se rompa -la radio sintoniza igual, solo que al reves- y lo
+ * unico que la caza es un banco. Ver sim/ncotest.c.
+ *
+ * `lo_aparcado` es 1 cuando el oscilador NO va a moverse con la sintonia.
+ * Devuelve los hercios que hay que SUMAR a la sintonia por ese arrastre.
+ */
+float nco_arrastre_hz(int32_t dx_px, float hz_por_px, uint8_t lo_aparcado);
+
 #endif /* NCO_H_INCLUDED */

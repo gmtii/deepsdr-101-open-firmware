@@ -550,6 +550,62 @@ static void prueba_aparcado(void)
     }
 }
 
+/*
+ * ======================================================================
+ * HACIA DONDE SINTONIZA UN ARRASTRE DEL DEDO - 03/11/2026
+ * ======================================================================
+ *
+ * El sintoma, visto en la radio: con el NCO puesto, deslizar el dedo de
+ * izquierda a derecha movia la raya vertical de DERECHA A IZQUIERDA.
+ *
+ * Y el fallo no se puede ver desde dentro: la radio sintoniza igual de
+ * bien con el signo al reves, solo que hacia el otro lado. No hay cuelgue,
+ * ni ruido, ni numero raro. Por eso la regla vive en nco.c y por eso esto
+ * esta aqui: es de las que solo se ven desde fuera.
+ *
+ * Las dos conductas son correctas, cada una en su sitio:
+ *
+ *   oscilador siguiendo a la sintonia -> se mueve EL ESPECTRO, y va con el
+ *   dedo: arrastrar a la derecha baja la frecuencia (la regla del mapa).
+ *
+ *   oscilador APARCADO -> el espectro se queda quieto y lo unico que se
+ *   mueve es LA RAYA, que esta en (sintonia - oscilador). Un marcador va
+ *   donde va el dedo: arrastrar a la derecha SUBE la frecuencia.
+ */
+static void prueba_arrastre(void)
+{
+    const float HZPX = 100.0f;   /* cien hercios por pixel, numero redondo */
+
+    printf("\n  el arrastre del dedo\n");
+
+    /* Con el oscilador siguiendo a la sintonia: el espectro va con el
+     * dedo, o sea que la frecuencia va al reves. */
+    comprueba(nco_arrastre_hz(+10, HZPX, 0U) < 0.0f,
+              "oscilador libre, dedo a la derecha: la frecuencia BAJA");
+    comprueba(nco_arrastre_hz(-10, HZPX, 0U) > 0.0f,
+              "oscilador libre, dedo a la izquierda: la frecuencia SUBE");
+
+    /* Aparcado: la raya va con el dedo, o sea que la frecuencia tambien. */
+    comprueba(nco_arrastre_hz(+10, HZPX, 1U) > 0.0f,
+              "aparcado, dedo a la derecha: la raya va a la DERECHA");
+    comprueba(nco_arrastre_hz(-10, HZPX, 1U) < 0.0f,
+              "aparcado, dedo a la izquierda: la raya va a la IZQUIERDA");
+
+    /* Y es el MISMO recorrido en los dos sentidos: lo unico que cambia es
+     * el signo, no cuanto se mueve. Un arrastre de diez pixeles a cien
+     * hercios por pixel son mil hercios, se mire por donde se mire. */
+    comprueba(nco_arrastre_hz(+10, HZPX, 1U) == 1000.0f,
+              "diez pixeles a cien hercios son mil hercios");
+    comprueba(nco_arrastre_hz(+10, HZPX, 0U) ==
+              -nco_arrastre_hz(+10, HZPX, 1U),
+              "los dos casos son el mismo numero con el signo cambiado");
+
+    /* Sin movimiento no hay sintonia que mover, en ninguno de los dos. */
+    comprueba(nco_arrastre_hz(0, HZPX, 0U) == 0.0f &&
+              nco_arrastre_hz(0, HZPX, 1U) == 0.0f,
+              "sin movimiento del dedo no se mueve nada");
+}
+
 int main(void)
 {
     printf("banco del NCO\n");
@@ -560,6 +616,7 @@ int main(void)
     prueba_aparcado();
     prueba_aparcado_lf();
     prueba_barrido_pantalla();
+    prueba_arrastre();
     printf("\n  %s\n", fallos ? "HAY FALLOS" : "TODO CORRECTO (0 fallos)");
     return fallos ? 1 : 0;
 }

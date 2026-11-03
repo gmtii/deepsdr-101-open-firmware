@@ -243,9 +243,19 @@ def pinta(txt):
     j = txt.find('static void tune_encoder_poll(void)\n{')
     cuerpo = txt[j:j + 60000] if j >= 0 else ''
     marca   = 's_regla_debe = 1U;' in cuerpo
+    #
+    # *** Y LA COMPUERTA YA NO PREGUNTA SOLO POR EL MANDO - 03/11/2026. ***
+    #
+    # Ponia `detents == 0 || s_regla_saltos`, o sea "el mando no se ha
+    # movido esta vuelta". Con un dedo arrastrando por el espectro el mando
+    # no se mueve NUNCA, asi que la compuerta se abria en todas las vueltas
+    # y el arrastre ralentizaba la radio igual que lo hacia el mando antes
+    # de la V6.44. Ahora las tres preguntan tambien por s_dedo_dial.
+    #
     desague = ('s_regla_debe &&' in cuerpo
                and 'spec_span_labels_draw();' in cuerpo
-               and 'detents == 0 || s_regla_saltos' in cuerpo)
+               and 'detents == 0 && !s_dedo_dial' in cuerpo
+               and 's_regla_saltos >= REGLA_GIRO_SALTOS' in cuerpo)
     print("    la regla se marca, no se pinta al momento     %s"
           % ("ok" if marca else "*** MAL ***"))
     if not marca:
@@ -283,7 +293,7 @@ def pinta(txt):
     # Ahora se exige el reloj: CHAPA_PARADO_MS desde el ultimo detente.
     #
     chapa_marca   = 's_chapa_debe = 1U;' in cuerpo
-    chapa_desague = ('s_chapa_debe && detents == 0' in cuerpo
+    chapa_desague = ('s_chapa_debe && detents == 0 && !s_dedo_dial' in cuerpo
                      and 'CHAPA_PARADO_MS' in cuerpo
                      and 'ui_top_draw_chips(&s_top);' in cuerpo)
     print("    la chapa del NCO se marca, no se pinta        %s"
@@ -310,6 +320,7 @@ def pinta(txt):
     freq_marca   = 's_freq_debe = 1U;' in cuerpo
     freq_desague = ('s_freq_debe' in cuerpo
                     and 'FREQ_GIRO_MS' in cuerpo
+                    and 'detents == 0 && !s_dedo_dial' in cuerpo
                     and 'freq_display_draw();' in cuerpo)
     print("    el numero de la frecuencia se marca           %s"
           % ("ok" if freq_marca else "*** MAL ***"))
@@ -318,6 +329,89 @@ def pinta(txt):
     print("    y sale a diez por segundo, no a treinta       %s"
           % ("ok" if freq_desague else "*** MAL ***"))
     if not freq_desague:
+        mal += 1
+
+    #
+    # ==================================================================
+    # Y EL DEDO, QUE ES LA OTRA PUERTA - 03/11/2026
+    # ==================================================================
+    #
+    # El sintoma: arrastrar el dedo por el espectro ralentizaba la radio
+    # igual que lo hacia el mando antes de la V6.44.
+    #
+    # Y era el MISMO fallo. Toda la V6.44 se escribio mirando
+    # tune_encoder_poll(), y spec_drag_tune_apply() -que mueve el mismo
+    # dial, con el mismo coste de repintado- se quedo pintando a pelo en
+    # cada paso del arrastre. Dos caminos para la misma cosa y la
+    # disciplina aplicada solo a uno.
+    #
+    # Asi que esto no mira el mando: mira que QUIEN MUEVA EL DIAL pase por
+    # las mismas compuertas.
+    #
+    k = txt.find('static void spec_drag_tune_apply(')
+    arr = txt[k:k + 6000] if k >= 0 else ''
+    arr_marca  = ('s_freq_debe  = 1U;' in arr or 's_freq_debe = 1U;' in arr)
+    arr_regla  = ('s_regla_debe = 1U;' in arr)
+    arr_pelo   = ('freq_display_draw();' in arr
+                  or 'spec_span_labels_draw();' in arr)
+    print("    el arrastre del dedo tambien marca            %s"
+          % ("ok" if (arr_marca and arr_regla) else "*** MAL ***"))
+    if not (arr_marca and arr_regla):
+        mal += 1
+    print("    y NO pinta a pelo en cada paso                %s"
+          % ("*** MAL ***" if arr_pelo else "ok"))
+    if arr_pelo:
+        mal += 1
+
+    # Y la bandera que las compuertas miran tiene que apagarse al levantar
+    # el dedo; si no, el numero bueno no llega nunca.
+    dedo_apaga = 's_dedo_dial = 0U;' in txt and 's_dedo_dial = 1U;' in txt
+    print("    y la bandera del dedo se enciende y se apaga  %s"
+          % ("ok" if dedo_apaga else "*** MAL ***"))
+    if not dedo_apaga:
+        mal += 1
+
+    #
+    # ==================================================================
+    # Y LA REGLA DEL MARCO, QUE ERA LA CUARTA Y NADIE LA MIRABA
+    # 03/11/2026
+    # ==================================================================
+    #
+    # Medido por el cable con la orden "DD;", arrastrando el dedo:
+    #
+    #     quieto        chr     27 us por cuadro
+    #     arrastrando   chr  4.100 us por cuadro
+    #
+    # Veintisiete microsegundos quieto quiere decir que la comparacion de
+    # spec_chrome_ruler_changed() funciona. Cuatro milisegundos
+    # arrastrando quiere decir que la regla SI cambia en todos los
+    # cuadros -la marca de demodulacion pasea por las cinco etiquetas- y
+    # se repinta entera: 800 x 26 = 20.800 pixeles por la CPU.
+    #
+    # Es el mismo caso que el numero de la frecuencia y la fila de
+    # etiquetas, y era el unico repintado del cuadro que se habia quedado
+    # sin el freno de la V6.44.
+    #
+    # LO QUE SE EXIGE: que spec_chrome_tick() ponga s_chrome al dia
+    # SIEMPRE -si no, el cuadro siguiente no veria el cambio que este se
+    # dejo sin pintar- y que lo que se aplace sea el DIBUJO, con bandera.
+    #
+    m = txt.find('static void spec_chrome_tick(void)')
+    chm = txt[m:m + 4000] if m >= 0 else ''
+    chr_marca   = 's_chrome_debe = 1U;' in chm
+    chr_aldia   = 's_chrome = nueva;' in chm
+    chr_desague = ('s_chrome_debe' in chm
+                   and 'CHROME_GIRO_MS' in chm
+                   and 's_gir_ms' in chm
+                   and 'spec_chrome_draw_ruler(&s_chrome);' in chm)
+    chr_pelo    = chm.count('spec_chrome_draw_ruler(&s_chrome);') > 1
+    print("    la regla del marco se marca, no se pinta      %s"
+          % ("ok" if (chr_marca and chr_aldia) else "*** MAL ***"))
+    if not (chr_marca and chr_aldia):
+        mal += 1
+    print("    y sale a diez por segundo mientras se mueve   %s"
+          % ("ok" if (chr_desague and not chr_pelo) else "*** MAL ***"))
+    if not chr_desague or chr_pelo:
         mal += 1
 
     if mal:

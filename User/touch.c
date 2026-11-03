@@ -131,6 +131,18 @@ static uint16_t xpt2046_transfer(uint8_t cmd)
     return (uint16_t)((result >> 3) & 0x0FFF);
 }
 
+/* La respuesta guardada entre dos miradas al panel. Lo de por que se
+ * guarda esta donde se decide, en TOUCH_CADENCIA_MS; se declara aqui
+ * arriba porque touch_init() la deja en blanco. */
+/* Lecturas de verdad del panel, acumuladas desde el arranque. Quien lo lee
+ * se queda con la diferencia. Ver touch_lecturas(). */
+static uint32_t s_lecturas = 0UL;
+static uint32_t s_cad_ms   = 0U;
+static uint8_t  s_cad_vale = 0U;   /* hay respuesta guardada */
+static uint8_t  s_cad_hay  = 0U;
+static uint16_t s_cad_x    = 0U;
+static uint16_t s_cad_y    = 0U;
+
 void touch_init(void)
 {
     rcu_periph_clock_enable(RCU_GPIOB);
@@ -197,6 +209,11 @@ void touch_init(void)
         touch_calibration_t cal = {130, 3990, 230, 3805, 0, 1, 0};
         touch_set_calibration(&cal);
     }
+
+    /* Que la cadencia no arranque con una respuesta guardada de antes.
+     * Ver TOUCH_CADENCIA_MS. */
+    s_cad_vale = 0U;
+    s_cad_hay  = 0U;
 
     debug_print("touch_init: completado\n");
 }
@@ -291,6 +308,11 @@ uint8_t touch_read_raw(uint16_t *raw_x, uint16_t *raw_y)
     if (!touch_is_pressed()) {
         return 0;
     }
+
+    /* Una lectura de verdad: diez transacciones de 24 bits, 775 us medidos
+     * en deepsdr-ui/m4/m4_tactil.c. Se cuenta para poder sacarlo por cable
+     * y saber cuantas se pagan de verdad por cuadro. Ver "DD;" en cat.c. */
+    s_lecturas++;
 
     t_cs(0);
     delay_us_approx(2); /* tiempo de adquisicion tras seleccionar chip */
@@ -505,8 +527,72 @@ uint8_t touch_get_firmeza(void)
 }
 
 static uint8_t touch_read_una(uint16_t *x, uint16_t *y);
+static uint8_t touch_read_firme(uint16_t *x, uint16_t *y);
+
+/*
+ * ======================================================================
+ * CADA CUANTO SE MIRA EL PANEL - 03/11/2026
+ * ======================================================================
+ *
+ * *** El usuario: arrastrando con el dedo la radio se ralentiza, igual
+ * que se ralentizaba con el mando antes de la V6.44. Los repintados
+ * diferidos de la V6.51 no lo curaron, o sea que habia otra cosa. ***
+ *
+ * La otra cosa tiene que estar en el unico camino que recorre el dedo y
+ * no recorre el mando, y ese camino es la lectura del panel. Medido, no
+ * supuesto: deepsdr-ui/m4/m4_tactil.c, un Cortex-M4 de verdad con el
+ * touch.c de verdad, da 155.066 instrucciones por lectura, que a 200 MHz
+ * son 775 us. Una vuelta del bucle con el espectro pintando mide de
+ * 1.700 a 4.000 us por el cable. O sea que mientras el dedo esta apoyado
+ * la lectura del panel se llevaba el 20-45% de cada vuelta.
+ *
+ * Y no es gratuita por accidente: el XPT2046 se lee por SPI de bit-bang,
+ * con delay_us_approx(1) entre flanco y flanco, cinco muestras por eje
+ * para filtrar el ruido del panel resistivo = diez transacciones de 24
+ * bits. Eso es lo que cuesta leer bien; no se toca.
+ *
+ * LO QUE SI SE TOCA ES CADA CUANTO. Hasta aqui se leia en CADA vuelta del
+ * bucle, o sea cada 1,7 ms, y ese ritmo no le sirve a nadie:
+ *
+ *   - para CONFIRMAR un contacto no sirve, y lo dice este mismo fichero
+ *     unas lineas mas arriba: entre dos lecturas que cuentan tienen que
+ *     pasar TOUCH_CONF_MS (20 ms), "mirar mas deprisa ya no hace la radio
+ *     mas sensible".
+ *   - para ARRASTRAR tampoco: a 8 ms son 125 lecturas por segundo, y lo
+ *     que se ve en pantalla no va mas rapido que el repintado.
+ *   - y el propio latido que ya existe mira cada 8 ms (TOUCH_LATIDO_MS)
+ *     mientras se pinta, que es la misma cadencia que se pone aqui.
+ *
+ * Asi que entre lectura y lectura se devuelve la respuesta anterior. La
+ * suelta se entera como mucho 8 ms tarde -un dedo humano esta puesto 50
+ * ms largos; ver la tabla de toques de sim/tactil_arrastre.c, donde
+ * mirando cada 10 ms salen hasta los toques de 40 ms- y a cambio el coste
+ * por vuelta baja de 775 us a 194 us de media, medido en m4_tactil con
+ * vueltas de 2 ms.
+ *
+ * NO AFECTA A LA CALIBRACION: touch_calib.c llama a touch_read_raw()
+ * directamente, sin pasar por aqui, y sigue leyendo a pleno ritmo.
+ */
+#define TOUCH_CADENCIA_MS  8U
+
+uint32_t touch_lecturas(void) { return s_lecturas; }
 
 uint8_t touch_read(uint16_t *x, uint16_t *y)
+{
+    if (s_cad_vale
+        && (uint32_t)(g_msticks - s_cad_ms) < TOUCH_CADENCIA_MS) {
+        if (s_cad_hay) { *x = s_cad_x; *y = s_cad_y; }
+        return s_cad_hay;
+    }
+
+    s_cad_ms   = g_msticks;
+    s_cad_vale = 1U;
+    s_cad_hay  = touch_read_firme(&s_cad_x, &s_cad_y);
+    if (s_cad_hay) { *x = s_cad_x; *y = s_cad_y; }
+    return s_cad_hay;
+}
+
+static uint8_t touch_read_firme(uint16_t *x, uint16_t *y)
 {
     uint16_t px, py, tope;
     uint32_t ahora = g_msticks;
@@ -762,11 +848,44 @@ void touch_debug_stream_poll(void)
 static uint32_t s_latido_ms;
 static uint8_t  s_lat_hubo;    /* hubo contacto confirmado sin recoger */
 static uint16_t s_lat_x, s_lat_y;
+static uint8_t  s_lat_pausa;   /* ver touch_latido_pausa() */
+
+/*
+ * ======================================================================
+ * Y CON UN GESTO EN MARCHA, EL LATIDO NO PINTA NADA - 03/11/2026
+ * ======================================================================
+ *
+ * *** El usuario, por tercera vez: "sigue ralentizando" con el dedo. ***
+ *
+ * Esto no es una sospecha, es trabajo que se tira. Lo UNICO que produce
+ * el latido es el pestillo de arriba: "hubo un contacto y el bucle no lo
+ * vio". Y demo_touch_poll() solo lo recoge cuando NO hay dedo y NO hay
+ * gesto en marcha; en cualquier otro caso llama a touch_pendiente_borra()
+ * y lo borra sin mirarlo. Esta escrito alli con todas las letras: "con el
+ * dedo puesto manda lo que se acaba de leer, y mientras se arrastra, lo
+ * apuntado es el propio arrastre y meterlo seria un salto".
+ *
+ * O sea que mientras se arrastra, cada latido bajaba al panel -775 us,
+ * medidos en deepsdr-ui/m4/m4_tactil.c- para guardar un dato que la
+ * vuelta siguiente borra. Y lo hace DENTRO del repintado, entre banda y
+ * banda, que es el tramo mas caro de la vuelta: a una lectura cada 8 ms,
+ * un cuadro de 22 ms se llevaba dos o tres, entre 1,5 y 2,3 ms de cuadro
+ * tirados, y SOLO con el dedo apoyado. El mando no paga nada de esto.
+ *
+ * El pestillo sigue existiendo para lo que se invento -el toque corto que
+ * entra y sale entero dentro de un repintado-, porque ahi no hay gesto en
+ * marcha y el latido no esta en pausa.
+ */
+void touch_latido_pausa(uint8_t si)
+{
+    s_lat_pausa = si ? 1U : 0U;
+}
 
 void touch_latido(void)
 {
     uint16_t x = 0U, y = 0U;
 
+    if (s_lat_pausa) { return; }
     if ((uint32_t)(g_msticks - s_latido_ms) < TOUCH_LATIDO_MS) { return; }
     s_latido_ms = g_msticks;
 

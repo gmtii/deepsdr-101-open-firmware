@@ -362,6 +362,24 @@ static volatile uint32_t s_diag_suma[TRAMO_N];
 static volatile uint32_t s_diag_vuelta;
 static volatile uint16_t s_diag_n;
 static volatile uint16_t s_diag_detentes;
+/*
+ * Y el desglose de DENTRO del dibujo, para la orden "DD;". Sumas desde la
+ * ultima consulta, igual que las de "DG;": ver donde se acumulan, al final
+ * de sdr_spectrum_waterfall_tick().
+ */
+static volatile uint32_t s_dd_fft, s_dd_chrome, s_dd_spec, s_dd_push, s_dd_wf;
+static volatile uint32_t s_dd_salt, s_dd_bandas;
+static volatile uint16_t s_dd_n;
+/* Y CUANTAS VECES se hizo cada cosa cara. Los tiempos dicen cuanto cuesta;
+ * estos dicen cuantas veces se paga, que es la mitad que faltaba. */
+static volatile uint32_t s_dd_frq_n, s_dd_rgl_n, s_dd_chapa_n, s_dd_arr_n;
+static volatile uint32_t s_dd_chr_n;   /* repintados de la regla del marco */
+/* Y lo que cuesta reprogramar la sintonia DESDE EL ARRASTRE, que el tramo
+ * `lot` de "DG;" no cubre: ver donde se cronometra. */
+static volatile uint32_t s_dd_lot, s_dd_lot_n;
+/* Y lo que cuesta spec_drag_tune_apply() entera, para saber si los dos mil
+ * microsegundos sin nombre de `tac` estan ahi dentro o en el reparto. */
+static volatile uint32_t s_dd_arr_us;
 
 static volatile uint32_t s_peor_tramo_us;
 /* Los tres de dentro de franja_arriba_tick(), que no puede escribir en la
@@ -6363,6 +6381,30 @@ static uint8_t  s_freq_debe = 0U;
 static uint32_t s_freq_ms   = 0UL;
 
 /*
+ * ======================================================================
+ * EL DEDO TAMBIEN MUEVE EL DIAL - 03/11/2026
+ * ======================================================================
+ *
+ * El sintoma: arrastrar el dedo por el espectro ralentizaba la radio
+ * igual que lo hacia el mando antes de la V6.44.
+ *
+ * Y es el mismo fallo, por la otra puerta. La V6.44 dejo de repintar en
+ * cada detente el numero de la frecuencia, la regla y las chapas: ahora se
+ * marcan pendientes y se pintan diez veces por segundo mientras el mando
+ * gira, y el bueno en cuanto para. Pero esas tres compuertas preguntan
+ * `detents == 0`, o sea "el mando no se ha movido ESTA vuelta", y con un
+ * dedo arrastrando el mando no se mueve NUNCA: las tres se abrian en todas
+ * las vueltas y spec_drag_tune_apply() ademas pintaba por su cuenta, sin
+ * pasar por ellas.
+ *
+ * Esta bandera vale 1 mientras un arrastre esta moviendo el dial, y es lo
+ * unico que las tres compuertas necesitan saber para que el dedo cuente
+ * como "se esta girando". Con el mando vale 0 y todo se comporta
+ * EXACTAMENTE igual que en la V6.44.
+ */
+static uint8_t s_dedo_dial = 0U;
+
+/*
  * ===========================================================================
  * EL BINARIO QUE PARTE EL PROBLEMA EN DOS - 02/11/2026.
  * ===========================================================================
@@ -9424,6 +9466,16 @@ static void spec_chrome_full_draw(void)
  * donde pone -60. Comparar cuesta seis comparaciones por frame y no se
  * puede olvidar.
  */
+/*
+ * Cada cuanto se repinta la regla mientras el dial se mueve. El mismo
+ * numero que FREQ_GIRO_MS, y por el mismo motivo: diez veces por segundo
+ * es mas de lo que el ojo pide para un numero que esta cambiando.
+ */
+#define CHROME_GIRO_MS  100U
+
+static uint8_t  s_chrome_debe = 0U;   /* hay regla pendiente de pintar */
+static uint32_t s_chrome_ms   = 0U;   /* cuando se pinto la ultima */
+
 __attribute__((noinline))
 static void spec_chrome_tick(void)
 {
@@ -9446,11 +9498,64 @@ static void spec_chrome_tick(void)
         s_chrome = nueva;
         spec_chrome_draw_axis(&s_chrome);
     }
+    /*
+     * ==================================================================
+     * LA REGLA TAMPOCO SE REPINTA EN CADA CUADRO MIENTRAS EL DIAL SE
+     * MUEVE - 03/11/2026
+     * ==================================================================
+     *
+     * *** Medido por el cable con "DD;" (tools/cat_vuelta.ps1), con el
+     * dedo arrastrando el espectro:
+     *
+     *     quieto        chr     27 us por cuadro
+     *     arrastrando   chr  4.100 us por cuadro   <- x150
+     *
+     * Veintisiete microsegundos quieto quiere decir que la comparacion
+     * funciona: cuando no cambia nada, esto no pinta nada. Y cuatro
+     * milisegundos arrastrando quiere decir que SI cambia, en todos los
+     * cuadros. ***
+     *
+     * Y cambia de verdad, no por un fallo de la comparacion: lo que
+     * decide el repintado es en QUE etiqueta cae la marca de
+     * demodulacion (ver spec_chrome_ruler_changed(), 02/11), y un dedo
+     * barriendo el espectro de lado a lado la pasea por las cinco. O sea
+     * que la regla dice otra cosa, y se repinta: 800 x 26 = 20.800
+     * pixeles por la CPU, sin DMA.
+     *
+     * PERO NADIE VE ESO TREINTA VECES POR SEGUNDO. Lo unico que cambia
+     * es cual de las cinco etiquetas va en color de acento. Esto es
+     * exactamente lo que la V6.44 hizo con el numero de la frecuencia y
+     * con la fila de etiquetas -diez veces por segundo mientras el dial
+     * se mueve, y la buena en cuanto para-, y es el unico repintado del
+     * cuadro que se quedo sin ese freno.
+     *
+     * COMO, sin perderse ningun cambio: `s_chrome` se pone al dia SIEMPRE
+     * -si no, la comparacion del cuadro siguiente no veria el cambio que
+     * este se dejo sin pintar- y lo que se aplaza es el DIBUJO, con una
+     * bandera que no se baja hasta que se pinta. Mismo patron que
+     * s_freq_debe.
+     *
+     * Y "el dial se mueve" es s_gir_ms, que vale para el mando y para el
+     * dedo: los dos lo ponen. Parado el dial, la primera condicion es
+     * falsa y la regla buena sale en el cuadro siguiente, sin esperar.
+     */
     if (spec_chrome_ruler_changed(&s_chrome, &nueva)) {
-        s_chrome = nueva;
-        spec_chrome_draw_ruler(&s_chrome);
+        s_chrome_debe = 1U;
     }
     s_chrome = nueva;
+
+    if (s_chrome_debe) {
+        uint8_t movido = (uint8_t)((uint32_t)(g_msticks - s_gir_ms)
+                                   < CHROME_GIRO_MS);
+
+        if (!movido
+            || (uint32_t)(g_msticks - s_chrome_ms) >= CHROME_GIRO_MS) {
+            spec_chrome_draw_ruler(&s_chrome);
+            s_chrome_ms   = g_msticks;
+            s_chrome_debe = 0U;
+            s_dd_chr_n++;   /* para el cable: ver "DD;" */
+        }
+    }
 }
 
 
@@ -17942,13 +18047,95 @@ static void cat_diag_lee(cat_diag_t *d)
     if (d->carga > 100U) { d->carga = 100U; }
 }
 
+/*
+ * Lo que contesta "DD;": el desglose de DENTRO del dibujo, en medias por
+ * cuadro desde la consulta anterior, y los contadores a cero. Mismo
+ * patron y mismo motivo que cat_diag_lee(), incluida la interrupcion
+ * cerrada: el bucle escribe en estos mismos contadores.
+ */
+static void cat_dibujo_lee(cat_dibujo_t *d)
+{
+    /* Los dos acumulados que NO se pueden poner a cero -viven en otro
+     * fichero y los usa alguien mas-: se guarda el de la consulta anterior
+     * y se contesta la diferencia. */
+    static uint32_t s_inval_antes, s_lect_antes, s_wflin_antes;
+    uint32_t primask = __get_PRIMASK();
+    uint32_t inval = spectrum_invalida_cuenta();
+    uint32_t lect  = touch_lecturas();
+    uint32_t wflin = s_wf_lineas;
+    uint16_t n;
+
+    __disable_irq();
+    n = s_dd_n;
+    d->cuadros   = n;
+    d->fft_us    = n ? (s_dd_fft    / n) : 0UL;
+    d->chrome_us = n ? (s_dd_chrome / n) : 0UL;
+    d->spec_us   = n ? (s_dd_spec   / n) : 0UL;
+    d->push_us   = n ? (s_dd_push   / n) : 0UL;
+    d->wf_us     = n ? (s_dd_wf     / n) : 0UL;
+    d->saltadas  = n ? (s_dd_salt   / n) : 0UL;
+    d->bandas    = n ? (s_dd_bandas / n) : 0UL;
+    d->frq_n     = s_dd_frq_n;
+    d->rgl_n     = s_dd_rgl_n;
+    d->chr_n     = s_dd_chr_n;
+    d->lot_us    = n ? (s_dd_lot / n) : 0UL;
+    d->lot_n     = s_dd_lot_n;
+    d->arr_us    = n ? (s_dd_arr_us / n) : 0UL;
+    d->chapa_n   = s_dd_chapa_n;
+    d->arrastre_n = s_dd_arr_n;
+    s_dd_fft = 0UL; s_dd_chrome = 0UL; s_dd_spec = 0UL;
+    s_dd_push = 0UL; s_dd_wf = 0UL;
+    s_dd_salt = 0UL; s_dd_bandas = 0UL;
+    s_dd_frq_n = 0UL; s_dd_rgl_n = 0UL; s_dd_chapa_n = 0UL; s_dd_arr_n = 0UL;
+    s_dd_chr_n = 0UL;
+    s_dd_lot = 0UL; s_dd_lot_n = 0UL;
+    s_dd_arr_us = 0UL;
+    s_dd_n = 0U;
+    if (!primask) { __enable_irq(); }
+
+    d->invalida  = (uint32_t)(inval - s_inval_antes);
+    d->lecturas  = (uint32_t)(lect  - s_lect_antes);
+    d->wf_lineas = (uint32_t)(wflin - s_wflin_antes);
+    s_inval_antes = inval;
+    s_lect_antes  = lect;
+    s_wflin_antes = wflin;
+
+    /*
+     * Y EL ESTADO, para no tener que preguntarlo aparte ni fiarse de lo
+     * que uno crea que tenia puesto la radio cuando tomo la medida.
+     */
+    d->estado = (uint32_t)((s_nco_on            ? 1UL : 0UL)
+                           | (s_menu_open       ? 2UL : 0UL)
+                           | (s_dedo_dial       ? 4UL : 0UL)
+                           | (modo_panel_entero() ? 8UL : 0UL)
+                           | (((uint32_t)s_spec_zoom & 0x0FUL) << 4)
+                           /*
+                            * Y LOS ROTULOS DE EMISORAS SOBRE EL ESPECTRO
+                            * - 03/11/2026.
+                            *
+                            * Porque son el sospechoso de los 4.800 us que
+                            * crece la traza al arrastrar: se filtran por
+                            * distancia a la SINTONIA (ver
+                            * spec_rotulos_filtra()), asi que mover el dial
+                            * cambia cuales salen y donde, y cada cambio
+                            * ensucia bandas. Medido: `salta` baja de 26 a
+                            * 15 de 52 arrastrando.
+                            *
+                            * Con el bit en la medida, la tanda dice si
+                            * estaban puestos y no hay que preguntarlo.
+                            */
+                           | (s_bd_espectro     ? 256UL : 0UL)
+                           | (nr_ss_get_enabled() ? 512UL : 0UL));
+}
+
 static const cat_radio_t k_cat_radio = {
     cat_freq_lee, cat_freq_pon,
     cat_modo_lee, cat_modo_pon,
     cat_smeter_lee,
     cat_vol_lee, cat_vol_pon,
     cat_ancho_lee,
-    cat_diag_lee
+    cat_diag_lee,
+    cat_dibujo_lee
 };
 
 static void cat_puente_init(void)
@@ -34405,8 +34592,10 @@ static void tune_encoder_poll(void)
      * no lo que se haga despues con el movimiento. */
     if (detents != 0) {
         s_gir_ms = g_msticks;
-        /* Para "DG": cuantos clics cayeron en el rato que mide la
-         * consulta, que es lo que separa "girando" de "quieto". */
+        /* Para "DG": cuanto se movio el dial en el rato que mide la
+         * consulta, que es lo que separa "moviendo" de "quieto". El
+         * arrastre con el dedo suma en el mismo sitio; ver
+         * spec_drag_tune_apply(). */
         s_diag_detentes = (uint16_t)(s_diag_detentes
                                      + (uint16_t)((detents < 0)
                                                   ? -detents : detents));
@@ -34470,11 +34659,13 @@ static void tune_encoder_poll(void)
          */
         if (s_lo_hz == s_regla_lo && tasa == s_regla_tasa) {
             s_regla_debe = 0U;      /* diria lo mismo: no se pinta */
-        } else if (detents == 0 || s_regla_saltos >= REGLA_GIRO_SALTOS) {
+        } else if ((detents == 0 && !s_dedo_dial)
+                   || s_regla_saltos >= REGLA_GIRO_SALTOS) {
             uint32_t t0 = DWT->CYCCNT;
 
             spec_span_labels_draw();
             s_man_rgl += (DWT->CYCCNT - t0) / (SystemCoreClock / 1000000U);
+            s_dd_rgl_n++;   /* para el cable: ver "DD;" */
             s_regla_lo     = s_lo_hz;
             s_regla_tasa   = tasa;
             s_regla_saltos = 0U;
@@ -34526,18 +34717,21 @@ static void tune_encoder_poll(void)
      * mudarlo aqui.
      */
     if (s_freq_debe
-        && (detents == 0 || (uint32_t)(g_msticks - s_freq_ms) >= FREQ_GIRO_MS)) {
+        && ((detents == 0 && !s_dedo_dial)
+            || (uint32_t)(g_msticks - s_freq_ms) >= FREQ_GIRO_MS)) {
         uint32_t t0 = DWT->CYCCNT;
 
         freq_display_draw();
         s_man_frq  += (DWT->CYCCNT - t0) / (SystemCoreClock / 1000000U);
         s_freq_ms   = g_msticks;
         s_freq_debe = 0U;
+        s_dd_frq_n++;   /* para el cable: ver "DD;" */
     }
 
-    if (s_chapa_debe && detents == 0
+    if (s_chapa_debe && detents == 0 && !s_dedo_dial
         && (uint32_t)(g_msticks - s_gir_ms) >= CHAPA_PARADO_MS) {
         s_chapa_debe = 0U;
+        s_dd_chapa_n++;   /* para el cable: ver "DD;" */
         if (!ui_top_nco_al_dia(&s_top)) { ui_top_draw_chips(&s_top); }
     }
 
@@ -35853,6 +36047,12 @@ static void radio_screen_draw(void)
  * frequency increases left-to-right - see spec_span_labels_draw()'s
  * tick ruler).
  *
+ * *** Y ESO VALE SOLO CUANDO EL OSCILADOR SIGUE A LA SINTONIA -
+ * 03/11/2026. *** Con el NCO puesto el oscilador se queda aparcado, el
+ * espectro no se mueve y lo unico que se mueve es la raya: ahi el signo
+ * se invierte para que la raya vaya con el dedo. El porque entero esta en
+ * nco_arrastre_hz(), y el signo lo vigila sim/ncotest.c.
+ *
  * QUANTIZED to whole steps rather than applied as continuous
  * fractional Hz - added same day, per the project owner: raw pixel-
  * proportional Hz produced odd non-round frequencies and, on this
@@ -36089,9 +36289,31 @@ static void spec_drag_tune_apply(uint16_t x, uint16_t prev_x, float *hz_accum)
     hz_per_px = (float)spec_zoom_full_span_hz() / (float)SPEC_TRACE_W;
     step_hz = (float)k_tune_steps[s_tune_step_idx];
 
-    /* Drag right (dx_px > 0) -> frequency DOWN, so subtract - see this
-     * function's comment for the "pan the content" reasoning. */
-    *hz_accum -= (float)dx_px * hz_per_px;
+    /*
+     * EL SIGNO DEPENDE DE QUE SE MUEVE EN LA PANTALLA - 03/11/2026.
+     *
+     * Con el oscilador siguiendo a la sintonia, lo que se mueve es el
+     * ESPECTRO y vale la regla del mapa: arrastrar a la derecha baja la
+     * frecuencia. Con el oscilador APARCADO -el NCO puesto- el espectro se
+     * queda quieto y lo unico que se mueve es LA RAYA, que tiene que ir
+     * donde va el dedo.
+     *
+     * La regla entera, con el porque, esta en nco_arrastre_hz(): vive en
+     * User/nco.c para que sim/ncotest.c pueda medirla, porque un signo al
+     * reves no rompe nada -la radio sintoniza igual- y lo unico que lo caza
+     * es un banco o un usuario con un video.
+     *
+     * Y LA FM ANCHA CUENTA COMO "NO APARCADO" aunque el NCO este puesto:
+     * lo_para_sintonia() devuelve la frecuencia tal cual en WFM, o sea que
+     * ahi el oscilador SI sigue a la sintonia y el que se mueve vuelve a
+     * ser el espectro.
+     */
+    {
+        uint8_t aparcado = (uint8_t)(s_nco_on
+                                     && demod_am_get_mode() != DEMOD_MODE_WFM);
+
+        *hz_accum += nco_arrastre_hz(dx_px, hz_per_px, aparcado);
+    }
 
     /* C99 truncates toward zero - exactly what we want for both signs
      * here, same reasoning as encoder_take_delta()'s comment. Usually
@@ -36109,11 +36331,69 @@ static void spec_drag_tune_apply(uint16_t x, uint16_t prev_x, float *hz_accum)
     if (f > (int64_t)TUNE_MAX_HZ) { f = (int64_t)TUNE_MAX_HZ; }
 
     if ((uint32_t)f != s_tune_hz) {
+        /*
+         * EL RELOJ AQUI, PORQUE EL TRAMO `lot` NO CUBRE ESTA LLAMADA
+         * - 03/11/2026.
+         *
+         * `lot` solo cronometra las dos llamadas de dentro de
+         * tune_encoder_poll(), o sea el mando. La del arrastre cae dentro
+         * de `tac` -el tramo del tactil- revuelta con la lectura del panel
+         * y con el despacho, y asi no se puede saber cual de las tres es.
+         *
+         * Y hay un motivo concreto para querer saberlo: reprogramar el
+         * MS5351 cuesta 1.763 us medidos (deepsdr-ui/m4/m4_i2c.c), por I2C
+         * de bit-bang. Con el NCO puesto el oscilador se queda aparcado y
+         * esto no cuesta nada; con el NCO apagado sigue al dial hercio a
+         * hercio y CADA paso del arrastre lo reprograma. En la tanda de la
+         * V6.55 sobran unos 1.770 us por muestra dentro de `tac` que no
+         * son la lectura del panel, y 1.770 se parece demasiado a 1.763.
+         * Pero parecerse no es medir, asi que se mide.
+         *
+         * Va a "DD;" y no a "DG;" para no tocar el reparto de la vuelta:
+         * los dieciocho tramos de "DG" tienen que sumar.
+         */
+        uint32_t t_lot = DWT->CYCCNT;
+
         s_tune_hz = (uint32_t)f;
         apply_lo_tune(s_tune_hz);
-        freq_display_draw();
-        spec_span_labels_draw(); /* "esta escala tiene que variar con
-                                   * la frecuencia" - see its comment */
+        s_dd_lot += (DWT->CYCCNT - t_lot) / (SystemCoreClock / 1000000U);
+        s_dd_lot_n++;
+        /*
+         * MARCAR, NO PINTAR - 03/11/2026. Ver s_dedo_dial.
+         *
+         * Aqui se llamaba a freq_display_draw() y a spec_span_labels_draw()
+         * en cada paso del arrastre, que es lo que la V6.44 quito del
+         * camino del mando por costar siete milisegundos de cada vuelta.
+         * El arrastre no se entero entonces y ralentizaba la radio igual
+         * que el mando antes de aquello.
+         *
+         * Ahora pasa por las mismas compuertas: diez veces por segundo
+         * mientras el dedo se mueve, y el bueno en cuanto lo levantas.
+         */
+        s_gir_ms     = g_msticks;   /* el dial se ha movido, aunque no sea el mando */
+        /*
+         * Y SE CUENTA COMO MOVIMIENTO DE DIAL PARA "DG;" - 03/11/2026.
+         *
+         * *** El usuario, por tercera vez: "sigue ralentizando". Dos
+         * arreglos a ciegas -los repintados diferidos y la cadencia del
+         * panel- y el sintoma sigue ahi. ***
+         *
+         * El unico instrumento que puede ver un dedo es la propia radio,
+         * y ya lo tiene: la orden "DG;" reparte la vuelta del bucle en
+         * dieciocho tramos. Lo que le faltaba era saber que el dial se
+         * estaba moviendo, porque este contador solo miraba los clics del
+         * mando: un arrastre con el dedo caia en la casilla de "quieto" y
+         * se promediaba con las vueltas en las que no pasa nada.
+         *
+         * Contando aqui los pasos, tools/cat_vuelta.ps1 separa
+         * "arrastrando" de "quieto" sin tocar el protocolo, y dice QUE
+         * TRAMO crece. Ver cat.h.
+         */
+        s_diag_detentes = (uint16_t)(s_diag_detentes
+                                     + (uint16_t)((steps < 0) ? -steps : steps));
+        s_dd_arr_n++;   /* y aparte del mando, para el cable: ver "DD;" */
+        s_freq_debe  = 1U;
+        s_regla_debe = 1U;
     }
 }
 
@@ -36277,6 +36557,19 @@ static void demo_touch_poll(void)
     } else {
         touch_pendiente_borra();
     }
+
+    /*
+     * Y EL LATIDO SE PARA MIENTRAS HAYA DEDO - 03/11/2026.
+     *
+     * Las cuatro lineas de arriba son el motivo: con dedo o con gesto en
+     * marcha, lo que el latido apunta se BORRA sin mirarlo. O sea que cada
+     * latido de dentro del repintado estaba bajando al panel -775 us- para
+     * nada, dos o tres veces por cuadro, y solo con el dedo apoyado.
+     *
+     * Se decide aqui y no dentro de touch.c porque quien sabe si hay un
+     * gesto en marcha es este fichero. Ver touch_latido_pausa().
+     */
+    touch_latido_pausa((uint8_t)(pressed || s_touch_active));
 
     /*
      * LA CAPTURA DE PANTALLA: LA ESQUINA DE ARRIBA A LA IZQUIERDA, MANTENIDA.
@@ -36742,7 +37035,34 @@ static void demo_touch_poll(void)
          * not the whole gesture's travel - spec_drag_tune_apply()'s own
          * per-sample-delta design expects exactly that. */
         if (s_spec_drag_moved) {
-            spec_drag_tune_apply(x, s_spec_drag_prev_x, &s_spec_drag_hz_accum);
+            /* El dedo esta moviendo el dial: que las compuertas de
+             * tune_encoder_poll() lo cuenten como "se esta girando". Ver
+             * s_dedo_dial. Se apaga al levantar el dedo, en `fin:`. */
+            s_dedo_dial = 1U;
+            /*
+             * Y CON RELOJ, PORQUE EL TRAMO `tac` NO LO SEPARA
+             * - 03/11/2026.
+             *
+             * `tac` cronometra demo_touch_poll() ENTERA, que son la
+             * lectura del panel, el reparto del gesto y esto. Medido en la
+             * tanda de la V6.56: `tac` son 2.799 us por vuelta y las
+             * lecturas del panel solo 800 -`lect` sale 29 por tanda y cada
+             * una son 775 us-, asi que sobran DOS MIL microsegundos por
+             * vuelta sin nombre. Y no es reprogramar el oscilador: `lot`
+             * sale 1 us, el NCO esta puesto y el oscilador aparcado.
+             *
+             * O esos dos mil estan aqui dentro, o estan en el reparto del
+             * gesto. Con el reloj puesto, la siguiente tanda lo dice y no
+             * hay que volver a adivinar.
+             */
+            {
+                uint32_t t_arr = DWT->CYCCNT;
+
+                spec_drag_tune_apply(x, s_spec_drag_prev_x,
+                                     &s_spec_drag_hz_accum);
+                s_dd_arr_us += (DWT->CYCCNT - t_arr)
+                               / (SystemCoreClock / 1000000U);
+            }
         }
         s_spec_drag_prev_x = x;
     }
@@ -37413,6 +37733,9 @@ static void demo_touch_poll(void)
 fin:
     if (!pressed) {
         s_touch_active = 0U;   /* gesture over - the next press re-decides ownership */
+        /* Dedo fuera: la vuelta siguiente de tune_encoder_poll() pinta el
+         * numero bueno y la regla buena, sin esperar. Ver s_dedo_dial. */
+        s_dedo_dial = 0U;
         s_spec_drag_active = 0U;
         s_spec_drag_moved = 0U;
         s_freq_tap_active = 0U;
@@ -39380,6 +39703,44 @@ static void sdr_spectrum_waterfall_tick(void)
     }
     s_wf_lineas_antes = s_wf_lineas;
     s_fotogramas++;
+
+    /*
+     * ==================================================================
+     * EL DESGLOSE DE DENTRO DEL DIBUJO, PARA EL CABLE - 03/11/2026
+     * ==================================================================
+     *
+     * *** La primera tanda por cable con el dedo (orden "DG;") dijo esto:
+     * la vuelta pasa de 14-22 ms quieto a 38-45 ms arrastrando, y de los
+     * 23 ms que crece, 13 se los lleva el tramo `dib`. El tactil son 2,7
+     * y repintar la frecuencia 2,9. O sea que el grueso esta DENTRO del
+     * dibujo, y el reparto por tramos no entra ahi. ***
+     *
+     * Los cinco numeros de dentro ya existen -los enseña la pagina de
+     * Informacion- pero solo se acumulaban dentro de la ventana del giro,
+     * que es una foto de 400 ms pensada para mirarla en la pantalla. Para
+     * el cable hace falta lo mismo que hace "DG;": sumas desde la consulta
+     * anterior, sin ventana, que no pierden ni un cuadro.
+     *
+     * Y el sexto numero es el que de verdad puede explicarlo: BANDAS
+     * SALTADAS de BANDAS TOTALES. El atajo del repintado parcial se salta
+     * las bandas cuya plantilla no ha cambiado, y spectrum.c lo tiene
+     * medido: con el atajo, la traza cuesta 7.524 us y se salta 28 de 52
+     * bandas; sin el, 13.329 us y cero saltadas. Si arrastrando se va a
+     * cero, ahi esta la explicacion y no hay que buscar mas.
+     */
+    s_dd_fft    += s_fft_us;
+    s_dd_chrome += s_chrome_us;
+    s_dd_spec   += s_spec_us;
+    s_dd_push   += s_push_us;
+    s_dd_wf     += s_wf_ciclos / (SystemCoreClock / 1000000U);
+    {
+        uint32_t sa, to;
+
+        spectrum_parcial_diag(&sa, &to);
+        s_dd_salt   += sa;
+        s_dd_bandas += to;
+    }
+    s_dd_n++;
 
     /* Y la foto del giro. Ver s_gir_tot: se queda con el cuadro mas caro de
      * los que caen dentro del giro, que es el que hay que mirar. */

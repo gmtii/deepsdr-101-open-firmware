@@ -1100,9 +1100,16 @@ static uint32_t s_bandas;            /* diagnostico: bandas en total en el ultim
 
 static uint8_t s_parcial = 1U;       /* el atajo, encendido */
 
+/* Cuantas veces se ha tirado el atajo. Acumulado desde el arranque; quien
+ * lo lee se queda con la diferencia. Es para el cable: ver "DD;" en cat.c. */
+static uint32_t s_inval_n;
+
+uint32_t spectrum_invalida_cuenta(void) { return s_inval_n; }
+
 void spectrum_invalida(void)
 {
     s_parcial_vale = 0U;
+    s_inval_n++;
 }
 
 /*

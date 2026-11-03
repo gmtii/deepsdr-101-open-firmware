@@ -10,26 +10,49 @@
 
     Esto lo arregla. La radio lleva desde la V6.41 una orden de CAT, "DG;",
     que devuelve la media de cada tramo del bucle desde la consulta
-    anterior, cuantas vueltas fueron, cuantos clics de mando hubo y la
-    carga de audio. Este guion pregunta dos veces por segundo, separa las
-    tandas en las que el mando se movio de las que no, y dice QUE TRAMO
-    CRECE.
+    anterior, cuantas vueltas fueron, cuanto se movio el dial y la carga de
+    audio. Este guion pregunta dos veces por segundo, separa las tandas en
+    las que el dial se movio de las que no, y dice QUE TRAMO CRECE.
+
+    Y DESDE LA V6.54, tambien "DD;": el desglose de DENTRO del dibujo. Hizo
+    falta porque la primera tanda con el dedo dijo que la vuelta pasa de
+    14-22 ms quieto a 38-45 ms arrastrando, y que de los veintitantos
+    milisegundos que crece, trece se los lleva el tramo `dib` -el tactil
+    son 2,7 y repintar la frecuencia 2,9-. Y `dib` es UN hueco del reparto,
+    asi que decir "es el dibujo" no resuelve nada: el dibujo son la
+    transformada, el marco, la traza, el empuje al panel y la cascada.
+
+    "DD;" los da por separado, y con ellos el estado del atajo del
+    repintado parcial -bandas saltadas de bandas totales, y cuantas veces
+    se tiro-, cuantas veces se bajo de verdad al panel tactil (775 us cada
+    una) y cuantas veces se repinto el numero del dial, la regla y la
+    chapa. Las dos ordenes se preguntan en la misma tanda y salen en la
+    misma fila: una tabla, no dos que haya que cuadrar a mano.
 
     USO:
         1. En la radio: Informacion -> pagina 4 -> "Puerto serie USB",
            un toque. La fila tiene que poner "abierto N".
         2. Enchufa el cable.
         3. powershell -ExecutionPolicy Bypass -File tools\cat_vuelta.ps1
-        4. Mientras corre, la tanda que de verdad contesta la pregunta:
+        4. Mientras corre, basta con esto, y en este orden:
 
-             - un rato quieto y un rato GIRANDO, con el reductor de ruido
-               ENCENDIDO;
-             - lo mismo con el reductor APAGADO;
-             - y al final, encenderlo y apagarlo varias veces.
+             - QUINCE SEGUNDOS SIN TOCAR NADA;
+             - QUINCE SEGUNDOS ARRASTRANDO EL DEDO por el espectro, de
+               lado a lado, sin soltar;
+             - quince segundos quieto otra vez;
+             - y, si da tiempo, quince GIRANDO EL MANDO, para tener las
+               dos maneras de mover el dial en la misma tanda.
 
-           No hace falta mirar la pantalla: la radio dice en cada tanda si
-           el reductor estaba puesto, y la tabla del final sale en cuatro
-           casillas -quieto/girando por NR si/no-.
+           No hace falta mirar la pantalla ni apuntar nada. La radio dice
+           en cada tanda si el reductor de ruido estaba puesto, y el
+           arrastre con el dedo cuenta igual que girar el mando: la linea
+           viva pone MOVIENDO y el resumen lo manda a la columna "mov".
+
+        5. Al final sale TODO: el reparto de la vuelta en dieciocho
+           tramos, el desglose de dentro del dibujo, el estado del atajo
+           del repintado parcial, cuantas veces se bajo al panel tactil y
+           cuantas veces se repinto cada cosa. Y un CSV al lado con todas
+           las muestras.
 
         powershell -ExecutionPolicy Bypass -File tools\cat_vuelta.ps1 COM5 60
 
@@ -47,6 +70,36 @@ $ErrorActionPreference = "Stop"
 # aqui tambien: la respuesta trae CAT_DIAG_TRAMOS huecos y ni uno mas.
 $TRAMOS = @("cat","smt","syn","cab","bus","emi","fra","mod","tc3",
             "dib","tac","man","frq","rgl","lot","dec","pol","res")
+
+# Los huecos de "DD;", en el orden de cat_dibujo_t. El primero es el numero
+# de cuadros y los catorce siguientes van de cinco cifras. Si alli se añade
+# uno, aqui tambien.
+$DIBUJO = @("cuadros","fft","chr","esp","emp","cas",
+            "salta","bandas","inval","lect",
+            "frqn","rgln","chrn","lotd","lotn","chapan","arrn","arru",
+            "wflin","estado")
+
+$QUE2 = @{
+    "fft"    = "la transformada"
+    "chr"    = "la regla, el marco y las etiquetas"
+    "esp"    = "LA TRAZA del espectro"
+    "emp"    = "empujar al panel"
+    "cas"    = "la cascada"
+    "salta"  = "bandas que el atajo se salto (por cuadro)"
+    "bandas" = "bandas que habia (por cuadro)"
+    "inval"  = "veces que se tiro el atajo del repintado parcial"
+    "lect"   = "bajadas de verdad al panel tactil (775 us cada una)"
+    "frqn"   = "repintados del numero del dial"
+    "rgln"   = "repintados de la fila de etiquetas"
+    "chrn"   = "repintados de la regla del marco"
+    "lotd"   = "reprogramar la sintonia DESDE EL ARRASTRE (us por cuadro)"
+    "lotn"   = "cuantas veces lo reprograma el arrastre"
+    "chapan" = "repintados de la chapa"
+    "arrn"   = "pasos de arrastre con el dedo"
+    "arru"   = "lo que cuesta el arrastre entero (us por cuadro)"
+    "wflin"  = "lineas volcadas a la cascada"
+    "estado" = "bit0 NCO, bit1 menu, bit2 dedo, bit3 panel entero, bits4-7 zoom, bit8 rotulos, bit9 NR"
+}
 
 $QUE = @{
     "cat" = "puerto serie y CAT"
@@ -102,17 +155,43 @@ $p.ReadTimeout  = 1000
 $p.WriteTimeout = 1000
 
 $muestras = @()
+$cab = $false
+
+#
+# EL CSV SE ESCRIBE SEGUN SE TOMA, NO AL FINAL - 03/11/2026.
+#
+# Estaba al final del todo, detras del resumen, y el usuario corta el guion
+# en cuanto tiene las lineas que queria: tres tandas seguidas y ni un CSV en
+# el disco. Un fichero que solo existe si el programa termina bien no es un
+# registro, es una promesa.
+#
+# Ahora cada muestra se añade en cuanto se toma. Si se corta, lo tomado
+# hasta ese momento esta en el disco.
+#
+function Apunta($m) {
+    $fila = New-Object psobject -Property $m
+    if (-not $script:cab) {
+        $fila | Export-Csv -Path $script:csv -NoTypeInformation -Encoding UTF8
+        $script:cab = $true
+    } else {
+        $fila | Export-Csv -Path $script:csv -NoTypeInformation -Encoding UTF8 -Append
+    }
+    return $fila
+}
 
 try {
     $p.Open()
     $p.DiscardInBuffer()
 
     # La primera consulta solo sirve para poner los contadores a cero.
-    $p.Write("DG;"); Start-Sleep -Milliseconds 300; $p.ReadExisting() | Out-Null
+    $p.Write("DG;"); Start-Sleep -Milliseconds 200; $p.ReadExisting() | Out-Null
+    $p.Write("DD;"); Start-Sleep -Milliseconds 200; $p.ReadExisting() | Out-Null
 
     $fin = (Get-Date).AddSeconds($Segundos)
     while ((Get-Date) -lt $fin) {
         Start-Sleep -Milliseconds 500
+
+        # --- el reparto de la vuelta ---
         $p.DiscardInBuffer()
         $p.Write("DG;")
         Start-Sleep -Milliseconds 120
@@ -132,18 +211,58 @@ try {
             $m[$TRAMOS[$k]] = [int]$d.Substring(17 + 5*$k, 5)
         }
         if ($m["vueltas"] -eq 0) { continue }
-        $muestras += ,(New-Object psobject -Property $m)
 
-        $marca = if ($m["detentes"] -gt 0) { "GIRANDO" } else { "quieto " }
+        # --- y lo de DENTRO del dibujo, que es donde se va el tiempo ---
+        #
+        # Se pregunta en la misma tanda y se mete en la misma fila: una
+        # tabla con las dos mitades y no dos tablas que hay que cuadrar a
+        # mano. Si la radio es vieja y no conoce "DD;" contesta "?;" y los
+        # huecos se quedan a cero, sin romper nada.
+        $p.DiscardInBuffer()
+        $p.Write("DD;")
+        Start-Sleep -Milliseconds 120
+        $r2 = ($p.ReadExisting() -replace "[^0-9A-Za-z;]","")
+        foreach ($c in $DIBUJO) { $m[$c] = 0 }
+        # 4 cifras de cuadros y cinco por cada uno de los OTROS huecos:
+        # "cuadros" es el primero de la lista y no lleva cinco.
+        if ($r2 -match ("^DD(\d{" + (4 + 5*($DIBUJO.Count - 1)) + "});$")) {
+            $d2 = $Matches[1]
+            $m["cuadros"] = [int]$d2.Substring(0,4)
+            for ($k = 1; $k -lt $DIBUJO.Count; $k++) {
+                $m[$DIBUJO[$k]] = [int]$d2.Substring(4 + 5*($k-1), 5)
+            }
+        }
+
+        $muestras += ,(Apunta $m)
+
+        $marca = if ($m["detentes"] -gt 0) { "MOVIENDO" } else { "quieto  " }
         $marca = $marca + $(if ($m["nr"] -eq 1) { " NR " } else { " -- " })
-        "{0}  vuelta {1,6}   dib {2,6}   frq {3,5}   rgl {4,5}   lot {5,5}   man {6,5}   carga {7,3} %   clics {8,3}" -f `
-            $marca, $m["vuelta"], $m["dib"], $m["frq"], $m["rgl"], $m["lot"], $m["man"], $m["carga"], $m["detentes"]
+        # El estado, en letras: es lo que luego hace falta para saber si
+        # dos tandas se pueden comparar.
+        $e = [int]$m["estado"]
+        $est = $(if ($e -band 1) { "NCO" } else { "---" })
+        $est = $est + $(if ($e -band 8) { " PE" } else { "   " })
+        $est = $est + (" z{0}" -f (($e -shr 4) -band 15))
+        $est = $est + $(if ($e -band 256) { " ROT" } else { " ---" })
+
+        "{0} v{1,4}/c{2,4} vuelta {3,6} dib {4,6} | fft {5,5} chr {6,5} esp {7,5} emp {8,5} cas {9,5} | salta {10,3}/{11,3} lect {12,4} | tac {13,5} arr {14,5} lot {15,4}x{16,3} frq {17,5} | chrn {18,3} frqn {19,3} pasos {20,4} | {21}" -f `
+            $marca, $m["vueltas"], $m["cuadros"], $m["vuelta"], $m["dib"], `
+            $m["fft"], $m["chr"], $m["esp"], $m["emp"], $m["cas"], `
+            $m["salta"], $m["bandas"], $m["lect"], `
+            $m["tac"], $m["arru"], $m["lotd"], $m["lotn"], $m["frq"], `
+            $m["chrn"], $m["frqn"], $m["detentes"], $est
     }
 }
-catch {
+catch [System.IO.IOException], [System.UnauthorizedAccessException] {
     Write-Host "No se pudo: $($_.Exception.Message)"
     Write-Host "  Si dice que esta ocupado, cierra lo que tenga el puerto abierto."
     exit 1
+}
+catch {
+    # Cualquier otra cosa -Ctrl-C incluido- no se come las muestras: se sale
+    # del bucle y se saca el resumen con lo que haya.
+    Write-Host ""
+    Write-Host "  (cortado: resumen con las $($muestras.Count) muestras tomadas)"
 }
 finally {
     if ($p.IsOpen) { $p.Close() }
@@ -183,7 +302,13 @@ function Media($lista, $campo) {
 }
 
 #
-# CUATRO CASILLAS Y NO DOS: quieto/girando POR reductor de ruido si/no.
+# CUATRO CASILLAS Y NO DOS: quieto/moviendo POR reductor de ruido si/no.
+#
+# Y "moviendo" es el dial movido DE CUALQUIER MANERA: los clics del mando
+# y los pasos del arrastre con el dedo cuentan en el mismo contador desde
+# el 03/11/2026. Antes solo contaba el mando, y un arrastre con el dedo se
+# promediaba con las vueltas en las que no pasa nada: justo la casilla
+# equivocada cuando lo que se persigue es el dedo. Ver cat.h.
 #
 # La carga de audio es el divisor del cuadro -el dibujo se pinta con lo
 # que queda despues del audio- y el reductor son ocho puntos de esa carga.
@@ -205,11 +330,26 @@ foreach ($x in $muestras) {
 
 Write-Host ""
 Write-Host "--------------------------------------------------------------"
-Write-Host ("  tandas:  quieto sin NR {0}   quieto con NR {1}   girando sin NR {2}   girando con NR {3}" -f $qs.Count, $qn.Count, $gs.Count, $gn.Count)
+Write-Host ("  tandas:  quieto sin NR {0}   quieto con NR {1}   moviendo sin NR {2}   moviendo con NR {3}" -f $qs.Count, $qn.Count, $gs.Count, $gn.Count)
 Write-Host ""
-Write-Host ("  {0,-8} {1,9} {2,9} {3,9} {4,9}" -f "tramo", "qui/--", "qui/NR", "gir/--", "gir/NR")
+Write-Host ("  {0,-8} {1,9} {2,9} {3,9} {4,9}" -f "tramo", "qui/--", "qui/NR", "mov/--", "mov/NR")
 Write-Host "  --------------------------------------------------"
-foreach ($t in (@("vuelta","carga","clics") + $TRAMOS)) {
+foreach ($t in (@("vuelta","carga","detentes") + $TRAMOS)) {
+    $a = Media $qs $t; $b = Media $qn $t; $c = Media $gs $t; $d = Media $gn $t
+    if (($a + $b + $c + $d) -eq 0) { continue }
+    Write-Host ("  {0,-8} {1,9} {2,9} {3,9} {4,9}" -f $t, $a, $b, $c, $d)
+}
+
+#
+# Y LO DE DENTRO DEL DIBUJO, en la misma tabla y con las mismas casillas.
+# `dib` es UN hueco del reparto de arriba y la primera tanda con el dedo
+# dijo que es donde se va el tiempo; esto lo abre.
+#
+Write-Host ""
+Write-Host "  --- dentro del dibujo (us por cuadro, y cuentas por tanda) ---"
+Write-Host ("  {0,-8} {1,9} {2,9} {3,9} {4,9}" -f "", "qui/--", "qui/NR", "mov/--", "mov/NR")
+Write-Host "  --------------------------------------------------"
+foreach ($t in $DIBUJO) {
     $a = Media $qs $t; $b = Media $qn $t; $c = Media $gs $t; $d = Media $gn $t
     if (($a + $b + $c + $d) -eq 0) { continue }
     Write-Host ("  {0,-8} {1,9} {2,9} {3,9} {4,9}" -f $t, $a, $b, $c, $d)
@@ -226,15 +366,45 @@ function Veredicto($nom, $q, $g) {
     Write-Host ""
     Write-Host ("  {0}: la vuelta pasa de {1} a {2} us" -f $nom, (Media $q "vuelta"), (Media $g "vuelta"))
     Write-Host ("      y el que mas crece es {0} ({1}), +{2} us" -f $peor, $QUE[$peor], $peorD)
+
+    # Y si el que mas crece es el dibujo, se abre: decir "es el dibujo" no
+    # sirve de nada, el dibujo son cinco cosas.
+    if ($peor -eq "dib") {
+        $peor2 = ""
+        $peorD2 = -999999
+        foreach ($t in @("fft","chr","esp","emp","cas")) {
+            $dif = (Media $g $t) - (Media $q $t)
+            if ($dif -gt $peorD2) { $peorD2 = $dif; $peor2 = $t }
+        }
+        if ($peor2 -ne "") {
+            Write-Host ("      y DENTRO del dibujo, {0} ({1}), +{2} us" -f $peor2, $QUE2[$peor2], $peorD2)
+        }
+        $sq = Media $q "salta"; $sg = Media $g "salta"
+        $bq = Media $q "bandas"
+        if ($bq -gt 0) {
+            Write-Host ("      atajo parcial: {0} de {1} bandas saltadas quieto, {2} moviendo" -f $sq, $bq, $sg)
+            if ($sg * 2 -lt $sq) {
+                Write-Host "      *** EL ATAJO SE MUERE AL MOVER: ahi esta el grueso ***"
+            }
+        }
+        $lq = Media $q "lect"; $lg = Media $g "lect"
+        Write-Host ("      panel tactil: {0} bajadas por tanda quieto, {1} moviendo (775 us cada una)" -f $lq, $lg)
+        Write-Host ("      repintados por tanda moviendo: marco {0}, dial {1}, etiquetas {2}" -f `
+                    (Media $g "chrn"), (Media $g "frqn"), (Media $g "rgln"))
+        $ld = Media $g "lotd"; $ln = Media $g "lotn"
+        Write-Host ("      reprogramar la sintonia desde el arrastre: {0} us por cuadro, {1} veces por tanda" -f $ld, $ln)
+        if ($ln -gt 0) {
+            Write-Host ("      (o sea unos {0} us cada vez; el MS5351 por I2C son 1.763)" -f [int]($ld * (Media $g "cuadros") / $ln))
+        }
+    }
 }
 
 Veredicto "sin NR" $qs $gs
 Veredicto "con NR" $qn $gn
 
 try {
-    $muestras | Export-Csv -Path $csv -NoTypeInformation -Encoding UTF8
     Write-Host ""
-    Write-Host "  Guardado en $csv"
+    Write-Host ("  Guardado en {0} ({1} muestras), segun se tomaban." -f $csv, $muestras.Count)
 }
 catch {
     Write-Host ""

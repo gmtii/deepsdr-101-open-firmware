@@ -144,6 +144,15 @@ prestada, así que también cuenta:
     se corta y se reintegra, perdiendo los candidatos más flojos en vez de
     el audio de la ranura siguiente. Se cuenta como `x` en la barra. Lo
     vigila `tools/ft8_tope_check.py`.
+- `demo_touch_poll()` — el panel táctil, y **sólo cuesta mientras hay un
+  dedo apoyado**: sin dedo, `touch_read_raw()` mira la patilla PENIRQ y se
+  vuelve. Con dedo son diez transacciones de 24 bits por SPI de bit-bang,
+  **775 µs** medidos en `make m4` (`m4_tactil`), contra una vuelta del
+  bucle de 1.700 a 4.000 µs. Por eso desde la V6.52 el panel **no se lee
+  más de una vez cada 8 ms** (`TOUCH_CADENCIA_MS`): entre medias se
+  devuelve la última lectura, y el coste por vuelta baja a 194 µs. La
+  calibración no pasa por ahí —lee en crudo— y lo vigilan `make tactilarr`
+  (medida 6) y `make m4`.
 - `fax_poll()`, `sstv_poll()`, el autoguardado, el mapa, la captura.
 - La unión de 71 kB (`g_ft8_shared_ram`): la comparten FT8, HFDL, WSPR, AIS,
   ALE, DSC, HELL, IDENT, JTTY, STANAG, el fax y el SSTV. Soltar el préstamo

@@ -5610,6 +5610,17 @@ out/m4_vuelta.elf: m4/m4_vuelta.c m4/start.c
 	@mkdir -p out
 	$(M4CC) $(M4FLAGS) -Im4 -Ihostinc $(filter %.c,$^) -o $@ $(M4LIBS)
 
+# Lo que cuesta leer el panel tactil. Ver la cabecera de m4/m4_tactil.c:
+# el dedo paga diez transacciones de bit-bang por vuelta del bucle y el
+# mando no paga ninguna.
+out/m4_tactil.elf: m4/m4_tactil.c m4/start.c m4/gpio_stub.c \
+                   $(FIRMWARE)/User/touch.c
+	@mkdir -p out
+	$(M4CC) $(M4FLAGS) $(M4DEFS) -I$(FIRMWARE)/User \
+	  -I$(FIRMWARE)/CMSIS/Include -I$(FIRMWARE)/CMSIS/GD/GD32F4xx/Include \
+	  -I$(FIRMWARE)/Firmware/Include \
+	  $(filter %.c,$^) -o $@ $(M4LIBS)
+
 out/m4_i2c.elf: m4/m4_i2c.c m4/start.c m4/gpio_stub.c \
                 $(FIRMWARE)/User/i2c_bitbang.c $(FIRMWARE)/User/ms5351.c
 	@mkdir -p out
@@ -5629,6 +5640,7 @@ m4:
 	   $(M4QEMU) out/m4_cabecera.elf && \
 	   $(M4QEMU) out/m4_i2c.elf && \
 	   $(MAKE) out/m4_ft8.elf && $(M4QEMU) out/m4_ft8.elf && \
+	   $(MAKE) out/m4_tactil.elf && $(M4QEMU) out/m4_tactil.elf && \
 	   $(MAKE) out/m4_audio.elf && $(M4QEMU) out/m4_audio.elf && \
 	   $(MAKE) out/m4_vuelta.elf && $(M4QEMU) out/m4_vuelta.elf && \
 	   $(MAKE) numeros; \

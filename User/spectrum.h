@@ -172,6 +172,9 @@ void    spectrum_pinta_en(gfx2_surf_t *sf, int16_t px, int16_t py);
  * para la ventana de informacion y para los bancos.
  */
 void    spectrum_invalida(void);
+/* Cuantas veces se ha tirado el atajo del repintado parcial, acumulado.
+ * Para medir por cable cuanto se tira durante un arrastre. */
+uint32_t spectrum_invalida_cuenta(void);
 void    spectrum_parcial_diag(uint32_t *saltadas, uint32_t *total);
 void    spectrum_parcial_set(uint8_t on);
 uint8_t spectrum_parcial_get(void);

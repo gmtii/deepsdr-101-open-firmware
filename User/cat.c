@@ -217,6 +217,49 @@ static uint8_t procesa(const char *o, uint8_t n, char *s)
         return j;
     }
 
+    /*
+     * --- y lo de DENTRO del dibujo ---
+     *
+     * "DG;" reparte la vuelta en dieciocho tramos y el dibujo es UNO de
+     * ellos. La primera tanda con el dedo dijo que ahi es donde se va el
+     * tiempo, asi que hace falta abrirlo. Ver cat_dibujo_t en cat.h.
+     *
+     * Va aparte y no como mas huecos de "DG" a proposito: los tramos de
+     * "DG" REPARTEN la vuelta y tienen que sumar, y estos son el desglose
+     * de uno de ellos. Metidos ahi contarian dos veces y el hueco de
+     * "lo que no cae en ningun tramo" dejaria de significar nada.
+     */
+    if (dos(o, 'D', 'D')) {
+        cat_dibujo_t d;
+
+        if (n != 2U) { return error(s); }
+        if (s_r->dibujo_lee == 0) { return error(s); }
+        s_r->dibujo_lee(&d);
+        j = pon(s, 0U, "DD");
+        j = pon_num(s, j, (uint32_t)d.cuadros, 4U);
+        j = pon_num(s, j, tope5(d.fft_us),     5U);
+        j = pon_num(s, j, tope5(d.chrome_us),  5U);
+        j = pon_num(s, j, tope5(d.spec_us),    5U);
+        j = pon_num(s, j, tope5(d.push_us),    5U);
+        j = pon_num(s, j, tope5(d.wf_us),      5U);
+        j = pon_num(s, j, tope5(d.saltadas),   5U);
+        j = pon_num(s, j, tope5(d.bandas),     5U);
+        j = pon_num(s, j, tope5(d.invalida),   5U);
+        j = pon_num(s, j, tope5(d.lecturas),   5U);
+        j = pon_num(s, j, tope5(d.frq_n),      5U);
+        j = pon_num(s, j, tope5(d.rgl_n),      5U);
+        j = pon_num(s, j, tope5(d.chr_n),      5U);
+        j = pon_num(s, j, tope5(d.lot_us),     5U);
+        j = pon_num(s, j, tope5(d.lot_n),      5U);
+        j = pon_num(s, j, tope5(d.chapa_n),    5U);
+        j = pon_num(s, j, tope5(d.arrastre_n), 5U);
+        j = pon_num(s, j, tope5(d.arr_us),     5U);
+        j = pon_num(s, j, tope5(d.wf_lineas),  5U);
+        j = pon_num(s, j, tope5(d.estado),     5U);
+        s[j++] = ';';
+        return j;
+    }
+
     /* --- el bloque gordo --- */
     if (dos(o, 'I', 'F')) {
         if (n != 2U) { return error(s); }

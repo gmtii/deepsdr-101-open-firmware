@@ -92,12 +92,17 @@ void nvic_irq_enable(uint8_t a, uint8_t b, uint8_t c) { (void)a; (void)b; (void)
 
 /* La patilla de seleccion arranca la cuenta de pulsos de cero: cada vez
  * que el firmware baja CS empieza una conversacion nueva. */
+/* Cuantas veces se ha hablado con el panel. Ver la medida (6). */
+static unsigned long g_miradas = 0UL;
+
 void gpio_bit_write(uint32_t port, uint32_t pin, bit_status val)
 {
     uint8_t v = (val == SET) ? 1U : 0U;
 
     if (port == P_GPIOD && pin == PIN_CS) {
-        if (v == 0U) { s_nclk = 0U; s_cmd = 0U; s_salida = 0U; }
+        /* Bajar CS es empezar a hablar con el panel: contarlo es contar
+         * las veces que se mira de verdad. Ver la medida (6). */
+        if (v == 0U) { s_nclk = 0U; s_cmd = 0U; s_salida = 0U; g_miradas++; }
         return;
     }
     if (port != P_GPIOB) { return; }
@@ -611,6 +616,119 @@ int main(void)
         g_msticks += 20U;
         if (touch_read(&x, &y)) { mal("el dedo levantado sigue dando contacto"); }
         else { printf("     sin dedo, contacto=0 a la primera\n"); }
+    }
+
+    /*
+     * ==================================================================
+     * (6) Y CADA CUANTO SE MIRA EL PANEL - 03/11/2026
+     * ==================================================================
+     *
+     * *** El usuario: arrastrando con el dedo la radio se ralentiza. ***
+     *
+     * Leer el panel cuesta 775 us en un Cortex-M4 de verdad (medido en
+     * deepsdr-ui/m4/m4_tactil.c) y hasta la V6.52 se leia en CADA vuelta
+     * del bucle, que son 1,7 ms en lo mas rapido. O sea casi la mitad de
+     * la vuelta, pagada solo mientras el dedo esta apoyado - que es
+     * exactamente cuando se notaba.
+     *
+     * Ahora touch_read() no baja al panel mas de una vez cada
+     * TOUCH_CADENCIA_MS; entre medias devuelve lo ultimo que vio. Este
+     * banco cuenta las bajadas de CS, que son las veces que se habla con
+     * el XPT2046 de verdad, y comprueba las dos mitades: que se mira
+     * MENOS, y que a pesar de eso el contacto se sigue dando en TODAS
+     * las vueltas, que es lo que necesita un arrastre.
+     */
+    printf("  -- (6) cada cuanto se baja al panel durante un arrastre --\n");
+    {
+        uint16_t x, y;
+        unsigned long antes, miradas;
+        int i, vueltas = 100, con_contacto = 0;
+
+        quita_dedo();
+        /* Dedo puesto y confirmado antes de empezar a contar. */
+        for (i = 0; i < 4; i++) { (void)muestra(400, 240, 20U, &x, &y); }
+
+        antes = g_miradas;
+        for (i = 0; i < vueltas; i++) {
+            s_dedo_x = 400 + i / 10;
+            s_dedo_y = 240;
+            g_msticks += 2U;              /* la vuelta mas rapida del bucle */
+            if (touch_read(&x, &y)) { con_contacto++; }
+        }
+        miradas = g_miradas - antes;
+
+        printf("     100 vueltas de 2 ms = 200 ms de dedo: %lu bajadas al panel\n",
+               miradas);
+        printf("     y contacto en %d de las %d vueltas\n", con_contacto, vueltas);
+
+        /* Sin cadencia serian 100. Con 8 ms tienen que salir unas 25. */
+        if (miradas > 30UL) {
+            mal("se sigue bajando al panel en casi cada vuelta");
+        } else if (miradas < 20UL) {
+            mal("se baja al panel demasiado poco: el arrastre se vuelve a saltos");
+        } else {
+            printf("     una de cada cuatro vueltas: el resto sale de lo guardado  ok\n");
+        }
+        if (con_contacto != vueltas) {
+            mal("la cadencia se come el contacto en alguna vuelta");
+        } else {
+            printf("     el dedo no desaparece en ninguna vuelta  ok\n");
+        }
+        quita_dedo();
+    }
+
+    /*
+     * ==================================================================
+     * (7) EL LATIDO, PARADO MIENTRAS HAY UN GESTO - 03/11/2026
+     * ==================================================================
+     *
+     * touch_latido() corre DENTRO del repintado, entre banda y banda, y
+     * lo unico que produce es el pestillo de "hubo un toque que el bucle
+     * no vio". Con un gesto en marcha ese pestillo se borra sin mirarlo
+     * -demo_touch_poll() llama a touch_pendiente_borra()-, asi que cada
+     * latido bajaba al panel para nada: 775 us dentro del tramo mas caro
+     * de la vuelta, dos o tres veces por cuadro, y solo con el dedo
+     * apoyado.
+     *
+     * Aqui se cuentan las bajadas de CS en cien latidos con el reloj
+     * corriendo: con la pausa puesta tienen que ser CERO, y sin ella las
+     * de siempre. Las dos mitades, porque una pausa que no se levanta
+     * deja sordo el toque corto que entra entero en un repintado, que es
+     * para lo que el latido existe.
+     */
+    printf("  -- (7) el latido no baja al panel con un gesto en marcha --\n");
+    {
+        unsigned long antes, con_pausa, sin_pausa;
+        int i;
+
+        quita_dedo();
+        s_dedo_x = 400; s_dedo_y = 240;
+
+        touch_latido_pausa(1U);
+        antes = g_miradas;
+        for (i = 0; i < 100; i++) { g_msticks += 2U; touch_latido(); }
+        con_pausa = g_miradas - antes;
+
+        touch_latido_pausa(0U);
+        antes = g_miradas;
+        for (i = 0; i < 100; i++) { g_msticks += 2U; touch_latido(); }
+        sin_pausa = g_miradas - antes;
+
+        printf("     200 ms de latidos: %lu bajadas en pausa, %lu sin pausa\n",
+               con_pausa, sin_pausa);
+
+        if (con_pausa != 0UL) {
+            mal("el latido sigue bajando al panel con un gesto en marcha");
+        } else {
+            printf("     en pausa no toca el panel  ok\n");
+        }
+        if (sin_pausa < 20UL) {
+            mal("el latido no vuelve: el toque corto de dentro de un repintado se pierde");
+        } else {
+            printf("     y al levantarla vuelve a mirar  ok\n");
+        }
+        touch_latido_pausa(0U);
+        quita_dedo();
     }
 
     mide_toques();

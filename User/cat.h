@@ -70,8 +70,8 @@ enum {
  * Con esto la radio lo cuenta sola por el puerto CAT, que ya existe y ya
  * esta conectado: una orden "DG;" devuelve, de todas las vueltas QUE HAN
  * DIBUJADO desde la consulta anterior, la media de cada uno de los quince
- * tramos del bucle, cuantas vueltas fueron, cuantos clics de mando hubo
- * mientras tanto y la carga de audio. Preguntando dos veces por segundo
+ * tramos del bucle, cuantas vueltas fueron, cuanto se movio el dial
+ * -mando o dedo- mientras tanto y la carga de audio. Preguntando dos veces por segundo
  * sale la pelicula entera, girando y sin girar, y no se pierde ni una
  * vuelta: son SUMAS, no muestras.
  *
@@ -82,7 +82,17 @@ enum {
 
 typedef struct {
     uint16_t vueltas;                    /* vueltas con dibujo desde la ultima consulta */
-    uint16_t detentes;                   /* clics del mando en ese mismo rato */
+    /*
+     * CUANTO SE MOVIO EL DIAL en ese mismo rato, en pasos. Es lo que
+     * separa "moviendo" de "quieto" en tools/cat_vuelta.ps1.
+     *
+     * CUENTA LAS DOS MANERAS DE MOVERLO: los clics del mando Y los pasos
+     * del arrastre con el dedo -03/11/2026-. Antes solo contaba el mando,
+     * y entonces un arrastre con el dedo salia en la casilla de "quieto",
+     * que es justo la casilla equivocada cuando lo que se persigue es por
+     * que la radio se ralentiza con el dedo.
+     */
+    uint16_t detentes;                   /* pasos de dial: mando + dedo */
     /*
      * El reductor de ruido, encendido o no, porque es la otra mitad de la
      * pregunta: la carga de audio es el divisor del cuadro, y el NR son
@@ -96,6 +106,52 @@ typedef struct {
     uint32_t tramo_us[CAT_DIAG_TRAMOS];  /* media de cada tramo, en orden */
 } cat_diag_t;
 
+/*
+ * Y el desglose de DENTRO del tramo del dibujo, que el reparto de "DG;"
+ * no puede dar: alli `dib` es UN hueco, y la primera tanda con el dedo
+ * dijo que es justo donde se va el tiempo. Ver "DD;" en cat.c.
+ *
+ * Son medias por CUADRO desde la consulta anterior, como las de "DG;".
+ * `saltadas` y `bandas` no son tiempo: son el atajo del repintado parcial
+ * -cuantas bandas se salto y cuantas habia-, y si saltadas se va a cero el
+ * atajo esta muerto y eso solo ya explica un 77 % mas de traza.
+ */
+#define CAT_DIBUJO_HUECOS  19U
+
+typedef struct {
+    uint16_t cuadros;                    /* cuadros desde la ultima consulta */
+    /* --- los cinco tiempos, media por cuadro, en us --- */
+    uint32_t fft_us;                     /* la transformada */
+    uint32_t chrome_us;                  /* la regla, el marco, las etiquetas */
+    uint32_t spec_us;                    /* la traza */
+    uint32_t push_us;                    /* empujar al panel */
+    uint32_t wf_us;                      /* la cascada */
+    /* --- el atajo del repintado parcial --- */
+    uint32_t saltadas;                   /* bandas saltadas, media por cuadro */
+    uint32_t bandas;                     /* bandas que habia */
+    uint32_t invalida;                   /* veces que se tiro el atajo */
+    /* --- cuantas veces se hizo cada cosa cara, desde la consulta --- */
+    uint32_t lecturas;                   /* bajadas de verdad al panel */
+    uint32_t frq_n;                      /* repintados del numero del dial */
+    uint32_t rgl_n;                      /* repintados de la fila de etiquetas */
+    uint32_t chr_n;                      /* repintados de la regla del marco */
+    uint32_t lot_us;                     /* reprogramar la sintonia DESDE EL
+                                          * ARRASTRE, media por cuadro. El
+                                          * tramo `lot` de "DG;" solo cubre
+                                          * el mando. */
+    uint32_t lot_n;                      /* cuantas veces */
+    uint32_t chapa_n;                    /* repintados de la chapa */
+    uint32_t arrastre_n;                 /* pasos de arrastre con el dedo */
+    uint32_t arr_us;                     /* lo que cuesta spec_drag_tune_apply()
+                                          * entera, media por cuadro */
+    uint32_t wf_lineas;                  /* lineas volcadas a la cascada */
+    /* --- y en que estado estaba la radio, para no tener que preguntarlo --- */
+    uint32_t estado;                     /* bit0 NCO, bit1 menu, bit2 dedo,
+                                          * bit3 panel entero, bits 4-7 zoom,
+                                          * bit8 rotulos de emisoras sobre el
+                                          * espectro, bit9 reductor de ruido */
+} cat_dibujo_t;
+
 typedef struct {
     uint32_t (*freq_lee)(void);          /* Hz */
     void     (*freq_pon)(uint32_t hz);
@@ -106,12 +162,14 @@ typedef struct {
     void     (*vol_pon)(uint8_t v);
     uint16_t (*ancho_lee)(void);         /* Hz */
     void     (*diag_lee)(cat_diag_t *d); /* "DG": la vuelta del bucle */
+    void     (*dibujo_lee)(cat_dibujo_t *d); /* "DD": dentro del dibujo */
 } cat_radio_t;
 
 /*
  * Lo mas largo que puede contestar esto ya no es el bloque IF -37- sino
  * "DG": 2 + 4 + 4 + 1 + 3 + 5 + 18 x 5 + ';' = 110. El buffer vive en la
  * pila de usb_cdc_poll(), y el margen de pila medido son 2.048 bytes.
+ * "DD" son 2 + 4 + 19 x 5 + ';' = 102, o sea que no mueve el techo.
  */
 #define CAT_SALIDA_MAX  112U
 

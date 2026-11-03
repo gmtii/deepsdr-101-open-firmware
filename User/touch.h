@@ -56,6 +56,16 @@ uint8_t touch_is_pressed(void);
  * largo. Solo mira; no despacha nada. Ver su comentario en touch.c.
  */
 void touch_latido(void);
+/*
+ * Y el latido se para mientras hay un gesto en marcha: lo que apunta se
+ * borra sin mirarlo en cuanto hay dedo, asi que bajar al panel para eso
+ * es tiempo tirado dentro del repintado. Ver su comentario en touch.c.
+ */
+void touch_latido_pausa(uint8_t si);
+/* Cuantas veces se ha bajado de verdad al XPT2046, acumulado. Cada una son
+ * 775 us medidos; sacarlo por cable es la unica forma de saber cuantas se
+ * pagan por cuadro con el dedo apoyado. */
+uint32_t touch_lecturas(void);
 /* Si el latido vio un contacto confirmado que el bucle no ha llegado a
  * atender, lo entrega UNA vez y se olvida. Devuelve 0 si no hay nada. */
 uint8_t touch_pendiente(uint16_t *x, uint16_t *y);

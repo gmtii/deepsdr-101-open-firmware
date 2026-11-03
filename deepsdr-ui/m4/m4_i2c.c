@@ -57,6 +57,68 @@ int main(void)
     v=mide("resintonizar dentro de zona    ", a,b,20);
     tope("resintonia", v, 400000UL);
 
+    /*
+     * ==================================================================
+     * Y RESINTONIZAR CAMBIANDO DE DIVISOR, QUE ES LO QUE HACE UN DEDO
+     * ==================================================================
+     *
+     * *** Medido en la radio por cable el 03/11/2026, arrastrando el dedo
+     * por el espectro CON EL NCO APAGADO: cada llamada a apply_lo_tune()
+     * cuesta de 5.753 a 7.395 us, treinta y ocho veces por segundo, y la
+     * vuelta del bucle se va a 56.567 us. Con el NCO puesto, 13 us. ***
+     *
+     * La medida de arriba daba 1.763 us y por eso yo daba el asunto por
+     * cerrado. Lo que mide son pasos de 1 kHz, que NO cambian el divisor:
+     * ahi set_lo_freq() escribe los ocho bytes de la PLL y se acabo.
+     *
+     * Arrastrando el dedo el dial se va kilohercios de golpe y el divisor
+     * SI cambia, y entonces se entra en la rama de `div != s_last_div`:
+     * dos Multisynth mas (ocho bytes cada uno), cuatro registros sueltos,
+     * la mascara de salida y un RESET DE LA PLL. Son veintidos bytes de
+     * I2C de mas sobre los ocho de antes, a 195 us el byte.
+     *
+     * Y el reset de la PLL no es solo tiempo: el comentario de ms5351.c
+     * dice con todas las letras que produce un CHASQUIDO AUDIBLE. O sea
+     * que arrastrar con el NCO apagado no solo frena la radio, ademas
+     * chasquea treinta y ocho veces por segundo.
+     *
+     * Dos frecuencias separadas 96 kHz, que es lo que mide el espectro de
+     * lado a lado: un barrido de pantalla completa con el dedo.
+     */
+    (void)ms5351_set_lo_freq(7102000UL);
+    a=tic(); for(r=0;r<20;r++){
+        (void)ms5351_set_lo_freq((r & 1) ? 7198000UL : 7102000UL); } b=tic();
+    v=mide("un barrido de pantalla (96 kHz)", a,b,20);
+    tope("barrido de pantalla", v, 400000UL);
+
+    /*
+     * Y UN CAMBIO DE BANDA ENTERO, por si la rama cara de set_lo_freq()
+     * -la de `div != s_last_div`, con veintidos bytes de I2C de mas y un
+     * reset de la PLL- fuera la que paga un arrastre.
+     *
+     * NO LO ES, Y ESTE ES EL NEGATIVO: las TRES medidas dan el mismo
+     * numero. Un paso de un kilohercio, un barrido de pantalla de noventa
+     * y seis, y saltar de cuarenta a veinte metros cuestan 1.763 us los
+     * tres. O sea que resintonizar cuesta LO QUE CUESTA, siempre, y la
+     * unica palanca que queda es CUANTAS VECES se hace.
+     *
+     * Que es justo lo que dice la radio. Medido por cable el 03/11/2026
+     * arrastrando el dedo CON EL NCO APAGADO, el tramo del arrastre llega
+     * a 14.625 us POR CUADRO -dos resintonias por cuadro, treinta y ocho
+     * por segundo-; con el NCO puesto, 18 us, porque el oscilador se
+     * queda aparcado y no se reprograma.
+     *
+     * (Y los 1.763 de aqui son el SUELO de QEMU, que no modela la espera
+     * de la flash: en la radio salen unos 6.800. La espera del bit-bang
+     * son 200 NOP a -O0 leidos de flash, que es justo donde este banco
+     * mide de menos. Ver la cabecera de m4/LEEME.md.)
+     */
+    (void)ms5351_set_lo_freq(7102000UL);
+    a=tic(); for(r=0;r<20;r++){
+        (void)ms5351_set_lo_freq((r & 1) ? 14200000UL : 7102000UL); } b=tic();
+    v=mide("cambiar de banda (7 a 14 MHz)  ", a,b,20);
+    tope("cambio de banda", v, 1600000UL);
+
     pr("\n");
     pila_di(4096UL);
     pr("\n");

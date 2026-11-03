@@ -55,9 +55,13 @@ def pares(raiz_fw, raiz_sim):
     # intentando precisamente eso. Ahora el original vive en el firmware
     # -que es lo que se publica- y la copia de aqui la vigila este banco,
     # igual que las de gfx2/.
+    # cat_vuelta.ps1 se añade el 03/11/2026: habia DOS copias y nadie las
+    # miraba, asi que la de aqui se quedo atras sin que saltara nada. Es el
+    # mismo fallo que trajo aqui a mando_check.py.
     for n in ("emisoras_pack.py", "datos_pack.py", "icao24_recorta.py",
               "emisoras_check.py", "icao24.py", "novedades_check.py",
-              "mando_check.py", "paises_xy.csv", "sitios_xy.csv"):
+              "mando_check.py", "cat_vuelta.ps1",
+              "paises_xy.csv", "sitios_xy.csv"):
         orig = os.path.join(raiz_fw, "tools", n)
         if os.path.isfile(orig):
             fuera.append((os.path.join(raiz_sim, "tools", n), orig))

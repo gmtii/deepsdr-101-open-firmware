@@ -73,8 +73,34 @@ static void d_lee(cat_diag_t *d)
     d->tramo_us[0] = 123456UL;   /* se tiene que topar a 99999 */
 }
 
+/* Y lo de DENTRO del dibujo, igual: numeros inventados con la forma de los
+ * de verdad. `saltadas` se topa para comprobar que el hueco aguanta. */
+static void dd_lee(cat_dibujo_t *d)
+{
+    d->cuadros    = 44U;
+    d->fft_us     = 1100UL;
+    d->chrome_us  = 2200UL;
+    d->spec_us    = 3300UL;
+    d->push_us    = 4400UL;
+    d->wf_us      = 5500UL;
+    d->saltadas   = 123456UL;   /* se tiene que topar a 99999 */
+    d->bandas     = 52UL;
+    d->invalida   = 17UL;
+    d->lecturas   = 131UL;
+    d->frq_n      = 5UL;
+    d->rgl_n      = 2UL;
+    d->chr_n      = 7UL;
+    d->lot_us     = 1763UL;
+    d->lot_n      = 35UL;
+    d->chapa_n    = 1UL;
+    d->arrastre_n = 23UL;
+    d->arr_us     = 1990UL;
+    d->wf_lineas  = 9UL;
+    d->estado     = 0x15UL;
+}
+
 static const cat_radio_t k_radio = {
-    f_lee, f_pon, m_lee, m_pon, s_lee, v_lee, v_pon, a_lee, d_lee
+    f_lee, f_pon, m_lee, m_pon, s_lee, v_lee, v_pon, a_lee, d_lee, dd_lee
 };
 
 /* Mete una orden entera y devuelve lo que contesta, terminado en cero. */
@@ -123,6 +149,14 @@ static void a_mano(void)
     iguales("la vuelta del bucle, de ancho fijo", "DG;",
             "DG0037001210492843199999001000020000300004000050000600007000"
             "0800009000100001100012000130001400015000160001700;");
+    /*
+     * Y LO DE DENTRO DEL DIBUJO. 2 + 4 + 19 x 5 + 1 = 102 caracteres. Va
+     * aparte de "DG" porque los tramos de "DG" REPARTEN la vuelta y estos
+     * son el desglose de uno de ellos: juntos contarian dos veces.
+     */
+    iguales("dentro del dibujo, de ancho fijo", "DD;",
+            "DD00440110002200033000440005500999990005200017001310000500002"
+            "0000701763000350000100023019900000900021;");
     iguales("y acepta que se la cambien",     "FA00014074000;", "");
     iguales("  (y se queda cambiada)",        "FA;", "FA00014074000;");
     iguales("da el modo",                     "MD;", "MD1;");
