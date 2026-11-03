@@ -795,8 +795,7 @@ static const dxcc_t k_dxcc[] __attribute__((section(".rodata.k_dxcc"))) = {
     /* ------------------------------------------------------------------
      * ANADIDOS EL 28/10/2026: FRANCIA SE HABIA QUEDADO CON UN SOLO PREFIJO
      *
-     * *** Avisado por el usuario: en FT8 salio "CQ TM8R IN88" y la columna
-     * de pais aparecia vacia. ***
+     * *** EN FT8, UN "CQ TM8R IN88" DEJABA LA COLUMNA DE PAIS VACIA. ***
      *
      * Y es el MISMO fallo del 25/09 de aqui arriba -"la primera version
      * ponia UN prefijo por pais cuando casi todos tienen un BLOQUE

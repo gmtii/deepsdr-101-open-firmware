@@ -55,6 +55,24 @@ cabeceras). La huella es inconfundible: el prefijo `ftx_`, `ftx_find_candidates(
    > de origen: las dos ramas existen y se compilan, que es como se midió
    > que no costaba sensibilidad.
    >
+   > **Y DESDE EL 02/11/2026 HAY TRES COSAS MÁS EN ESOS DOS FICHEROS.**
+   >
+   > 1. **Tres bits por celda** en vez de cuatro, por lo mismo que los
+   >    cuatro: que quepa el doble de resolución en frecuencia. El knob
+   >    pasa de `FTX_MAG_4BITS` a `FTX_MAG_BITS`, que admite 3, 4 y 8, y
+   >    con 8 el fichero sigue comportándose exactamente como el de
+   >    origen.
+   > 2. **`ftx_find_candidates_respira()`**, la misma búsqueda con un
+   >    gancho opcional que se llama cada pocos milisegundos para que
+   >    quien llama pueda atender lo suyo —aquí, vaciar el
+   >    remuestreador—. `ftx_find_candidates()` se queda, delegando en
+   >    ella con el gancho a cero: mismo recorrido, mismo orden, mismo
+   >    resultado.
+   > 3. **`WF_MAG_INT_AT` lee de una tabla** en vez de convertir a
+   >    flotante y volver. Son los mismos valores bit a bit —la tabla la
+   >    calcula el compilador con la misma expresión— y quita millones de
+   >    conversiones por ranura del bucle más caliente.
+   >
    > `ft8_decode_multi_symbols()` —que este árbol marca
    > `__attribute__((unused))`— **no se ha tocado**: sigue siendo la de
    > origen, palabra por palabra.

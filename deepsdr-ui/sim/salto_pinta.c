@@ -131,6 +131,28 @@ int main(void)
      *
      * Por eso lo que se exige ahora es eso mismo escrito como numero, y no
      * un "casi igual" a ojo.
+     *
+     * ==================================================================
+     * Y PASA A SER UNA PROPORCION, PORQUE LA BANDA YA NO ES LA MISMA
+     * 02/11/2026.
+     * ==================================================================
+     *
+     * La banda era TODO el ancho por cuatro filas. Desde que el panel se
+     * monta por lonjas de columnas -ver "LA BANDA, MAS ALTA Y MENOS
+     * ANCHA" en spectrum.c- son 192 columnas por dieciseis filas: el
+     * mismo numero de bandas, 52, pero cada una cubre un rectangulo
+     * distinto, y una banda alta es mas dificil de saltarse que una baja
+     * porque le cabe mas cielo debajo.
+     *
+     * O sea que "una banda" ya no mide lo que medía, y exigir el mismo
+     * numero absoluto seria comparar dos unidades distintas. Lo que este
+     * banco defiende no era el uno: era que el ahorro no fuese
+     * PROPORCIONAL al salto. Asi que se escribe asi, como tanto por
+     * ciento del total.
+     *
+     * Y los pixeles que de verdad salen por el bus no cambiaron ni uno:
+     * eso lo mide sim/espectro_oro.c, que sigue dando 158.132 accesos por
+     * cuadro entero, los mismos que antes de las lonjas.
      */
     {
         int dif = (int)s_poco - (int)s_mucho;
@@ -140,7 +162,7 @@ int main(void)
                  "mover la traza 60 veces mas cuesta %d banda(s) de %u, "
                  "no 60 veces mas", dif, (unsigned)tot);
         printf("    %-52s %s\n", "cuanto depende del salto del dial", d);
-        di(dif <= 1,
+        di(dif * 10 <= (int)tot,
            "y saltarse bandas NO depende de cuanto se movio el dial",
            "si dependiera, el repintado si explicaria la cascada lenta al saltar");
     }

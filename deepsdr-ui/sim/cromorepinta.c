@@ -34,9 +34,18 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 
 const palette_t *g_pal = &k_pal_oscura;
 static int fallos = 0;
+
+/* Microsegundos de reloj de pared, para la seccion de CPU del final. */
+static double reloj_us(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)t.tv_sec * 1e6 + (double)t.tv_nsec * 1e-3;
+}
 
 static void di(const char *que, int bien, const char *detalle)
 {
@@ -217,12 +226,78 @@ int main(void)
         b = a; b.demod_px = a.demod_px + 200;
         di("mover el punto de demodulacion SI",
            spec_chrome_ruler_changed(&a, &b) != 0U, 0);
+        /*
+         * Y MOVERLO POCO, NO - 02/11/2026.
+         *
+         * Es el caso que de verdad corre en la radio: con el NCO puesto,
+         * cada detente mueve la marca unos pocos pixeles. Antes eso
+         * repintaba los 800x26 de la regla EN CADA CUADRO para dibujar
+         * exactamente lo mismo, porque se comparaba demod_px en crudo en
+         * vez de los cinco booleanos que de verdad cambian el dibujo. Ver
+         * spec_chrome_ruler_changed().
+         *
+         * Tres pixeles no pueden cruzar ningun umbral: los cinco estan a
+         * SPC_TRACE_W/8 = 94 px de sus etiquetas.
+         */
+        b = a; b.demod_px = (int16_t)(a.demod_px + 3);
+        di("y moverlo tres pixeles NO, que se ve igual",
+           spec_chrome_ruler_changed(&a, &b) == 0U, 0);
+        b = a; b.demod_px = (int16_t)(a.demod_px - 3);
+        di("ni tres para el otro lado",
+           spec_chrome_ruler_changed(&a, &b) == 0U, 0);
         b = a; b.fam_banda = 2U;
         di("cambiar de clase de banda SI, que la raya es de otro color",
            spec_chrome_ruler_changed(&a, &b) != 0U, 0);
         b = a; b.eje_en_hz = 1U;
         di("y pasar el eje a hercios SI",
            spec_chrome_ruler_changed(&a, &b) != 0U, 0);
+    }
+
+    /*
+     * Y LO QUE CUESTA COMPONERLA, QUE ES LA OTRA MITAD - 01/11/2026.
+     *
+     * El bloque de arriba vigila CUANDO se repinta. Este dice CUANTO vale
+     * cada repintado, que es lo que convierte "una vez por detente" en un
+     * numero de milisegundos.
+     *
+     * Sin numero no se puede decidir: la regla costaba lo mismo que la
+     * lectura de frecuencia entera y nadie lo sabia, y por eso main.c la
+     * pintaba en cada detente sin pensarlo dos veces. Ver REGLA_GIRO_SALTOS
+     * en tune_encoder_poll().
+     *
+     * El minimo de nueve tandas y no la media: aqui lo que se busca es lo
+     * que cuesta el trabajo, no lo que cuesta compartir la maquina con
+     * quien la tenga ocupada.
+     */
+    printf("\n  lo que cuesta componer la regla, en CPU\n");
+    {
+        spec_chrome_t st;
+        int r, v;
+        double mejor = 1e9;
+
+        memset(&st, 0, sizeof st);
+        st.center_hz = 7102000UL;
+        st.span_hz   = 48000UL;
+        st.db_min    = -120.0f;
+        st.db_max    = -20.0f;
+        st.cmap      = spectrum_colormap_lut();
+        st.en_banda  = 1U;
+        st.band      = SPC_BAND_LOWER;
+        st.band_hz   = 2700UL;
+        spec_chrome_draw(&st);
+
+        for (v = 0; v < 9; v++) {
+            double t0 = reloj_us();
+            for (r = 0; r < 200; r++) {
+                st.center_hz = 7102000UL + (uint32_t)(r * 1000);
+                spec_chrome_draw_ruler(&st);
+            }
+            {
+                double d = (reloj_us() - t0) / 200.0;
+                if (d < mejor) { mejor = d; }
+            }
+        }
+        printf("    spec_chrome_draw_ruler()                  %6.1f us\n", mejor);
     }
 
     printf("\n  %s\n\n", fallos ? "HAY FALLOS" : "TODO CORRECTO (0 fallos)");

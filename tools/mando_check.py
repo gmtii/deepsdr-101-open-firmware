@@ -175,6 +175,155 @@ def main():
         print("  algo que no hace. Ver la cabecera de este guion.")
         return 1
     print("  todas preguntan por el volumen antes de quedarse el mando  ok")
+
+    return pinta(src)
+
+
+def pinta(txt):
+    """
+    Y QUE GIRAR EL MANDO NO REPINTE MEDIA PANTALLA - 31/10/2026.
+
+    EL SINTOMA: moviendo el mando -volumen o frecuencia- el waterfall y el
+    espectro se ralentizan, casi se paran, y vuelven en cuanto el mando se
+    queda quieto.
+
+    Y era eso, con los pixeles contados:
+
+      aux_row_display_draw()  = ui_top_draw() entera
+                              = cabecera 800x64  = 51.200 px
+                              + franja estado 800x40 = 32.000 px
+                              + RDS y dos botones
+                              -------------------------------
+                                mas de 83.000 px POR DETENTE
+
+      spec_span_labels_draw() = la regla, 800x26 = 20.800 px POR PASADA
+
+    Un cuadro entero de espectro son 106.564 px -medido el 30/10 al
+    perseguir el siseo del panel-, y el bucle principal hace todo esto
+    DESPUES de dibujar, asi que lo que retrasa es el cuadro siguiente. Y
+    el bucle pasa mas a menudo que los cuadros: de 10 a 35 ms contra 22.
+
+    Esto vigila las dos:
+
+      - que el detente de volumen NO llame a la cabecera entera. El numero
+        de dB vive en el boton "Volumen" de la barra de abajo; la cabecera
+        no lo enseña y la franja de estado solo cambia al CAMBIAR DE
+        DESTINO, que es pulsar el mando, no girarlo.
+      - que la regla no se pinte a pelo en el camino del mando, sino
+        aplazada y soltada como mucho una vez por cuadro.
+    """
+    print()
+    print("  girar el mando no repinta media pantalla:")
+
+    mal = 0
+
+    i = txt.find('if ((int16_t)v != s_volume_db_x2)')
+    if i < 0:
+        print("    no encuentro el detente del volumen           *** MAL ***")
+        return 1
+    bloque = txt[i:i + 2500]
+    fin = bloque.find('volume_activity = 1U;')
+    bloque = bloque[:fin if fin > 0 else len(bloque)]
+
+    # Fuera del menu tiene que pintar la casilla, no la cabecera.
+    casilla = 'act_una(&s_btn_vol)' in bloque
+    entera  = ('aux_row_display_draw()' in bloque)
+    suelto  = ('settings_value_redraw();' in bloque
+               and 's_menu_open' not in bloque)
+    print("    el detente pinta el boton de Volumen          %s"
+          % ("ok" if casilla else "*** MAL ***"))
+    if not casilla:
+        mal += 1
+    print("    y NO la cabecera entera                       %s"
+          % ("*** MAL ***" if (entera or suelto) else "ok"))
+    if entera or suelto:
+        mal += 1
+
+    # La regla: aplazada, no a pelo, y soltada cuando el mando para.
+    j = txt.find('static void tune_encoder_poll(void)\n{')
+    cuerpo = txt[j:j + 60000] if j >= 0 else ''
+    marca   = 's_regla_debe = 1U;' in cuerpo
+    desague = ('s_regla_debe &&' in cuerpo
+               and 'spec_span_labels_draw();' in cuerpo
+               and 'detents == 0 || s_regla_saltos' in cuerpo)
+    print("    la regla se marca, no se pinta al momento     %s"
+          % ("ok" if marca else "*** MAL ***"))
+    if not marca:
+        mal += 1
+    print("    y se suelta cuando el mando para              %s"
+          % ("ok" if desague else "*** MAL ***"))
+    if not desague:
+        mal += 1
+
+    #
+    # Y LA CHAPA DEL NCO IGUAL QUE LA REGLA - 01/11/2026.
+    #
+    # El numero del NCO vive en la franja de estado, que son 287 us de
+    # composicion -make topfranjas- y unos 12 ms en la radio. Girando, ese
+    # numero cambia en CADA detente, asi que repintarlo al momento es
+    # pagar la franja entera por un numero que no se lee hasta que se
+    # suelta. Tiene que marcarse y soltarse cuando dejan de llegar
+    # detentes; el plazo de NCO_CHAPA_MS es el seguro de los giros largos,
+    # no el camino normal.
+    #
+    #
+    # Y "CUANDO EL MANDO PARA" SE MIDE CON EL RELOJ - 02/11/2026.
+    #
+    # Pedia `s_chapa_debe && detents == 0` y que en algun sitio del cuerpo
+    # apareciera ui_top_draw_status(). Las dos cosas estaban mal:
+    #
+    #   - esa funcion ya no se llama ahi -es ui_top_draw_chips()- y esta
+    #     comprobacion seguia en verde porque el nombre salia en OTRO
+    #     sitio de los 60.000 caracteres que mira. Un banco que pasa por
+    #     el motivo equivocado es peor que uno que falla;
+    #   - y `detents == 0` no es "el mando ha parado", es "esta vuelta no
+    #     ha traido clics", que girando pasa a cada rato. Medido por el
+    #     cable: 3.428 us por vuelta repintando la chapa mientras se gira.
+    #
+    # Ahora se exige el reloj: CHAPA_PARADO_MS desde el ultimo detente.
+    #
+    chapa_marca   = 's_chapa_debe = 1U;' in cuerpo
+    chapa_desague = ('s_chapa_debe && detents == 0' in cuerpo
+                     and 'CHAPA_PARADO_MS' in cuerpo
+                     and 'ui_top_draw_chips(&s_top);' in cuerpo)
+    print("    la chapa del NCO se marca, no se pinta        %s"
+          % ("ok" if chapa_marca else "*** MAL ***"))
+    if not chapa_marca:
+        mal += 1
+    print("    y tambien se suelta cuando el mando para      %s"
+          % ("ok" if chapa_desague else "*** MAL ***"))
+    if not chapa_desague:
+        mal += 1
+
+    #
+    # Y EL NUMERO DE LA FRECUENCIA, QUE ERA EL QUE FALTABA - 02/11/2026.
+    #
+    # La regla y la chapa ya se marcaban; el numero se pintaba en CADA
+    # vuelta que moviera la frecuencia. Medido por el cable con "DG;": el
+    # tramo `frq` marca 3.331 us por vuelta girando, el segundo mas gordo
+    # despues del dibujo, y para nada: a treinta vueltas por segundo un
+    # numero que cambia treinta veces no se lee.
+    #
+    # Ahora va como los otros dos: se marca aqui y se pinta en el desague,
+    # diez veces por segundo girando (FREQ_GIRO_MS) y en cuanto para.
+    #
+    freq_marca   = 's_freq_debe = 1U;' in cuerpo
+    freq_desague = ('s_freq_debe' in cuerpo
+                    and 'FREQ_GIRO_MS' in cuerpo
+                    and 'freq_display_draw();' in cuerpo)
+    print("    el numero de la frecuencia se marca           %s"
+          % ("ok" if freq_marca else "*** MAL ***"))
+    if not freq_marca:
+        mal += 1
+    print("    y sale a diez por segundo, no a treinta       %s"
+          % ("ok" if freq_desague else "*** MAL ***"))
+    if not freq_desague:
+        mal += 1
+
+    if mal:
+        print("  *** %d cosa(s) que arreglar: ver la cabecera de pinta() ***" % mal)
+        return 1
+    print("  el mando ya no compite con el espectro por el bus  ok")
     return 0
 
 

@@ -61,24 +61,133 @@ typedef struct
  * pasaron de llevar un puntero a llevar un entero: a medio byte no se
  * puede apuntar. Es el unico cambio de forma; la aritmetica es la misma.
  */
-#ifndef FTX_MAG_4BITS
-#define FTX_MAG_4BITS 1
+/*
+ * ======================================================================
+ * *** Y TRES BITS POR CELDA - 02/11/2026, tambien de ESTE proyecto ***
+ * ======================================================================
+ *
+ * EL PORQUE, que es el mismo de arriba un paso mas alla. Con la ventana
+ * en 3.200 Hz y FREQ_OSR=1 el decodificador pierde las emisoras que caen
+ * a medio bin: medido en deepsdr-ui/sim/ft8_sensible.c, 216 de 216 en el
+ * centro del bin contra 13 de 216 a medio bin. Subir FREQ_OSR a 2 lo
+ * cierra -216 de 216- pero dobla mag[], y los 23.808 bytes que eso pide
+ * no estaban.
+ *
+ * CON TRES BITS mag[] mide 35.712 en vez de 47.616, y entonces SI cabe.
+ *
+ * LO QUE CUESTA, medido y no estimado, barriendo de -11 a -20 dB con la
+ * emision cayendo donde quiere en frecuencia y en tiempo:
+ *
+ *     hoy      FREQ_OSR 1, 4 bits ....  97 aciertos de 240
+ *              FREQ_OSR 2, 4 bits .... 129   (no cabe en RAM)
+ *     esto     FREQ_OSR 2, 3 bits .... 113
+ *
+ * O sea que de las 32 que da el submuestreo se quedan 16. La mitad del
+ * premio por la mitad de la memoria, y el agujero del medio bin cerrado
+ * igual. El umbral del 50 % se mueve 0,3 dB: -16,0 contra -15,7.
+ *
+ * LA ESCALA ES LA MISMA RECTA. El tramo de 51 dB no cambia; lo que
+ * cambia es que se reparte en ocho escalones en vez de dieciseis, o sea
+ * que el paso dobla. Por eso FTX_MAG_PASO_DB se calcula a partir de
+ * WF_MAG_NIVELES y no es un numero suelto: cambiar FTX_MAG_BITS no puede
+ * dejar la escalera descuadrada.
+ *
+ * EL EMPAQUETADO YA NO CAE EN BYTE. Tres bits no dividen a ocho, asi que
+ * una celda puede partirse entre dos bytes. Las dos funciones de abajo
+ * leen y escriben SIEMPRE dos bytes, que es mas barato que preguntar si
+ * hace falta el segundo. A cambio, mag[] y el desvio llevan UN BYTE DE
+ * RELLENO al final -FT8_ADAPTER_MAG_RELLENO-, porque la ultima celda
+ * toca el byte siguiente. Sin ese byte se sale del array.
+ */
+#ifndef FTX_MAG_BITS
+#define FTX_MAG_BITS 3
 #endif
 
-#if FTX_MAG_4BITS
-/* La escalera: 16 escalones de FTX_MAG4_PASO_DB a partir de
- * FTX_MAG4_BASE_DB. Se pueden fijar desde fuera (-D) para barrerlos en el
- * banco sin tocar el fichero; los valores de abajo son los medidos. */
-#ifndef FTX_MAG4_BASE_DB
-#define FTX_MAG4_BASE_DB (-35.0f)
+#if FTX_MAG_BITS == 3 || FTX_MAG_BITS == 4
+/* La escalera: WF_MAG_NIVELES escalones a partir de FTX_MAG_BASE_DB. Se
+ * pueden fijar desde fuera (-D) para barrerlos en el banco sin tocar el
+ * fichero; los valores de abajo son los medidos. */
+#ifndef FTX_MAG_BASE_DB
+#define FTX_MAG_BASE_DB (-35.0f)
 #endif
-#ifndef FTX_MAG4_PASO_DB
-#define FTX_MAG4_PASO_DB (3.4f)
+#define WF_MAG_NIVELES   (1 << FTX_MAG_BITS)
+#ifndef FTX_MAG_PASO_DB
+/* 54,4 son los 16 escalones de 3,4 dB con los que se midio la escalera a
+ * cuatro bits: el MISMO tramo, repartido entre los escalones que haya. */
+#define FTX_MAG_PASO_DB  (54.4f / (float)WF_MAG_NIVELES)
 #endif
+
+#if FTX_MAG_BITS == 4
 #define WF_MAG_RAW(wf, i)  ((int)((((const uint8_t *)(wf)->mag)[(i) >> 1]   \
                                    >> (((i) & 1) ? 4 : 0)) & 0x0F))
-#define WF_MAG_AT(wf, i)     ((float)WF_MAG_RAW(wf, i) * FTX_MAG4_PASO_DB + FTX_MAG4_BASE_DB)
-#define WF_MAG_INT_AT(wf, i) ((int)(2.0f * WF_MAG_AT(wf, i) + 240.0f))
+/* Lo que hay que escribir en el byte `i>>1` para dejar el nivel `q`
+ * (0..15) en el bin `i`. Lo usa el adaptador al guardar. */
+#define WF_MAG_PON(base, i, q)                                             \
+    do {                                                                   \
+        uint8_t *b_ = &((uint8_t *)(base))[(i) >> 1];                      \
+        if ((i) & 1) { *b_ = (uint8_t)((*b_ & 0x0FU) | ((q) << 4)); }      \
+        else         { *b_ = (uint8_t)((*b_ & 0xF0U) | (q)); }             \
+    } while (0)
+#else
+static inline int ftx_mag3_lee(const uint8_t *b, int i)
+{
+    unsigned bit = (unsigned)i * 3U;
+    const uint8_t *p = &b[bit >> 3];
+    unsigned v = (unsigned)p[0] | ((unsigned)p[1] << 8);
+    return (int)((v >> (bit & 7U)) & 7U);
+}
+
+static inline void ftx_mag3_pon(uint8_t *b, int i, uint8_t q)
+{
+    unsigned bit = (unsigned)i * 3U;
+    uint8_t *p = &b[bit >> 3];
+    unsigned s = bit & 7U;
+    unsigned v = (unsigned)p[0] | ((unsigned)p[1] << 8);
+
+    v = (v & ~(7U << s)) | (((unsigned)q & 7U) << s);
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+}
+#define WF_MAG_RAW(wf, i)      ftx_mag3_lee((const uint8_t *)(wf)->mag, (i))
+#define WF_MAG_PON(base, i, q) ftx_mag3_pon((uint8_t *)(base), (i), (uint8_t)(q))
+#endif
+
+#define WF_MAG_AT(wf, i)     ((float)WF_MAG_RAW(wf, i) * FTX_MAG_PASO_DB + FTX_MAG_BASE_DB)
+
+/*
+ * ======================================================================
+ * *** LA ESCALERA, YA EN ENTEROS - 03/11/2026, cambio de ESTE proyecto.
+ * Anotado en PROCEDENCIA.md. ***
+ * ======================================================================
+ *
+ * EL PORQUE. WF_MAG_INT_AT era
+ *
+ *     (int)(2.0f * ((float)raw * FTX_MAG_PASO_DB + FTX_MAG_BASE_DB) + 240.0f)
+ *
+ * o sea: desempaquetar la celda, convertir a flotante, multiplicar,
+ * sumar, multiplicar, sumar y convertir a entero. Y eso corre DENTRO del
+ * bucle mas caliente de FT8: ft8_sync_score() lo llama hasta ocho veces
+ * por simbolo de sincronismo, y la busqueda de candidatos llama a
+ * ft8_sync_score() treinta mil veces por ranura. Son millones de
+ * conversiones por ranura para leer una celda que solo puede valer
+ * WF_MAG_NIVELES cosas distintas.
+ *
+ * LO QUE SE HACE. La tabla. Son ocho enteros -dieciseis si se compila con
+ * cuatro bits- calculados por el compilador con la MISMA expresion, asi
+ * que el valor que sale es el mismo bit a bit, truncado incluido. Lo que
+ * desaparece es la aritmetica, no el resultado.
+ *
+ * Y EL TRUNCADO IMPORTA, por eso la tabla y no una resta escalada: los
+ * niveles truncan a 170, 183, 197, 210, 224, 238, 251 y 265, o sea que la
+ * diferencia entre vecinos vale unas veces 13 y otras 14. Calcular la
+ * puntuacion sobre niveles crudos y escalar al final habria dado otros
+ * numeros -parecidos, pero otros- y con ellos otro orden de candidatos.
+ * Aqui no cambia ninguno.
+ */
+#define FTX_MAG_INT(q) \
+    ((int16_t)(2.0f * ((float)(q) * FTX_MAG_PASO_DB + FTX_MAG_BASE_DB) + 240.0f))
+extern const int16_t ftx_mag_int[16];
+#define WF_MAG_INT_AT(wf, i) ((int)ftx_mag_int[WF_MAG_RAW(wf, i)])
 /*
  * EL ESCALON CRUDO, Y CUANTOS HAY.
  *
@@ -91,17 +200,8 @@ typedef struct
  * Indexando por el escalon crudo no puede pasar: hay WF_MAG_NIVELES y
  * punto, los diga la escalera que los diga.
  */
-#define WF_MAG_NIVELES       16
 #define WF_MAG_NIVEL(wf, i)  WF_MAG_RAW(wf, i)
-#define WF_MAG_NIVEL_DB(x)   ((float)(x) * FTX_MAG4_PASO_DB + FTX_MAG4_BASE_DB)
-/* Lo que hay que escribir en el byte `i>>1` para dejar el nivel `q`
- * (0..15) en el bin `i`. Lo usa el adaptador al guardar. */
-#define WF_MAG_PON(base, i, q)                                             \
-    do {                                                                   \
-        uint8_t *b_ = &((uint8_t *)(base))[(i) >> 1];                      \
-        if ((i) & 1) { *b_ = (uint8_t)((*b_ & 0x0FU) | ((q) << 4)); }      \
-        else         { *b_ = (uint8_t)((*b_ & 0xF0U) | (q)); }             \
-    } while (0)
+#define WF_MAG_NIVEL_DB(x)   ((float)(x) * FTX_MAG_PASO_DB + FTX_MAG_BASE_DB)
 #else
 #define WF_MAG_INT_AT(wf, i) WF_ELEM_MAG_INT((wf)->mag[i])
 #define WF_MAG_AT(wf, i)     WF_ELEM_MAG((wf)->mag[i])
@@ -160,6 +260,12 @@ typedef struct
 /// @param[in] min_score Minimal score allowed for pruning unlikely candidates (can be zero for no effect)
 /// @return Number of candidates filled in the heap
 int ftx_find_candidates(const ftx_waterfall_t* power, int num_candidates, ftx_candidate_t heap[], int min_score);
+
+/* La misma, con un gancho que se llama cada pocos milisegundos para que
+ * quien llama pueda atender lo suyo -en esta radio, vaciar el
+ * remuestreador-. Modificacion de este proyecto: ver el comentario en el
+ * .c. Con `respira` a cero hace exactamente lo de siempre. */
+int ftx_find_candidates_respira(const ftx_waterfall_t* power, int num_candidates, ftx_candidate_t heap[], int min_score, void (*respira)(void));
 
 /// Attempt to decode a message candidate. Extracts the bit probabilities, runs LDPC decoder, checks CRC and unpacks the message in plain text.
 /// @param[in] power Waterfall data collected during message slot

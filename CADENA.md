@@ -51,7 +51,6 @@ afecta a TODO lo que hay debajo de él, sin excepciones.
     │       ├─ ax25_process / aprs_scope_feed      APRS               │
     │       ├─ ais_modo_mete                       AIS                │
     │       ├─ sstv_process                        SSTV en FM         │
-    │       ├─ analiz_feed                         analizador         │
     │       └─ nr_ss_process → anotch_process → silenciador → AGC     │
     │                                                                 │
     └── rama banda lateral (USB/LSB) ─────────────────────────────────┤
@@ -122,15 +121,33 @@ prestada, así que también cuenta:
   además su guarda `!modo_panel_entero()`.
 
   La consecuencia para todo lo demás de este fichero: **lo único que impide
-  que la cascada escriba encima de los 69 kB mientras un modo los tiene es
+  que la cascada escriba encima de los 71 kB mientras un modo los tiene es
   el cerrojo de `waterfall.c`**, no que el tick deje de correr.
 - `hfdl_modo_poll()` — el Viterbi de HFDL. Corre **en el bucle principal**,
   no en la interrupción; si el bucle se atrasa, la ráfaga se pierde y se
   cuenta como `P` en la chapa.
+- `ft8_modo_poll()` — la decodificación de FT8, y es **el que más CPU del
+  bucle se lleva de todos**. Tres cosas que hay que saber antes de tocar
+  nada que alargue una vuelta del bucle:
+
+  - **Decodifica a trozos** de `FT8_PASO_MS` (8 ms) por vuelta, vaciando el
+    remuestreador entre medias. El colchón del remuestreador son 320 ms:
+    cualquier cosa que deje el bucle parado más que eso le quita audio a
+    FT8, y se cuenta como `p` en la barra.
+  - **Menos la búsqueda de candidatos**, que corre entera de un tirón
+    dentro de `ft8_decoder_slot_empieza()` —unos 214 ms de instrucciones,
+    ver `make m4`— y es el único trozo que no se puede partir. Para que no
+    ahogue al remuestreador lleva un gancho
+    (`ftx_find_candidates_respira()`) que lo vacía cada pocos
+    milisegundos.
+  - **Y hay un tope de reloj**, `FT8_TOPE_MS`: pasado ese tiempo la ranura
+    se corta y se reintegra, perdiendo los candidatos más flojos en vez de
+    el audio de la ranura siguiente. Se cuenta como `x` en la barra. Lo
+    vigila `tools/ft8_tope_check.py`.
 - `fax_poll()`, `sstv_poll()`, el autoguardado, el mapa, la captura.
-- La unión de 69 kB (`g_ft8_shared_ram`): la comparten FT8, HFDL, WSPR, AIS,
+- La unión de 71 kB (`g_ft8_shared_ram`): la comparten FT8, HFDL, WSPR, AIS,
   ALE, DSC, HELL, IDENT, JTTY, STANAG, el fax y el SSTV. Soltar el préstamo
-  **borra los 69 kB**.
+  **borra los 71 kB**.
 
 ---
 
@@ -150,5 +167,5 @@ Las tres preguntas:
 2. **¿Qué hay aguas abajo?** Se lee del diagrama. Todo lo que cuelgue por
    debajo del punto tocado está afectado hasta que se demuestre lo
    contrario.
-3. **¿Toca memoria compartida o CPU del bucle?** La unión de 69 kB, la banda
+3. **¿Toca memoria compartida o CPU del bucle?** La unión de 71 kB, la banda
    de la pantalla, el buffer del mapa, el tiempo de vuelta del bucle.

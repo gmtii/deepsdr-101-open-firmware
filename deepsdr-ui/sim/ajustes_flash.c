@@ -54,6 +54,17 @@ static uint32_t raiz(void)  { return fat1() + (uint32_t)g_chip[16] * fatsz(); }
 static uint32_t s_prox_cluster = 2U;
 
 /* Un fichero puesto por el PC, como los que ya hay en el volumen. */
+/* Una entrada de la FAT12, que son doce bits a caballo entre dos bytes. */
+static void fat12_pon(uint8_t *fat, uint16_t c, uint16_t v)
+{
+    uint32_t o = (uint32_t)c + ((uint32_t)c >> 1);
+    uint16_t p = (uint16_t)(fat[o] | (fat[o + 1U] << 8));
+    uint16_t n = (c & 1U) ? (uint16_t)((p & 0x000FU) | (v << 4))
+                          : (uint16_t)((p & 0xF000U) | (v & 0x0FFFU));
+    fat[o]      = (uint8_t)(n & 0xFFU);
+    fat[o + 1U] = (uint8_t)(n >> 8);
+}
+
 static void pc_pone(const char *n11, uint32_t bytes, uint8_t patron)
 {
     uint32_t rde = (uint32_t)(g_chip[17] | (g_chip[18] << 8));
@@ -274,6 +285,131 @@ int main(int argc, char **argv)
                   "y lo que deja el asincrono es lo que se le dio");
     } else {
         comprueba(0, "el camino asincrono se puede arrancar (el fichero ya existe)");
+    }
+
+    /*
+     * ==================================================================
+     * LA CADENA ROTA, QUE ES LO QUE TIENE LA RADIO DEL USUARIO.
+     * ==================================================================
+     *
+     * Su fila "Vuelta del bucle" dice `max 200 pol 176`: la peor vuelta
+     * fueron 200 ms y 176 se los llevo el bloque de polls. Y en ese
+     * bloque lo unico que puede durar eso es settings_poll(), o sea
+     * guardar CONFIG.CSV.
+     *
+     * El guardado normal va A TROCITOS -una pagina de 256 bytes por
+     * vuelta, ver spi_flash_async_save_poll()- y no se nota. Pero
+     * spi_flash_async_save_start() se niega si la cadena de clusters del
+     * fichero NO ES SEGUIDA, y entonces settings_poll() cae al camino
+     * BLOQUEANTE: borrar 4 kB y regrabarlos de una sentada por un SPI a
+     * patadas, a 16 us por byte.
+     *
+     * Y una cadena rota no se arregla sola: se queda rota para siempre,
+     * asi que TODOS los guardados pasan a ser bloqueantes. Como
+     * apply_lo_tune() marca los ajustes sucios en cada clic del mando,
+     * sale un paron cada pocos segundos mientras se sintoniza... y se
+     * acaba al soltar el mando. Que es exactamente lo que cuenta.
+     *
+     * Esto lo reproduce: se parte la cadena a proposito y se mira si el
+     * camino rapido se niega.
+     */
+    {
+        uint32_t rde = (uint32_t)(g_chip[17] | (g_chip[18] << 8));
+        uint32_t datos = raiz() + rde * 32U, off;
+        uint16_t primero = 0U;
+        int roto = 0;
+
+        /* La entrada de CONFIG.CSV, para saber por que cluster empieza. */
+        for (off = raiz(); off < datos; off += 32U) {
+            if (memcmp(&g_chip[off], CONFIG_NOMBRE CONFIG_EXT, 11) == 0) {
+                primero = (uint16_t)(g_chip[off + 26] | (g_chip[off + 27] << 8));
+                break;
+            }
+        }
+        comprueba(primero != 0U, "se encuentra la entrada de CONFIG.CSV");
+
+        /*
+         * UNA CADENA ROTA DE VERDAD, NO UN FICHERO ESTROPEADO.
+         *
+         * El primer intento mandaba el primer cluster a uno lejano
+         * cualquiera, y el banco lo caz: asi el fichero YA NO SE LEE, y
+         * eso no es lo que le pasa a la radio del usuario -la suya lee
+         * los ajustes perfectamente, solo que los guarda despacio-.
+         *
+         * Lo que de verdad pasa cuando un PC reescribe el fichero en un
+         * volumen con huecos es que la cadena sigue siendo VALIDA y los
+         * datos estan todos; lo unico que cambia es que los clusters ya
+         * no son consecutivos. Asi que se hace eso: se muda el cluster
+         * del medio a uno libre lejano, se mueven sus datos con el, y se
+         * cose la cadena. El fichero se lee igual de bien y la cadena ya
+         * no es seguida, que es exactamente el caso.
+         */
+        {
+            uint32_t rde2 = (uint32_t)(g_chip[17] | (g_chip[18] << 8));
+            uint32_t datos2 = raiz() + rde2 * 32U;
+            uint16_t medio  = (uint16_t)(primero + 1U);
+            uint16_t lejos  = 0x0A0U;      /* libre y lejos, en este volumen */
+            uint8_t  copia;
+
+            /* los datos del cluster del medio se van con el */
+            memcpy(&g_chip[datos2 + ((uint32_t)lejos - 2U) * bps()],
+                   &g_chip[datos2 + ((uint32_t)medio - 2U) * bps()], bps());
+
+            for (copia = 0U; copia < g_chip[16]; copia++) {
+                uint8_t *fat = &g_chip[fat1() + copia * fatsz()];
+                fat12_pon(fat, primero, lejos);                  /* 1o -> lejos  */
+                fat12_pon(fat, lejos, (uint16_t)(medio + 1U));   /* lejos -> 3o  */
+                fat12_pon(fat, medio, 0x000U);                   /* el del medio, libre */
+            }
+            printf("  --- se rompe a mala idea la cadena de CONFIG.CSV"
+                   " (cluster %u a %u)\n", medio, lejos);
+        }
+        spi_flash_geo_olvida();
+        spi_flash_init();
+
+        roto = (spi_flash_async_save_start(CONFIG_NOMBRE, CONFIG_EXT,
+                                           (const uint8_t *)csv, len) == 0U);
+        comprueba(roto,
+                  "con la cadena rota, el camino suave se NIEGA (y se cae al bloqueante)");
+        comprueba(spi_flash_cadena_seguida(CONFIG_NOMBRE, CONFIG_EXT) == 0U,
+                  "y la pregunta suelta dice lo mismo");
+
+        /*
+         * Y LA CURA: lo que hace settings_cadena_repara() al arrancar.
+         *
+         * Leer, borrar y volver a escribir. La pregunta que contesta este
+         * trozo no es si el codigo corre -eso es facil- sino si el
+         * escritor DEJA LA CADENA SEGUIDA al recolocarlo. Si no lo
+         * hiciera, la cura no curaria nada y habria que buscar otra.
+         */
+        {
+            char otra[2048];
+            uint32_t m = spi_flash_read_file_by_name(CONFIG_NOMBRE, CONFIG_EXT,
+                                                     (uint8_t *)otra, sizeof otra);
+            comprueba(m == len, "con la cadena rota el fichero AUN SE LEE entero");
+            comprueba(spi_flash_fichero_borra(CONFIG_NOMBRE, CONFIG_EXT) != 0U,
+                      "se borra");
+            comprueba(spi_flash_write_or_update_file(CONFIG_NOMBRE, CONFIG_EXT,
+                                                     (const uint8_t *)otra, m) != 0,
+                      "y se vuelve a escribir");
+            comprueba(spi_flash_cadena_seguida(CONFIG_NOMBRE, CONFIG_EXT) != 0U,
+                      "*** y AHORA la cadena esta seguida: la cura cura ***");
+            comprueba(spi_flash_async_save_start(CONFIG_NOMBRE, CONFIG_EXT,
+                                                 (const uint8_t *)csv, len) != 0U,
+                      "y el camino suave vuelve a aceptarse");
+            {
+                spi_flash_async_status_t e = SPI_FLASH_ASYNC_BUSY;
+                int v;
+                for (v = 0; v < 4000 && e == SPI_FLASH_ASYNC_BUSY; v++) {
+                    e = spi_flash_async_save_poll();
+                }
+                comprueba(e == SPI_FLASH_ASYNC_DONE, "y termina bien");
+            }
+            n = spi_flash_read_file_by_name(CONFIG_NOMBRE, CONFIG_EXT,
+                                            (uint8_t *)leido, sizeof leido);
+            comprueba(n == len && memcmp(leido, csv, len) == 0,
+                      "y los ajustes siguen siendo los mismos");
+        }
     }
 
     /* ---------------------------------------------------------------

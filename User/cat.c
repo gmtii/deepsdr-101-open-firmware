@@ -60,6 +60,14 @@ static uint32_t lee_num(const char *s, uint8_t n)
     return v;
 }
 
+/* Cinco cifras es todo lo que lleva un hueco de la respuesta de "DG": por
+ * encima de 99.999 us la vuelta ya no es una vuelta, es un cuelgue, y el
+ * numero topado lo dice igual de bien sin desplazar lo que viene detras. */
+static uint32_t tope5(uint32_t v)
+{
+    return (v > 99999UL) ? 99999UL : v;
+}
+
 static uint8_t dos(const char *o, char a, char b)
 {
     return ((o[0] == a) && (o[1] == b)) ? 1U : 0U;
@@ -179,6 +187,32 @@ static uint8_t procesa(const char *o, uint8_t n, char *s)
         if (v > 30U) { v = 30U; }
         j = pon(s, 0U, "SM0");
         j = pon_num(s, j, (uint32_t)v, 4U);
+        s[j++] = ';';
+        return j;
+    }
+
+    /*
+     * --- la vuelta del bucle, para medir sin fotos ---
+     *
+     * Ver cat_diag_t en cat.h. Todo de ancho fijo y sin separadores, que
+     * es como se lee desde un guion sin analizar nada.
+     */
+    if (dos(o, 'D', 'G')) {
+        cat_diag_t d;
+        uint8_t    k;
+
+        if (n != 2U) { return error(s); }
+        if (s_r->diag_lee == 0) { return error(s); }
+        s_r->diag_lee(&d);
+        j = pon(s, 0U, "DG");
+        j = pon_num(s, j, (uint32_t)d.vueltas,  4U);
+        j = pon_num(s, j, (uint32_t)d.detentes, 4U);
+        j = pon_num(s, j, (uint32_t)(d.nr ? 1U : 0U), 1U);
+        j = pon_num(s, j, (uint32_t)d.carga,    3U);
+        j = pon_num(s, j, tope5(d.vuelta_us),   5U);
+        for (k = 0U; k < CAT_DIAG_TRAMOS; k++) {
+            j = pon_num(s, j, tope5(d.tramo_us[k]), 5U);
+        }
         s[j++] = ';';
         return j;
     }

@@ -1377,6 +1377,7 @@ static void pon_copia(const char *t)
  * 1 si TODO lo que ha cuadrado son pistas de ancho. Ver donde se usa.
  * Con n == 0 no se llama: eso ya tiene su propia frase.
  */
+__attribute__((noinline))
 static uint8_t solo_pistas(const uint8_t *cand, uint16_t n)
 {
     uint16_t i;

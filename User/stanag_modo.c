@@ -768,6 +768,7 @@ static void avisos_haz(void)
 #define AV4415 4U
 static char s_a4[AV4415][STANAG_MODO_LARGO];
 
+__attribute__((noinline))
 static void avisos4415_haz(void)
 {
     s4415_est_t e;
@@ -1117,6 +1118,7 @@ static uint32_t s_firma;      /* huella de lo que se ve ahora mismo */
 static uint32_t s_cambios;    /* cuantas veces ha cambiado esa huella */
 static uint32_t s_firma_t;    /* el cuarto de segundo en que se miro */
 
+__attribute__((noinline))
 static uint32_t huella(uint32_t h, const char *t)
 {
     while (*t != '\0') {

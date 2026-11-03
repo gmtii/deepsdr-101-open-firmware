@@ -4,9 +4,10 @@ LO QUE COSTARIA UNA FFT DE 512 PUNTOS, CONTADO EN INSTRUCCIONES DEL BRAZO.
 
 POR QUE EXISTE (24/10/2026)
 ---------------------------
-*** Avisado por el usuario: "creo que en 192 estoy viendo señales que no
-terminan en pico". Y despues, cuando le dije lo que costaria arreglarlo:
-"se podrian encontrar esos 8kb que hacen falta?" y "empieza a medir". ***
+*** A 192 kHz HABIA SEÑALES QUE NO TERMINABAN EN PICO. ***
+
+Y la pregunta siguiente, una vez contado lo que costaria arreglarlo, fue si
+se podian encontrar esos 8 kB. De ahi sale este banco.
 
 Y tenia razon en lo que veia. La FFT del panadaptador son 256 bins SIEMPRE,
 asi que:

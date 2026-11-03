@@ -425,6 +425,56 @@ int main(void)
            tras_cruzar_con_puerta > bueno - 3.0, 0);
     }
 
+    /* ------------------------------------------------------------------
+     * 6. EL ARRANQUE: CUANTO TARDA EL CORRECTOR EN ESTAR PUESTO.
+     *
+     *    EL SINTOMA: nada mas reiniciar el receptor la interferencia de
+     *    imagen es importante, y despues de alguna maniobra -sin saber
+     *    cual- desaparece.
+     *
+     *    iqbal_init() deja el corrector a cero -s_hay = 0, theta = 0,
+     *    g = 1- o sea SIN CORREGIR NADA, y las medias arrancan tambien a
+     *    cero. Hasta que resuelve() acepta la primera medida no se corrige
+     *    ni un dB. Esto cronometra ese hueco con el camino de verdad.
+     * ------------------------------------------------------------------ */
+    {
+        static const double k_seg[] = { 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 30.0 };
+        unsigned q;
+
+        printf("\n  cuanto tarda el corrector desde el arranque\n");
+        printf("      (banda poblada, el caso bueno)\n");
+        for (q = 0U; q < sizeof k_seg / sizeof k_seg[0]; q++) {
+            iqbal_init();
+            limpia_escena();
+            g_e.n = 5;
+            g_e.f[0] = -62000.0; g_e.a[0] = 5000.0;
+            g_e.f[1] = -31000.0; g_e.a[1] = 7000.0;
+            g_e.f[2] =  13000.0; g_e.a[2] = 6000.0;
+            g_e.f[3] =  41000.0; g_e.a[3] = 4000.0;
+            g_e.f[4] =  67000.0; g_e.a[4] = 5000.0;
+            g_e.n_ant = 60.0; g_e.n_des = 0.0;
+            asienta(k_seg[q]);
+            printf("      %5.1f s ... %5.1f dB%s\n", k_seg[q],
+                   mide(13000.0, 2000.0),
+                   (k_seg[q] < 1.5) ? "   <- aqui todavia no corrige" : "");
+        }
+
+        /* Y la banda FLOJA, que es donde se puede quedar colgado: por
+         * debajo de IQB_POT_MIN resuelve() no acepta ninguna medida y
+         * s_hay se queda en cero para siempre. */
+        printf("\n      (banda floja: una sola señal debil y poco ruido)\n");
+        for (q = 0U; q < sizeof k_seg / sizeof k_seg[0]; q++) {
+            iqbal_init();
+            limpia_escena();
+            g_e.n = 1; g_e.f[0] = 24000.0; g_e.a[0] = 40.0; g_e.desv[0] = 3000.0;
+            g_e.n_ant = 4.0; g_e.n_des = 0.0;
+            asienta(k_seg[q]);
+            printf("      %5.1f s ... %5.1f dB\n", k_seg[q],
+                   mide(24000.0, 8000.0));
+        }
+        printf("\n");
+    }
+
     printf("\n  %s: %d fallo(s)\n\n", fallos ? "MAL" : "bien", fallos);
     return fallos ? 1 : 0;
 }

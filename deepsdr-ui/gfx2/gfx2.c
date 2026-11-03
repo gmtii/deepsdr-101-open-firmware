@@ -225,6 +225,7 @@ uint8_t gfx2_render(int16_t x, int16_t y, int16_t w, int16_t h,
                     void (*draw)(gfx2_surf_t *s, void *ctx), void *ctx)
 {
     int16_t by;
+    int16_t banda_h;
 
     if (w <= 0 || h <= 0) return 0U;
     if (w > GFX2_W) w = GFX2_W;
@@ -258,12 +259,52 @@ uint8_t gfx2_render(int16_t x, int16_t y, int16_t w, int16_t h,
         return 0U;
     }
 
-    for (by = y; by < (int16_t)(y + h); by = (int16_t)(by + GFX2_BAND_H)) {
+    /*
+     * ==================================================================
+     * LA BANDA SE ESTIRA CUANDO LA VENTANA ES ESTRECHA - 01/11/2026.
+     * ==================================================================
+     *
+     * EL PORQUE, del usuario y despues de seis versiones persiguiendo
+     * otras cosas: "se ralentiza igual moviendo el mando pa arriba y pa
+     * abajo, avanzando varios hercios, sin que llegue a cambiar de
+     * pantalla... y en cuanto paro el encoder vuelve a su velocidad
+     * normal".
+     *
+     * Sin cruzar banda, sin reaparcar el oscilador y sin menu, lo unico
+     * que corre en cada detente es repintar los digitos. Y eso, medido,
+     * son unos 5 ms en su radio; a treinta detentes por segundo es casi
+     * una cuarta parte del reloj, sobre un fotograma que ya cuesta 25 ms.
+     * De ahi la bajada mientras se gira y la vuelta al soltar.
+     *
+     * Y la mitad de esos 5 ms no era dibujar: era REPETIR LA MAQUETA. La
+     * banda tenia altura FIJA, asi que una franja de 64 filas se
+     * componia en cuatro pasadas y en cada una el dibujo rehacia la
+     * cuenta entera -los anchos de las cifras, donde empieza cada
+     * pastilla, donde acaba la lectura- para quedarse con 16 filas.
+     * Cuatro veces el mismo trabajo.
+     *
+     * El limite de verdad no es la ALTURA, es el BUFFER: caben
+     * GFX2_W * GFX2_BAND_H pixeles. Con la ventana entera (800 px de
+     * ancho) la altura maxima sigue siendo GFX2_BAND_H y no cambia
+     * nada; con la caja de un digito -unos 40 px- caben las 64 filas de
+     * una sentada y el dibujo se hace UNA vez.
+     *
+     * El resultado es el mismo pixel: la banda solo decide en cuantos
+     * trozos se compone, no que se pinta.
+     */
+    {
+        int32_t cabe = (int32_t)GFX2_W * (int32_t)GFX2_BAND_H / (int32_t)w;
+        if (cabe < 1) { cabe = 1; }
+        if (cabe > (int32_t)GFX2_H) { cabe = (int32_t)GFX2_H; }
+        banda_h = (int16_t)cabe;
+    }
+
+    for (by = y; by < (int16_t)(y + h); by = (int16_t)(by + banda_h)) {
         gfx2_surf_t s;
         int16_t bh = (int16_t)((y + h) - by);
         int32_t n, i;
 
-        if (bh > GFX2_BAND_H) bh = GFX2_BAND_H;
+        if (bh > banda_h) bh = banda_h;
 
         s.px = s_band;
         s.x = x; s.y = by; s.w = w; s.h = bh;
@@ -474,36 +515,103 @@ void gfx2_vgrad(gfx2_surf_t *s, int16_t x, int16_t y, int16_t w, int16_t h,
          * por segundo. El resultado es el mismo pixel a pixel. */
         {
             gfx2_rgba_t cf;
+            uint16_t pal[4];
+            uint8_t  k;
             cf.r = (uint8_t)((c0.r * (255u - t) + c1.r * t) / 255u);
             cf.g = (uint8_t)((c0.g * (255u - t) + c1.g * t) / 255u);
             cf.b = (uint8_t)((c0.b * (255u - t) + c1.b * t) / 255u);
             cf.a = (uint8_t)((c0.a * (255u - t) + c1.a * t) / 255u);
 
-        for (ix = 0; ix < w; ix++) {
-            int16_t lx = (int16_t)((x + ix) - s->x);
-            gfx2_rgba_t c;
-            /* el dither se aplica en 888 antes de cuantizar: sumamos una
-             * fraccion de LSB de 565 (8 para R/B, 4 para G) segun la
-             * posicion, lo que rompe los escalones del degradado */
-            int32_t d = (int32_t)k_dither[sy & 3][(x + ix) & 3] - 8;
+        /*
+         * ==============================================================
+         * CUATRO COLORES POR FILA, Y DESPUES SOLO GUARDAR - 01/11/2026.
+         * ==============================================================
+         *
+         * EL PORQUE, dicho antes que ningun banco: que cambiar la linea
+         * vertical y un digito de la frecuencia hiciera que todo lo demas
+         * fuera lento no tenia sentido. Y no lo tenia.
+         *
+         * Medido: la traza del espectro compone 157.000 pixeles en 283
+         * us -555 por microsegundo- y la cabecera 14.700 en 156 -94 por
+         * microsegundo-. SEIS VECES MAS CARO EL PIXEL, dibujando mucho
+         * menos. La diferencia es este bucle.
+         *
+         * Lo que se pagaba POR PIXEL: dos indices en la tabla de tramado,
+         * una copia de la estructura de color, tres divisiones y seis
+         * comparaciones de recorte, y una llamada a blend() que ademas
+         * hace otra division y empaqueta a 565. Treinta y tantas
+         * operaciones.
+         *
+         * Y para nada: el color de la fila es UNO -solo depende de t- y
+         * el tramado depende de (x & 3), o sea que en toda la fila no hay
+         * mas que CUATRO colores distintos. Se calculan los cuatro una
+         * vez, ya empaquetados a 565, y el bucle de columnas se queda en
+         * una carga y un guardado.
+         *
+         * El resultado es el MISMO pixel: misma mezcla, mismo tramado,
+         * mismo redondeo, porque es literalmente la misma cuenta hecha
+         * cuatro veces en vez de ochocientas. Lo vigila
+         * sim/top_franjas.c, que compara los repintados parciales contra
+         * el completo pixel a pixel.
+         *
+         * Si el degradado no fuera opaco -cf.a < 255- hay que mezclar con
+         * lo que haya debajo y entonces el color SI depende del pixel: ese
+         * caso se queda por el camino de antes. Hoy no se da -las paletas
+         * traen alfa 255- pero no cuesta nada dejarlo correcto.
+         */
+        /*
+         * Y NO HAY CAMINO LENTO: todos los degradados del arbol se piden
+         * con gfx2_rgb(), que pone alfa 255 -son seis llamadas y estan
+         * contadas-. Un degradado translucido tendria que mezclarse con
+         * lo que hay debajo y entonces el color SI dependeria del pixel,
+         * pero no existe ninguno. Si alguien añade uno, saldra opaco y se
+         * vera a la primera; mantener aqui un segundo bucle para un caso
+         * que no se da costaba 150 bytes de flash que el 450 no tiene.
+         */
+        for (k = 0U; k < 4U; k++) {
+            int32_t dk = (int32_t)k_dither[sy & 3][k] - 8;
+            int32_t r = cf.r + dk / 2, g = cf.g + dk / 4, b = cf.b + dk / 2;
+            if (r < 0)   { r = 0; }
+            if (r > 255) { r = 255; }
+            if (g < 0)   { g = 0; }
+            if (g > 255) { g = 255; }
+            if (b < 0)   { b = 0; }
+            if (b > 255) { b = 255; }
+            pal[k] = gfx2_to565((uint8_t)r, (uint8_t)g, (uint8_t)b);
+        }
+        /*
+         * ==============================================================
+         * Y EL RECORTE, UNA VEZ POR FILA Y NO POR PIXEL - 02/11/2026.
+         * ==============================================================
+         *
+         * El bucle de arriba se quedo en "una carga y un guardado"... mas
+         * CUATRO comparaciones y dos saltos de recorte por pixel, que son
+         * invariantes: ni la ventana de la banda ni el recorte horizontal
+         * cambian dentro de la fila.
+         *
+         * Medido en un Cortex-M4 de verdad -qemu, contando instrucciones
+         * sobre el codigo compilado para el GD32-: el degradado costaba
+         * 30 instrucciones por pixel contra las 7,7 de un relleno liso.
+         * La diferencia era esto.
+         *
+         * Asi que los tres recortes -la ventana de la banda, el trozo que
+         * se pidio y s_rec_*- se cruzan ANTES y el bucle se queda en lo
+         * que decia el comentario de arriba. Mismos pixeles exactamente:
+         * los que se saltaban por `continue` son los que ahora no entran
+         * en el rango. Lo vigila sim/top_franjas.c, que compara los
+         * repintados parciales contra el completo pixel a pixel.
+         */
+        {
+            int16_t xa = x, xb = (int16_t)(x + w);
 
-            if (lx < 0 || lx >= s->w) continue;
-            if ((x + ix) < s_rec_x0 || (x + ix) >= s_rec_x1) continue;
+            if (xa < s->x)        { xa = s->x; }
+            if (xa < s_rec_x0)    { xa = s_rec_x0; }
+            if (xb > (int16_t)(s->x + s->w)) { xb = (int16_t)(s->x + s->w); }
+            if (xb > s_rec_x1)    { xb = s_rec_x1; }
 
-            c = cf;
-
-            {
-                int32_t r = c.r + d / 2, g = c.g + d / 4, b = c.b + d / 2;
-                if (r < 0)   { r = 0; }
-                if (r > 255) { r = 255; }
-                if (g < 0)   { g = 0; }
-                if (g > 255) { g = 255; }
-                if (b < 0)   { b = 0; }
-                if (b > 255) { b = 255; }
-                c.r = (uint8_t)r; c.g = (uint8_t)g; c.b = (uint8_t)b;
+            for (ix = xa; ix < xb; ix++) {
+                row[ix - s->x] = pal[ix & 3];
             }
-
-            row[lx] = blend(row[lx], c, 255);
         }
         }
     }
@@ -512,12 +620,62 @@ void gfx2_vgrad(gfx2_surf_t *s, int16_t x, int16_t y, int16_t w, int16_t h,
 /* Cobertura antialiasada de un pixel dentro de un rectangulo redondeado.
  * Supermuestreo 4x4: barato, suficiente para radios de 4-12px, y no hace
  * falta ni sqrt ni float. */
+/*
+ * ======================================================================
+ * EL PIXEL, ¿CAE EN LA VENTANA QUE SE ESTA COMPONIENDO? - 01/11/2026.
+ * ======================================================================
+ *
+ * EL PORQUE: cambiar la linea vertical y un digito de la frecuencia no
+ * tendria que hacer que vaya lento todo lo demas, y lo hacia.
+ *
+ * Desde que la cabecera se compone A TROZOS -solo la caja de los digitos
+ * que cambian al girar el mando- las pastillas de modo y de banda caen
+ * ENTERAS fuera de la ventana. Y se seguian redondeando: los bucles de
+ * esquina de gfx2_rrect() y gfx2_rrect_outline() miraban la banda
+ * VERTICAL antes de llamar a rr_cov() -que son 16 submuestras con sus
+ * multiplicaciones- pero NO la horizontal, asi que se pagaban enteras y
+ * px_blend() las tiraba despues una a una.
+ *
+ * La pregunta se hace UNA VEZ por rectangulo y no por pixel: lo que de
+ * verdad pasa es que la pastilla cae entera fuera, y preguntarlo pixel a
+ * pixel costaba 96 bytes mas de flash para cazar ademas un caso -la
+ * pastilla a medio entrar- que no se da al girar el mando.
+ *
+ * Medido con callgrind sobre el banco de la cabecera: rr_cov() se
+ * llevaba el 38 % de TODO, mas del triple que dibujar los glifos.
+ */
+/*
+ * ===========================================================================
+ * LA COBERTURA DE LA ESQUINA, EN TABLA - 02/11/2026.
+ * ===========================================================================
+ *
+ * Medido con callgrind sobre el repintado de la franja de estado: rr_cov()
+ * se llevaba el 50,5 % de TODO, y calcularla una vez por pixel en vez de
+ * cuatro solo bajo al 35,6 %. Sigue siendo el primero de la lista.
+ *
+ * Y no hace falta calcularla NUNCA mas de una vez por radio: la cobertura
+ * del pixel (ix, iy) de una esquina no depende ni del color, ni de donde
+ * este el rectangulo, ni de lo grande que sea -mientras r quepa, que ya se
+ * recorta-. Depende SOLO de ix, iy y r.
+ *
+ * Asi que se guarda. Dos huecos porque gfx2_rrect_outline() alterna entre
+ * dos radios -el de fuera y el de dentro- dentro del mismo bucle, y con uno
+ * solo se estaria recalculando en cada vuelta.
+ *
+ * Son 2 x 16 x 16 = 512 bytes de RAM. Radios mas grandes que 16 no se usan
+ * en este arbol, y si alguien pone uno se va por el camino de siempre, que
+ * sigue estando aqui y da exactamente lo mismo.
+ */
+#define RR_TAB_MAX  16
+static uint8_t s_rr_tab[2][RR_TAB_MAX * RR_TAB_MAX];
+static int16_t s_rr_rad[2] = { -1, -1 };
+static uint8_t s_rr_turno;
+
 static uint16_t rr_cov(int16_t px, int16_t py, int16_t x, int16_t y,
                        int16_t w, int16_t h, int16_t r)
 {
     int16_t sx, sy;
     uint16_t hit = 0;
-
     PROF_RRCOV();
 
     for (sy = 0; sy < 4; sy++) {
@@ -547,13 +705,48 @@ static uint16_t rr_cov(int16_t px, int16_t py, int16_t x, int16_t y,
     return (uint16_t)((hit * 255u) / 16u);
 }
 
+/*
+ * La tabla del radio r, calculada con el MISMO rr_cov() de arriba sobre un
+ * rectangulo de referencia de 2r x 2r: ahi el recorte de r cae igual que en
+ * cualquier otro, asi que el numero es el mismo. Devuelve 0 si el radio no
+ * cabe en la tabla, y entonces quien llama usa el camino de siempre.
+ */
+static const uint8_t *rr_tabla(int16_t r)
+{
+    uint8_t k;
+    int16_t ix, iy;
+
+    if (r < 1 || r > RR_TAB_MAX) { return (const uint8_t *)0; }
+    for (k = 0U; k < 2U; k++) {
+        if (s_rr_rad[k] == r) { return s_rr_tab[k]; }
+    }
+    k = (uint8_t)(s_rr_turno & 1U);
+    s_rr_turno++;
+    for (iy = 0; iy < r; iy++) {
+        for (ix = 0; ix < r; ix++) {
+            s_rr_tab[k][iy * RR_TAB_MAX + ix] =
+                (uint8_t)rr_cov(ix, iy, 0, 0, (int16_t)(2 * r),
+                                (int16_t)(2 * r), r);
+        }
+    }
+    s_rr_rad[k] = r;
+    return s_rr_tab[k];
+}
+
 void gfx2_rrect(gfx2_surf_t *s, int16_t x, int16_t y, int16_t w, int16_t h,
                 int16_t r, gfx2_rgba_t c)
 {
     int16_t iy, ix;
+    uint16_t cov4;
+    const uint8_t *tab;
 
     if (w <= 0 || h <= 0) return;
-    if (!gfx2_band_hits(s, y, h)) return;
+    /* La banda, Y TAMBIEN la ventana en horizontal: ver el comentario de
+     * rr_cov(). Un rectangulo que cae entero fuera no tiene esquinas que
+     * redondear, y los tramos rectos se recortan solos en gfx2_fill(). */
+    if (!gfx2_band_hits(s, y, h)
+        || (int16_t)(x + w) <= s->x
+        || x >= (int16_t)(s->x + s->w)) return;
     if (r <= 0) { gfx2_fill(s, x, y, w, h, c); return; }
     if (r > w / 2) r = (int16_t)(w / 2);
     if (r > h / 2) r = (int16_t)(h / 2);
@@ -563,21 +756,53 @@ void gfx2_rrect(gfx2_surf_t *s, int16_t x, int16_t y, int16_t w, int16_t h,
     gfx2_fill(s, (int16_t)(x + r), y, (int16_t)(w - 2 * r), r, c);
     gfx2_fill(s, (int16_t)(x + r), (int16_t)(y + h - r), (int16_t)(w - 2 * r), r, c);
 
+    tab = rr_tabla(r);
+
     for (iy = 0; iy < r; iy++) {
         for (ix = 0; ix < r; ix++) {
             int16_t xs[2], ys[2];
             int k, l;
             xs[0] = (int16_t)(x + ix);          xs[1] = (int16_t)(x + w - 1 - ix);
             ys[0] = (int16_t)(y + iy);          ys[1] = (int16_t)(y + h - 1 - iy);
+            /*
+             * ==============================================================
+             * UNA VEZ PARA LAS CUATRO ESQUINAS - 02/11/2026.
+             * ==============================================================
+             *
+             * EL PORQUE: con el mando enganchado al ancho de filtro -que
+             * solo cambia una chapa enana- se ralentiza igual. O sea que el
+             * coste no estaba en lo que se ve cambiar.
+             *
+             * Medido con callgrind sobre el repintado de la franja de
+             * estado: rr_cov() se lleva el 50,5 % de TODO. Son 16
+             * submuestras por pixel de esquina, y la franja tiene siete
+             * pastillas redondeadas con cuatro esquinas cada una.
+             *
+             * Y LAS CUATRO DAN EL MISMO NUMERO. No es una aproximacion, es
+             * simetria: para la esquina de la izquierda la distancia al
+             * centro del arco sale dx = 8*ix - 8*r + 2*sx + 1, y para la de
+             * la derecha, con la submuestra espejada (sx' = 3 - sx), sale
+             * dx' = -dx. Como solo cuenta dx*dx, las dieciseis submuestras
+             * suman lo mismo. Igual en vertical.
+             *
+             * Asi que se calcula UNA vez por pixel de esquina en vez de
+             * cuatro. Mismos pixeles exactamente. Lo vigila
+             * sim/top_franjas.c, que compara los repintados parciales
+             * contra el completo pixel a pixel.
+             */
+            /* Y la comprobacion de banda SIGUE yendo delante: rr_cov son
+             * 16 submuestras que no se pagan por un pixel que no esta en
+             * esta banda. Basta con que lo este UNA de las dos filas. */
+            if ((ys[0] < s->y || ys[0] >= (int16_t)(s->y + s->h))
+                && (ys[1] < s->y || ys[1] >= (int16_t)(s->y + s->h))) { continue; }
+            cov4 = tab ? (uint16_t)tab[iy * RR_TAB_MAX + ix]
+                       : rr_cov(xs[0], ys[0], x, y, w, h, r);
+            if (!cov4) { continue; }
             for (k = 0; k < 2; k++) {
                 for (l = 0; l < 2; l++) {
-                    uint16_t cov;
-                    /* la comprobacion de banda va ANTES del supermuestreo:
-                     * rr_cov son 16 submuestras que no se deben pagar para
-                     * un pixel que ni siquiera esta en esta banda */
+                    uint16_t cov = cov4;
                     if (ys[l] < s->y || ys[l] >= (int16_t)(s->y + s->h)) continue;
-                    cov = rr_cov(xs[k], ys[l], x, y, w, h, r);
-                    if (cov) px_blend(s, xs[k], ys[l], c, cov);
+                    px_blend(s, xs[k], ys[l], c, cov);
                 }
             }
         }
@@ -588,9 +813,15 @@ void gfx2_rrect_outline(gfx2_surf_t *s, int16_t x, int16_t y, int16_t w, int16_t
                         int16_t r, int16_t t, gfx2_rgba_t c)
 {
     int16_t iy, ix, k;
+    uint16_t cov_o, cov_i;
 
     if (w <= 0 || h <= 0 || t <= 0) return;
-    if (!gfx2_band_hits(s, y, h)) return;
+    /* La banda, Y TAMBIEN la ventana en horizontal: ver el comentario de
+     * rr_cov(). Un rectangulo que cae entero fuera no tiene esquinas que
+     * redondear, y los tramos rectos se recortan solos en gfx2_fill(). */
+    if (!gfx2_band_hits(s, y, h)
+        || (int16_t)(x + w) <= s->x
+        || x >= (int16_t)(s->x + s->w)) return;
 
     if (r > w / 2) r = (int16_t)(w / 2);
     if (r > h / 2) r = (int16_t)(h / 2);
@@ -622,18 +853,27 @@ void gfx2_rrect_outline(gfx2_surf_t *s, int16_t x, int16_t y, int16_t w, int16_t
                 int16_t xs[2], ys[2];
                 xs[0] = (int16_t)(x + ix);         xs[1] = (int16_t)(x + w - 1 - ix);
                 ys[0] = (int16_t)(y + iy);         ys[1] = (int16_t)(y + h - 1 - iy);
+                /* Una vez para las cuatro, por la misma simetria que
+                 * gfx2_rrect(): ver el comentario de alli. Y con la
+                 * comprobacion de banda delante, por lo mismo. */
+                if ((ys[0] < s->y || ys[0] >= (int16_t)(s->y + s->h))
+                    && (ys[1] < s->y || ys[1] >= (int16_t)(s->y + s->h))) { continue; }
+                {
+                    int16_t ri = (int16_t)(r - t);
+                    if (ri < 0) { ri = 0; }
+                    cov_o = rr_cov(xs[0], ys[0], x, y, w, h, r);
+                    cov_i = cov_o ? rr_cov(xs[0], ys[0], (int16_t)(x + t),
+                                           (int16_t)(y + t),
+                                           (int16_t)(w - 2 * t),
+                                           (int16_t)(h - 2 * t), ri)
+                                  : (uint16_t)0;
+                }
+                if (cov_o <= cov_i) { continue; }
                 for (k = 0; k < 4; k++) {
                     int16_t sx = xs[k & 1], sy = ys[(k >> 1) & 1];
-                    uint16_t outer, inner;
-                    int16_t ri = (int16_t)(r - t);
                     if (sy < s->y || sy >= (int16_t)(s->y + s->h)) continue;
-                    outer = rr_cov(sx, sy, x, y, w, h, r);
-                    if (!outer) continue;
-                    if (ri < 0) ri = 0;
-                    inner = rr_cov(sx, sy, (int16_t)(x + t), (int16_t)(y + t),
-                                   (int16_t)(w - 2 * t), (int16_t)(h - 2 * t), ri);
-                    if (outer > inner) {
-                        px_blend(s, sx, sy, c, (uint16_t)(outer - inner));
+                    {
+                        px_blend(s, sx, sy, c, (uint16_t)(cov_o - cov_i));
                     }
                 }
             }

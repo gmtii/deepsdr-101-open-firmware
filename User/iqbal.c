@@ -113,6 +113,9 @@ static uint32_t s_bloques     TCMRAM_BSS;
  * promedio. Ver IQB_PAR_MAX: en una banda llena esto sube y el estimador
  * se queda quieto, que es lo correcto. */
 static uint32_t s_pares       TCMRAM_BSS;
+/* Los que se habian visto en el intento anterior de iqbal_resuelve(): es
+ * la condicion para bajar el orden del FIR. Ver alli. */
+static uint32_t s_pares_ult;
 static uint8_t  s_turno       TCMRAM_BSS;
 static float    s_esp_db      TCMRAM_BSS;
 static int16_t  s_esp_bin     TCMRAM_BSS;
@@ -162,9 +165,35 @@ static volatile float    s_ab_on      TCMRAM_BSS;
  * unico de esta radio que no se salta nunca. Ver iqbal.h.
  */
 #define IQB_AB_PLAZO  2500U
+
+/*
+ * LO QUE DURA EL RESULTADO EN PANTALLA, EN BLOQUES. 30/10/2026.
+ *
+ * El resultado de la prueba MANDA SOBRE LA LECTURA NORMAL de la fila
+ * "Espejo I/Q" -ver main.c-, y hasta hoy mandaba PARA SIEMPRE: s_ab_hay
+ * se ponia a uno al terminar la prueba y solo lo bajaban lanzar otra o
+ * abortar. O sea que quien tocaba la fila una vez se quedaba con ese par
+ * de numeros clavados en la pantalla el resto del encendido.
+ *
+ * Eso no es un detalle de presentacion. Si la prueba cae cuando el
+ * corrector todavia no ha aprendido nada -los primeros segundos, o una
+ * banda tan vacia que no hay señal con la que calibrar-, los dos lados
+ * salen iguales y la fila se queda diciendo "19 -> 19" mientras el
+ * corrector, por detras, sube a 30 y a 40. El usuario lee que no mejora,
+ * reinicia la radio para arreglarlo, y el reinicio tira el aprendizaje
+ * que habia. Tres vueltas de eso y la conclusion es que el corrector no
+ * funciona, cuando lo unico roto era el numero.
+ *
+ * Veinte segundos: la prueba entera dura menos de siete -IQB_AB_PLAZO-,
+ * asi que da de sobra para leerlo y compararlo, y despues la fila vuelve
+ * a la lectura de verdad, que es la que se mueve.
+ */
+#define IQB_AB_VIDA   7500U
 /* Volatil por lo mismo que las de arriba: la cuenta la lleva la
  * interrupcion y el bucle principal la pone a cero. */
 static volatile uint16_t s_ab_plazo   TCMRAM_BSS;
+/* Lo que le queda al resultado en pantalla; ver IQB_AB_VIDA. */
+static volatile uint16_t s_ab_vida    TCMRAM_BSS;
 /*
  * CUANTAS VECES SE HA ABORTADO. 26/10/2026, revision a fondo de espejos y
  * armonicos. Lo unico que hace falta para que el bucle principal se entere
@@ -218,12 +247,14 @@ void iqbal_init(void)
     s_g       = 1.0f;
     s_bloques = 0U;
     s_pares   = 0U;   /* va en pareja con s_bloques: ver iqbal_pares() */
+    s_pares_ult = 0UL;
     s_turno   = 0U;
     s_esp_db  = 0.0f;
     s_esp_bin = 0;
     s_ab_est  = AB_PARADA;
     s_ab_gen  = 0U;
     s_ab_hay  = 0U;
+    s_ab_vida = 0U;
     s_ab_off  = 0.0f;
     s_ab_on   = 0.0f;
 }
@@ -806,9 +837,8 @@ void iqbal_calibra(const float *re, const float *im, uint32_t n)
  */
 static uint8_t resuelve_sistema(float ar[IQB_FIR_TOMAS][IQB_FIR_TOMAS + 1U],
                                 float ai[IQB_FIR_TOMAS][IQB_FIR_TOMAS + 1U],
-                                float *xr, float *xi)
+                                float *xr, float *xi, uint8_t L)
 {
-    const uint8_t L = (uint8_t)IQB_FIR_TOMAS;
     uint8_t c, f, p;
     float lim;
 
@@ -888,7 +918,7 @@ static uint8_t resuelve_sistema(float ar[IQB_FIR_TOMAS][IQB_FIR_TOMAS + 1U],
 
 uint8_t iqbal_resuelve(void)
 {
-    const uint8_t L = (uint8_t)IQB_FIR_TOMAS;
+    uint8_t L;
     float ar[IQB_FIR_TOMAS][IQB_FIR_TOMAS + 1U];
     float ai[IQB_FIR_TOMAS][IQB_FIR_TOMAS + 1U];
     float xr[IQB_FIR_TOMAS], xi[IQB_FIR_TOMAS];
@@ -915,7 +945,80 @@ uint8_t iqbal_resuelve(void)
         if (s_cal_den[r] <= 0.0f) { continue; }
         usadas++;
     }
-    if (usadas < (uint8_t)IQB_RANURAS_MIN) { return 0U; }
+
+    /*
+     * ==================================================================
+     * *** Y SI NO HAY CINCO RANURAS, SE AJUSTA UNA TOMA EN VEZ DE
+     * NINGUNA. 30/10/2026: la busqueda del equilibrio no siempre se
+     * inclinaba a acertar. ***
+     * ==================================================================
+     *
+     * Tenia razon, y el motivo estaba escrito cuatro comentarios mas
+     * arriba sin que nadie atara los dos cabos: "con una sola emisora en
+     * la banda no se juntan nunca" las cinco ranuras. Lo que pasaba
+     * entonces era que el FIR NO SE INSTALABA, y el rechazo se quedaba en
+     * lo que da el corrector plano solo -los 19-21 dB de sus fotos-.
+     *
+     * Y por eso sus tres maniobras funcionaban, que es la prueba de que
+     * esto es lo que era: desintonizar hasta perder la señal y volver,
+     * entrar y salir del NCO, y hasta reiniciar y dejarla un rato. Las
+     * tres MUEVEN LA PORTADORA DENTRO DE LA VENTANA, o sea reparten sus
+     * medidas por ranuras distintas hasta juntar cinco. Entonces el FIR
+     * se instalaba de golpe y aparecian los 44, los 46, los 51 dB. La
+     * radio funcionaba; lo que no funcionaba era quedarse quieto en una
+     * banda vacia, que es lo que hace cualquiera.
+     *
+     * Cinco ranuras hacen falta para las CUATRO TOMAS: cuatro incognitas
+     * complejas no se determinan con menos puntos. Pero una toma -una
+     * constante compleja sobre el conjugado, o sea ganancia y fase- se
+     * determina con UNA ranura, y de sobra: el sistema queda 1x1, no hay
+     * nada que pueda estar mal condicionado, y el filtro resultante es
+     * plano en toda la ventana por construccion, asi que no puede
+     * estropear lo que no ha medido.
+     *
+     * Las guardas de abajo no se tocan y siguen valiendo las cuatro: la
+     * de -42 dB que para el lazo cuando ya no queda espejo, el tope del
+     * incremento, el tope de lo acumulado y el medio paso. Lo unico que
+     * cambia es CUANTAS incognitas se piden con los datos que hay.
+     *
+     * Las tomas 1..3 no se tocan en las vueltas de orden uno. No se
+     * quedan viejas: el panadaptador mide el residuo del filtro ENTERO,
+     * asi que la toma 0 se ajusta sabiendo lo que dejan las otras tres.
+     * Y cuando cambia la banda o la tasa, iqbal_fir_olvida() las pone a
+     * cero igual que siempre.
+     */
+    if (usadas == 0U) { return 0U; }
+    L = (uint8_t)IQB_FIR_TOMAS;
+    if (usadas < (uint8_t)IQB_RANURAS_MIN) {
+        /*
+         * *** Y CON UNA SOLA TOMA HACE FALTA QUE LA BANDA ESTE LIMPIA.
+         * El primer intento de esto SALIA PEOR Y LO DIJO EL BANCO. ***
+         *
+         * Bajar el orden sin mas dejaba la seccion "emisoras enfrente de
+         * otras" de `make iqbal` en 19,4 y 18,6 dB donde antes se quedaba
+         * en los 20,2 de no corregir. O sea que arreglando la banda vacia
+         * estropeaba la banda llena, que es la de onda corta y la de
+         * HFDL. No se entrega algo asi.
+         *
+         * El motivo es que con cinco ranuras las limpias le ganan la
+         * votacion a una sucia, y con una no hay votacion: lo que mida
+         * esa ranura entra tal cual. Y lo que la ensucia tiene nombre
+         * desde hace tiempo: UNA EMISORA JUSTO ENFRENTE DE OTRA, que deja
+         * la misma huella que un desequilibrio y por eso el estimador
+         * plano la vigila con IQB_PAR_MAX y la cuenta aparte.
+         *
+         * Asi que la condicion es esa misma cuenta, que ya existe y que
+         * ademas se enseña en Informacion -la fila "Choques de banda",
+         * pares contra bloques-: si desde el intento anterior se ha visto
+         * UN SOLO bloque con pinta de pareja simetrica, no se baja el
+         * orden. Con cinco ranuras se sigue ajustando igual que siempre,
+         * porque alli el promedio ya protege.
+         *
+         * En la radio del usuario que lo reporto esa fila decia 0 / 9820.
+         */
+        if (s_pares != s_pares_ult) { s_pares_ult = s_pares; return 0U; }
+        L = 1U;
+    }
 
     for (m = 0U; m < L; m++) {
         for (j = 0U; j <= L; j++) { ar[m][j] = 0.0f; ai[m][j] = 0.0f; }
@@ -1010,7 +1113,7 @@ uint8_t iqbal_resuelve(void)
         if (pesos <= 0.0f || (suma / pesos) < 6.3e-5f) { return 0U; }
     }
 
-    if (!resuelve_sistema(ar, ai, xr, xi)) { return 0U; }
+    if (!resuelve_sistema(ar, ai, xr, xi, L)) { return 0U; }
 
     /*
      * EL TOPE. Lo mismo que hacen theta y g mas arriba, y por lo mismo: un
@@ -1198,6 +1301,11 @@ void iqbal_bloque(int16_t *crudo, uint32_t n)
     if (s_ab_est != AB_PARADA) {
         s_ab_plazo++;
         if (s_ab_plazo >= IQB_AB_PLAZO) { ab_aborta(); }
+    } else if (s_ab_hay) {
+        /* Y cuando no hay prueba corriendo, lo que se gasta es el
+         * resultado: ver IQB_AB_VIDA. */
+        s_ab_vida--;
+        if (s_ab_vida == 0U) { s_ab_hay = 0U; }
     }
 
     if (s_turno == 0U && s_aprende) {
@@ -1578,9 +1686,23 @@ void iqbal_ab_paso(void)
              * resultado: media de nada es cero, y un cero aqui se leeria
              * como "cero dB de rechazo". */
             if (s_ab_c_off >= 3U && s_ab_c_on >= 3U) {
-                s_ab_off = s_ab_s_off / (float)s_ab_c_off;
-                s_ab_on  = s_ab_s_on  / (float)s_ab_c_on;
-                s_ab_hay = 1U;
+                s_ab_off  = s_ab_s_off / (float)s_ab_c_off;
+                s_ab_on   = s_ab_s_on  / (float)s_ab_c_on;
+                /*
+                 * LA VIDA SE CARGA ANTES QUE LA BANDERA, Y NO ES CAPRICHO.
+                 *
+                 * Esto corre en el bucle principal y la cuenta atras corre
+                 * en la interrupcion del DMA -iqbal_bloque()-, que puede
+                 * caer entre estas dos lineas. Al reves, la interrupcion
+                 * pillaria s_ab_hay a uno con la vida todavia a cero, la
+                 * restaria, y el contador daria la vuelta a 65.535: tres
+                 * minutos de resultado clavado en vez de veinte segundos,
+                 * que es justo lo que se viene a quitar. En este orden lo
+                 * peor que pasa es que la interrupcion vea la vida cargada
+                 * y la bandera aun baja, y no haga nada.
+                 */
+                s_ab_vida = IQB_AB_VIDA;
+                s_ab_hay  = 1U;
             } else {
                 s_ab_hay = 0U;
             }

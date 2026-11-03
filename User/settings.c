@@ -12,12 +12,51 @@ extern volatile uint32_t g_msticks; /* same free-running ms counter touch.c/touc
 #define CONFIG_FILE_NAME8 "CONFIG  "
 #define CONFIG_FILE_EXT3  "CSV"
 
-/* Wait this long after the last settings_mark_dirty() before actually
- * writing - see settings.h's comment. 3s comfortably outlasts a single
- * encoder detent's worth of tuning without feeling laggy if the user
- * powers off shortly after their last change (worst case: that last
- * change is lost, same trade-off every debounced autosave makes). */
-#define SETTINGS_SAVE_DEBOUNCE_MS 3000UL
+/*
+ * Wait this long after the last settings_mark_dirty() before actually
+ * writing - see settings.h's comment. Worst case if the radio is
+ * switched off in between: the last change is lost, which is the
+ * trade-off every debounced autosave makes.
+ *
+ * ======================================================================
+ * DE TRES SEGUNDOS A TREINTA - 01/11/2026, y aqui esta el porque.
+ * ======================================================================
+ *
+ * SEGUIA RALENTIZANDOSE al mover el mando, cinco versiones seguidas y
+ * despues de arreglar media pantalla. La fila "Vuelta del bucle" lo dijo
+ * cuando por fin se puso a cero antes de girar:
+ *
+ *     Vuelta del bucle   23 ms (42)
+ *     tac 2  max 200  pol 176
+ *
+ * La peor vuelta fueron 200 ms y 176 se los llevo el bloque de POLLS.
+ * No el mando, no el dibujo. Y en ese bloque lo unico que puede durar
+ * eso es settings_poll(), o sea guardar CONFIG.CSV.
+ *
+ * El guardado normal va a trocitos -una pagina de 256 bytes por vuelta,
+ * ver spi_flash_async_save_poll()- y no se nota. Pero el camino rapido
+ * se NIEGA si la cadena de clusters del fichero no es seguida, y
+ * entonces se cae al BLOQUEANTE: borrar 4 kB y regrabarlos de una
+ * sentada por un SPI a patadas a 16 us por byte, mas el bloque del
+ * directorio. Son los 176 ms, y la cuenta cuadra con el cronometro.
+ *
+ * Una cadena rota no se arregla sola, asi que en esa radio TODOS los
+ * guardados son bloqueantes. Y apply_lo_tune() marca sucio en CADA CLIC
+ * del mando, asi que cada vez que el usuario para tres segundos se come
+ * un paron. Su pantalla decia "21 guardados en 110 s": uno cada cinco
+ * segundos.
+ *
+ * Treinta segundos no curan la cadena -eso se dice aparte-, pero
+ * convierten un paron cada cinco segundos en uno cada treinta, que es
+ * la diferencia entre "se ralentiza al girar" y "no se nota". Y lo que
+ * se arriesga es lo mismo de siempre: apagar la radio dentro de esos
+ * treinta segundos pierde el ultimo cambio. No pierde el fichero: de
+ * eso se encarga RESPALDO.BIN desde la V6.24.
+ *
+ * Lo reproduce make ajustesflash, que parte la cadena a proposito y
+ * comprueba que el camino suave se niega.
+ */
+#define SETTINGS_SAVE_DEBOUNCE_MS 30000UL
 
 static uint8_t s_dirty = 0U;
 
@@ -186,7 +225,6 @@ static const char *const k_extra_claves[] = {
     "cw_wpm_idx",       /* SET_X_CW_WPM     */
     "cw_autotune",      /* SET_X_CW_AUTO    */
     "wf_speed",         /* SET_X_WFVEL      */
-    "audio_analyzer",   /* SET_X_ANALIZ     */
     "nco",              /* SET_X_NCO        */
     "rds",              /* SET_X_RDS        */
     "spec_bridge",      /* SET_X_PUENTE     */
@@ -708,6 +746,74 @@ uint8_t settings_load(settings_loaded_t *out)
 uint8_t settings_hay_faena(void)
 {
     return (uint8_t)(s_async_save_in_progress || s_dirty);
+}
+
+/*
+ * ======================================================================
+ * LA CADENA DE CONFIG.CSV, ARREGLADA AL ARRANCAR - 01/11/2026.
+ * ======================================================================
+ *
+ * EL PORQUE esta entero en el comentario de SETTINGS_SAVE_DEBOUNCE_MS de
+ * mas arriba y en spi_flash_cadena_seguida(). Resumido: si los clusters
+ * del fichero no estan seguidos, el guardado suave se niega y CADA
+ * guardado pasa a ser un paron de unos 176 ms. Y no se cura solo.
+ *
+ * Aqui se cura. Se lee el fichero, se borra y se vuelve a escribir: el
+ * escritor lo coloca donde quepa seguido y a partir de ahi todos los
+ * guardados son suaves.
+ *
+ * SE HACE AL ARRANCAR Y SOLO ENTONCES, y eso es la mitad de la idea: los
+ * 176 ms se pagan UNA vez, con la pantalla aun encendiendose, donde no
+ * los ve nadie. Hacerlo con la radio en marcha seria cambiar un paron
+ * por otro.
+ *
+ * SI ALGO SALE MAL SE DEJA COMO ESTABA. Se comprueba que lo leido tiene
+ * pinta de fichero antes de borrar nada, y si el borrado o la escritura
+ * fallan, lo peor que queda es lo que ya habia: un fichero que se guarda
+ * por el camino lento. Nunca se borra sin haber leido.
+ *
+ * Y el directorio sigue protegido mientras tanto por RESPALDO.BIN, que
+ * es justo para esto: un apagon en mitad del borrado del bloque del raiz
+ * no se lleva el directorio por delante. Ver spi_flash_respaldo_repara().
+ */
+void settings_cadena_repara(void)
+{
+    uint32_t n, tam = 0UL;
+
+    if (spi_flash_cadena_seguida(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3)) {
+        return;                       /* ya esta bien: lo normal */
+    }
+
+    /*
+     * Y ANTES DE BORRAR NADA, QUE LO LEIDO CUADRE CON LO QUE DICE EL
+     * DIRECTORIO. Esto no es prudencia de oficio: lo pidio el banco.
+     *
+     * La primera version de la prueba rompia la cadena mandandola a un
+     * cluster cualquiera, y entonces el fichero YA NO SE LEE ENTERO. Si
+     * esta funcion se fiara de "he leido algo", en ese caso borraria el
+     * fichero y escribiria un trozo: perder los ajustes arreglando la
+     * velocidad. Con la comprobacion, un fichero de verdad estropeado se
+     * queda como esta y lo unico que se pierde es la cura.
+     *
+     * (El caso del usuario no es ese: su radio lee los ajustes
+     * perfectamente, solo los guarda despacio. Pero el codigo tiene que
+     * aguantar los dos.)
+     */
+    if (!spi_flash_fichero_tam(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3, &tam)
+        || tam == 0U || tam > (uint32_t)sizeof s_async_csv_buf) {
+        return;
+    }
+    n = spi_flash_read_file_by_name(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3,
+                                    s_async_csv_buf, sizeof s_async_csv_buf);
+    if (n != tam) {
+        return;                       /* no cuadra: no se toca */
+    }
+
+    if (!spi_flash_fichero_borra(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3)) {
+        return;
+    }
+    (void)spi_flash_write_or_update_file(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3,
+                                         s_async_csv_buf, n);
 }
 
 void settings_mark_dirty(void)

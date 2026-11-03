@@ -28,10 +28,9 @@ razonable. Solo se ven mirando TODOS los sitios a la vez.
 
 LO QUE CAMBIO EL 29/10/2026, Y POR QUE ESTE GUION SE REESCRIBIO ENTERO.
 
-Pedido por el usuario, con la medida delante -"he entrado a hfdl con 20 dB y
-parecia perder paquetes, la he subido a 35 y parece ir mejor"- y una por
-modo: "no no uno para cada uno de los 8". Asi que las ganancias pasan de
-tres a DIEZ:
+Con 20 dB de ganancia HFDL perdia paquetes y con 35 va mejor, y hace falta
+una por MODO, no una compartida. Asi que las ganancias pasan de tres a
+DIEZ:
 
   s_pga_gain_db_x2   la VIVA
   s_pga_hf_x2        la tuya escuchando

@@ -2830,6 +2830,7 @@ typedef struct {
     uint32_t page_index;
 } spi_flash_async_block_t;
 
+__attribute__((noinline))
 static void spi_flash_async_write_block_start(spi_flash_async_block_t *op, uint32_t block_addr, const uint8_t *data4k)
 {
     op->active = 1U;
@@ -2931,6 +2932,52 @@ static uint16_t s_async_cluster;
 static char s_async_name8[8];
 static char s_async_ext3[3];
 static uint32_t s_async_data_len;
+
+/*
+ * ======================================================================
+ * ¿LA CADENA DE ESTE FICHERO ES SEGUIDA? - 01/11/2026.
+ * ======================================================================
+ *
+ * EL PORQUE, con el cronometro del usuario delante. Su fila "Vuelta del
+ * bucle" marcaba `max 200 pol 176`: la peor vuelta, 200 ms, y 176 en el
+ * bloque de polls. Ahi lo unico que puede durar eso es guardar
+ * CONFIG.CSV.
+ *
+ * El guardado normal va a trocitos -una pagina de 256 bytes por vuelta,
+ * ver spi_flash_async_save_poll()- y no se nota. Pero el camino rapido
+ * se NIEGA si la cadena de clusters no es seguida, porque escribe `len`
+ * bytes de corrido desde el primer cluster, y entonces settings_poll()
+ * cae al BLOQUEANTE: borrar 4 kB y regrabarlos de una sentada por un SPI
+ * a patadas a 16 us por byte, mas el bloque del directorio. Son los 176
+ * ms, y la cuenta cuadra al milisegundo.
+ *
+ * Y una cadena rota NO SE ARREGLA SOLA: se queda rota para siempre, asi
+ * que todos los guardados pasan a ser bloqueantes. Como apply_lo_tune()
+ * marca los ajustes sucios en cada clic del mando, sale un paron cada
+ * pocos segundos mientras se sintoniza.
+ *
+ * Esto es la pregunta suelta, para que settings.c pueda arreglarlo AL
+ * ARRANCAR -donde 176 ms no se ven- en vez de pagarlos cada vez. Es
+ * exactamente la misma comprobacion que hace el camino rapido ahi abajo,
+ * escrita una sola vez y llamada desde los dos sitios.
+ */
+uint8_t spi_flash_cadena_seguida(const char name8[8], const char ext3[3])
+{
+    uint32_t dir_off, old_size, cuantos, ultimo, saltos, n;
+    uint16_t old_cluster;
+
+    if (!dir_find_entry(name8, ext3, &dir_off, &old_cluster, &old_size)) {
+        return 0U;   /* no esta: que lo cree quien toque, por el camino normal */
+    }
+    n = (old_size + (ROOT_DIR_SECTOR_BYTES - 1U)) / ROOT_DIR_SECTOR_BYTES;
+    if (n == 0U) { n = 1U; }
+
+    if (!cadena_ultimo((uint32_t)old_cluster, &ultimo, &cuantos, &saltos)) {
+        return 0U;
+    }
+    return (uint8_t)((cuantos == n) && (saltos == 0U)
+                     && (ultimo == ((uint32_t)old_cluster + cuantos - 1U)));
+}
 
 uint8_t spi_flash_async_save_start(const char name8[8], const char ext3[3],
                                     const uint8_t *data, uint32_t len)
@@ -5401,9 +5448,8 @@ static uint8_t recorta_interno(const char name8[8], const char ext3[3], uint32_t
 
 /*
  * ======================================================================
- * EL RESPALDO DEL DIRECTORIO - 30/10/2026, pedido por el usuario:
- * "que me da igual rescatar lo de dentro, lo que quiero es que no vuelva
- * a ocurrir".
+ * EL RESPALDO DEL DIRECTORIO - 30/10/2026. Lo que se pidio no fue
+ * rescatar lo de dentro: fue que no vuelva a ocurrir.
  * ======================================================================
  *
  * QUE PASO. Un usuario apago la radio mientras guardaba y perdio 124
@@ -5473,6 +5519,7 @@ static uint8_t respaldo_es_raiz(uint32_t block_addr)
     return (uint8_t)(block_addr < (RAIZ_ABS + ROOT_DIR_BYTES));
 }
 
+__attribute__((noinline))
 static uint32_t respaldo_suma(const uint8_t *d, uint32_t n)
 {
     uint32_t s = 0x1234ABCDUL;
@@ -5604,12 +5651,30 @@ static uint8_t respaldo_guarda(uint32_t destino, const uint8_t *contenido4k)
  * bits de 1 a 0 sin borrado, y 0xFF -> 0x00 solo apaga bits. Por eso esto
  * no abre otra ventana: no hay nada que interrumpir.
  */
-static void respaldo_anula(void)
+static void respaldo_anula_en(uint32_t base)
 {
     uint8_t cero = 0x00U;
 
-    if (s_respaldo_addr == 0UL) { return; }
-    spi_flash_page_program(s_respaldo_addr + FLASH_SECTOR_SIZE + 16U, &cero, 1U);
+    if (base == 0UL) { return; }
+    spi_flash_page_program(base + FLASH_SECTOR_SIZE + 16U, &cero, 1U);
+}
+
+static void respaldo_anula(void)
+{
+    respaldo_anula_en(s_respaldo_addr);
+}
+
+/* Deja el respaldo en su sitio: si la copia venia de un barrido -y no del
+ * directorio- se olvida y el fichero se vuelve a crear como es debido. Ver
+ * la nota de "no se adopta como sitio de escritura". */
+static uint8_t respaldo_cierra(uint8_t suelta, uint8_t r)
+{
+    if (suelta) {
+        s_respaldo_addr   = 0UL;
+        s_respaldo_mirado = 0U;
+        respaldo_crea_si_falta();
+    }
+    return r;
 }
 
 uint8_t spi_flash_respaldo_repara(void)
@@ -5617,6 +5682,7 @@ uint8_t spi_flash_respaldo_repara(void)
     uint32_t base;
     uint8_t  cab[RESPALDO_CAB_N];
     uint32_t destino, suma, i;
+    uint8_t  suelta = 0U;   /* 1 = la copia salio del barrido, no del directorio */
 
     if (!geo_lee()) { return 0U; }
     base = respaldo_donde();
@@ -5667,14 +5733,33 @@ uint8_t spi_flash_respaldo_repara(void)
         }
         debug_print_hex32("respaldo: la copia no estaba en el directorio, "
                           "barrida y encontrada en", base);
-        s_respaldo_addr = base;
+        /*
+         * *** Y NO SE ADOPTA COMO SITIO DE ESCRITURA. 31/10/2026, y lo
+         * destapo el usuario preguntando si podia borrar RESPALDO.BIN. ***
+         *
+         * Lo que el barrido encuentra es la MAGIA, no el fichero. Y la
+         * magia sigue ahi aunque el fichero ya no este: borrar en FAT
+         * marca la entrada y suelta la cadena, pero no toca los datos. Si
+         * el usuario borra RESPALDO.BIN desde el PC, el barrido del
+         * arranque siguiente encuentra los restos y -antes de esta nota-
+         * se los quedaba en s_respaldo_addr. A partir de ahi, cada copia
+         * se grababa sobre DOS BLOQUES LIBRES del volumen, que Windows
+         * puede haber dado ya a otro fichero. El remedio estropeando lo
+         * de al lado, otra vez.
+         *
+         * Asi que lo encontrado sirve SOLO para reparar, en solo lectura y
+         * para esta vez. Al terminar se tira y se vuelve a crear el
+         * fichero por el camino bueno, con su entrada en el directorio.
+         */
+        suelta = 1U;
     }
 
     spi_flash_read(base + FLASH_SECTOR_SIZE, cab, RESPALDO_CAB_N);
     for (i = 0U; i < 8U; i++) {
-        if (cab[i] != k_respaldo_magia[i]) { return 0U; }
+        if (cab[i] != k_respaldo_magia[i]) { return respaldo_cierra(suelta, 0U); }
     }
-    if (cab[16] != 0xFFU) { return 0U; }      /* ya anulada: nada que hacer */
+    /* Ya anulada: nada que reparar. */
+    if (cab[16] != 0xFFU) { return respaldo_cierra(suelta, 0U); }
 
     destino = (uint32_t)cab[8] | ((uint32_t)cab[9] << 8)
               | ((uint32_t)cab[10] << 16) | ((uint32_t)cab[11] << 24);
@@ -5686,17 +5771,19 @@ uint8_t spi_flash_respaldo_repara(void)
      * este driver, pero el disco pasa por un PC: una copia de otro volumen
      * no puede acabar grabada sobre un sitio cualquiera del chip.
      */
-    if (destino < RAIZ_ABS) { return 0U; }
-    if (destino >= (RAIZ_ABS + ROOT_DIR_BYTES)) { return 0U; }
-    if ((destino & (uint32_t)(FLASH_SECTOR_SIZE - 1U)) != 0U) { return 0U; }
+    if (destino < RAIZ_ABS) { return respaldo_cierra(suelta, 0U); }
+    if (destino >= (RAIZ_ABS + ROOT_DIR_BYTES)) { return respaldo_cierra(suelta, 0U); }
+    if ((destino & (uint32_t)(FLASH_SECTOR_SIZE - 1U)) != 0U) {
+        return respaldo_cierra(suelta, 0U);
+    }
 
-    if (!borrador_coge(BORRADOR_SECTOR)) { return 0U; }
+    if (!borrador_coge(BORRADOR_SECTOR)) { return respaldo_cierra(suelta, 0U); }
     spi_flash_read(base, s_sector, FLASH_SECTOR_SIZE);
     if (respaldo_suma(s_sector, FLASH_SECTOR_SIZE) != suma) {
         /* Copia a medias o disco movido: no vale, y no se toca nada. */
         borrador_suelta(BORRADOR_SECTOR);
-        respaldo_anula();
-        return 0U;
+        respaldo_anula_en(base);
+        return respaldo_cierra(suelta, 0U);
     }
 
     /*
@@ -5723,16 +5810,16 @@ uint8_t spi_flash_respaldo_repara(void)
         }
         if (igual) {
             borrador_suelta(BORRADOR_SECTOR);
-            respaldo_anula();
-            return 0U;               /* el guardado si termino */
+            respaldo_anula_en(base);
+            return respaldo_cierra(suelta, 0U);   /* el guardado si termino */
         }
     }
 
     debug_print_hex32("respaldo: el directorio no cuadra - se repara el bloque", destino);
     spi_flash_write_block_4k(destino, s_sector);
     borrador_suelta(BORRADOR_SECTOR);
-    respaldo_anula();
-    return 1U;
+    respaldo_anula_en(base);
+    return respaldo_cierra(suelta, 1U);
 }
 
 /* =======================================================================

@@ -295,9 +295,9 @@ int main(void)
      *
      * decodifica_msf() tenia nueve salidas de rechazo y ninguna ponia el
      * motivo, asi que la pantalla enseñaba "mal N" y se callaba el porque
-     * SIEMPRE con esta emisora. Salio buscando el aviso de un usuario -"MSF
-     * on 60kHz... does not seem to work at all"- que no se pudo reproducir:
-     * esto no arregla su recepcion, pero sin esto no hay forma de mirarla.
+     * SIEMPRE con esta emisora. Salio buscando por que MSF en 60 kHz no
+     * funcionaba en un sitio concreto, caso que no se pudo reproducir: esto
+     * no arregla aquella recepcion, pero sin esto no hay forma de mirarla.
      *
      * Se exige el motivo CONCRETO y no "cualquiera distinto de cero": con
      * una trama corrida lo que falla es el patron fijo, y si algun dia
@@ -312,9 +312,9 @@ int main(void)
      * decodifica_msf() tenia nueve salidas de rechazo y NINGUNA ponia el
      * motivo, asi que la pantalla enseñaba "mal N" y se callaba el porque
      * SIEMPRE con esta emisora -con DCF77 si lo dice desde siempre-. Salio
-     * buscando el aviso de un usuario -"MSF on 60kHz... does not seem to
-     * work at all"- que no se pudo reproducir: esto no arregla su
-     * recepcion, pero sin esto no hay forma de mirarla.
+     * buscando por que MSF en 60 kHz no funcionaba en un sitio concreto,
+     * caso que no se pudo reproducir: esto no arregla aquella recepcion,
+     * pero sin esto no hay forma de mirarla.
      *
      * La prueba 5 de aqui arriba NO vale para medirlo: con la trama
      * corrida no llega ninguna marca de minuto, asi que decodifica_msf()

@@ -55,11 +55,10 @@
  * PERO SI SE DISTINGUEN, Y LA DIFERENCIA ES ENORME - 24/10/2026.
  * ======================================================================
  *
- * *** Avisado por el usuario, que lo vio antes que yo: "si voy disminuyendo
- * la frecuencia solo deberian de aparecerme señales por la izquierda, y
- * tambien me aparecen señales por la derecha". Y luego: "estoy escuchando
- * en lsb en 40m una señal que estoy casi seguro de que es de 20m y por lo
- * tanto deberia de ser usb". ***
+ * *** BAJANDO EL DIAL APARECEN SEÑALES POR LA DERECHA, Y NO DEBERIAN. ***
+ *
+ * Y la pareja: en LSB en 40 m se oye una señal de 20 m que tendria que
+ * estar en USB.
  *
  * Lo de arriba daba por hecho que cada armonico produce UNA copia. No es
  * cierto, y la cuenta es de una linea: los dos osciladores van separados 90

@@ -82,7 +82,16 @@ INCLUDES += -ICMSIS/DSP/Include
 INCLUDES += -ICMSIS/DSP/PrivateInclude
 
 # --- Sources ---
-C_SOURCES   = $(wildcard User/*.c)
+#
+# EL MAPA DE SERIE SE QUEDA FUERA - 02/11/2026, decision del usuario.
+#
+# User/mapa_datos.c son 7.268 bytes de flash del chip para una costa del
+# mundo que solo se ve mientras no hay un .map grabado. Sigue en el
+# repositorio porque los bancos del simulador lo necesitan -un mapa
+# conocido contra el que comparar-, pero el firmware lleva en su lugar
+# User/mapa_vacio.c, con los dos simbolos a cero. Ver su cabecera.
+USER_EXCLUIR = User/mapa_datos.c
+C_SOURCES   = $(filter-out $(USER_EXCLUIR),$(wildcard User/*.c))
 #
 # LA ETHERNET FUERA DEL BUILD, Y NO AHORRA NI UN BYTE - 07/10/2026.
 #

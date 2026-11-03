@@ -970,19 +970,11 @@ configreal: out/configreal ; ./out/configreal 0
 
 comprueba: configreal
 
-# Banco del analizador de audio (User/analizador.c). Un analizador es un
-# instrumento: si miente, miente con pinta de dato. Se comprueban las cuatro
-# cosas que lo harian mentir - que la frecuencia sea la frecuencia, que la
-# banda sea plana, que no se invente rayas por alias, y que separe 100 de
-# 125 Hz, que es la pregunta que motivo escribirlo.
-out/aniztest: sim/aniztest.c $(FIRMWARE)/User/analizador.c $(FIRMWARE)/User/fft.c
-	@mkdir -p out
-	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ sim/aniztest.c \
-	      $(FIRMWARE)/User/analizador.c $(FIRMWARE)/User/fft.c -lm
-
-analiz: out/aniztest ; ./out/aniztest
-
-comprueba: analiz
+# *** AQUI ESTABA EL BANCO DEL ANALIZADOR DE AUDIO - 02/11/2026. ***
+#
+# La funcion se quito entera para que su RAM -2.528 bytes- pagase parte del
+# submuestreo en frecuencia de FT8. Con ella se fueron User/analizador.c,
+# User/analizador.h y sim/aniztest.c.
 
 # Los temas, pintados de verdad. La tabla de temas se GENERA de main.c
 # (tools/gen_temas.py) para que el simulador pinte los emparejamientos que
@@ -2874,7 +2866,7 @@ comprueba: semibanda
 # EL REDUCTOR DE RUIDO A LAS DOS TASAS (24/10/2026)
 # ---------------------------------------------------------------------
 #
-# Nacio de una pregunta del usuario -"a 192 parece reducir menos"- y se
+# Nacio de una duda -si a 192 kHz el reductor reduce menos- y se
 # queda porque la respuesta no se puede razonar, hay que medirla: lo que
 # vigila es que el camino de 192 kHz no le cambie la entrada al reductor.
 out/nrtasa: sim/nr_tasa.c sim/demod_stubs.c $(FIRMWARE)/User/demod_am.c \
@@ -3256,6 +3248,78 @@ out/ft8banda: sim/ft8_banda.c \
 
 .PHONY: ft8banda
 ft8banda: out/ft8banda ; ./out/ft8banda
+
+# ---------------------------------------------------------------------
+# LA SENSIBILIDAD DE FT8 CONTRA LA REFERENCIA DEL PROTOCOLO (02/11/2026)
+#
+# Ver la cabecera de sim/ft8_sensible.c. ft8banda ya barria el SNR de tres
+# en tres decibelios con ocho semillas; esto lo hace de uno en uno con
+# veinticuatro, con la emision donde cae en la vida real -en cualquier
+# sitio del bin y del simbolo- y saca el umbral del 50 %.
+out/ft8sensible: sim/ft8_sensible.c \
+              $(FIRMWARE)/User/ft8_decimator.c \
+              $(FIRMWARE)/User/ft8_waterfall_adapter.c \
+              $(FIRMWARE)/User/ft8_fft.c \
+              $(FIRMWARE)/User/ft8_tablas.c \
+              $(FIRMWARE)/User/ft8_decoder.c \
+              $(FIRMWARE)/User/ft8_snr.c \
+              $(FIRMWARE)/Ft8Lib/ft8/decode.c \
+              $(FIRMWARE)/Ft8Lib/ft8/ldpc.c \
+              $(FIRMWARE)/Ft8Lib/ft8/message.c \
+              $(FIRMWARE)/Ft8Lib/ft8/crc.c \
+              $(FIRMWARE)/Ft8Lib/ft8/constants.c \
+              $(FIRMWARE)/Ft8Lib/ft8/text.c \
+              sim/waterfall_prestamo.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I $(FIRMWARE)/User -I $(FIRMWARE)/Ft8Lib -o $@ $^ $(LDLIBS)
+
+.PHONY: ft8sensible
+ft8sensible: out/ft8sensible ; ./out/ft8sensible
+
+# El tope de la decodificacion de FT8 se ha roto de tres maneras en un
+# solo dia, y las tres en silencio: la radio seguia decodificando, solo
+# que peor. Ver la cabecera de tools/ft8_tope_check.py.
+.PHONY: ft8tope
+ft8tope:
+	@python3 ../tools/ft8_tope_check.py $(FIRMWARE)/User/ft8_modo.c \
+	         $(FIRMWARE)/User/main.c
+
+comprueba: ft8tope
+
+# ---------------------------------------------------------------------
+# LA FFT DE ENTRADA REAL CONTRA LA COMPLEJA (02/11/2026)
+#
+# Ver la cabecera de sim/ft8_fftreal.c. Compila ft8_fft.c DOS VECES: una
+# tal cual y otra con -DFT8_FFT_COMPLEJA y los nombres cambiados, para
+# tener las dos en el mismo binario y compararlas bin a bin.
+#
+# Y SI CUELGA DE `comprueba`, que es lo que faltaba: el banco estaba
+# escrito desde el 02/11 pero sin regla, o sea que no lo corria nadie.
+out/ft8_fftvieja.o: $(FIRMWARE)/User/ft8_fft.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I $(FIRMWARE)/User -I $(FIRMWARE)/Ft8Lib -DFT8_FFT_COMPLEJA \
+	  -Dft8_fft_compute_db_rango=vieja_compute_db_rango \
+	  -Dft8_fft_compute_db=vieja_compute_db \
+	  -Dft8_fft_init=vieja_fft_init \
+	  -Dft8_fft_hann=vieja_fft_hann \
+	  -Dft8_bitrev=vieja_bitrev \
+	  -Dft8_cos_giro=vieja_cos_giro -Dft8_sen_giro=vieja_sen_giro \
+	  -c $< -o $@
+
+out/ft8fftreal: sim/ft8_fftreal.c $(FIRMWARE)/User/ft8_fft.c \
+                $(FIRMWARE)/User/ft8_tablas.c sim/waterfall_prestamo.c \
+                out/ft8_fftvieja.o
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I $(FIRMWARE)/User -I $(FIRMWARE)/Ft8Lib -o $@ $^ $(LDLIBS)
+
+.PHONY: ft8fftreal
+ft8fftreal: out/ft8fftreal ; ./out/ft8fftreal
+comprueba: ft8fftreal
+
+# NO cuelga de `comprueba`: son 38 segundos, mil cien ranuras de quince
+# segundos pasadas por el decodificador entero. Se corre a proposito,
+# cuando se toca algo del camino de FT8, y la cifra que saca se apunta en
+# la cabecera del banco.
 
 # ---------------------------------------------------------------------
 # CON EL MODO APAGADO, NADIE ESCRIBE EN LA MEMORIA PRESTADA (28/10/2026)
@@ -4277,7 +4341,7 @@ comprueba: geolectura
 
 # QUE EL PIE DE LA REJILLA NO SE SALGA DE SU HUECO - 06/10/2026.
 #
-# El usuario leyo "0 0 1 75-255/10" en la fila de audio: el numero acababa en
+# La fila de audio enseñaba "0 0 1 75-255/10": el numero acababa en
 # "/10" porque el texto estaba CORTADO. Son 27 bytes en un hueco de 24, y
 # los tres de mas iban al pie de la celda siguiente, en silencio. El pie se
 # arma byte a byte sin nada que recorte, asi que el tamaño lo tiene que
@@ -5404,6 +5468,171 @@ out/salto_pinta: sim/salto_pinta.c sim/lcd_sim.c vendor/gfx.c \
 	@mkdir -p out
 	$(CC) -O2 -Wall -I hostinc -I sim -I gfx2 -I $(FIRMWARE)/User -I vendor \
 	      -o $@ $(filter %.c,$^) $(LDLIBS)
+
+# ---------------------------------------------------------------------
+# EL BANCO DEL CORTEX-M4: lo que cuesta de verdad, en instrucciones.
+#
+# POR QUE EXISTE (02/11/2026). Los bancos de sim/ miden en el PC y despues
+# se escalaba a la radio a ojo. Eso no vale, y costo seis versiones
+# persiguiendo microsegundos del PC creyendo saber cuantos milisegundos
+# eran alli. Esto compila el MISMO codigo con las opciones del firmware
+# para Cortex-M4, lo corre sobre un M4 emulado y CUENTA INSTRUCCIONES.
+# Ver m4/LEEME.md.
+#
+# NO cuelga de `comprueba` a proposito: hace falta qemu-system-arm, y en la
+# maquina del usuario no tiene por que estar. Si no esta, se dice y se
+# salta, no se falla.
+# ---------------------------------------------------------------------
+M4CC    = arm-none-eabi-gcc
+M4FLAGS = -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
+          -O2 -ffreestanding -ffunction-sections -fdata-sections \
+          -nostartfiles -Wl,--gc-sections -Tm4/link.ld -Im4
+M4DEFS  = -DGD32F450 -DUSE_STDPERIPH_DRIVER -DHXTAL_VALUE=12288000U \
+          -DDEBUG_UART_ENABLED=0 -DARM_MATH_DSP=1 -DARM_MATH_CM4
+M4QEMU  = qemu-system-arm -M mps2-an386 -cpu cortex-m4 -nographic \
+          -semihosting-config enable=on,target=native -icount shift=0 -kernel
+M4LIBS  = -lc -lm -lgcc
+
+out/m4_espectro.elf: m4/m4_espectro.c m4/start.c m4/panel.c \
+                     gfx2/gfx2.c gfx2/fonts_data.c gfx2/idioma.c \
+                     $(FIRMWARE)/User/spectrum.c $(FIRMWARE)/User/waterfall.c
+	@mkdir -p out
+	$(M4CC) $(M4FLAGS) -Igfx2 -I$(FIRMWARE)/User -I$(FIRMWARE)/Ft8Lib -Ihostinc \
+	  $(filter %.c,$^) -o $@ $(M4LIBS)
+
+out/m4_cabecera.elf: m4/m4_cabecera.c m4/start.c m4/panel.c \
+                     gfx2/gfx2.c gfx2/fonts_data.c gfx2/ui_top.c \
+                     gfx2/spec_chrome.c gfx2/idioma.c \
+                     $(FIRMWARE)/User/rds_pi.c vendor/spectrum.c
+	@mkdir -p out
+	$(M4CC) $(M4FLAGS) -Igfx2 -I$(FIRMWARE)/User -Ihostinc \
+	  $(filter %.c,$^) -o $@ $(M4LIBS)
+
+# ---------------------------------------------------------------------
+# LOS MISMOS NUMEROS EN EL PC Y EN EL M4 (02/11/2026)
+#
+# El PC calcula con la FPU del anfitrion y el Cortex-M4 con la suya, de
+# simple precision. Todo sitio donde el simulador da bien un numero que en
+# la radio sale mal -filtros, el PLL del SAM, el corrector de espejo, los
+# decodificadores- se ve corriendo LO MISMO en los dos y comparando bit a
+# bit. Ver m4/numeros_cuerpo.h.
+out/numeros_pc: sim/numeros_pc.c m4/numeros_cuerpo.h \
+                $(FIRMWARE)/User/fft.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c \
+                    $(FIRMWARE)/User/iqbal.c $(FIRMWARE)/User/iqancho.c \
+                    $(FIRMWARE)/User/sam.c $(FIRMWARE)/User/rapido.c \
+                    $(FIRMWARE)/Ft8Lib/ft8/ldpc.c $(FIRMWARE)/Ft8Lib/ft8/crc.c \
+                    $(FIRMWARE)/Ft8Lib/ft8/constants.c \
+                    $(FIRMWARE)/User/hfdl_costas.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -Im4 -I$(FIRMWARE)/User -I$(FIRMWARE)/Ft8Lib -I$(FIRMWARE)/Ft8Lib/ft8 -Ihostinc -o $@ \
+	  $(filter %.c,$^) $(LDLIBS)
+
+out/m4_numeros.elf: m4/m4_numeros.c m4/start.c m4/numeros_cuerpo.h \
+                    $(FIRMWARE)/User/fft.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c \
+                    $(FIRMWARE)/User/iqbal.c $(FIRMWARE)/User/iqancho.c \
+                    $(FIRMWARE)/User/sam.c $(FIRMWARE)/User/rapido.c \
+                    $(FIRMWARE)/Ft8Lib/ft8/ldpc.c $(FIRMWARE)/Ft8Lib/ft8/crc.c \
+                    $(FIRMWARE)/Ft8Lib/ft8/constants.c \
+                    $(FIRMWARE)/User/hfdl_costas.c
+	@mkdir -p out
+	$(M4CC) $(M4FLAGS) -Im4 -I$(FIRMWARE)/User -I$(FIRMWARE)/Ft8Lib -I$(FIRMWARE)/Ft8Lib/ft8 -Ihostinc \
+	  $(filter %.c,$^) -o $@ $(M4LIBS)
+
+# Y el MISMO codigo sin contraccion. Ver el .PHONY de abajo: es lo que
+# separa "el algoritmo es otro" de "el compilador ha fusionado un
+# multiplica-y-suma".
+out/m4_numeros_sin.elf: m4/m4_numeros.c m4/start.c m4/numeros_cuerpo.h \
+                    $(FIRMWARE)/User/fft.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c \
+                    $(FIRMWARE)/User/iqbal.c $(FIRMWARE)/User/iqancho.c \
+                    $(FIRMWARE)/User/sam.c $(FIRMWARE)/User/rapido.c \
+                    $(FIRMWARE)/Ft8Lib/ft8/ldpc.c $(FIRMWARE)/Ft8Lib/ft8/crc.c \
+                    $(FIRMWARE)/Ft8Lib/ft8/constants.c \
+                    $(FIRMWARE)/User/hfdl_costas.c
+	@mkdir -p out
+	$(M4CC) $(M4FLAGS) -ffp-contract=off -Im4 -I$(FIRMWARE)/User -I$(FIRMWARE)/Ft8Lib -I$(FIRMWARE)/Ft8Lib/ft8 -Ihostinc \
+	  $(filter %.c,$^) -o $@ $(M4LIBS)
+
+.PHONY: numeros
+numeros: out/numeros_pc out/m4_numeros.elf out/m4_numeros_sin.elf
+	@if ! command -v qemu-system-arm >/dev/null 2>&1; then \
+	   echo "  qemu-system-arm no esta instalado: me salto la comparacion"; \
+	 else \
+	   ./out/numeros_pc | sed -n '/== NUMEROS/,/^$$/p' > out/num_pc.txt; \
+	   $(M4QEMU) out/m4_numeros.elf 2>&1 \
+	     | sed -n '/== NUMEROS/,/^$$/p' > out/num_m4.txt; \
+	   $(M4QEMU) out/m4_numeros_sin.elf 2>&1 \
+	     | sed -n '/== NUMEROS/,/^$$/p' > out/num_m4sin.txt; \
+	   if diff -u out/num_pc.txt out/num_m4sin.txt > out/numeros.diff; then \
+	     echo "  el ALGORITMO es el mismo en el PC y en el M4  ok"; \
+	   else \
+	     echo "  *** EL ALGORITMO NO ES EL MISMO EN EL PC Y EN EL M4 ***"; \
+	     cat out/numeros.diff; exit 1; \
+	   fi; \
+	   if diff -q out/num_m4.txt out/num_m4sin.txt >/dev/null; then \
+	     echo "  y la radio da lo mismo que el simulador, bit a bit  ok"; \
+	   else \
+	     echo "  aviso: la radio FUSIONA multiplica-y-suma y el PC no."; \
+	     echo "  Donde difiere (la radio redondea UNA vez, el PC dos):"; \
+	     diff out/num_m4sin.txt out/num_m4.txt | grep '^>' | sed 's/^>/     /'; \
+	   fi; \
+	 fi
+
+# ---------------------------------------------------------------------
+# LO QUE TARDA DECODIFICAR UNA RANURA DE FT8, EN LA CPU DE LA RADIO
+# (02/11/2026). Ver la cabecera de m4/m4_ft8.c: de ese numero sale cuantos
+# bloques tiene que aguantar el desvio, y el desvio cuesta RAM.
+out/m4_ft8.elf: m4/m4_ft8.c m4/start.c \
+                $(FIRMWARE)/User/ft8_decimator.c \
+                $(FIRMWARE)/User/ft8_waterfall_adapter.c \
+                $(FIRMWARE)/User/ft8_fft.c \
+                $(FIRMWARE)/User/ft8_tablas.c \
+                $(FIRMWARE)/User/ft8_decoder.c \
+                $(FIRMWARE)/User/ft8_snr.c \
+                $(FIRMWARE)/Ft8Lib/ft8/decode.c \
+                $(FIRMWARE)/Ft8Lib/ft8/ldpc.c \
+                $(FIRMWARE)/Ft8Lib/ft8/message.c \
+                $(FIRMWARE)/Ft8Lib/ft8/crc.c \
+                $(FIRMWARE)/Ft8Lib/ft8/constants.c \
+                $(FIRMWARE)/Ft8Lib/ft8/text.c
+	@mkdir -p out
+	$(M4CC) $(M4FLAGS) -Im4 -Isim -I$(FIRMWARE)/User -I$(FIRMWARE)/Ft8Lib \
+	  -Ihostinc $(filter %.c,$^) -o $@ $(M4LIBS)
+
+out/m4_audio.elf: m4/m4_audio.c m4/start.c $(FIRMWARE)/User/nr_ss.c \
+                  $(FIRMWARE)/User/fft.c $(FIRMWARE)/User/nco.c \
+                  $(FIRMWARE)/User/nco_tabla.c $(FIRMWARE)/User/iqbal.c \
+                  $(FIRMWARE)/User/iqancho.c
+	@mkdir -p out
+	$(M4CC) $(M4FLAGS) -Im4 -I$(FIRMWARE)/User -Ihostinc \
+	  $(filter %.c,$^) -o $@ $(M4LIBS)
+
+out/m4_vuelta.elf: m4/m4_vuelta.c m4/start.c
+	@mkdir -p out
+	$(M4CC) $(M4FLAGS) -Im4 -Ihostinc $(filter %.c,$^) -o $@ $(M4LIBS)
+
+out/m4_i2c.elf: m4/m4_i2c.c m4/start.c m4/gpio_stub.c \
+                $(FIRMWARE)/User/i2c_bitbang.c $(FIRMWARE)/User/ms5351.c
+	@mkdir -p out
+	$(M4CC) $(M4FLAGS) $(M4DEFS) -I$(FIRMWARE)/User \
+	  -I$(FIRMWARE)/CMSIS/Include -I$(FIRMWARE)/CMSIS/GD/GD32F4xx/Include \
+	  -I$(FIRMWARE)/Firmware/Include \
+	  $(filter %.c,$^) -o $@ $(M4LIBS)
+
+.PHONY: m4
+m4:
+	@if ! command -v qemu-system-arm >/dev/null 2>&1; then \
+	   echo "  qemu-system-arm no esta instalado: me salto el banco del M4"; \
+	   echo "  (en Debian/Ubuntu: apt install qemu-system-arm)"; \
+	 else \
+	   $(MAKE) out/m4_espectro.elf out/m4_cabecera.elf out/m4_i2c.elf && \
+	   $(M4QEMU) out/m4_espectro.elf && \
+	   $(M4QEMU) out/m4_cabecera.elf && \
+	   $(M4QEMU) out/m4_i2c.elf && \
+	   $(MAKE) out/m4_ft8.elf && $(M4QEMU) out/m4_ft8.elf && \
+	   $(MAKE) out/m4_audio.elf && $(M4QEMU) out/m4_audio.elf && \
+	   $(MAKE) out/m4_vuelta.elf && $(M4QEMU) out/m4_vuelta.elf && \
+	   $(MAKE) numeros; \
+	 fi
 
 .PHONY: saltopinta
 saltopinta: out/salto_pinta ; ./out/salto_pinta

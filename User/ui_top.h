@@ -431,6 +431,14 @@ uint8_t ui_top_nco_al_dia(const ui_top_state_t *st);
  * de S, las unidades, el dBm y la sobrecarga. Ver su comentario en ui_top.c:
  * repintar la franja entera cada vez que la barra se mueve era el 21 % de
  * mas que costaba el fotograma cuando entraba señal. */
+/* Solo la parte de la franja que se mueve con el MANDO: la pastilla del
+ * mando y los chips. Ver su comentario en el .c. */
+void ui_top_draw_mando(const ui_top_state_t *st);
+
+/* Solo los chips, de donde acaba la pastilla del mando al borde derecho.
+ * Para quien cambia un chip sin tocar la pastilla: ver ui_top_draw_chips(). */
+void ui_top_draw_chips(const ui_top_state_t *st);
+
 void ui_top_draw_smeter(const ui_top_state_t *st);
 
 /*

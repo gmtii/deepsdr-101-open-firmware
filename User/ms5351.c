@@ -1070,6 +1070,32 @@ _Static_assert(LOWF_HANDOFF_HZ == LOWF_HANDOFF_HZ_CHK,
 
 uint8_t ms5351_set_lo_freq(uint32_t freq_hz)
 {
+#ifdef SIN_I2C
+    /*
+     * DIAGNOSTICO - 02/11/2026. Con -DSIN_I2C el firmware hace EXACTAMENTE
+     * lo mismo -mismo estado, misma pantalla, mismas cuentas- pero no manda
+     * ni un byte al oscilador al RESINTONIZAR. El arranque si lo programa,
+     * asi que sigue habiendo señal y sigue habiendo espectro; lo que pasa
+     * es que el oscilador se queda donde arranco y lo que se oye no es lo
+     * que pone la pantalla.
+     *
+     * Existe para contestar a una sola pregunta: ¿es el bus quien frena la
+     * cascada al girar? No es una version de entrega.
+     */
+    /*
+     * Las PRIMERAS llamadas SI escriben: son las del arranque, y sin ellas
+     * no hay oscilador, no hay señal y no hay nada que mirar. A partir de
+     * ahi -o sea, en cuanto el mando empieza a mover la frecuencia- se
+     * saltan. La radio se queda sintonizada donde arranco, con su señal y
+     * su espectro vivos, y el mando hace todo lo demas.
+     */
+    {
+        static uint8_t s_arr;
+        if (s_arr >= 4U) { return 1U; }
+        s_arr++;
+    }
+#endif
+    {
     uint32_t div;
     uint64_t fvco;
     uint32_t a, b;
@@ -1169,6 +1195,7 @@ uint8_t ms5351_set_lo_freq(uint32_t freq_hz)
     }
 
     return ok;
+    }
 }
 
 /*

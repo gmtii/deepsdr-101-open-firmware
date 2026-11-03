@@ -512,6 +512,14 @@ void spi_flash_mira_alta(spi_flash_alta_t *out);
  * referenced. Returns 1 if the async save actually started (poll from
  * here on), 0 if the fast-path preconditions weren't met (nothing
  * started - fall back to spi_flash_write_or_update_file()). */
+/*
+ * 1 si la cadena de clusters de ese fichero es SEGUIDA, que es lo que el
+ * camino rapido de guardado exige. Con 0, cada guardado se hace por el
+ * camino bloqueante -unos 176 ms con la radio en marcha- y eso no se cura
+ * solo. Ver su comentario en spi_flash.c y settings_cadena_repara().
+ */
+uint8_t spi_flash_cadena_seguida(const char name8[8], const char ext3[3]);
+
 uint8_t spi_flash_async_save_start(const char name8[8], const char ext3[3],
                                     const uint8_t *data, uint32_t len);
 

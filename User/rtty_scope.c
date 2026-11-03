@@ -5,8 +5,7 @@
 /*
  * LA FFT YA NO ES DE ESTE FICHERO - 24/10/2026.
  *
- * *** Preguntado por el usuario: "que mas cosas hay en memoria mientras no
- * se estan usando?". ***
+ * *** QUE MAS HAY RESERVADO MIENTRAS NO SE ESTA USANDO. ***
  *
  * Aqui habia una FFT ENTERA: s_re, s_im, las dos tablas de giro, la
  * ventana de Hann y la tabla de inversion de bits, 9.216 bytes de TCM, mas

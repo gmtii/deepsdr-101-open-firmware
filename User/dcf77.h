@@ -125,11 +125,10 @@ enum {
      * Y LOS DE MSF, QUE NO EXISTIAN - 28/10/2026
      * ==================================================================
      *
-     * *** Avisado por un usuario: "MSF on 60kHz, which has a strong
-     * signal, and I can hear the seconds beating, does not seem to work at
-     * all." ***
+     * *** MSF EN 60 kHz NO FUNCIONABA, con señal fuerte y los segundos
+     * oyendose batir. ***
      *
-     * No se ha podido reproducir su antena ni su ruido, asi que esto no es
+     * No se ha podido reproducir esa antena ni ese ruido, asi que esto no es
      * "el arreglo": es lo que hacia falta para poder diagnosticarlo. Y era
      * un agujero de verdad.
      *

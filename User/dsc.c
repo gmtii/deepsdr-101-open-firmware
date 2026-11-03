@@ -180,6 +180,7 @@ static const char *fmt_txt(uint8_t f)
     }
 }
 
+__attribute__((noinline))
 static const char *cat_txt(uint8_t c)
 {
     switch (c) {
@@ -197,6 +198,7 @@ static const char *cat_txt(uint8_t c)
  * no hay grabación de una alerta y ojalá siga sin haberla. Los códigos están
  * leídos del estándar y el entramado se prueba con trama sintética.
  */
+__attribute__((noinline))
 static const char *nat_txt(uint8_t n)
 {
     switch (n) {
@@ -215,6 +217,7 @@ static const char *nat_txt(uint8_t n)
     }
 }
 
+__attribute__((noinline))
 static void u2s(char *d, uint32_t v)
 {
     char t[12]; uint8_t n = 0U, i;
@@ -229,6 +232,7 @@ static void u2s(char *d, uint32_t v)
  * todos los caracteres de información. Cuentan el especificador de formato y
  * el de fin de secuencia; NO cuentan los de enganche ni los RX.
  */
+__attribute__((noinline))
 static uint8_t ecc_de(const uint8_t *m, uint8_t n)
 {
     uint8_t i = 0U, r = 0U;
@@ -432,6 +436,7 @@ void dsc_mete_simbolo(uint8_t sim, uint8_t valido, uint8_t ranura_rx)
     simbolo(sim, valido, ranura_rx);
 }
 
+__attribute__((noinline))
 static void bit_mete(uint8_t b)
 {
     uint8_t sim, valido;
@@ -652,6 +657,7 @@ void dsc_stop(void)
 
 static float s_busca_hz;          /* lo ultimo que encontro la busqueda */
 
+__attribute__((noinline))
 static void busca_centro(void)
 {
     const float *f = rtty_scope_frame_peek();

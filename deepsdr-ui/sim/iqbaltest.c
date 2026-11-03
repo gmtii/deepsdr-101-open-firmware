@@ -651,6 +651,45 @@ int main(void)
         di("y acaba igual", iqbal_ab_hay() && iqbal_get_on() == 1U, 0);
 
         /*
+         * EL RESULTADO SE GASTA, Y ESTE ES EL FALLO QUE LO TRAJO.
+         * 30/10/2026, con dos fotos de la pantalla de un usuario delante.
+         *
+         * La fila "Espejo I/Q" ensena el resultado de la prueba POR ENCIMA
+         * de la lectura normal, porque es lo que se acaba de pedir. Pero
+         * hasta hoy lo ensenaba para siempre: s_ab_hay solo lo bajaban
+         * lanzar otra prueba o abortar.
+         *
+         * El dano no es de presentacion. Si la prueba cae antes de que el
+         * corrector haya aprendido -banda vacia, o recien encendida la
+         * radio- los dos lados salen iguales, y la fila se queda clavada en
+         * "19 -> 19" mientras por detras el corrector sube a 32. Quien lo
+         * mira concluye que no mejora, reinicia para arreglarlo, y el
+         * reinicio tira el aprendizaje: la pantalla fabrica el problema que
+         * dice estar midiendo.
+         *
+         * Aqui se cuenta en BLOQUES, que es lo que cuenta la radio. Un
+         * bloque son 2,667 ms por diseno.
+         */
+        {
+            int b;
+            uint8_t vivo_antes, vivo_despues;
+
+            for (b = 0; b < 7000; b++) { bloque(); iqbal_bloque(g_crudo, NB); }
+            vivo_antes = iqbal_ab_hay();
+
+            for (b = 0; b < 1000; b++) { bloque(); iqbal_bloque(g_crudo, NB); }
+            vivo_despues = iqbal_ab_hay();
+
+            snprintf(det, sizeof det,
+                     "a los %.1f s todavia esta, a los %.1f s ya no",
+                     7000 * 0.002667, 8000 * 0.002667);
+            di("el resultado aguanta lo que se tarda en leerlo", vivo_antes, det);
+            di("y despues la fila vuelve a la lectura que SI se mueve",
+               !vivo_despues, 0);
+            di("y no se lleva por delante al corrector", iqbal_get_on() == 1U, 0);
+        }
+
+        /*
          * EL PLAZO DE SEGURIDAD, QUE ES EL QUE HABRIA PILLADO EL FALLO.
          *
          * iqbal_ab_paso() se llamaba desde dentro de un bloque que se salta
@@ -840,6 +879,69 @@ int main(void)
         }
 
         g_fir_fondo = 0;
+        g_fir_nc = 0;
+        fir_escena_cinco();
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*
+     * LA BANDA VACIA: UNA SOLA EMISORA. 30/10/2026, del usuario.
+     *
+     * Este es el caso que faltaba y el que de verdad se escucha: 2 m a las
+     * once de la noche, una portadora y nada mas. Con una sola emisora
+     * SOLO SE LLENA UNA RANURA de las dieciseis, nunca las cinco que
+     * necesitan las cuatro tomas, asi que hasta hoy el FIR no se instalaba
+     * NUNCA y el rechazo se quedaba en lo que da el corrector plano solo.
+     *
+     * Y por eso al usuario le funcionaban tres maniobras distintas
+     * -desintonizar y volver, entrar y salir del NCO, reiniciar y
+     * esperar-: las tres mueven la portadora dentro de la ventana, o sea
+     * reparten sus medidas por ranuras distintas hasta juntar cinco.
+     *
+     * Desde hoy, con la banda limpia de parejas simetricas, con una
+     * ranura se ajusta UNA TOMA. Ver iqbal_resuelve().
+     */
+    printf("\n  la banda vacia: una sola emisora\n");
+    {
+        static const double fp[3] = { 19000.0, -31000.0, 5000.0 };
+        int e;
+
+        for (e = 0; e < 3; e++) {
+            double crudo, plano, confir;
+            char det[140];
+
+            g_fir_nc    = 1;
+            g_fir_fp[0] = fp[e];
+            g_fir_am[0] = 3000.0;
+
+            fir_escena_init(1.0, 0.0, 0.93, 0.115);
+            iqbal_set_on(0U);
+            crudo = fir_peor();
+
+            fir_escena_init(1.0, 0.0, 0.93, 0.115);
+            plano  = fir_asienta_y_mide();
+            confir = fir_calibra_y_mide();
+
+            snprintf(det, sizeof det,
+                     "apagado %5.1f | plano %5.1f | con FIR %5.1f dB"
+                     "   | EN LA EMISORA %5.1f dB",
+                     crudo, plano, confir, fir_rechazo(fp[e]));
+            printf("    emisora en %+7.0f Hz   %s\n", fp[e], det);
+            /*
+             * LAS DOS CARAS, Y LAS DOS SE MIDEN. El ajuste de una toma es
+             * PLANO: clava el espejo en la frecuencia que ha medido y se
+             * queda igual de plano en el resto de la ventana. Asi que
+             * gana mucho donde esta la emisora -que es lo que se escucha
+             * y lo que enseña la fila de Informacion- y pierde un poco
+             * donde no hay nada. Las dos cosas con numero, para que nadie
+             * pueda contar solo la mitad buena.
+             */
+            di("    donde esta la emisora, gana 8 dB o mas",
+               fir_rechazo(fp[e]) > plano + 8.0, 0);
+            di("    y en el resto de la ventana no pierde mas de 3 dB",
+               confir > crudo - 3.0, 0);
+        }
+
         g_fir_nc = 0;
         fir_escena_cinco();
     }

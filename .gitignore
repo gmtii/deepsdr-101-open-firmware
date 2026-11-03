@@ -31,13 +31,27 @@ desktop.ini
 CONFIG.CSV
 
 # Material de trabajo que vive en la carpeta y no es el proyecto.
-# (tools/publicar.ps1 movia casi todo esto a _archivo\; ese guion ya no existe.)
 _archivo/
 cabecera_ft8.png
 mapa_indicativos.png
+mapas.rar
+mapas.zip
 mockups_mapa/
 screens/
 rescate/
+#
+# LOS CIEN MAPAS Y SU CATALOGO SI VAN - 03/11/2026.
+#
+# Aqui se ignoraban `mapas/` y `DeepSDR_mapas_100.pdf`, y la regla no hacia
+# NADA: los cien .map ya estaban seguidos desde antes, y .gitignore no deja
+# de seguir lo que ya se sigue. Lo unico que conseguia era hacer creer que
+# estaban fuera.
+#
+# Y fuera no pueden estar: el README manda al que clone a esa carpeta a
+# elegir mapa -"en `mapas/` hay cien, con su catalogo de miniaturas en
+# PDF"- y enlaza las dos cosas. Ignorarlas seria publicar un README con dos
+# enlaces rotos. Son 15,6 MB y son parte de lo que se entrega, no material
+# de pruebas como sim/aire/.
 
 # Cache de Python: lo genera el interprete solo.
 __pycache__/
@@ -45,42 +59,23 @@ __pycache__/
 
 # EL SIMULADOR, lo que de el no se publica.
 #
-# Pedido por el usuario el 13/10/2026: ni las muestras ni vendor.
-#
 #   out/       lo que escribe el simulador al correr: PNG y ejecutables.
-#   muestras/  veinte grabaciones de aire. Parte no son nuestras: se las
-#              paso gente al usuario o salen de un WebSDR.
+#   muestras/  grabaciones de aire. Parte no son nuestras: se las paso
+#              gente al usuario o salen de un WebSDR.
 #   vendor/    gfx.c y spectrum.c del firmware ORIGINAL, guardados para
 #              comparar el dibujado nuevo contra el viejo. Es codigo del
 #              fabricante y no hay licencia que invocar.
 #
-# CORREGIDO EL 16/10/2026. Aqui ponia: "Ninguna de las tres hace falta para
-# make comprueba: esa tanda da sus 154 TODO CORRECTO sin ellas. Medido."
-# Medido otra vez hoy, moviendo las carpetas de sitio y lanzando la tanda:
-# con muestras/ era cierto; con vendor/ NO. La tanda moria en el primero de
-# los veinte objetivos que lo usan.
-#
-# Ya no: esos veinte se saltan solos cuando vendor/ no esta (ver el final de
-# local.mk y la linea "comprueba:" de Makefile). Medido en las dos
-# direcciones:
+# Los veinte objetivos que usan vendor/ se saltan solos cuando no esta:
 #
 #   con vendor/    175 "TODO CORRECTO", exit 0
 #   sin vendor/    158 "TODO CORRECTO", exit 0   <- lo que ve quien clona
-#
-# Y los bancos que las piden por su nombre siguen fallando diciendo cual
-# falta y por que.
 deepsdr-ui/out/
 deepsdr-ui/sim/muestras/
 deepsdr-ui/vendor/
 
-# Y sim/aire/, que es LO MISMO QUE muestras/ y se escapo - 16/10/2026.
-#
-# muestras/ se saco el 13/10 a peticion del usuario.
-# sim/aire/ se creo despues, con la misma clase de material (grabaciones
-# de aire que paso el usuario, ver sim/hfdl_aire.c) y nadie
-# actualizo esta lista. Son siete .wav y 13,8 MB: el 27 % del repositorio
-# entero en un proyecto de firmware. La regla ya estaba escrita; lo que
-# faltaba era aplicarla.
+# Y sim/aire/, que es LO MISMO QUE muestras/: siete .wav y 13,8 MB de
+# grabaciones de aire que paso el usuario (ver sim/hfdl_aire.c).
 deepsdr-ui/sim/aire/
 
 # Las dos listas de emisoras viven en tools/datos/, con su LEEME que dice
@@ -93,10 +88,7 @@ deepsdr-ui/datos/aoki.txt
 .repo
 out/mapas_tmp/
 
-# Restos que deja el propio trabajo en la carpeta del simulador y que no son
-# del proyecto. Anadidos el 21/10/2026, al barrer la carpeta entera fichero a
-# fichero para dejarla igual aqui y en la maquina del usuario:
-#
+# Restos que deja el propio trabajo en la carpeta del simulador.
 #   gmon.out   lo escribe un ejecutable compilado con -pg al terminar.
 #   $@         un fallo de una regla: el make escribio el nombre de la
 #              variable en vez de su valor. Cero bytes.
@@ -104,3 +96,10 @@ out/mapas_tmp/
 deepsdr-ui/gmon.out
 deepsdr-ui/$@
 deepsdr-ui/sim/.x
+
+# LAS MEDIDAS POR EL CABLE - 03/11/2026.
+#
+# tools/cat_vuelta.ps1 escribe un CSV por tanda, con la fecha y la hora en
+# el nombre. Son medidas de UNA sesion en UNA radio: el guion si es del
+# proyecto y se publica, los numeros que saca no.
+tools/vuelta_*.csv

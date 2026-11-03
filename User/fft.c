@@ -298,9 +298,10 @@ void fft_compute_db(const int16_t *samples, float *db_out)
  * LA MISMA, PARA EL OSCILOSCOPIO DE RTTY - 24/10/2026.
  * ======================================================================
  *
- * *** Pedido por el usuario, que hizo la pregunta buena: "de hecho no
- * entiendo porque estan los tres en memoria a la vez" y "que mas cosas hay
- * en memoria mientras no se estan usando?". ***
+ * *** LOS TRES ESTABAN EN MEMORIA A LA VEZ, Y NO HACIA FALTA. ***
+ *
+ * La pregunta de la que sale esto es la buena: que mas hay reservado
+ * mientras no se esta usando.
  *
  * Y la respuesta en rtty_scope.c era peor de lo que parecia: no es que
  * tuviera un buffer de sobra, es que tenia UNA FFT ENTERA DUPLICADA. Sus

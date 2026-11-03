@@ -7,8 +7,19 @@
  * vice versa). Storage itself is defined once, in waterfall.c -
  * these are just typed views into it via macros, so every line below
  * that already said s_re/s_im/etc. keeps working unchanged. */
+#ifdef FT8_FFT_COMPLEJA
+/* La version vieja, la compleja de 2.048 puntos, SOLO existe para que
+ * sim/ft8_fftreal.c pueda comparar. Pide el doble de sitio y ya no lo hay
+ * en la union, asi que se lo pone ella: ese binario es un banco de
+ * anfitrion y no entra en la radio. */
+static float s_re_c[FT8_FFT_SIZE];
+static float s_im_c[FT8_FFT_SIZE];
+#define s_re           s_re_c
+#define s_im           s_im_c
+#else
 #define s_re           (g_ft8_shared_ram.ft8.fft_re)
 #define s_im           (g_ft8_shared_ram.ft8.fft_im)
+#endif
 /*
  * LAS CUATRO TABLAS VIVEN EN FLASH DESDE EL 10/10/2026, no aqui dentro.
  *
@@ -149,6 +160,76 @@ void ft8_fft_init(void)
 {
 }
 
+/*
+ * ======================================================================
+ * LA ENTRADA ES REAL, ASI QUE LA MITAD DE LA TRANSFORMADA SOBRABA
+ * 02/11/2026
+ * ======================================================================
+ *
+ * Esto hacia una transformada COMPLEJA de 2.048 puntos con la parte
+ * imaginaria puesta a cero, y luego tiraba la mitad de la salida. Dos
+ * desperdicios del mismo sitio:
+ *
+ *   - 16.384 bytes de la memoria mas disputada de la radio (re e im de
+ *     2.048 floats cada uno) para guardar algo que es simetrico;
+ *   - y el doble de mariposas de las que hacen falta.
+ *
+ * LO QUE SE HACE AHORA es el reparto de siempre para entrada real: las
+ * muestras pares van a la parte real y las impares a la imaginaria de una
+ * transformada de 1.024 puntos, y al final se desenreda:
+ *
+ *     Xe[k] = (Z[k] + conj(Z[M-k])) / 2
+ *     Xo[k] = (Z[k] - conj(Z[M-k])) / 2i
+ *     X[k]  = Xe[k] + e^(-i2pi k/N) * Xo[k]
+ *
+ * con N = 2.048 y M = 1.024. El giro de fuera sale de la MISMA tabla de
+ * cuarto de vuelta que ya habia -k_ft8_cuarto, en flash- porque esta
+ * hecha para N y aqui el indice es k, no 2k.
+ *
+ * QUE SE GANA: 8.192 bytes, que es lo que hacia falta para empezar a
+ * pagar el submuestreo en frecuencia (ver FT8_ADAPTER_FREQ_OSR), y
+ * aproximadamente la mitad del tiempo de la FFT, que tambien importa:
+ * mientras se decodifica una ranura la siguiente se esta escribiendo en
+ * el desvio, y lo que no cabe ahi se pierde.
+ *
+ * QUE NO CAMBIA: la salida. Lo vigila sim/ft8_fftreal.c, que corre las
+ * dos contra las mismas muestras y compara bin a bin.
+ */
+#define FT8_FFT_M  (FT8_FFT_SIZE / 2U)   /* los puntos que de verdad se transforman */
+
+/* Invertir los bits que hacen falta para M, que son uno menos que los de
+ * FT8_FFT_SIZE. Misma instruccion `rbit`, otro desplazamiento. */
+static inline uint32_t ft8_bitrev_m(uint32_t i)
+{
+    return ft8_bitrev(i << 1U);
+}
+
+static void fft_run_m(void)
+{
+    uint32_t i, j;
+    uint32_t half_size, step;
+
+    for (half_size = 1U, step = FT8_FFT_SIZE / 2U; half_size < FT8_FFT_M;
+         half_size <<= 1U, step >>= 1U) {
+        for (i = 0; i < FT8_FFT_M; i += (half_size << 1U)) {
+            for (j = 0; j < half_size; j++) {
+                uint32_t tw_idx = j * step;
+                float tre = ft8_cos_giro(tw_idx);
+                float tim = ft8_sen_giro(tw_idx);
+                uint32_t a = i + j;
+                uint32_t b = a + half_size;
+                float br = s_re[b] * tre - s_im[b] * tim;
+                float bi = s_re[b] * tim + s_im[b] * tre;
+                s_re[b] = s_re[a] - br;
+                s_im[b] = s_im[a] - bi;
+                s_re[a] = s_re[a] + br;
+                s_im[a] = s_im[a] + bi;
+            }
+        }
+    }
+}
+
+#ifdef FT8_FFT_COMPLEJA
 static void fft_run(void)
 {
     uint32_t i, j;
@@ -173,6 +254,7 @@ static void fft_run(void)
         }
     }
 }
+#endif /* FT8_FFT_COMPLEJA */
 
 /*
  * SOLO LOS BINS QUE SE VAN A LEER - 28/10/2026.
@@ -186,7 +268,21 @@ static void fft_run(void)
  * `base` es el primer bin crudo que interesa, `paso` cada cuantos y
  * `n_out` cuantos. El que llama guarda n_out valores, no 1.024.
  */
-void ft8_fft_compute_db_rango(const int16_t *samples, float *db_out,
+/*
+ * De decibelios a cuartos de decibelio, con tope. Ver FT8_FFT_DB_ESCALA:
+ * el tope no se alcanza con la formula de la potencia, pero un valor raro
+ * -una entrada a cero da logaritmo de cero- no puede salirse del entero.
+ */
+static inline int16_t ft8_fft_db_entero(float db)
+{
+    float v = db * FT8_FFT_DB_ESCALA;
+
+    if (v >  32767.0f) { return  32767; }
+    if (v < -32768.0f) { return -32768; }
+    return (int16_t)(v + (v >= 0.0f ? 0.5f : -0.5f));
+}
+
+void ft8_fft_compute_db_rango(const int16_t *samples, int16_t *db_out,
                               uint32_t base, uint32_t paso, uint32_t n_out)
 {
     uint32_t n;
@@ -206,6 +302,7 @@ void ft8_fft_compute_db_rango(const int16_t *samples, float *db_out,
      * de estar tapado.
      */
 
+#ifdef FT8_FFT_COMPLEJA
     for (n = 0; n < FT8_FFT_SIZE; n++) {
         uint16_t src = ft8_bitrev(n);   /* `rbit`: antes era una tabla de 2 kB */
         s_re[n] = (float)samples[src] * ft8_fft_hann(src);
@@ -217,13 +314,41 @@ void ft8_fft_compute_db_rango(const int16_t *samples, float *db_out,
     for (n = 0; n < n_out; n++) {
         uint32_t k = base + (n * paso);
         float power = s_re[k] * s_re[k] + s_im[k] * s_im[k];
-        db_out[n] = 3.0103f * log2_approx(power);
+        db_out[n] = ft8_fft_db_entero(3.0103f * log2_approx(power));
     }
+#else
+    /* Las pares a la parte real y las impares a la imaginaria, ya en el
+     * orden invertido que pide el radix-2. La ventana de Hann se aplica
+     * con el indice de la MUESTRA, no con el de la pareja. */
+    for (n = 0; n < FT8_FFT_M; n++) {
+        uint32_t par = ft8_bitrev_m(n) << 1U;
+        s_re[n] = (float)samples[par]      * ft8_fft_hann(par);
+        s_im[n] = (float)samples[par + 1U] * ft8_fft_hann(par + 1U);
+    }
+
+    fft_run_m();
+
+    for (n = 0; n < n_out; n++) {
+        uint32_t k  = base + (n * paso);
+        uint32_t kr = (FT8_FFT_M - k) & (FT8_FFT_M - 1U);
+        float er =  0.5f * (s_re[k] + s_re[kr]);
+        float ei =  0.5f * (s_im[k] - s_im[kr]);
+        float orr =  0.5f * (s_im[k] + s_im[kr]);
+        float oi = -0.5f * (s_re[k] - s_re[kr]);
+        float c  = ft8_cos_giro(k);
+        float sg = ft8_sen_giro(k);
+        float xr = er + (c * orr - sg * oi);
+        float xi = ei + (c * oi  + sg * orr);
+        float power = xr * xr + xi * xi;
+
+        db_out[n] = ft8_fft_db_entero(3.0103f * log2_approx(power));
+    }
+#endif
 }
 
 /* La de siempre: todos los bins utiles, de uno en uno. La usan los bancos
  * y cualquiera que quiera el espectro entero. */
-void ft8_fft_compute_db(const int16_t *samples, float *db_out)
+void ft8_fft_compute_db(const int16_t *samples, int16_t *db_out)
 {
     ft8_fft_compute_db_rango(samples, db_out, 0U, 1U, FT8_FFT_BINS_USEFUL);
 }

@@ -47,6 +47,10 @@ void rtc_hw_get(rtc_hw_datetime_t *o) { if (o) { memset(o, 0, sizeof *o); } }
 const char *dxcc_pais(const char *ind) { (void)ind; return 0; }
 const float *ft8_waterfall_get(void) { return 0; }
 int  ftx_find_candidates(void *a, void *b, int c) { (void)a; (void)b; (void)c; return 0; }
+/* Y la del gancho, que es la que llama ft8_decoder.c desde el 02/11/2026.
+ * Ver ftx_find_candidates_respira() en Ft8Lib/ft8/decode.c. */
+int  ftx_find_candidates_respira(void *a, int b, void *c, int d, void (*e)(void))
+{ (void)a; (void)b; (void)c; (void)d; (void)e; return 0; }
 bool ftx_decode_candidate(void *a, void *b, int c, void *d, void *e)
 { (void)a; (void)b; (void)c; (void)d; (void)e; return false; }
 int  ftx_message_decode(void *a, void *b, char *c)

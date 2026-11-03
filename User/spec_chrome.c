@@ -428,13 +428,55 @@ int spec_chrome_divisiones(void)
  * de lado: el dia que algo mueva la banda sin mover el centro, la raya se
  * quedaria del color de antes.
  */
+/* En cual de las cinco etiquetas cae la marca. Ver el comentario de
+ * dentro de spec_chrome_ruler_changed(). */
+static int8_t marca_etiqueta(int16_t demod_px)
+{
+    int32_t v = (int32_t)demod_px + (SPC_TRACE_W / 8);
+    int32_t k = v / (SPC_TRACE_W / 4);
+
+    if (v < 0) { k--; }            /* la division trunca hacia cero */
+    if (k < -3) { k = -3; }
+    if (k >  3) { k =  3; }
+    return (int8_t)k;
+}
+
 uint8_t spec_chrome_ruler_changed(const spec_chrome_t *a, const spec_chrome_t *b)
 {
     char   ta[20], tb[20];
     int8_t k;
     uint8_t c;
 
-    if (a->demod_px  != b->demod_px)  { return 1U; }
+    /*
+     * =====================================================================
+     * LA MARCA NO ES EL NUMERO, ES EN QUE ETIQUETA CAE - 02/11/2026.
+     * =====================================================================
+     *
+     * Aqui ponia "if (a->demod_px != b->demod_px) return 1". Y demod_px es
+     * donde cae la marca de demodulacion, que con el NCO puesto SE MUEVE EN
+     * CADA DETENTE. O sea que girando el dial con el NCO, la regla entera
+     * -800 x 26 = 20.800 pixeles que empuja la CPU, sin DMA- se repintaba
+     * en TODOS los cuadros. Para dibujar exactamente lo mismo.
+     *
+     * Porque demod_px solo entra en el dibujo por is_demod: si la marca
+     * cae a menos de SPC_TRACE_W/8 de una etiqueta, esa etiqueta se pinta
+     * en el color de acento y su raya es mas larga. Ver draw_ruler().
+     *
+     * Y las cinco etiquetas estan en sitios FIJOS: k * SPC_TRACE_W/4, con
+     * k de -2 a 2. El ancho de la ventana no los mueve -px sale de
+     * W*(k*(span/4))/span, que es W*k/4 para cualquier span-. Asi que los
+     * cinco intervalos de SPC_TRACE_W/4 de ancho no se solapan y basta con
+     * saber EN CUAL cae la marca. Mover la marca tres pixeles no la saca
+     * del suyo, y entonces la regla se ve igual y no se repinta.
+     *
+     * Fuera de -2..2 no hay etiqueta encendida, y por eso se recorta a
+     * -3..3: todas las posiciones lejanas valen lo mismo.
+     *
+     * Es un camino DISTINTO del freno de la V6.37, que estaba en
+     * tune_encoder_poll(); este va por el cuadro y aquel no lo tocaba. Ver
+     * s_regla_debe en main.c. Lo vigila sim/cromorepinta.c.
+     */
+    if (marca_etiqueta(a->demod_px) != marca_etiqueta(b->demod_px)) { return 1U; }
     if (a->en_banda  != b->en_banda)  { return 1U; }
     if (a->fam_banda != b->fam_banda) { return 1U; }
     if (a->eje_en_hz != b->eje_en_hz) { return 1U; }

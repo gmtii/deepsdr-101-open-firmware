@@ -94,6 +94,21 @@ static int get_cand_off(const ftx_waterfall_t* wf, const ftx_candidate_t* candid
     return offset;
 }
 
+/*
+ * La escalera en enteros. Ver FTX_MAG_INT en decode.h: el compilador la
+ * calcula con la misma expresion que habia en el macro, asi que los
+ * valores son los de siempre. Dieciseis entradas siempre, que son 32
+ * bytes de flash, para que valga igual con tres bits que con cuatro.
+ */
+#if FTX_MAG_BITS == 3 || FTX_MAG_BITS == 4
+const int16_t ftx_mag_int[16] = {
+    FTX_MAG_INT(0),  FTX_MAG_INT(1),  FTX_MAG_INT(2),  FTX_MAG_INT(3),
+    FTX_MAG_INT(4),  FTX_MAG_INT(5),  FTX_MAG_INT(6),  FTX_MAG_INT(7),
+    FTX_MAG_INT(8),  FTX_MAG_INT(9),  FTX_MAG_INT(10), FTX_MAG_INT(11),
+    FTX_MAG_INT(12), FTX_MAG_INT(13), FTX_MAG_INT(14), FTX_MAG_INT(15)
+};
+#endif
+
 static int ft8_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate)
 {
     int score = 0;
@@ -223,7 +238,41 @@ static int ft4_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
     return score;
 }
 
+/*
+ * ======================================================================
+ * *** QUE RESPIRE EL REMUESTREADOR - 02/11/2026, cambio de ESTE
+ * proyecto. Anotado en PROCEDENCIA.md. ***
+ * ======================================================================
+ *
+ * EL PROBLEMA. Esta funcion corre DE UN TIRON y es lo unico del camino de
+ * FT8 que no se puede partir. Mientras corre, el bucle principal de la
+ * radio esta parado, o sea que nadie llama a ft8_decimator_poll(); y el
+ * remuestreador solo tiene dos buffers de salida, 320 ms de colchon. Lo
+ * que tarde de mas es audio de la ranura siguiente que se pierde en
+ * silencio.
+ *
+ * Medido en deepsdr-ui/m4/m4_ft8.c sobre un Cortex-M4: 308 ms de
+ * instrucciones contra esos 320 de colchon -y en el chip de verdad, con
+ * la espera de la flash, bastante mas-. O sea que no es que vaya justo:
+ * es que no cabe.
+ *
+ * Y ACABA DE DOBLAR: con FT8_ADAPTER_FREQ_OSR en 2 el bucle de
+ * freq_offset recorre el doble de bins.
+ *
+ * LO QUE SE HACE. Un gancho opcional que se llama al acabar cada
+ * desplazamiento de tiempo -60 veces por ranura con la geometria de hoy,
+ * o sea cada 5 ms- para que quien llama vacie lo que tenga que vaciar.
+ * No cambia ni un resultado: es el mismo recorrido en el mismo orden.
+ *
+ * La funcion de siempre se queda, llamando a esta con el gancho vacio,
+ * para que nada de arriba tenga que enterarse.
+ */
 int ftx_find_candidates(const ftx_waterfall_t* wf, int num_candidates, ftx_candidate_t heap[], int min_score)
+{
+    return ftx_find_candidates_respira(wf, num_candidates, heap, min_score, 0);
+}
+
+int ftx_find_candidates_respira(const ftx_waterfall_t* wf, int num_candidates, ftx_candidate_t heap[], int min_score, void (*respira)(void))
 {
     int (*sync_fun)(const ftx_waterfall_t*, const ftx_candidate_t*) = (wf->protocol == FTX_PROTOCOL_FT4) ? ft4_sync_score : ft8_sync_score;
     int num_tones = (wf->protocol == FTX_PROTOCOL_FT4) ? 4 : 8;
@@ -263,6 +312,13 @@ int ftx_find_candidates(const ftx_waterfall_t* wf, int num_candidates, ftx_candi
                         ++heap_size;
                         heapify_up(heap, heap_size);
                     }
+                }
+
+                /* El gancho de arriba: una vez por desplazamiento de
+                 * tiempo, que con la geometria de hoy son unos 5 ms. */
+                if (respira != 0)
+                {
+                    respira();
                 }
             }
         }
@@ -401,7 +457,8 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
 
     uint8_t plain174[FTX_LDPC_N]; // message bits (0/1)
     bp_decode(log174, max_iterations, plain174, &status->ldpc_errors);
-    // ldpc_decode(log174, max_iterations, plain174, &status->ldpc_errors);
+    /* La otra version, ldpc_decode(), se borro el 02/11/2026: pedia 115 kB
+     * de pila contra los 5.632 que hay. Ver ldpc.c. */
 
     if (status->ldpc_errors > 0)
     {

@@ -12,7 +12,9 @@ extern "C"
 // plain is a return value, 174 ints, to be 0 or 1.
 // iters is how hard to try.
 // ok == 87 means success.
-void ldpc_decode(float codeword[], int max_iters, uint8_t plain[], int* ok);
+/* ldpc_decode() se ha ido: declaraba 115 kB de matrices en la PILA, que
+ * son veinte veces la de esta radio, y no la llamaba nadie. Ver el
+ * comentario de ldpc.c. Lo que se usa es bp_decode(). */
 
 void bp_decode(float codeword[], int max_iters, uint8_t plain[], int* ok);
 

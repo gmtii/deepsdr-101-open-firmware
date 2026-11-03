@@ -845,6 +845,7 @@ static void cruces_limpia(void)
  * APUNTAR, mas abajo. Quien no quiera recortar pasa los topes del int16_t
  * y aqui no se tira nada.
  */
+__attribute__((noinline))
 static void cruces_arista(int16_t ax, int16_t ay, int16_t bx, int16_t by,
                           int16_t y0, int16_t alto, int16_t izq, int16_t der)
 {

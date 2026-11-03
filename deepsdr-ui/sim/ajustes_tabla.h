@@ -9,7 +9,7 @@ static const char *const k_aj_pag_nombres[AJ_TABLA_PAGINAS][AJ_TABLA_IDIOMAS] = 
     { "Equipo", "Device" },
 };
 
-#define AJ_TABLA_N 45
+#define AJ_TABLA_N 44
 static const struct { const char *nombre[AJ_TABLA_IDIOMAS]; int pagina; }
 k_aj_tabla[AJ_TABLA_N] = {
     { { "AGC", "AGC" }, 0 },
@@ -37,7 +37,6 @@ k_aj_tabla[AJ_TABLA_N] = {
     { { "Contorno", "Contour" }, 2 },
     { { "Puente", "Bridge" }, 2 },
     { { "Cascada", "Waterfall" }, 2 },
-    { { "Analizador", "Analyzer" }, 2 },
     { { "NCO", "NCO" }, 2 },
     { { "Altavoz", "Speaker" }, 4 },
     { { "Muestreo", "Sampling" }, 4 },

@@ -295,8 +295,9 @@ static float g_desvio = 0.0f;
  * EL ESPEJO QUE METE UN CORRECTOR DE IMAGEN MAL CALIBRADO - 28/10/2026
  * ======================================================================
  *
- * *** Puesto por el aviso del usuario: "la vieja decodifica muchisimo mas",
- * con dos fotos de la misma frecuencia. La V5.06 sacaba cinco aviones con
+ * *** LA VERSION VIEJA DECODIFICABA MUCHISIMO MAS, en la misma
+ * frecuencia. ***
+ * La V5.06 sacaba cinco aviones con
  * el embudo en 10>6>6 y 5 buenas de 6; la nueva, dos aviones con 26>15>14
  * y 3 de 10. O sea MAS enganches y MENOS tramas, que es una forma muy
  * concreta de romperse y no se parece a "llega menos senal". ***

@@ -3,8 +3,7 @@
  *
  * POR QUE EXISTE - 24/10/2026
  * ---------------------------
- * *** Preguntado por el usuario, y es la pregunta correcta: "cuando
- * acabes, puede que a cw le pase lo mismo que a rtty?". ***
+ * *** ¿LE PASA A CW LO MISMO QUE A RTTY? Es la pregunta correcta. ***
  *
  * Le pasaba. Hoy rtty_scope.c dejo de tener su propia FFT -usa la de
  * fft.c, ver el bloque del principio de aquel fichero- y en la primera

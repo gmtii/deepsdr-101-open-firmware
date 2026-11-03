@@ -300,6 +300,52 @@ int main(int argc, char **argv)
         }
     }
 
+    /* ------------------------------------------------------------------
+     * 3. Y SI EL USUARIO BORRA RESPALDO.BIN - 31/10/2026, preguntado por
+     *    el: "¿se puede borrar? ¿lo borra al siguiente inicio?".
+     *
+     *    Borrar en FAT marca la entrada y suelta la cadena, PERO NO TOCA
+     *    LOS DATOS: la magia de la copia sigue en el disco. El barrido del
+     *    arranque -el que existe para el caso en que el directorio esta en
+     *    blanco- la encuentra igual. Lo que no puede hacer es quedarsela
+     *    como sitio donde grabar: esos dos bloques ya son del volumen y
+     *    Windows puede habérselos dado a otro fichero.
+     *
+     *    Asi que lo que se exige es que despues de borrarlo y arrancar,
+     *    RESPALDO.BIN VUELVA A EXISTIR en el directorio, con su cadena
+     *    marcada en la FAT.
+     * ------------------------------------------------------------------ */
+    {
+        uint32_t i, hay_antes = 0U, hay_despues = 0U, cl = 0U;
+        char det[90];
+
+        memcpy(g_chip, g_patron, CHIP);
+        spi_flash_init();
+        spi_flash_geo_olvida();
+
+        for (i = 0U; i + 32U <= raiz_bytes; i += 32U) {
+            if (memcmp(&g_chip[raiz_abs + i], "RESPALDOBIN", 11) == 0) { hay_antes = 1U; }
+        }
+        (void)spi_flash_fichero_borra("RESPALDO", "BIN");
+        spi_flash_init();
+        spi_flash_geo_olvida();
+        (void)spi_flash_respaldo_repara();          /* el arranque siguiente */
+
+        for (i = 0U; i + 32U <= raiz_bytes; i += 32U) {
+            const uint8_t *e = &g_chip[raiz_abs + i];
+            if (memcmp(e, "RESPALDOBIN", 11) == 0 && e[0] != 0xE5U) {
+                hay_despues = 1U;
+                cl = (uint32_t)e[26] | ((uint32_t)e[27] << 8);
+            }
+        }
+        printf("\n    borrando RESPALDO.BIN y arrancando otra vez:\n");
+        snprintf(det, sizeof det, "(antes %u, despues %u, primer cluster %u)",
+                 hay_antes, hay_despues, cl);
+        di(hay_antes != 0U, "el banco parte con RESPALDO.BIN puesto", det);
+        di(hay_despues != 0U, "y tras borrarlo, el arranque lo vuelve a crear", det);
+        di(cl >= 2U, "con su cadena en la FAT, no sobre bloques sueltos", det);
+    }
+
     {
         char det[80];
         snprintf(det, sizeof det, "(lo peor fueron %u; se reparo %u vez/veces)",

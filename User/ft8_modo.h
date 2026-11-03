@@ -165,6 +165,11 @@ uint16_t ft8_modo_candidatos(void);
  * si no lo es, a la captura le faltan trozos y FT8 decodifica peor sin que se
  * vea por que. Ver ft8_decimator_perdidos(). */
 uint16_t ft8_modo_ms(void);
+
+/* Ranuras cortadas por el tope de reloj: la captura estaba bien y lo que
+ * falta son los candidatos mas flojos de esa ranura. Distinto de
+ * ft8_modo_perdidos(), que es audio que no llego. */
+uint16_t ft8_modo_cortadas(void);
 uint16_t ft8_modo_perdidos(void);
 void     ft8_modo_db(int16_t *lo, int16_t *hi);
 

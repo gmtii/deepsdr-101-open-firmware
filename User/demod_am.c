@@ -6,7 +6,6 @@
 #include "rds.h"
 #include "nb.h"
 #include "dcf77.h"
-#include "analizador.h"
 #include "sam.h" /* DEMOD_MODE_SAM - 21/08/2026 */
 #include "rapido.h" /* rapido_atan2(): ver fm_discriminate() */
 #include "bip.h"    /* bip_mete(): el pitido de los avisos, al final del bloque */
@@ -92,10 +91,9 @@
  *
  * *** 01/09/2026: se añadieron los equivalentes de 48 kHz
  * -CHF_48K_COEFFS y el ALPF_48K_COEFFS de entonces- al lado de estos de
- * 96, pedido por
- * el usuario; la historia entera de "la opcion de 48 kHz para mejor
- * relacion señal a ruido y mas holgura de procesador" esta en el
- * comentario de demod_am_set_active_rate() en demod_am.h. Esos valores de
+ * 96; la historia entera de la tasa de 48 kHz -mejor relacion señal a
+ * ruido y mas holgura de procesador- esta en el comentario de
+ * demod_am_set_active_rate() en demod_am.h. Esos valores de
  * 48 kHz NO son una deduccion nueva: se recuperaron literalmente del
  * codigo real de la epoca de 48 kHz de este mismo proyecto -un ZIP que el
  * usuario todavia guardaba de antes de la migracion a 96- y despues se
@@ -1919,6 +1917,7 @@ static uint32_t s_am_diag_count;
  * risks causing the exact choppiness it would be used to diagnose.
  * See wfm_should_log_diag()'s comment for the full story.
  */
+__attribute__((noinline))
 static uint8_t am_should_log_diag(void)
 {
     (void)s_am_diag_count;
@@ -6841,25 +6840,14 @@ void demod_am_process_raw(const int16_t *raw_interleaved)
     }
 
     /*
-     * 3b. El analizador de audio se alimenta AQUI, y el sitio importa:
-     * despues del filtro -para que lo que se vea sea lo que se oye- pero
-     * ANTES del AGC. Con el AGC en medio, la altura de una raya dependeria
-     * de cuanto lleve amplificando el control automatico en ese momento, o
-     * sea que el analizador estaria midiendo su propio AGC. Un instrumento
-     * que se mide a si mismo no sirve de nada.
-     */
-    if (analiz_activo()) {
-        analiz_feed(s_env, SDR_RX_BLOCK_SAMPLES);
-    }
-
-    /*
      * ==================================================================
      * EL NIVEL CON EL QUE EL BARRIDO DECIDE, Y SE MIDE AQUI.
      * 26/10/2026, segunda colocacion: ver demod_am_get_nivel_db().
      * ==================================================================
      *
-     * El sitio es el mismo que el del analizador de aqui arriba y por las
-     * mismas dos razones, que aqui pesan todavia mas:
+     * El sitio se eligio por las mismas dos razones que ya valian para el
+     * analizador de audio que se alimentaba aqui hasta el 02/11/2026, y
+     * que aqui pesan todavia mas:
      *
      *   - DESPUES DEL FILTRO, o sea en el ancho que de verdad se escucha.
      *     El primer intento lo medía sobre la I/Q del canal, antes de la

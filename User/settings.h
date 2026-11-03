@@ -130,7 +130,6 @@ typedef enum {
     SET_X_CW_WPM,       /* indice en k_cw_wpm[] */
     SET_X_CW_AUTO,      /* autoenganche de CW, 0/1 */
     SET_X_WFVEL,        /* velocidad de la cascada, 0..3 */
-    SET_X_ANALIZ,       /* analizador de audio: 0=apagado, 1..5 = zoom+1 */
     SET_X_NCO,          /* NCO de sintonia: 0=apagado (el oscilador sigue a la sintonia), 1=puesto */
     SET_X_RDS,          /* decodificador de RDS en FM ancha, 0/1 */
     SET_X_PUENTE,       /* puente de la traza del espectro, 0/1 (por defecto 1) */
@@ -333,9 +332,8 @@ typedef enum {
     /*
      * Y UNA POR CADA UNO DE LOS OCHO MODOS DE PANEL ENTERO - 29/10/2026.
      *
-     * Pedido por el usuario con la medida delante: "he entrado a hfdl con
-     * 20 dB y parecia perder paquetes, la he subido a 35 y parece ir
-     * mejor", y una por modo, no una compartida.
+     * Con 20 dB de ganancia HFDL perdia paquetes y con 35 va mejor, y una
+     * por modo, no una compartida.
      *
      * EL ORDEN ES EL DE pga_digi_t EN main.c y tiene que seguir siendolo:
      * extras_leer() y extras_aplicar() recorren el array con un bucle
@@ -357,8 +355,8 @@ typedef enum {
     SET_X_PGA_IDENT,
     /*
      * LOS MILISEGUNDOS DE CADA CUADRO DEL PANADAPTADOR, Y EL CERO QUE LO
-     * PARA - 30/10/2026, del usuario: "no puede ser que en el menu se
-     * escuche mejor y sin interferencias".
+     * PARA - 30/10/2026: dentro del menu se escuchaba mejor y sin
+     * interferencias, porque el panadaptador deja de repintar.
      *
      * Se guarda porque es un ajuste de RUIDO, no de gusto: el repintado
      * mete hasta 10 dB de siseo en el audio -medido- y quien lo baja o lo
@@ -460,6 +458,14 @@ uint8_t settings_load(settings_loaded_t *out);
  * call from a hot path (e.g. every encoder tick during tuning) -
  * that's the whole point of debouncing here instead of at each call
  * site. */
+/*
+ * Mira si la cadena de clusters de CONFIG.CSV es seguida y, si no, lo
+ * reescribe para que lo sea. Se llama UNA VEZ al arrancar: con la cadena
+ * rota cada guardado se hace por el camino bloqueante y son unos 176 ms
+ * de parón cada vez. Ver su comentario en settings.c.
+ */
+void settings_cadena_repara(void);
+
 void settings_mark_dirty(void);
 
 /* Si settings_poll() va a hacer algo o se va a ir por donde ha venido. Ver

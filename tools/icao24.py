@@ -254,8 +254,8 @@ def guiona(texto):
 def nombre_bonito(tipo, votos):
     """"B788" -> "B788 Boeing 787-8".
 
-    POR QUE NO SE GUARDA EL MODELO DE CADA AVION. Pedido por el usuario. Y era cierto.: "B788" es el codigo, no el
-    modelo.
+    POR QUE NO SE GUARDA EL MODELO DE CADA AVION. "B788" es el codigo, no
+    el modelo.
 
     Pero el modelo NO es un dato del avion, es un dato del TIPO: los 3.000
     787-8 del fichero dicen todos lo mismo. Lo que pasa es que lo dicen de

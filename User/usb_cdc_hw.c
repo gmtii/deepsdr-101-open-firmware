@@ -137,6 +137,23 @@ void usb_timer_init(void)
      * del codec y el oscilador de banda baja. */
 }
 
+/*
+ * CLAVADO A -O0, COMO SUS TRES HERMANOS - 02/11/2026, revision de las
+ * esperas por ciclos.
+ *
+ * Este era el unico bucle de espera del proyecto que NO lo estaba:
+ * delay_i2c() de i2c_bitbang.c, delay_us_approx() de touch.c y el de
+ * spi_flash.c si. Y ese es justo el fallo que ya costo una tarde el
+ * 30/07/2026, cuando el proyecto paso de -O0 a -O2 y la espera del I2C se
+ * encogio sola: ruido continuo en recepcion, sin un solo sintoma que
+ * apuntara al bus.
+ *
+ * Aqui el riesgo es menor -la libreria de USB solo lo usa al arrancar el
+ * nucleo y lo que importa es esperar AL MENOS lo pedido- pero depender de
+ * que eso siga siendo verdad con otro compilador no es una garantia, es
+ * una suposicion. Con -O0 el bucle tarda lo que tardaba.
+ */
+__attribute__((optimize("O0")))
 void usb_udelay(const uint32_t usec)
 {
     /*

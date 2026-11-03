@@ -31,6 +31,7 @@
 #include "font_ui_18b.h"
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 const palette_t *g_pal = &k_pal_oscura;
 static int fallos = 0;
@@ -116,6 +117,214 @@ int main(void)
      * y da igual lo demas. La huella del PPM son unos 300 px; se exige mas
      * de 100 para no depender del texto exacto.
      */
+    /*
+     * ==================================================================
+     * CUANTA CPU CUESTA CADA REPINTADO DE LA FRANJA - 01/11/2026.
+     * ==================================================================
+     *
+     * EL PORQUE, con la pantalla del usuario delante. Su fila "Fotograma"
+     * dice `2+0+16(0)+7 ms`: el parentesis -lo que se va en EMPUJAR
+     * pixeles al panel- es CERO de dieciseis. Los empuja el DMA. Asi que
+     * contar pixeles no mide tiempo: lo que cuesta es COMPONER, o sea el
+     * degradado, las pastillas y, sobre todo, los glifos.
+     *
+     * Y la pregunta concreta: el usuario dice que el espectro se para en
+     * cuanto mueve la frecuencia, y NO con el volumen. Con el NCO puesto
+     * -su barra dice "NCO +33k"- cada clic del dial cambia el numero de
+     * esa chapa, que vive en la franja de ESTADO, asi que cada detente
+     * recompone la cabecera ENTERA mas la franja de estado ENTERA.
+     *
+     * Esto pone numero a las tres piezas para poder compararlas con lo
+     * que cuesta un cuadro de espectro (make pixeles).
+     */
+    /*
+     * ==================================================================
+     * EL REPINTADO ESTRECHO NO PUEDE DEJAR MINTIENDO A LAS PASTILLAS.
+     * 01/11/2026.
+     * ==================================================================
+     *
+     * ui_top_draw_freq() compone solo hasta donde acaba la LECTURA, que
+     * es lo que cambia al mover un digito, y se deja fuera las pastillas
+     * de MODO y de BANDA para no pagarlas en cada detente del mando.
+     *
+     * El riesgo es evidente y es el que vigila esto: al sintonizar SE
+     * CRUZAN BORDES DE BANDA, y el modo tambien puede cambiar. Si el
+     * camino estrecho no se da cuenta, la pastilla se queda con la banda
+     * anterior pintada - una pantalla que miente, que es peor que una
+     * pantalla lenta.
+     */
+    printf("\n  el repintado estrecho se entera de modo y banda:\n");
+    {
+        ui_top_state_t a = st, b = st;
+        int n;
+
+        /* 1. Mover solo la frecuencia NO tiene por que tocar las
+         *    pastillas: es el caso que se viene a abaratar. */
+        a.freq = "14.090,00";
+        b.freq = "14.091,00";
+        lcd_sim_reset(0x0000);
+        gfx2_render_screen(fondo, 0);
+        ui_top_draw(&a);
+        ui_top_draw_freq(&a);      /* deja anotados modo y banda */
+        guarda();
+        ui_top_draw_freq(&b);
+        n = cambiados();
+        printf("    %-46s %6d px   %s\n", "mover un digito cambia algo", n,
+               (n > 0) ? "ok " : "*** MAL ***");
+        if (n <= 0) { fallos++; }
+
+        /* 2. Cambiar de BANDA con la misma frecuencia TIENE que repintar
+         *    la pastilla, que cae fuera de la ventana estrecha. */
+        b = a; b.band = "30 m";
+        lcd_sim_reset(0x0000);
+        gfx2_render_screen(fondo, 0);
+        ui_top_draw(&a);
+        ui_top_draw_freq(&a);
+        guarda();
+        ui_top_draw_freq(&b);
+        n = cambiados();
+        printf("    %-46s %6d px   %s\n", "cambiar de banda repinta su pastilla",
+               n, (n > 0) ? "ok " : "*** MAL ***");
+        if (n <= 0) { fallos++; }
+
+        /* 3. Y lo mismo con el MODO. */
+        b = a; b.mode = "CW";
+        lcd_sim_reset(0x0000);
+        gfx2_render_screen(fondo, 0);
+        ui_top_draw(&a);
+        ui_top_draw_freq(&a);
+        guarda();
+        ui_top_draw_freq(&b);
+        n = cambiados();
+        printf("    %-46s %6d px   %s\n", "cambiar de modo repinta su pastilla",
+               n, (n > 0) ? "ok " : "*** MAL ***");
+        if (n <= 0) { fallos++; }
+
+        /* 4. Y que el estrecho deje la pantalla IGUAL que el ancho: si
+         *    se quedara algo sin pintar, esto lo ve. */
+        lcd_sim_reset(0x0000);
+        gfx2_render_screen(fondo, 0);
+        ui_top_draw(&b);
+        ui_top_draw_freq(&b);
+        guarda();
+        ui_top_draw_freq(&b);      /* otra vez, por el camino estrecho */
+        n = cambiados();
+        printf("    %-46s %6d px   %s\n", "y repetirlo no cambia ni un pixel",
+               n, (n == 0) ? "ok " : "*** MAL ***");
+        if (n != 0) { fallos++; }
+    }
+
+    /*
+     * ==================================================================
+     * EL ESTRECHO TIENE QUE DEJAR LA PANTALLA IGUAL QUE EL ANCHO.
+     * 01/11/2026.
+     * ==================================================================
+     *
+     * ui_top_draw_freq() compone solo la caja de los DIGITOS QUE CAMBIAN.
+     * La pregunta no es si es rapido -eso se mide abajo- sino si lo que
+     * deja pintado es EXACTAMENTE lo mismo que repintarlo todo. Si se
+     * queda un pixel de la cifra anterior, la radio enseña una frecuencia
+     * que no es, y eso es peor que ir lenta.
+     *
+     * Se prueba con los casos que de verdad pasan al girar: un digito,
+     * un acarreo que cambia varios, y mover el subrayado del paso de
+     * sintonia sin tocar ninguna cifra.
+     */
+    printf("\n  el estrecho pinta lo mismo que el ancho:\n");
+    {
+        static const struct { const char *de; const char *a; int d0, d1; } cs[] = {
+            { "14.090,00", "14.091,00", 7, 7 },   /* un digito */
+            { "14.099,00", "14.100,00", 7, 7 },   /* acarreo: varios */
+            { "14.090,00", "14.090,00", 7, 4 },   /* solo el subrayado */
+            { "14.090,00", "14.080,00", 5, 5 },   /* 10 kHz */
+        };
+        size_t k;
+
+        for (k = 0U; k < sizeof cs / sizeof cs[0]; k++) {
+            ui_top_state_t a = st, b = st;
+            int n;
+
+            a.freq = cs[k].de; a.freq_digit = (int8_t)cs[k].d0;
+            b.freq = cs[k].a;  b.freq_digit = (int8_t)cs[k].d1;
+
+            /* El patron: pintar A entero, anotarlo, pasar a B POR EL
+             * CAMINO ESTRECHO, y guardar esa pantalla. */
+            lcd_sim_reset(0x0000);
+            gfx2_render_screen(fondo, 0);
+            ui_top_draw(&a);
+            ui_top_draw_freq(&a);
+            ui_top_draw_freq(&b);          /* estrecho */
+            guarda();
+
+            /* Y ahora la misma B, pero pintada ENTERA desde cero. */
+            lcd_sim_reset(0x0000);
+            gfx2_render_screen(fondo, 0);
+            ui_top_draw(&b);
+
+            n = cambiados();
+            printf("    %-9s -> %-9s (digito %d->%d)  %5d px   %s\n",
+                   cs[k].de, cs[k].a, cs[k].d0, cs[k].d1, n,
+                   (n == 0) ? "ok " : "*** MAL ***");
+            if (n != 0) { fallos++; }
+        }
+    }
+
+    printf("\n  lo que cuesta componer cada franja, en CPU:\n");
+    {
+        struct { const char *n; void (*f)(const ui_top_state_t *); } cual[3] = {
+            { "la frecuencia  (ui_top_draw_freq)",   ui_top_draw_freq   },
+            { "la de estado   (ui_top_draw_status)", ui_top_draw_status },
+            { "las dos juntas (ui_top_draw)",        ui_top_draw        },
+        };
+        int c, r;
+
+        lcd_sim_reset(0x0000);
+        gfx2_render_screen(fondo, 0);
+        for (c = 0; c < 3; c++) {
+            struct timespec t0, t1;
+            double us;
+
+            /*
+             * EL MINIMO DE VARIAS TANDAS, no la media de una.
+             *
+             * La primera version hacia la media de 200 llamadas y daba
+             * numeros que bailaban un 40 % entre ejecuciones: la franja
+             * de estado salio 296 us y despues 408 SIN HABERLA TOCADO.
+             * Una medida que se mueve mas que lo que se quiere medir no
+             * vale para decidir nada. El minimo de varias tandas se
+             * queda con la vuelta que menos interrupciones del sistema
+             * se comio, que es la que mide el codigo y no la maquina.
+             */
+            int tanda;
+            double mejor = 1e18;
+
+            /*
+             * Y LA FRECUENCIA CAMBIANDO EN CADA LLAMADA, que es girar el
+             * mando. Con la misma cadena 200 veces, ui_top_draw_freq()
+             * se sale en la primera linea -no hay nada que cambiar- y el
+             * cronometro marcaba 0,0 us: medir el caso que no pasa.
+             */
+            ui_top_state_t v = st;
+            static const char *k_f[4] = { "14.090,00", "14.091,00",
+                                          "14.092,00", "14.093,00" };
+
+            cual[c].f(&st);                    /* calentamiento */
+            for (tanda = 0; tanda < 9; tanda++) {
+                clock_gettime(CLOCK_MONOTONIC, &t0);
+                for (r = 0; r < 200; r++) {
+                    v.freq = k_f[r & 3];
+                    cual[c].f(&v);
+                }
+                clock_gettime(CLOCK_MONOTONIC, &t1);
+                us = ((double)(t1.tv_sec - t0.tv_sec) * 1e6
+                      + (double)(t1.tv_nsec - t0.tv_nsec) / 1e3) / 200.0;
+                if (us < mejor) { mejor = us; }
+            }
+            printf("    %-38s %7.1f us\n", cual[c].n, mejor);
+        }
+        printf("\n");
+    }
+
     printf("\n  lo primero: ¿se VE el error de PLL de SAM?\n");
     {
         ui_top_state_t con = st, sin = st;

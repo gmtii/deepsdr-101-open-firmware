@@ -56,6 +56,46 @@ enum {
     CAT_MODO_FSKR = 9
 };
 
+/*
+ * ======================================================================
+ * LA VUELTA DEL BUCLE POR EL PUERTO, PARA NO MEDIR CON FOTOS - 02/11/2026
+ * ======================================================================
+ *
+ * Seis versiones persiguiendo por que la cascada se frena al girar el
+ * mando, y todas las medidas de la radio han llegado leyendo numeros de
+ * una foto de la pantalla de Informacion. Eso tiene dos fallos: la fila
+ * enseña una media o un record -nunca la vuelta a vuelta- y no se puede
+ * mirar mientras se gira, porque en esa pantalla el mando mueve el cursor.
+ *
+ * Con esto la radio lo cuenta sola por el puerto CAT, que ya existe y ya
+ * esta conectado: una orden "DG;" devuelve, de todas las vueltas QUE HAN
+ * DIBUJADO desde la consulta anterior, la media de cada uno de los quince
+ * tramos del bucle, cuantas vueltas fueron, cuantos clics de mando hubo
+ * mientras tanto y la carga de audio. Preguntando dos veces por segundo
+ * sale la pelicula entera, girando y sin girar, y no se pierde ni una
+ * vuelta: son SUMAS, no muestras.
+ *
+ * No es una orden de Kenwood. Un Kenwood de verdad contestaria "?;" y
+ * hamlib no la manda nunca, asi que no estorba a nadie.
+ */
+#define CAT_DIAG_TRAMOS  18U
+
+typedef struct {
+    uint16_t vueltas;                    /* vueltas con dibujo desde la ultima consulta */
+    uint16_t detentes;                   /* clics del mando en ese mismo rato */
+    /*
+     * El reductor de ruido, encendido o no, porque es la otra mitad de la
+     * pregunta: la carga de audio es el divisor del cuadro, y el NR son
+     * ocho puntos de esa carga. Sin este bit no se pueden comparar dos
+     * tandas -el que mira la tabla no sabe con que estaba puesto-, y con
+     * el salen cuatro casillas: quieto/girando por NR si/no.
+     */
+    uint8_t  nr;                         /* 1 = reductor de ruido encendido */
+    uint8_t  carga;                      /* carga de audio, % */
+    uint32_t vuelta_us;                  /* media de la vuelta entera */
+    uint32_t tramo_us[CAT_DIAG_TRAMOS];  /* media de cada tramo, en orden */
+} cat_diag_t;
+
 typedef struct {
     uint32_t (*freq_lee)(void);          /* Hz */
     void     (*freq_pon)(uint32_t hz);
@@ -65,10 +105,15 @@ typedef struct {
     uint8_t  (*vol_lee)(void);           /* 0..255 */
     void     (*vol_pon)(uint8_t v);
     uint16_t (*ancho_lee)(void);         /* Hz */
+    void     (*diag_lee)(cat_diag_t *d); /* "DG": la vuelta del bucle */
 } cat_radio_t;
 
-/* Lo mas largo que puede contestar esto es el bloque IF: 37 + ';' + fin. */
-#define CAT_SALIDA_MAX  48U
+/*
+ * Lo mas largo que puede contestar esto ya no es el bloque IF -37- sino
+ * "DG": 2 + 4 + 4 + 1 + 3 + 5 + 18 x 5 + ';' = 110. El buffer vive en la
+ * pila de usb_cdc_poll(), y el margen de pila medido son 2.048 bytes.
+ */
+#define CAT_SALIDA_MAX  112U
 
 void cat_init(const cat_radio_t *radio);
 

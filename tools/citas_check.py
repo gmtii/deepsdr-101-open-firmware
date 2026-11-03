@@ -75,6 +75,27 @@ ATRIB = re.compile(
     r'nos reportaron|a peticion de|se quejo|transcripcion|por el canal|'
     r'el que lo abrio|la peticion que llego)', re.I)
 
+#
+# LA ATRIBUCION EN PARTICIPIO, QUE SE COLABA ENTERA - 02/11/2026.
+#
+# De arriba se pedia el VERBO detras ("el usuario dijo") o el asterisco
+# pegado ("*Por el usuario:*"). La forma mas usada de todo el arbol no es
+# ninguna de las dos: es el participio delante -"Avisado por el usuario:",
+# "Pedido por el usuario:", "Preguntado por el usuario:"- y la escueta
+# "Del usuario:". Cuarenta y cinco sitios daban verde.
+#
+# Y CUENTA SOLO PEGADA A LA CITA, con sus dos puntos -o su coma, o su
+# guion- y la comilla justo detras. Sin eso no se puede distinguir: "el
+# ajuste del usuario" es correcto y hay medio arbol lleno, y "pedido por el
+# usuario" a secas es, dice el parrafo de arriba, la forma correcta y
+# limpia. Lo que sobra es la atribucion que ABRE una cita, no la que
+# explica de donde salio la idea.
+ATRIB_FIN = re.compile(
+    r'(?:(?:avisad|pedid|preguntad|puest|dich|contad|reportad|encargad|'
+    r'propuest|se[nñ]alad)[oa]s?\s+por\s+(?:el|un|una|la)\s+usuari[oa]|'
+    r'\b(?:del?|de un|de la)\s+usuari[oa])\b'
+    r'(?:,[^.:\n]{0,45})?\s*[:,-]\s*$', re.I)
+
 HABLA = re.compile(
     r'\b(no me |me pone|me sale|se me |he borrado|he dejao|le doy|'
     r'esta radio va|la radio se (cuelga|queda|reinicia)|siempre que arranco|'
@@ -283,7 +304,8 @@ def main():
                 # palabras entre comillas no lo es.
                 cerca = pg[max(0, q.start() - 80):q.start()]
                 frase = len(s.split()) >= 3
-                if (ATRIB.search(cerca) and frase) or HABLA.search(s):
+                atrib = ATRIB.search(cerca) or ATRIB_FIN.search(cerca)
+                if (atrib and frase) or HABLA.search(s):
                     malos.append((p, lin, 'cita', s))
 
     rel = lambda x: os.path.relpath(x, raiz).replace(os.sep, '/')

@@ -166,20 +166,38 @@ static inline uint16_t ft8_bitrev(uint32_t n)
 void ft8_fft_init(void);
 
 /*
+ * LA SALIDA SON ENTEROS, EN CUARTOS DE DECIBELIO - 02/11/2026.
+ *
+ * Eran flotantes, y con FREQ_OSR=2 el adaptador guarda 1.024 bins por
+ * subbloque en vez de 512: 4.096 bytes de la memoria mas disputada de la
+ * radio. En enteros de 16 bits son 2.048, y los otros 2.048 son parte de
+ * lo que paga el submuestreo.
+ *
+ * Y NO PIERDE NADA UTIL: lo unico que lee esos valores es el cuantizador
+ * del adaptador, que los reparte en ocho escalones de 6,8 dB. Un cuarto
+ * de decibelio es el 3,7 % de un escalon.
+ *
+ * El recorrido tampoco aprieta: +-8.191 dB en 16 bits con signo, contra
+ * los 128 dB que da la formula de la potencia.
+ */
+#define FT8_FFT_DB_ESCALA  4.0f
+
+/*
  * Input: `samples` (FT8_FFT_SIZE real samples). Output: `db_out`
  * (FT8_FFT_BINS_USEFUL values, uncalibrated relative "dB" - same
- * formula/scale as fft.c's fft_compute_db(), see
+ * formula/scale as fft.c's fft_compute_db(), see FT8_FFT_DB_ESCALA para
+ * las unidades, que son CUARTOS de decibelio y no decibelios, y see
  * ft8_waterfall_adapter.h's FT8_ADAPTER_DB_OFFSET comment for why that
  * scale needs its own calibration offset regardless). Applies a Hann
  * window internally before transforming.
  */
-void ft8_fft_compute_db(const int16_t *samples, float *db_out);
+void ft8_fft_compute_db(const int16_t *samples, int16_t *db_out);
 
 /* La misma, pero guardando solo `n_out` bins empezando en `base` y de
  * `paso` en `paso`. Ver su comentario en el .c: con la FFT en 2.048 el
  * adaptador lee uno de cada dos, y guardar los otros costaba 4.096 bytes
  * de SRAM y la mitad de los logaritmos. */
-void ft8_fft_compute_db_rango(const int16_t *samples, float *db_out,
+void ft8_fft_compute_db_rango(const int16_t *samples, int16_t *db_out,
                               uint32_t base, uint32_t paso, uint32_t n_out);
 
 #endif /* FT8_FFT_H */

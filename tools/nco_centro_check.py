@@ -123,13 +123,44 @@ else:
             "de rechazo (sim/vhf_espejo.c)"
         )
     llamadas = len(re.findall(r"\bespejo_aprende_refresca\s*\(\s*\)\s*;", mn))
-    if llamadas < 2:
+    if llamadas < 3:
         fallos.append(
-            "espejo_aprende_refresca() se llama %d vez: hacen falta las dos "
-            "-apply_demod_mode() cuando cambia el modo y apply_lo_tune() "
-            "cuando cambia la sintonia-, porque las dos entradas de la "
-            "puerta cambian en sitios distintos" % llamadas
+            "espejo_aprende_refresca() se llama %d vez/veces: hacen falta "
+            "tres -apply_demod_mode(), apply_lo_tune() y el bucle "
+            "principal-. Ver abajo por que la del bucle no es opcional"
+            % llamadas
         )
+
+    # --- Y UNA DE ELLAS, EN EL BUCLE PRINCIPAL ---------------------------
+    #
+    # Es la que de verdad cierra el fallo. Las otras dos corren en el
+    # instante del cambio, y ahi esta el problema: apply_demod_mode() corre
+    # ANTES de que apply_lo_tune() haya puesto el desplazamiento nuevo, asi
+    # que lee el viejo. Viniendo de FM ancha o de un arranque el viejo es
+    # CERO, la puerta se cierra, y si detras no viene un apply_lo_tune() se
+    # queda cerrada: el corrector no aprende, s_hay se queda en cero y no se
+    # corrige nada. Un usuario lo vio como "despues de reiniciar la imagen
+    # es importante y despues de alguna maniobra desaparece".
+    #
+    # Con la pregunta hecha en cada vuelta, ningun orden la puede dejar mal
+    # mas de una vuelta. Por eso esta llamada NO se puede quitar aunque las
+    # otras dos sigan ahi.
+    m_main = re.search(r"\bint\s+main\s*\(\s*void\s*\)\s*\{", mn)
+    if not m_main:
+        fallos.append("no encuentro main() en main.c")
+    else:
+        m_bucle = re.search(r"\bwhile\s*\(\s*1\s*\)\s*\{", mn[m_main.end():])
+        if not m_bucle:
+            fallos.append("no encuentro el bucle principal dentro de main()")
+        elif not re.search(r"\bespejo_aprende_refresca\s*\(\s*\)\s*;",
+                           mn[m_main.end() + m_bucle.end():]):
+            fallos.append(
+                "el bucle principal ya no llama a espejo_aprende_refresca(): "
+                "sin esa llamada, un orden malo entre apply_demod_mode() y "
+                "apply_lo_tune() deja al corrector de espejo sin aprender "
+                "hasta que el usuario sintonice, y recien arrancado eso es "
+                "no corregir NADA"
+            )
 
 # Y que nadie vuelva a llamar a iqbal_aprende() por su cuenta, que es como
 # se pierde la mitad de la puerta.

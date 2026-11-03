@@ -786,6 +786,7 @@ static uint8_t tema_claro(void)
 }
 
 /* a sobre b con alfa 0..255, en 0xRRGGBB. */
+__attribute__((noinline))
 static uint32_t pal_mezcla(uint32_t a, uint32_t b, uint8_t k)
 {
     uint32_t i = 255U - (uint32_t)k;
@@ -801,6 +802,7 @@ static uint32_t pal_mezcla(uint32_t a, uint32_t b, uint8_t k)
  * banda de paso. Es la traza al 25 % sobre el fondo, que es lo mismo
  * que hacia el estilo LINE con su azul y su fondo oscuro.
  */
+__attribute__((noinline))
 static uint16_t color_relleno_claro(void)
 {
     return pal565(pal_mezcla(g_pal->trace, g_pal->surf_0, 64U));
@@ -1026,16 +1028,68 @@ static struct {
  */
 #define SPEC_REFRESCO_CUADROS 32U
 
-static uint32_t s_firma_ant;         /* firma de la plantilla del cuadro anterior */
+/*
+ * ===========================================================================
+ * LA FIRMA, POR TRAMOS Y NO DE TODO EL CUADRO - 02/11/2026.
+ * ===========================================================================
+ *
+ * EL FALLO, y es el que lleva ocho versiones escondido. El atajo de arriba
+ * se salta las bandas cuya plantilla no ha cambiado, y para saber si ha
+ * cambiado hashea la plantilla ENTERA en un solo numero. O sea que CUALQUIER
+ * cambio, por estrecho que sea, invalida el cuadro completo.
+ *
+ * Y el cambio mas frecuente que hay es el mas estrecho de todos: la marca
+ * central, que son DOS COLUMNAS, y se mueve en cada clic del mando. Con el
+ * NCO puesto es literalmente lo unico que se mueve en toda la pantalla.
+ *
+ * MEDIDO en un Cortex-M4 de verdad (qemu, contando instrucciones sobre el
+ * codigo compilado para el GD32 - ver deepsdr-ui/sim/m4):
+ *
+ *     traza quieta ................  7.524 us,  28 de 52 bandas saltadas
+ *     moviendo la marca central ... 13.329 us,   0 de 52 bandas saltadas
+ *
+ * Dos columnas de 756 tiraban el atajo entero y la traza costaba un 77 %
+ * mas. En la radio eso son unos diez milisegundos POR CUADRO, y solo
+ * mientras gira el mando: el espectro se ralentiza al girar el encoder y
+ * vuelve a su velocidad en cuanto se para.
+ *
+ * LO QUE SE HACE: una firma POR TRAMO de SPEC_TRAMO columnas en vez de una
+ * para todo. El tramo donde esta la marca se repinta; los otros cincuenta
+ * siguen saltandose igual que antes. La parte que no depende de la columna
+ * -el tamaño y las rayas horizontales- se hashea una vez y entra en las
+ * cincuenta y una firmas como semilla.
+ *
+ * NO cambia ni un pixel: un tramo sucio se pinta ENTERO, que es lo que hacia
+ * el cuadro completo. Lo vigilan sim/salto_pinta.c -que mide que saltarse
+ * bandas no dependa de cuanto se movio el dial- y el banco de la imagen
+ * patron, que corre los doce casos con el atajo encendido y apagado contra
+ * la misma referencia.
+ */
 /* El techo de cada tramo de SPEC_TRAMO columnas, en filas desde arriba: la
  * primera fila donde alguna columna del tramo pinta algo que no sea
  * plantilla. h = el tramo no pinta nada. Dos tablas porque hace falta el de
  * este cuadro y el del anterior: una banda hay que volcarla si la toca
  * cualquiera de los dos. */
 #define SPEC_TRAMO    16U
+/* Filas por banda que se busca al partir el panel en lonjas de columnas.
+ * Ver "LA BANDA, MAS ALTA Y MENOS ANCHA" en spectrum_draw(). */
+#define SPEC_BANDA_FILAS 12U
 #define SPEC_TRAMOS   ((SPEC_MAX_W + SPEC_TRAMO - 1U) / SPEC_TRAMO)
 static uint16_t s_tramo_techo[SPEC_TRAMOS];
 static uint16_t s_tramo_techo_ant[SPEC_TRAMOS];
+/*
+ * El techo DE ESTE CUADRO Y SIN TOCAR, que es otra cosa que s_tramo_techo.
+ *
+ * Aquel acaba mezclado con el del cuadro anterior y puesto a cero en los
+ * tramos sucios, porque lo que decide es QUE SE VUELCA: un tramo cuya
+ * plantilla ha cambiado hay que volcarlo en todas las bandas, llegue o no
+ * la traza. Esto otro dice donde EMPIEZA A PINTAR la traza de ahora, que
+ * es lo unico que necesita el bucle de columnas de compon(): por encima no
+ * hay nada que decidir, y lo que haya que borrar ahi ya lo pone la
+ * plantilla con el memcpy de la banda.
+ */
+static uint16_t s_tramo_real[SPEC_TRAMOS];
+static uint32_t s_firma_tramo[SPEC_TRAMOS];  /* la del cuadro anterior, por tramo */
 static uint16_t s_n_tramos;
 static uint8_t  s_parcial_vale;      /* 0 = el cuadro anterior no sirve de referencia */
 static uint8_t  s_cuadros_desde;     /* cuantos cuadros desde el ultimo completo */
@@ -1080,7 +1134,10 @@ static uint32_t firma_mezcla(uint32_t h, uint32_t v)
     return h * 16777619UL;
 }
 
-static uint32_t firma_plantilla(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
+/* La parte de la firma que NO depende de la columna: el tamaño y las rayas
+ * horizontales. Se hashea una vez y es la semilla de las de cada tramo. */
+__attribute__((noinline))
+static uint32_t firma_comun(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 {
     uint32_t f = 2166136261UL;
     uint16_t i;
@@ -1089,10 +1146,43 @@ static uint32_t firma_plantilla(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
     f = firma_mezcla(f, (uint32_t)y);
     f = firma_mezcla(f, (uint32_t)w);
     f = firma_mezcla(f, (uint32_t)h);
-    for (i = 0; i < w; i++) { f = firma_mezcla(f, (uint32_t)s_plant_lisa[i]); }
-    for (i = 0; i < w; i++) { f = firma_mezcla(f, (uint32_t)s_plant_rej[i]); }
     for (i = 0; i < h; i++) { f = firma_mezcla(f, (uint32_t)s_row_grid[i]); }
     return f;
+}
+
+/*
+ * Marca los tramos cuya plantilla ha cambiado desde el cuadro anterior, y se
+ * queda con la firma de este para la proxima. Ver el comentario gordo de
+ * s_firma_tramo.
+ *
+ * `vale` a cero quiere decir que no hay cuadro anterior con el que comparar:
+ * entonces no se marca nada -el de fuera ya decide pintarlo todo- pero las
+ * firmas se guardan igual, que es lo que hace que el cuadro SIGUIENTE si
+ * pueda compararse.
+ */
+static void firmas_por_tramo(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                             uint8_t vale)
+{
+    uint32_t base = firma_comun(x, y, w, h);
+    uint16_t t;
+
+    for (t = 0; t < s_n_tramos; t++) {
+        uint32_t f = base;
+        uint16_t i  = (uint16_t)(t * SPEC_TRAMO);
+        uint16_t i1 = (uint16_t)(i + SPEC_TRAMO);
+
+        if (i1 > w) { i1 = w; }
+        for (; i < i1; i++) {
+            f = firma_mezcla(f, (uint32_t)s_plant_lisa[i]);
+            f = firma_mezcla(f, (uint32_t)s_plant_rej[i]);
+        }
+        /* Sucio = su techo baja a cero, o sea "pinta desde la primera
+         * fila": asi PINTA() lo da por bueno en todas las bandas sin una
+         * tabla de banderas aparte ni una condicion mas por banda. Corre
+         * DESPUES de techos_por_tramo(), que es quien lo acaba de llenar. */
+        if (vale && (f != s_firma_tramo[t])) { s_tramo_techo[t] = 0U; }
+        s_firma_tramo[t] = f;
+    }
 }
 
 /*
@@ -1127,6 +1217,8 @@ static void techos_por_tramo(uint16_t w, uint16_t h, uint8_t fill_enabled)
         t = (uint16_t)(col / SPEC_TRAMO);
         if (techo < s_tramo_techo[t]) { s_tramo_techo[t] = techo; }
     }
+    memcpy(s_tramo_real, s_tramo_techo,
+           (size_t)s_n_tramos * sizeof s_tramo_real[0]);
 }
 
 /*
@@ -1272,8 +1364,41 @@ static void compon(uint16_t *dst, uint32_t stride, uint16_t row, uint16_t nf,
             }
         }
 
-        /* 2. lo que depende de la barra, columna a columna y en tramos */
-        for (col = c0; col <= c1; col++) {
+        /*
+         * 2. lo que depende de la barra, columna a columna y en tramos
+         *
+         * Y LOS TRAMOS QUE NO LLEGAN A ESTAS FILAS SE SALTAN DE GOLPE.
+         *
+         * Lo de este bucle -el relleno, la traza y el pico- solo existe
+         * desde el techo del tramo hacia abajo. Por encima no escribia
+         * nada, pero se pagaba igual: mirar el borde, leer las cuatro
+         * tablas de la columna, recortar el tramo contra la banda y salir
+         * sin pintar. Son unos sesenta ciclos por columna y por banda, y
+         * en un cuadro entero la mayor parte del panel esta por encima de
+         * la traza.
+         *
+         * El techo por tramo ya esta calculado -techos_por_tramo(), que es
+         * quien decide tambien que bandas se vuelcan- asi que saltar no
+         * cuesta ni una cuenta nueva: una comparacion cada dieciseis
+         * columnas. La plantilla de esas filas ya la puso el memcpy de
+         * arriba, que es lo unico que habia que pintar ahi.
+         *
+         * Un tramo sucio trae el techo a cero, o sea que se pinta entero:
+         * la regla es la misma que usa PINTA() para elegir las rachas, y
+         * por eso no puede dejarse nada sin pintar que antes se pintara.
+         * Lo vigila sim/espectro_oro.c pixel a pixel.
+         */
+        col = c0;
+        while (col <= c1) {
+            uint16_t tra = (uint16_t)(col / SPEC_TRAMO);
+            uint16_t fin = (uint16_t)(tra * SPEC_TRAMO + SPEC_TRAMO - 1U);
+
+            if (fin > c1) { fin = c1; }
+            if (s_tramo_real[tra] >= (uint16_t)(row + nf)) {
+                col = (uint16_t)(fin + 1U);
+                continue;
+            }
+        for (; col <= fin; col++) {
             uint8_t  borde = (uint8_t)(band_active &&
                                        ((col == band_col_lo) || (col == band_col_hi)));
             uint16_t lo = s_bar_lo[col];
@@ -1358,6 +1483,7 @@ static void compon(uint16_t *dst, uint32_t stride, uint16_t row, uint16_t nf,
                     }
                 }
             }
+        }
         }
 
 }
@@ -1762,19 +1888,15 @@ void spectrum_draw(const float *db, uint32_t n_bins,
          * fuera.
          */
         uint16_t *banda = gfx2_banda_coge();
-        uint16_t  nb    = gfx2_banda_filas();
+        uint16_t  nb;                /* filas por banda, segun la lonja */
+        uint16_t  tr_lonja = 0U;     /* tramos de columna por lonja */
+        uint16_t  t_ini;
         uint16_t *buf[2];
         uint8_t   cual = 0U, vuela = 0U;
         /* Invariante de todo el dibujado; se decidia dentro del bucle. */
         uint8_t   traza_de_fila = (uint8_t)((s_style == SPECTRUM_STYLE_HEATMAP) &&
                                             !s_heatmap_trace_white);
 
-        {
-            uint32_t caben = gfx2_banda_pixeles() / (2UL * (uint32_t)w);
-
-            if (caben < (uint32_t)nb) { nb = (uint16_t)caben; }
-            if (nb == 0U) { nb = 1U; }          /* no deberia pasar nunca */
-        }
         /*
          * LA COMPROBACION VA ANTES DE LA ARITMETICA - 07/10/2026,
          * encontrado por cppcheck.
@@ -1795,9 +1917,6 @@ void spectrum_draw(const float *db, uint32_t n_bins,
             return;
         }
 
-        buf[0] = banda;
-        buf[1] = banda + ((uint32_t)nb * w);
-
         /* Lo que la captura necesita saber de esta pasada. Ver compon(). */
         s_ult.w = w; s_ult.h = h;
         s_ult.bg_color   = bg_color;
@@ -1816,14 +1935,18 @@ void spectrum_draw(const float *db, uint32_t n_bins,
          * montadas - antes no existirian.
          */
         {
-            uint32_t firma = firma_plantilla(x, y, w, h);
+            uint8_t  sigue = (uint8_t)(s_parcial && s_parcial_vale
+                                       && (gfx_vigilancia() == s_vig_ant)
+                                       && (s_cuadros_desde + 1U
+                                           < SPEC_REFRESCO_CUADROS));
             uint16_t t;
 
             techos_por_tramo(w, h, fill_enabled);
+            /* Las firmas se calculan SIEMPRE, aunque este cuadro vaya a
+             * pintarse entero: es lo que deja al siguiente poder comparar. */
+            firmas_por_tramo(x, y, w, h, sigue);
             s_cuadros_desde++;
-            if (s_parcial && s_parcial_vale && (firma == s_firma_ant) &&
-                (gfx_vigilancia() == s_vig_ant) &&
-                (s_cuadros_desde < SPEC_REFRESCO_CUADROS)) {
+            if (sigue) {
                 /* El techo que manda es el MAS ALTO de los dos cuadros: hay
                  * que repintar tanto lo que esta traza pinta como lo que
                  * pintaba la anterior y ahora destapa. */
@@ -1866,11 +1989,87 @@ void spectrum_draw(const float *db, uint32_t n_bins,
                 memcpy(s_tramo_techo_ant, s_tramo_techo,
                        (size_t)s_n_tramos * sizeof s_tramo_techo[0]);
             }
-            s_firma_ant = firma;
             s_parcial_vale = 1U;
             s_saltadas = 0UL;
             s_bandas = 0UL;
         }
+
+        /*
+         * ==============================================================
+         * LA BANDA, MAS ALTA Y MENOS ANCHA - 02/11/2026.
+         * ==============================================================
+         *
+         * El panel se montaba en bandas de TODO el ancho. La banda de
+         * gfx2 son 6.400 pixeles y hacen falta dos -una se vuelca por DMA
+         * mientras se monta la otra-, asi que a 756 columnas salian
+         * CUATRO filas por banda: 52 bandas y, en cada una, el bucle de
+         * columnas de compon() recorriendo otra vez las mismas columnas.
+         *
+         * Y ese bucle no cuesta por pixel, cuesta POR COLUMNA Y BANDA:
+         * mirar si la columna es borde de la banda de paso, leer sus
+         * cuatro tablas -traza, puente, relleno, pico-, recortar contra
+         * las filas de la banda. Son unos sesenta ciclos que se pagan
+         * cincuenta y dos veces por columna y de los que solo se
+         * aprovechan cuatro filas.
+         *
+         * LO QUE SE HACE: partir el panel en LONJAS de columnas y subir
+         * las filas en la misma proporcion. Con lonjas de 16 tramos -256
+         * columnas- caben doce filas por banda: tres lonjas de dieciocho
+         * bandas. Los mismos pixeles, pero cada columna se mira DIECIOCHO
+         * veces por cuadro en vez de cincuenta y dos.
+         *
+         * MEDIDO en el banco del Cortex-M4 (make m4), con ruido en la
+         * traza y los ajustes del usuario -Linea, contorno 1-:
+         *
+         *     el dial quieto ....... 7.724 us  ->  4.350 us   -44 %
+         *     el dial moviendose ... 8.902 us  ->  4.568 us   -49 %
+         *     el cuadro entero .... 14.129 us  ->  5.108 us   -64 %
+         *
+         * Y NI UN PIXEL DISTINTO: lo vigila sim/espectro_oro.c, que
+         * compara contra la imagen patron pixel a pixel, con el atajo
+         * encendido y apagado.
+         *
+         * EL BUS CASI NO SE MUEVE, que es lo que habia que cuidar: el
+         * siseo que mide sim/pixeles.c sube de 53.953 pixeles por cuadro
+         * a 55.312, un 2,5 %, y las VENTANAS que se abren bajan de 154 a
+         * 61. Por eso la lonja es de doce filas y no de dieciseis: con
+         * dieciseis la CPU baja otro 10 % pero los pixeles del bus suben
+         * un 8 %, y el bus es lo que se oye.
+         *
+         * POR QUE DOCE FILAS Y NO LAS QUE QUEPAN: la banda de gfx2 son
+         * 6.400 pixeles y hacen falta dos -una se vuelca por DMA mientras
+         * se monta la otra-, asi que filas y columnas se reparten ese
+         * presupuesto. SPEC_BANDA_FILAS es el lado que se pide; el ancho
+         * de la lonja sale de dividir.
+         */
+        {
+            uint32_t tr = gfx2_banda_pixeles()
+                          / (2UL * (uint32_t)SPEC_BANDA_FILAS * SPEC_TRAMO);
+
+            if (tr == 0UL) { tr = 1UL; }
+            if (tr > (uint32_t)s_n_tramos) { tr = (uint32_t)s_n_tramos; }
+            tr_lonja = (uint16_t)tr;
+        }
+
+        for (t_ini = 0U; t_ini < s_n_tramos; t_ini = (uint16_t)(t_ini + tr_lonja)) {
+        uint16_t t_fin = (uint16_t)(t_ini + tr_lonja);
+        uint16_t c0l   = (uint16_t)(t_ini * SPEC_TRAMO);
+        uint16_t c1l;
+        uint16_t anchura;
+
+        if (t_fin > s_n_tramos) { t_fin = s_n_tramos; }
+        c1l = (uint16_t)(t_fin * SPEC_TRAMO - 1U);
+        if (c1l > (uint16_t)(w - 1U)) { c1l = (uint16_t)(w - 1U); }
+        anchura = (uint16_t)(c1l - c0l + 1U);
+
+        {
+            uint32_t caben = gfx2_banda_pixeles() / (2UL * (uint32_t)anchura);
+
+            nb = (caben > (uint32_t)h) ? h : (uint16_t)caben;
+            if (nb == 0U) { nb = 1U; }          /* no deberia pasar nunca */
+        }
+        buf[0] = banda;
+        buf[1] = banda + ((uint32_t)nb * anchura);
 
         for (row = 0; row < h; row = (uint16_t)(row + nb)) {
             uint16_t nf = (uint16_t)(h - row);
@@ -1880,9 +2079,9 @@ void spectrum_draw(const float *db, uint32_t n_bins,
             s_bandas++;
             /*
              * ==========================================================
-             * LAS RACHAS, NO EL TRAMO ENTERO - 30/10/2026, del usuario:
-             * "no puede ser que en el menu se escuche mejor y sin
-             * interferencias", y van tres veces que lo dice.
+             * LAS RACHAS, NO EL TRAMO ENTERO - 30/10/2026. Con el menu
+             * abierto se escucha mejor y sin interferencias, y van tres
+             * veces que sale.
              * ==========================================================
              *
              * LO QUE HABIA. De cada banda se buscaba el PRIMER segmento
@@ -1928,23 +2127,23 @@ void spectrum_draw(const float *db, uint32_t n_bins,
              */
             {
                 uint16_t fin = (uint16_t)(row + nf);   /* primera fila de fuera */
-                uint16_t t = 0U;
+                uint16_t t = t_ini;
                 uint8_t  nada = 1U;
 
                 /* Sin parcial, TODOS los segmentos cuentan como que pintan:
                  * asi sale una sola racha de borde a borde y este bucle
                  * hace exactamente lo de siempre, sin una rama aparte. */
 #define PINTA(k)  ((!s_parcial_hay) || (s_tramo_techo[k] < fin))
-                while (t < s_n_tramos) {
+                while (t < t_fin) {
                     uint16_t ini_t, hueco, c0r, c1r;
 
                     if (!PINTA(t)) { t++; continue; }
                     ini_t = t;
                     for (;;) {
-                        while (t < s_n_tramos && PINTA(t)) { t++; }
+                        while (t < t_fin && PINTA(t)) { t++; }
                         hueco = t;
-                        while (hueco < s_n_tramos && !PINTA(hueco)) { hueco++; }
-                        if ((hueco - t) == 1U && hueco < s_n_tramos) {
+                        while (hueco < t_fin && !PINTA(hueco)) { hueco++; }
+                        if ((hueco - t) == 1U && hueco < t_fin) {
                             t = hueco;     /* un solo segmento de hueco: se sigue */
                             continue;
                         }
@@ -1988,6 +2187,7 @@ void spectrum_draw(const float *db, uint32_t n_bins,
                     s_saltadas++;
                 }
             }
+        }
         }
         if (vuela) { (void)gfx_blit_espera(); }
         gfx2_banda_suelta();

@@ -18,13 +18,2411 @@ ordered by date, does not spare the detail, and is not published.
 
 ---
 
+## V6.50 · 2026-11-03
+
+### Qué cambia
+
+**El tope de la decodificación ahora mira un reloj.** Hasta aquí contaba
+bloques del desvío —160 ms de audio cada uno, diez bloques, 1,6 s— y eso
+debería ser lo mismo. En la radio no lo fue: hubo ranuras de **2,4 s** con
+el tope puesto en 1,6, o sea ochocientos milisegundos por encima de un
+tope que no topaba.
+
+**No sé por qué el contador de bloques se quedaba corto.** Descarté tres
+explicaciones leyendo el código —que el desvío no avanzara durante la
+búsqueda, que el desbordamiento apagara el desvío, que el contador no se
+reiniciara— y ninguna era.
+
+Y no hace falta saberlo para arreglarlo: un tope que dice «no tardes más
+de esto» se mide con un reloj, no con un sustituto. Se quedan los dos,
+con O — el que llegue primero corta. El de bloques sigue sirviendo por si
+el desvío se llena antes de tiempo; el del reloj no se puede despistar.
+
+- **`make ft8tope`, nuevo y colgando de `make comprueba`.** El tope se ha
+  roto de **tres** maneras distintas en un solo día, y las tres en
+  silencio: la radio seguía decodificando, sólo que peor. Ningún banco de
+  decodificación las caza, porque las tres decodifican bien. Esto lee que
+  el código siga diciendo lo que tiene que decir: que el corte mire el
+  reloj, que el remuestreador respire durante la búsqueda, que la barra
+  distinga ranura cortada de audio perdido, y —la que me costó una
+  noche— **que el aviso de tiempo salte antes que el tope**, porque un
+  aviso puesto por encima del tope no puede dispararse nunca.
+
+### What's new
+
+**The decode cap now watches a clock.** Until now it counted sidetrack
+blocks — 160 ms of audio each, ten blocks, 1.6 s — which ought to be the
+same thing. On the radio it was not: there were **2.4 s** slots with the
+cap set at 1.6, eight hundred milliseconds past a cap that was not
+capping.
+
+**I do not know why the block counter fell short.** Three explanations
+were ruled out by reading the code — that the sidetrack did not advance
+during the search, that overflow switched diverting off, that the counter
+was not reset — and none of them was it.
+
+And you do not need to know in order to fix it: a cap that says "do not
+take longer than this" is measured with a clock, not with a stand-in.
+Both stay, OR'd — whichever comes first cuts. The block one still earns
+its place if the sidetrack ever fills early; the clock one cannot be
+fooled.
+
+- **`make ft8tope`, new and hanging off `make comprueba`.** The cap has
+  broken in **three** different ways in a single day, all three silently:
+  the radio kept decoding, just worse. No decoding bench catches them,
+  because all three decode fine. This one reads that the code still says
+  what it has to say: that the cut watches the clock, that the resampler
+  breathes during the search, that the bar tells a cut slot from lost
+  audio, and — the one that cost me a night — **that the timing warning
+  fires before the cap**, because a warning set above the cap can never
+  fire at all.
+
+---
+
+## V6.49 · 2026-11-03
+
+### Qué cambia
+
+**Buscar candidatos cuesta un 30 % menos, y decodifica exactamente lo
+mismo.** Bit a bit: las seis pruebas de `sim/ft8_sensible.c` salen
+idénticas a las de la V6.48, comparadas línea a línea.
+
+- **Una tabla en vez de coma flotante.** El bucle más caliente de FT8
+  leía cada celda así:
+
+```c
+(int)(2.0f * ((float)raw * PASO + BASE) + 240.0f)
+```
+
+Desempaquetar, convertir a flotante, multiplicar, sumar, multiplicar,
+sumar y volver a entero. Y una celda **sólo puede valer ocho cosas
+distintas**. `ft8_sync_score()` hace eso hasta ocho veces por símbolo de
+sincronismo, y la búsqueda llama a `ft8_sync_score()` **treinta mil veces
+por ranura**: millones de conversiones para leer ocho valores posibles.
+
+Ahora es una tabla de ocho enteros que calcula el compilador con la misma
+expresión, truncado incluido. Medido en `make m4`, sobre un Cortex-M4:
+
+```
+                        V6.48     V6.49
+  buscar candidatos     308 ms    214 ms     -30 %
+  probar candidatos     401 ms    401 ms
+  decodificar entero    710 ms    615 ms     -13 %
+```
+
+Y eso va directo al presupuesto: la búsqueda es la parte que corre de un
+tirón antes de que el tope de reloj pueda mirar nada, así que cada
+milisegundo que se le quita es un milisegundo más para probar candidatos.
+
+### Lo que se probó y NO vale
+
+Antes de esto se probó lo que parecía obvio: **buscar en la rejilla
+gruesa** —una medida por bin— y refinar sólo los ganadores. La premisa
+era que el submuestreo hace falta para *leer* los símbolos pero no para
+*encontrar* la emisión.
+
+Es falsa, y el banco la tumbó en media hora:
+
+```
+  barrido dentro del bin    fina     gruesa    gruesa con el liston bajo
+                           192/192   148/192        162/192
+  a medio bin              216/216   155/216
+```
+
+Una emisión a medio bin **no** da pico claro en la rejilla gruesa: no
+entra en la lista, y lo que no entra no se puede refinar. Revertido, con
+la tabla de números escrita en `CAMBIOS.md` para que nadie lo vuelva a
+intentar.
+
+### What's new
+
+**Candidate search costs 30 % less and decodes exactly the same.** Bit
+for bit: all six tests in `sim/ft8_sensible.c` come out identical to
+V6.48, compared line by line.
+
+- **A table instead of floating point.** FT8's hottest loop read every
+  cell as `(int)(2.0f * ((float)raw * STEP + BASE) + 240.0f)`: unpack,
+  convert to float, multiply, add, multiply, add, back to int. And a cell
+  **can only hold eight distinct values**. `ft8_sync_score()` does that
+  up to eight times per sync symbol, and the search calls it **thirty
+  thousand times per slot**.
+
+It is now a table of eight integers the compiler works out with the same
+expression, truncation included. Measured with `make m4` on a Cortex-M4:
+
+```
+                        V6.48     V6.49
+  candidate search      308 ms    214 ms     -30 %
+  trying candidates     401 ms    401 ms
+  whole decode          710 ms    615 ms     -13 %
+```
+
+That goes straight into the budget: the search is the part that runs in
+one go before the wall-clock cap can look at anything, so every
+millisecond taken off it is a millisecond more for trying candidates.
+
+**What was tried and does not work.** Searching on the coarse grid — one
+measurement per bin — and refining only the winners. The premise was that
+oversampling is needed to *read* symbols but not to *find* a signal. It
+is false, and the bench killed it in half an hour: the sweep across the
+bin goes from 192/192 to 148/192, and half-bin signals from 216/216 to
+155/216. A half-bin signal does **not** peak clearly on the coarse grid:
+it never enters the list, and what never enters cannot be refined.
+Reverted, with the numbers written into `CAMBIOS.md`.
+
+---
+
+## V6.48 · 2026-11-02
+
+### Qué cambia
+
+**Sólo el instrumento: el aviso de tiempo de FT8 estaba fuera de rango.**
+
+`FT8_BARRA_MS_AVISA` valía **7500 ms**. Ese número se puso cuando
+decodificar eran décimas y sólo importaba el caso absurdo. Hoy lo normal
+son uno o dos segundos y el tope de reloj corta a 1,60 s: **la
+decodificación no llegaba a 7.500 ms nunca**, así que ese número no se
+enseñaba jamás. Un aviso que no puede dispararse no es un aviso.
+
+- **Umbral a 1.200 ms**, que es donde está la pregunta: por debajo cabe
+  de sobra, por encima hay que saber si se acerca al tope.
+- **`x` y el tiempo salen juntos.** La V6.46 puso `x` por delante del
+  tiempo con el mismo razonamiento por el que `p` iba delante de los dos,
+  y salió el mismo problema una fila más abajo: en cuanto el tope cortaba
+  una ranura —con la banda llena, a menudo— el tiempo dejaba de verse, y
+  el tiempo es justo lo que dice si el corte roza el tope o se pasa de
+  largo.
+- **Y el tiempo pasa a segundos con un decimal.** No es cosmética: con
+  cuatro cifras de milisegundos, `99x · 9999 ms` mide lo mismo que la
+  pareja que en su día obligó a elegir —243 px contra los 190 que hay— y
+  se saldría por la derecha. `99x · 9,9 s` cabe de sobra, y además se lee
+  mejor para lo que se mide ahora.
+
+`p` sigue excluyendo a los dos, y eso no cambia: cuando falta audio, el
+resto de los números describen una ranura que ya no es de fiar.
+
+**No toca nada del decodificador.** Mismos binarios de decodificación,
+mismas pruebas en verde.
+
+### What's new
+
+**Instrumentation only: the FT8 timing warning was out of range.**
+
+`FT8_BARRA_MS_AVISA` was **7500 ms**. That figure dates from when
+decoding took tenths of a second and only the absurd case mattered. Today
+one or two seconds is normal and the wall-clock cap cuts at 1.60 s, so
+decoding **never reached 7,500 ms** and the number was never shown. A
+warning that cannot fire is not a warning.
+
+- **Threshold at 1,200 ms**, where the question actually is: below that it
+  fits easily, above it you need to know how close to the cap you are.
+- **`x` and the time now show together.** V6.46 put `x` ahead of the time
+  by the same reasoning that put `p` ahead of both, and produced the same
+  problem one row down: as soon as the cap cut a slot — often, on a busy
+  band — the time disappeared, and the time is exactly what says whether
+  the cut is grazing the cap or overshooting it.
+- **And the time is now seconds with one decimal.** Not cosmetic: with
+  four digits of milliseconds, `99x · 9999 ms` is as wide as the pair that
+  forced the choice in the first place — 243 px against the 190 available
+  — and would run off the right edge. `99x · 9.9 s` fits comfortably, and
+  reads better for what is being measured now.
+
+`p` still excludes both, and that does not change: when audio is missing,
+the other numbers describe a slot that is no longer trustworthy.
+
+**Nothing in the decoder changes.** Same decoding, same benches green.
+
+---
+
+## V6.47 · 2026-11-02
+
+### Qué cambia
+
+**El audio perdido no estaba donde dije.** La V6.46 puso un tope de reloj
+a la decodificación y las pérdidas bajaron, pero no se fueron: `56c 7p`,
+`70c 10p`. Así que fui a medir el único trozo que el tope **no** cubre.
+
+`ft8_decoder_slot_empieza()` —la búsqueda de candidatos— corre **de un
+tirón**. El tope mira *entre* candidatos, y por ahí no pasa. Medido en
+`make m4` sobre un Cortex-M4:
+
+```
+  buscar los candidatos   308 ms  contra los 320 ms
+                                  de colchón del remuestreador
+```
+
+No es que fuera justo: es que no cabía. Y acababa de doblar, porque con
+dos medidas por bin el buscador recorre el doble.
+
+Mientras esa función corre, nadie vacía el remuestreador, que sólo tiene
+dos buffers de salida. Lo que tarde de más es audio de la ranura
+siguiente perdido en silencio. **Eso era el `p`.**
+
+- **Un gancho dentro de la búsqueda.** Se llama al acabar cada
+  desplazamiento de tiempo —60 veces por ranura— y vacía el remuestreador
+  igual que el bucle normal. No cambia ni un resultado: es el mismo
+  recorrido en el mismo orden. El banco lo comprueba: **60 respiros, un
+  hueco de 5 ms** contra los 320 de colchón.
+- **Y el banco del M4 ahora mide lo correcto.** Antes exigía que buscar
+  candidatos tardase poco, que es lo que no se puede cumplir. Ahora exige
+  que no deje al remuestreador sin vaciar, que es otra cosa.
+
+### Y una corrección de la V6.46
+
+Dije que había puesto a ordenar los candidatos de más fuerte a más flojo.
+**Ya venían ordenados**: `ftx_find_candidates()` lo hace al final, y lo
+dice su propio comentario. Mi ordenación era redundante y está quitada;
+la prueba 6 de `sim/ft8_sensible.c` sigue en verde sin ella —24 de 24—,
+que es como se comprobó. El tope de la V6.46 sigue siendo correcto y la
+prueba ahora vigila la ordenación de Ft8Lib, que es lo que de verdad la
+sostiene.
+
+### What's new
+
+**The lost audio was not where I said it was.** V6.46 put a wall-clock
+cap on decoding and losses dropped, but did not go away: `56c 7p`,
+`70c 10p`. So I went to measure the one piece the cap does **not** cover.
+
+`ft8_decoder_slot_empieza()` — the candidate search — runs **in one go**.
+The cap looks *between* candidates, so it never gets there. Measured with
+`make m4` on a Cortex-M4: **308 ms** against the resampler's **320 ms** of
+cushion. Not tight: it did not fit. And it had just doubled, because with
+two measurements per bin the search covers twice the bins.
+
+While that function runs nobody drains the resampler, which only has two
+output buffers. Anything over is next slot's audio lost in silence.
+**That was the `p`.**
+
+- **A breathing hook inside the search.** Called at the end of each time
+  offset — 60 times per slot — draining the resampler exactly as the main
+  loop does. It changes no result: same traversal, same order. The bench
+  checks it: **60 breaths, a 5 ms gap** against 320 ms of cushion.
+- **And the M4 bench now measures the right thing.** It used to demand
+  that the candidate search be fast, which cannot be met. It now demands
+  that it not starve the resampler, which is a different thing.
+
+**A correction to V6.46.** I said I had sorted the candidates strongest
+first. **They already were**: `ftx_find_candidates()` does it at the end,
+and says so in its own comment. My sort was redundant and is gone; test 6
+of `sim/ft8_sensible.c` stays green without it — 24 out of 24 — which is
+how it was checked.
+
+---
+
+## V6.46 · 2026-11-02
+
+### Qué cambia
+
+**Una ranura larga ya no se come la siguiente.** Esto es el remate de la
+V6.45, y sale de medir en la radio lo que el banco no podía ver.
+
+Con la banda llena —62 candidatos en 40 m a las nueve de la noche— la
+decodificación tardaba más de lo que aguanta el desvío, así que a la
+ranura de después le faltaba audio y no sacaba nada, aunque sonara llena
+de pitidos. El contador de pérdidas marcaba `24p`.
+
+Medido por el cable con `tools\cat_vuelta.ps1`, en plena decodificación:
+
+```
+  vuelta  56014   dib  10163     ->  46 ms que no son dibujo
+  vuelta  56736   dib   5061     ->  52
+  vuelta  47882   dib   1709     ->  46
+  vuelta  64348   dib  10191     ->  54
+
+  una vuelta normal: 1,7 a 4 ms
+```
+
+El trozo de decodificación está limitado a **8 ms** y tardaba **46–54**,
+porque mira el reloj *antes* de cada candidato y **un candidato no se
+puede partir**: es la extracción de los 79 símbolos más el LDPC entero.
+Subir ese límite no arregla nada, la granularidad ya es seis veces el
+trozo.
+
+- **Un tope de reloj de verdad.** Al llegar a dos bloques por debajo de
+  lo que cabe en el desvío, la decodificación para y se reintegra. Se
+  pierden los candidatos que queden de *esa* ranura en vez de *la
+  siguiente entera*.
+- **Y los candidatos van ordenados de más fuerte a más flojo.**
+  `ftx_find_candidates()` devuelve un montículo: garantiza que ahí están
+  los mejores, no en qué orden. Sin ordenar, cortar perdía estaciones
+  buenas al azar. Lo vigila la prueba 6 de `sim/ft8_sensible.c`:
+  cortando al primer candidato, la emisión de −5 dB sobrevive **24 de 24
+  veces**.
+- **Un contador nuevo en la barra,** `Nx`: ranuras cortadas por el tope.
+  Es distinto de `Np` —ahí falta audio— y por eso va aparte.
+
+### Lo que hay que reconocer del banco
+
+`make m4` da **instrucciones divididas por 200 MHz**, no milisegundos de
+reloj: QEMU no modela la espera de la flash ni el bus. Y su ranura lleva
+20 mensajes cuando la banda de verdad da 62 candidatos. Sus 710 ms eran
+más de tres segundos en el chip. Sirve para comparar versiones, no para
+decidir si la decodificación cabe. Queda escrito en la cabecera del banco.
+
+### What's new
+
+**A long slot no longer eats the next one.** This finishes what V6.45
+started, and it comes from measuring on the radio what the bench could
+not see.
+
+With a busy band — 62 candidates on 40 m at nine in the evening —
+decoding took longer than the sidetrack buffer holds, so the next slot
+was missing audio and decoded nothing, however full of tones it sounded.
+The loss counter read `24p`.
+
+Measured over the cable with `tools\cat_vuelta.ps1`, mid-decode, loop
+turns of **46–54 ms** against a normal 1.7 to 4 ms. The decode slice is
+capped at **8 ms** and was taking six times that, because it checks the
+clock *before* each candidate and **a candidate cannot be split**: it is
+the full 79-symbol extraction plus LDPC. Raising the cap fixes nothing —
+the granularity is already six times the slice.
+
+- **A real wall-clock cap.** Two blocks short of what the sidetrack
+  holds, decoding stops and reintegrates. You lose the remaining
+  candidates of *that* slot instead of *the whole next one*.
+- **And candidates are now sorted strongest first.**
+  `ftx_find_candidates()` returns a heap: it guarantees the best N are
+  there, not their order. Without sorting, cutting short dropped good
+  stations at random. Test 6 of `sim/ft8_sensible.c` watches it: cutting
+  at the first candidate, the −5 dB signal survives **24 times out of
+  24**.
+- **A new counter on the bar,** `Nx`: slots cut by the cap. Different
+  from `Np` — that one means missing audio — so it gets its own letter.
+
+**What the bench got wrong.** `make m4` reports **instructions divided by
+200 MHz**, not wall-clock milliseconds: QEMU models neither flash wait
+states nor the bus. And its slot carries 20 messages where the real band
+gives 62 candidates. Its 710 ms were over three seconds on the chip. It
+is for comparing versions, not for deciding whether decoding fits. That
+is now written in the bench's own header.
+
+---
+
+## V6.45 · 2026-11-02
+
+### Qué cambia
+
+**FT8 deja de perder las emisoras que caen a medio bin.** Era el fallo
+gordo y no se veía, porque no se parece a un fallo: se parece a una banda
+tranquila.
+
+El decodificador guardaba una medida por bin de 6,25 Hz. Una emisora que
+caiga justo en el centro de un bin se lee siempre; una que caiga a mitad de
+camino entre dos, casi nunca. Y una emisora cae donde le da la gana.
+Medido en `sim/ft8_sensible.c`, sumando de −8 a −17 dB:
+
+```
+                       antes      ahora
+  en el centro       216/216    216/216
+  a medio bin         13/216    216/216
+```
+
+Ahora se guardan **dos medidas por bin** (`FT8_ADAPTER_FREQ_OSR` vuelve
+a 2) y el barrido dentro del bin queda plano de punta a punta:
+
+```
+  desvío dentro del bin    antes     ahora
+       0,00 Hz             24/24     24/24
+       2,34 Hz              2/24     24/24
+       3,12 Hz              0/24     24/24
+       3,91 Hz              7/24     24/24
+                          121/192   192/192
+```
+
+**Y sin estrechar la ventana:** siguen siendo los 3.200 Hz enteros.
+
+### Lo que cuesta, y de dónde sale
+
+Duplicar la rejilla duplica la tabla de la ranura: 23.808 bytes más de una
+RAM que tenía 5.948 libres. Pagado con tres cosas:
+
+- **Tres bits por celda en vez de cuatro.** La escalera cubre el mismo
+  tramo de 51 dB con ocho escalones en vez de dieciséis. La tabla baja de
+  47.616 a 35.712 bytes.
+- **La salida de la FFT en enteros.** Cuartos de decibelio en vez de
+  flotantes: 2.048 bytes, y el cuantizador no nota la diferencia porque
+  reparte en escalones de 6,8 dB.
+- **El analizador de audio, quitado entero.** 2.528 bytes de RAM y su
+  código. Era una función que no se usaba.
+
+### Qué se gana de verdad
+
+Con la emisión cayendo donde quiere en frecuencia **y** en tiempo, de −11
+a −20 dB:
+
+```
+  antes   (1 medida/bin, 4 bits)    97 aciertos de 240
+  ahora   (2 medidas/bin, 3 bits)  110 de 240
+```
+
+Un **13 % más de estaciones**, y el umbral del 50 % pasa de −13,8 a
+−16,0 dB.
+
+**Lo que no arregla, dicho claro:** el eje del tiempo. Una emisión que
+empiece entre 40 y 80 ms dentro del símbolo se sigue perdiendo igual que
+antes —117 de 192 las dos veces—. Cerrar ese agujero serían otros 35.712
+bytes y no los hay.
+
+### Y el reloj
+
+Decodificar cuesta el doble: **710 ms** en vez de 352 en el Cortex-M4 del
+banco (`make m4`), o sea 5 bloques en vez de 3. No congela nada —el
+decodificador va a trozos de 8 ms por vuelta del bucle— pero el desvío,
+que es lo que recoge la captura mientras se decodifica, sube de 8 a 12
+bloques para no quedarse corto.
+
+### What's new
+
+**FT8 stops losing the stations that land half a bin off.** This was the
+big one, and it was invisible, because it does not look like a bug: it
+looks like a quiet band.
+
+The decoder stored one measurement per 6.25 Hz bin. A station landing in
+the centre of a bin is read every time; one landing halfway between two,
+almost never. And a station lands wherever it likes. Measured in
+`sim/ft8_sensible.c`, summed from −8 to −17 dB:
+
+```
+                       before      now
+  bin centre          216/216   216/216
+  half a bin off       13/216   216/216
+```
+
+It now stores **two measurements per bin** (`FT8_ADAPTER_FREQ_OSR` back to
+2) and the sweep across the bin is flat end to end: 192/192 where it was
+121/192. **And without narrowing the window:** still the full 3,200 Hz.
+
+Doubling the grid doubles the slot table: 23,808 more bytes out of a RAM
+that had 5,948 free. Paid for with three things:
+
+- **Three bits per cell instead of four.** The same 51 dB ladder in eight
+  steps instead of sixteen. The table drops from 47,616 to 35,712 bytes.
+- **The FFT output as integers.** Quarter-decibels instead of floats:
+  2,048 bytes, and the quantiser cannot tell, because its steps are
+  6.8 dB.
+- **The audio analyser, removed entirely.** 2,528 bytes of RAM and its
+  code. It was a feature nobody used.
+
+**What is actually gained.** With the transmission landing wherever it
+likes in frequency **and** time, from −11 to −20 dB: 110 hits out of 240
+where it was 97. **13 % more stations**, and the 50 % threshold moves from
+−13.8 to −16.0 dB.
+
+**What it does not fix, plainly:** the time axis. A transmission starting
+between 40 and 80 ms into the symbol is still lost exactly as before —
+117 of 192 both times. Closing that hole would be another 35,712 bytes
+and there are none.
+
+**And the clock.** Decoding costs twice as much: **710 ms** instead of 352
+on the bench's Cortex-M4 (`make m4`), i.e. 5 blocks instead of 3. Nothing
+freezes — the decoder runs in 8 ms slices, one per main loop turn — but
+the sidetrack buffer that catches the incoming capture while decoding goes
+from 8 to 12 blocks so it cannot fall short.
+
+---
+
+## V6.44 · 2026-11-02
+
+### Qué cambia
+
+**Girar el mando deja de repintar la cabecera treinta veces por segundo.**
+La medida por el cable (`DG;` + `tools\cat_vuelta.ps1`) lo dejó sin
+discusión. Girando, con el NCO puesto:
+
+```
+  tramo     quieto   girando
+  vuelta     28043     38259
+  dib        26306     29738      el dibujo, +13 %: lo previsto
+  frq             0     3331      repintar el número de la frecuencia
+  man             1     3428      la chapa del NCO
+```
+
+Casi **siete milisegundos por vuelta** repintando dos cosas de la cabecera
+que, a treinta veces por segundo, nadie puede leer.
+
+- **La chapa del NCO esperaba mal.** La condición era «esta vuelta no ha
+  traído clics», y girando eso pasa a cada rato: el mando suelta los
+  detentes a rachas y entre racha y racha caen vueltas vacías. En cada una
+  se repintaban los chips —unos 7,5 ms— y el detente siguiente volvía a
+  marcarlos. Ahora se mira el reloj: **150 ms desde el último detente**,
+  que es lo que el comentario decía desde el principio. Y el seguro de un
+  segundo también pide ahora que el mando esté parado.
+
+  Se propuso quitarle el número a la chapa y dejar un «NCO» a secas, que
+  también lo arreglaría. **No hace falta: el número se queda.** Lo que
+  costaba no era enseñarlo, era repintarlo treinta veces por segundo.
+
+- **El número de la frecuencia, diez veces por segundo mientras giras.**
+  Se pintaba en cada vuelta que moviera el dial. Ahora se marca y se pinta
+  en el desagüe, como ya hacían la regla y la chapa: diez veces por segundo
+  girando, y **el bueno en cuanto sueltas**, sin esperar. Un clic suelto
+  sale una vuelta después, unos treinta milisegundos: no se ve.
+
+Las dos cosas quedan vigiladas por `make mando`, que además tenía una
+comprobación en verde **por el motivo equivocado** —buscaba el nombre de
+una función que ya no se llama ahí y lo encontraba en otro sitio del
+fichero—. Arreglada.
+
+### Y medido después, por el mismo cable
+
+```
+                       vuelta     dib    frq    man      girar cuesta
+  V6.43  con NR  quieto  28043   26306      0      1
+         con NR girando  36756   28770   3286   3640          +31 %
+  V6.44  con NR  quieto  24344   23874      0      1
+         con NR girando  26878   24837    946    564          +10 %
+
+  V6.43  sin NR girando contra quieto                         +26 %
+  V6.44  sin NR girando contra quieto                          -9 %
+```
+
+`frq` baja un 71 % y `man` un 85 %, que es lo que se pedía. **Girar pasa de
+costar un 31 % de cuadro a un 10 %**, y sin el reductor de ruido se mete en
+el ruido de la medida: no cuesta nada medible. Lo que queda de ese 10 % es
+el dibujo, que es el coste legítimo de que la marca y la chapa del filtro
+se muevan.
+
+### Lo que sigue en pie
+
+El dibujo crece un 13 % al girar, que es lo que predice el modelo después
+de las lonjas de la V6.41. Y sin NCO cada detente reprograma el sintetizador
+por I2C: 3.588 µs de `lot` más 1.198 de regla, que es el precio de no usar
+el NCO y no tiene arreglo por software.
+
+### What's new
+
+**Turning the knob stops repainting the header thirty times a second.**
+The measurement over the cable (`DG;` + `tools\cat_vuelta.ps1`) settled it.
+Turning, with the NCO engaged:
+
+```
+  segment    still   turning
+  loop       28043     38259
+  dib        26306     29738      the drawing, +13 %: as predicted
+  frq            0      3331      repainting the frequency readout
+  man            1      3428      the NCO badge
+```
+
+Almost **seven milliseconds per loop** repainting two header items that,
+at thirty times a second, nobody can read.
+
+- **The NCO badge was waiting on the wrong thing.** The condition was
+  "this pass brought no clicks", and while turning that happens constantly:
+  the encoder emits detents in bursts and empty passes fall in between. On
+  every one of them the chips were repainted — some 7.5 ms — and the next
+  detent marked them again. Now it watches the clock: **150 ms since the
+  last detent**, which is what the comment said all along. The one-second
+  backstop now also requires the knob to be still.
+
+  Dropping the number from the badge and leaving a bare "NCO" was
+  suggested, and it would fix it too. **It is not needed: the number
+  stays.** What cost time was not showing it, it was repainting it thirty
+  times a second.
+
+- **The frequency readout, ten times a second while turning.** It was
+  painted on every pass that moved the dial. Now it is marked and painted
+  in the drain, as the ruler and the badge already were: ten times a second
+  while turning, and **the right one the moment you let go**, with no wait.
+  A single click shows up one pass later, some thirty milliseconds: not
+  visible.
+
+Both are now guarded by `make mando`, which also had a check passing **for
+the wrong reason** — it looked for the name of a function no longer called
+there and found it elsewhere in the file. Fixed.
+
+### And measured afterwards, over the same cable
+
+```
+                        loop      dib    frq    man      turning costs
+  V6.43  NR on    still  28043   26306      0      1
+         NR on  turning  36756   28770   3286   3640          +31 %
+  V6.44  NR on    still  24344   23874      0      1
+         NR on  turning  26878   24837    946    564          +10 %
+
+  V6.43  NR off turning against still                         +26 %
+  V6.44  NR off turning against still                          -9 %
+```
+
+`frq` drops 71 % and `man` 85 %, which is what was asked of them. **Turning
+goes from costing 31 % of a frame to 10 %**, and with the noise reducer off
+it falls inside the measurement noise: no measurable cost at all. What is
+left of that 10 % is the drawing, the legitimate cost of the marker and the
+filter badge moving across the screen.
+
+### What still stands
+
+The drawing grows 13 % when turning, which is what the model predicts after
+V6.41's column slices. And without the NCO every detent reprograms the
+synthesiser over I2C: 3,588 µs of `lot` plus 1,198 of ruler, which is the
+price of not using the NCO and cannot be fixed in software.
+
+---
+
+## V6.43 · 2026-11-02
+
+### Qué cambia
+
+**La primera medida por el cable ya dijo algo, y esta versión va a por
+ello.** Con la V6.42 y `tools\cat_vuelta.ps1`, girando el dial:
+
+```
+  tramo       quieto   girando     de mas
+  VUELTA     21025 us   29005 us    +7980 us
+  dib        19086 us   22675 us    +3589 us
+  man            4 us    5592 us    +5588 us   <-
+```
+
+El dibujo crece un 19 %, que es **exactamente lo que predecía el modelo**
+(`make m4` → `m4_vuelta`) después de las lonjas de la V6.41: ese lado está
+entendido. Lo que no estaba previsto es `man`: **`tune_encoder_poll()` pasa
+de 4 µs a 5,6 ms por vuelta**, y es el tramo que más crece de los quince.
+
+- **`man` se parte en cuatro.** Ese tramo era la función entera, y dentro
+  hay tres cosas gordas y muy distintas: repintar el número de la
+  frecuencia (`frq`), la fila de etiquetas de la regla (`rgl`) y
+  reprogramar la sintonía —oscilador, mezclador, corrector de espejo—
+  (`lot`). Un tramo que gana sin decir cuál de sus tres mitades es el mismo
+  fallo que tenía la fila «Vuelta del bucle» antes de llevar el número del
+  ganador al lado. Ahora son dieciocho tramos y la respuesta de `DG;` trae
+  los dieciocho.
+
+- **Y `DG;` dice también si el reductor de ruido estaba puesto.** La carga
+  de audio es el divisor del cuadro y el reductor son ocho puntos de esa
+  carga: comparar una tanda con NR contra otra sin él, sin saber cuál era
+  cuál, es como no medir. El guion saca ahora **cuatro casillas** —quieto
+  y girando, por NR sí y no— y dice qué tramo crece en cada pareja.
+
+### Cómo se mide ahora
+
+```
+powershell -ExecutionPolicy Bypass -File tools\cat_vuelta.ps1
+```
+
+Noventa segundos, y durante ellos:
+
+1. un rato quieto y un rato **girando**, con el reductor **encendido**;
+2. lo mismo con el reductor **apagado**;
+3. y al final, encenderlo y apagarlo varias veces.
+
+No hay que mirar la pantalla ni apuntar nada: la radio dice en cada tanda
+si el reductor estaba puesto.
+
+### What's new
+
+**The first measurement over the cable already said something, and this
+release goes after it.** With V6.42 and `tools\cat_vuelta.ps1`, turning the
+dial:
+
+```
+  segment      still   turning     extra
+  LOOP       21025 us   29005 us    +7980 us
+  dib        19086 us   22675 us    +3589 us
+  man            4 us    5592 us    +5588 us   <-
+```
+
+The drawing grows 19 %, which is **exactly what the model predicted**
+(`make m4` → `m4_vuelta`) after V6.41's column slices: that side is
+understood. What was not expected is `man`: **`tune_encoder_poll()` goes
+from 4 µs to 5.6 ms per loop**, and it is the fastest-growing of the
+fifteen segments.
+
+- **`man` is split in four.** That segment was the whole function, and
+  inside it there are three big and very different things: repainting the
+  frequency readout (`frq`), the ruler's label row (`rgl`) and
+  reprogramming the tuning — oscillator, mixer, image corrector — (`lot`).
+  A segment that wins without saying which of its three halves is the same
+  flaw the "Loop pass" row had before it carried the winner's number next
+  to it. There are eighteen segments now and `DG;` returns all eighteen.
+
+- **And `DG;` also says whether the noise reducer was on.** The audio load
+  is the frame's divisor and the reducer is eight points of that load:
+  comparing a batch with NR against one without, not knowing which was
+  which, is not measuring. The script now prints **four cells** — still and
+  turning, by NR on and off — and names the growing segment in each pair.
+
+### How to measure now
+
+```
+powershell -ExecutionPolicy Bypass -File tools\cat_vuelta.ps1
+```
+
+Ninety seconds, and during them:
+
+1. a while still and a while **turning**, with the reducer **on**;
+2. the same with the reducer **off**;
+3. and finally, switch it on and off several times.
+
+Nothing to watch on screen and nothing to write down: the radio reports
+whether the reducer was on in every batch.
+
+---
+
+## V6.42 · 2026-11-02
+
+### Qué cambia
+
+**La radio ya puede contar lo que tarda por el cable, sin fotos.** Seis
+versiones persiguiendo por qué la cascada se frena al girar el mando, y
+todas las medidas han llegado leyendo números diminutos de una foto de la
+pantalla de Información. Esa fila, además, es la medida equivocada: enseña
+una media larga o un récord, nunca la vuelta a vuelta, y no se puede mirar
+**mientras** se gira, porque en esa página el mando mueve el cursor.
+
+- **Orden de CAT nueva: `DG;`.** Devuelve, de todas las vueltas del bucle
+  que han dibujado desde la consulta anterior, la media de cada uno de los
+  **quince tramos**, cuántas vueltas fueron, cuántos clics de mando hubo
+  mientras tanto y la carga de audio. Son **sumas, no muestras**: no se
+  pierde ni una vuelta. No es una orden de Kenwood —un Kenwood contesta
+  `?;`— y hamlib no la manda nunca, así que no estorba a nada.
+
+- **Y un guion que la lee y saca la conclusión:
+  `tools\cat_vuelta.ps1`.** Pregunta dos veces por segundo, separa las
+  tandas en las que el mando se movió de las que no, y escribe una tabla
+  con **qué tramo crece al girar y cuánto**. PowerShell trae el puerto
+  serie de serie: no hay que instalar nada.
+
+  1. En la radio: **Información → página 4 → «Puerto serie USB»**, un
+     toque. La fila tiene que poner «abierto N».
+  2. Enchufa el cable.
+  3. `powershell -ExecutionPolicy Bypass -File tools\cat_vuelta.ps1`
+  4. Mientras corre: el mando quieto unos segundos, luego **gíralo sin
+     parar** unos segundos, y repite. No hay que mirar la pantalla.
+
+  Deja un `vuelta_AAAAMMDD_HHMMSS.csv` al lado con todas las muestras.
+
+### Lo que esto viene a cerrar
+
+Después de las lonjas de la V6.41 el dibujo del espectro cuesta la mitad y
+**el precipicio desapareció**: repintar el cuadro entero cuesta ahora 5.108
+µs contra los 4.568 del camino con atajo —un 12 % de diferencia, cuando en
+la V6.40 eran 8.902 contra 14.129, un 59 %—. O sea que «al girar se cae el
+atajo» ya **no puede** explicar más de un 12 % de frenazo.
+
+Y el modelo del cuadro entero (`make m4` → `m4_vuelta`) dice que girar con
+el NCO puesto debería costar entre un 10 % y un 25 % más de cuadro. Si lo
+que se ve es más que eso, no está en el dibujo, y los bancos no pueden
+decir dónde está: hace falta la vuelta a vuelta de la radio de verdad. Eso
+es lo que trae esta versión.
+
+### What's new
+
+**The radio can now report its own timing over the cable, with no
+photos.** Six releases chasing why the waterfall slows down when the knob
+turns, and every measurement has arrived by reading tiny numbers off a
+photo of the Information page. That row is also the wrong measurement: it
+shows a long average or a record, never loop by loop, and it cannot be
+watched **while** turning, because on that page the knob moves the cursor.
+
+- **New CAT command: `DG;`.** It returns, over all loop passes that drew
+  since the previous query, the average of each of the **fifteen
+  segments**, how many passes there were, how many knob clicks happened
+  meanwhile and the audio load. These are **sums, not samples**: not one
+  pass is lost. It is not a Kenwood command — a Kenwood answers `?;` — and
+  hamlib never sends it, so it gets in nobody's way.
+
+- **And a script that reads it and draws the conclusion:
+  `tools\cat_vuelta.ps1`.** It asks twice a second, separates the batches
+  where the knob moved from the ones where it did not, and prints a table
+  showing **which segment grows when turning, and by how much**.
+  PowerShell ships with serial port support: nothing to install.
+
+  1. On the radio: **Information → page 4 → «USB serial port»**, one tap.
+     The row must read «open N».
+  2. Plug the cable in.
+  3. `powershell -ExecutionPolicy Bypass -File tools\cat_vuelta.ps1`
+  4. While it runs: knob still for a few seconds, then **turn it steadily**
+     for a few seconds, and repeat. No need to watch the screen.
+
+  It leaves a `vuelta_YYYYMMDD_HHMMSS.csv` next to it with every sample.
+
+### What this is meant to settle
+
+After V6.41's column slices the spectrum drawing costs half, and **the
+cliff is gone**: repainting the whole frame now costs 5,108 µs against the
+4,568 of the shortcut path — a 12 % difference, where in V6.40 it was 8,902
+against 14,129, a 59 %. So "the shortcut dies while turning" can no longer
+account for more than a 12 % slowdown.
+
+And the whole-frame model (`make m4` → `m4_vuelta`) says that turning with
+the NCO engaged should cost between 10 % and 25 % more frame. If what you
+see is more than that, it is not in the drawing, and the benches cannot say
+where it is: that needs the real radio's loop-by-loop numbers. That is what
+this release brings.
+
+---
+
+## V6.41 · 2026-11-02
+
+### Qué cambia
+
+**El espectro cuesta la mitad.** Medido en el banco del Cortex-M4 (`make
+m4`), con ruido en la traza y los ajustes de pantalla reales —Línea,
+contorno 1—:
+
+| Lo que pasa en pantalla | V6.40 | V6.41 |
+|---|---|---|
+| el dial quieto | 7.724 µs | **4.350 µs** |
+| el dial moviéndose | 8.902 µs | **4.568 µs** |
+| el cuadro entero, sin atajo | 14.129 µs | **5.108 µs** |
+
+Y **ni un píxel distinto**: lo vigila `sim/espectro_oro.c`, que compara
+contra una imagen patrón píxel a píxel, con el atajo encendido y apagado.
+Los píxeles que salen por el bus del panel —que es lo que mete siseo en el
+audio— suben un 2,5 %, y las **ventanas** que se abren en el panel bajan de
+154 a 61 por cuadro.
+
+De dónde sale:
+
+- **El panel se monta en lonjas de columnas, no en bandas de todo el
+  ancho.** El montaje de cada banda no cuesta por píxel: cuesta **por
+  columna y por banda**. Mirar si la columna es borde del filtro, leer sus
+  cuatro tablas —traza, puente, relleno, pico— y recortarlas contra las
+  filas de la banda son unos sesenta ciclos, y con bandas de cuatro filas
+  eso se pagaba **cincuenta y dos veces por columna** para aprovechar
+  cuatro filas cada vez. Ahora el panel se parte en tres lonjas de 256
+  columnas y la banda sube a doce filas: cada columna se mira **dieciocho
+  veces** en vez de cincuenta y dos. Los mismos píxeles, el mismo bus.
+
+- **Y los tramos que no llegan a esas filas se saltan de golpe.** El
+  relleno, la traza y el pico solo existen desde el techo del tramo hacia
+  abajo; por encima no se escribía nada, pero se pagaba igual. El techo por
+  tramo ya estaba calculado, así que saltar no cuesta ni una cuenta nueva:
+  una comparación cada dieciséis columnas. El cielo de encima de las
+  señales —que en un cuadro entero es la mayor parte del panel— deja de
+  recorrerse.
+
+### Y la limpieza de siempre
+
+- **Fuera 45 citas de conversaciones** que quedaban en comentarios del
+  firmware, de los bancos y de las herramientas. `tools/citas_check.py` no
+  las veía: pedía el verbo detrás («el usuario dijo») o el asterisco pegado,
+  y la forma más usada del árbol es el participio delante —«Avisado por el
+  usuario:», «Pedido por el usuario:»— y el escueto «Del usuario:». Ahora
+  las caza, y solo cuando abren una cita: «pedido por el usuario» a secas
+  sigue siendo la forma correcta y no se marca.
+
+### What's new
+
+**The spectrum costs half.** Measured on the Cortex-M4 bench (`make m4`),
+with noise on the trace and the real display settings — Line, outline 1:
+
+| What is on screen | V6.40 | V6.41 |
+|---|---|---|
+| dial still | 7,724 µs | **4,350 µs** |
+| dial moving | 8,902 µs | **4,568 µs** |
+| whole frame, no shortcut | 14,129 µs | **5,108 µs** |
+
+And **not one pixel different**: `sim/espectro_oro.c` checks it against a
+reference image pixel by pixel, with the shortcut on and off. The pixels
+that go out over the panel bus — which is what puts hiss into the audio —
+go up by 2.5 %, and the **windows** opened on the panel drop from 154 to 61
+per frame.
+
+Where it comes from:
+
+- **The panel is assembled in column slices, not in full-width bands.**
+  Assembling a band does not cost per pixel: it costs **per column and per
+  band**. Checking whether the column is a filter edge, reading its four
+  tables — trace, bridge, fill, peak — and clipping them against the band's
+  rows is some sixty cycles, and with four-row bands that was paid **fifty-two
+  times per column** to use four rows each time. Now the panel is split into
+  three slices of 256 columns and the band grows to twelve rows: each column
+  is looked at **eighteen times** instead of fifty-two. Same pixels, same bus.
+
+- **And the segments that do not reach those rows are skipped outright.**
+  The fill, the trace and the peak only exist from the segment's ceiling
+  downwards; above it nothing was written, but it was paid for all the same.
+  The per-segment ceiling was already computed, so skipping costs no new
+  arithmetic: one comparison every sixteen columns. The sky above the
+  signals — most of the panel on a full frame — is no longer walked.
+
+### And the usual cleanup
+
+- **45 conversation quotes removed** from comments in the firmware, the
+  benches and the tools. `tools/citas_check.py` could not see them: it asked
+  for the verb after («el usuario dijo») or the asterisk stuck to it, and
+  the most common form in the tree is the participle in front — «Avisado por
+  el usuario:», «Pedido por el usuario:» — and the bare «Del usuario:». It
+  catches them now, and only when they open a quote: a plain «pedido por el
+  usuario» is still the correct form and is not flagged.
+
+---
+
+## V6.40 · 2026-11-02
+
+### Qué cambia
+
+**El cuadro no se pinta en el tiempo que sobra: se pinta en lo que queda
+después del audio.** Ese es el hallazgo de esta versión, y explica por qué
+todas las medidas del dibujo se quedaban cortas respecto a lo que se ve.
+
+El audio manda: si el buffer de salida del I2S se vacía, se oye un
+chasquido, así que coge el trozo de CPU que necesita y el dibujo se pinta
+con lo que sobra. Con la carga de audio al 54 % —la que dice la propia
+radio—, al dibujo le queda el 46 %, y **un cuadro de 22 ms de trabajo tarda
+48 ms de reloj**. Dicho al revés: **cada milisegundo de dibujo de más cuesta
+2,2 ms de verdad.** Ese divisor es el multiplicador que faltaba, y es
+también la razón de que encender el reductor de ruido frene la cascada sin
+tocar ni un píxel: no le quita tiempo al dibujo, le quita sitio.
+
+Con eso en la mano, tres cosas que estaban mal:
+
+- **«Muy rápida» bajaba UN renglón, no dos.** Los dos renglones solo salían
+  si el cuadro había cuadrado más medidas de FFT que la foto de media tanda
+  (`s_db_count > s_wf_mitad_n`), y en la radio eso es «1/1»: uno y uno. `1 >
+  1` es falso. Y no se degradaba poco a poco, era un **escalón**: en cuanto
+  la vuelta se alargaba lo más mínimo, la cascada se partía por dos de golpe
+  y volvía entera al soltar el mando. Ahora «Muy rápida» baja sus dos
+  renglones siempre: sin reparto, el mismo renglón se empuja dos veces. La
+  textura sale un pelín más basta y el **ritmo** es el que pide el ajuste,
+  que es lo que se mira.
+
+- **La regla de frecuencias se repintaba entera al mover la marca.**
+  `spec_chrome_ruler_changed()` comparaba `demod_px` en crudo, y con el NCO
+  puesto eso se mueve en cada detente: **800 × 26 = 20.800 píxeles empujados
+  por la CPU, sin DMA, en todos los cuadros**. Y para dibujar lo mismo,
+  porque `demod_px` solo entra en el dibujo por si la marca cae cerca de una
+  de las **cinco** etiquetas, que están en sitios fijos. Mover la marca tres
+  píxeles no la saca de la suya. Ahora se compara eso. Es un camino distinto
+  del freno de la V6.33, que vive en `tune_encoder_poll()` y no tocaba éste.
+
+- **El mapa de serie se va del firmware, y con él 7.268 bytes.** La costa
+  del mundo que llevaba dentro —106 líneas, 1.762 puntos— solo se veía
+  mientras no hubiera un `.map` grabado, y quien usa el mapa graba el suyo,
+  que tiene relleno, niveles y bastante más detalle. Sin fichero, la
+  pantalla del mapa dice ahora **«Necesitas grabar un mapa»**. El tope de
+  latitud se queda: ése no es del mapa, es la geometría de la proyección y
+  lo usan todas las chinchetas —aviones, emisoras, el cursor—, haya fichero
+  o no.
+
+### Y para no volver a medir a ciegas
+
+- **`make m4` mide ahora el camino de audio** (`m4_audio`): el reductor de
+  ruido se lleva **8,2 % de cada segundo**, el mezclador del NCO 1,3 % en
+  bloques de 256 muestras y 2,6 % en los de 512, y el corrector de espejo
+  **0,0 % corrigiendo y 2,1 % aprendiendo**.
+
+- **Y suma el cuadro entero** (`m4_vuelta`): junta el audio y el dibujo con
+  la fórmula de arriba y dice qué cuadro sale, con filas de «¿y si quito
+  esto?». Es lo que hacía falta para contestar «¿cuánto gano con esto?» sin
+  grabar un binario.
+
+- **La fila «Vuelta del bucle» dice ahora `gir`** en vez de `max` cuando lo
+  que enseña es el peor tramo **de mientras se giraba el mando**: lleva su
+  propio record y solo cuenta las vueltas de dentro del giro. Tocando la
+  fila se pone a cero. Así la radio nombra ella sola al culpable.
+
+### What's new
+
+**The frame is not painted in the time left over: it is painted in what is
+left after the audio.** That is this release's finding, and it explains why
+every measurement of the drawing fell short of what you actually see.
+
+Audio comes first: if the I2S output buffer runs dry you hear a click, so it
+takes the slice of CPU it needs and the drawing gets the rest. With the
+audio load at 54 % — the radio's own figure — the drawing gets 46 %, and **a
+frame worth 22 ms of work takes 48 ms of wall clock**. Put the other way:
+**every extra millisecond of drawing costs 2.2 ms for real.** That divisor is
+the multiplier that was missing, and it is also why switching the noise
+reducer on slows the waterfall without touching a single pixel: it does not
+take time away from the drawing, it takes room.
+
+With that in hand, three things that were wrong:
+
+- **«Very fast» was dropping ONE line, not two.** The two lines only came
+  out if the frame had gathered more FFT measurements than the half-batch
+  snapshot (`s_db_count > s_wf_mitad_n`), and on the radio that reads «1/1»:
+  one and one. `1 > 1` is false. And it did not degrade gradually, it was a
+  **cliff**: the moment the loop got the slightest bit longer the waterfall
+  halved at once, and came back whole when you let go of the knob. Now «Very
+  fast» always pushes its two lines: with no split, the same line is pushed
+  twice. The texture comes out slightly coarser and the **rate** is the one
+  the setting asks for, which is what you watch.
+
+- **The frequency ruler was fully repainted whenever the marker moved.**
+  `spec_chrome_ruler_changed()` compared raw `demod_px`, and with the NCO
+  engaged that moves on every detent: **800 × 26 = 20,800 pixels pushed by
+  the CPU, with no DMA, on every frame**. And to draw the same thing, because
+  `demod_px` only enters the drawing through whether the marker falls near
+  one of the **five** labels, which sit at fixed positions. Moving the marker
+  three pixels does not take it out of its own. That is what is compared now.
+  It is a different path from the V6.33 throttle, which lives in
+  `tune_encoder_poll()` and never touched this one.
+
+- **The built-in map leaves the firmware, and 7,268 bytes with it.** The
+  world coastline it carried — 106 lines, 1,762 points — was only visible
+  while no `.map` was flashed, and anyone who uses the map flashes their own,
+  which has fill, levels and a good deal more detail. With no file, the map
+  screen now says **«You need to flash a map»**. The latitude limit stays:
+  that one is not the map's, it is the projection's geometry, and every pin
+  uses it — aircraft, stations, the cursor — file or no file.
+
+### And so as not to measure blind again
+
+- **`make m4` now measures the audio path** (`m4_audio`): the noise reducer
+  takes **8.2 % of every second**, the NCO mixer 1.3 % on 256-sample blocks
+  and 2.6 % on 512-sample ones, and the mirror corrector **0.0 % correcting
+  and 2.1 % learning**.
+
+- **And it adds up the whole frame** (`m4_vuelta`): it combines audio and
+  drawing with the formula above and says what frame period comes out, with
+  «what if I removed this?» rows. That is what was needed to answer «how much
+  does this buy me?» without flashing a binary.
+
+- **The «Loop pass» row now says `gir`** instead of `max` when what it shows
+  is the worst segment **from while the knob was turning**: it keeps its own
+  record and only counts passes from inside the turn. Tapping the row clears
+  it. So the radio names the culprit by itself.
+
+---
+
+## V6.39 · 2026-11-02
+
+### Qué cambia
+
+**Girar el mando con un ajuste enganchado repintaba la cabecera ENTERA en
+cada clic.** Se ve anclando el mando al ancho de filtro con el botón Func:
+en pantalla solo se mueven los valores de la chapa del BW, que es una zona
+enana, y aun así el espectro se ralentizaba.
+
+El camino era `settings_value_redraw()` → fuera del menú →
+`aux_row_display_draw()` → `ui_top_draw()`: **83.200 píxeles por detente**
+para mover una pastilla de 204 px que vive dentro de la franja de estado. Y
+lo usan **nueve** destinos del mando: ancho, escala, silenciador, NR, PGA,
+brillo, tono de CW, desplazamiento de RTTY y el ajuste genérico. Los dos que
+sí estaban arreglados —sintonía y volumen— eran justo los dos que ya eran
+baratos.
+
+- **Cada repintado abre la ventana de lo que de verdad cambia.** Tres
+  ventanas nuevas en la franja de estado: la **pastilla del mando** sola,
+  los **chips** solos —que es lo único que cambia cuando la chapa del NCO se
+  queda atrasada girando el dial— y la franja entera, que ya casi no hace
+  falta. La ventana de la pastilla se queda en la pastilla mientras los
+  cuatro chips digan lo mismo; si uno cambia de texto se mueven de sitio y
+  entonces sí va hasta el borde.
+
+- **Y las esquinas redondeadas se calculan una vez, no cuatro.** El perfil
+  decía que `rr_cov()` —16 submuestras por píxel de esquina— se llevaba el
+  **50,5 %** del repintado de la franja. Las cuatro esquinas dan el mismo
+  número por simetría (no es una aproximación: con la submuestra espejada la
+  distancia sale cambiada de signo, y solo cuenta su cuadrado), así que se
+  calcula una vez. Esto abarata **todo** lo que lleve pastillas.
+
+Medido en un Cortex-M4 de verdad (`make m4`), con el mismo banco contra las
+dos versiones:
+
+```
+                                      V6.38      V6.39
+  un detente con un ajuste anclado  28.886 us   2.185 us   (13,2 veces menos)
+  la chapa del NCO girando el dial  15.581 us   4.399 us   (3,5 veces menos)
+  cambiar el paso de sintonia       15.581 us   2.185 us   (7,1 veces menos)
+  el S-metro, en cada cuadro           776 us     412 us
+  la franja de estado entera        15.581 us   9.470 us
+  la cabecera entera                28.886 us  20.018 us
+  la caja de un digito                 623 us     623 us   (ya estaba)
+```
+
+En la radio son unas **1,7 veces** esos números. Un clic con el BW
+enganchado pasa de **49 ms a 3,7**, y con un cuadro de 21 ms eso es la
+diferencia entre no llegar a pintar un cuadro entre detente y detente y que
+no se note. La chapa del NCO, que se repintaba sola una vez por segundo
+mientras giras, pasa de 26,5 ms a 7,5.
+
+Y eso es además **menos ruido en el audio**: los píxeles de la cabecera los
+empuja la CPU a pelo por el bus de la pantalla, sin DMA, y eso mete hasta
+10 dB de siseo —medido en la V6.25—. Menos píxeles por detente, menos siseo.
+
+No cambia ni un píxel: `make topfranjas`, `make espectrooro`, `make
+cromorepinta` y `make saltopinta`, todos en verde.
+
+### El firmware, corriendo en un Cortex-M4 de verdad
+
+El banco del M4 (`make m4`) deja de ser solo un cronómetro:
+
+- **Las trampas del procesador, puestas.** `UNALIGN_TRP` y `DIV_0_TRP`, que
+  en el chip van apagadas: ahora un acceso desalineado o una división entre
+  cero paran en seco. Y los dieciséis vectores de fallo, que apuntaban todos
+  al reset —un HardFault reiniciaba la prueba en silencio—, ahora dicen
+  quién es el fallo, con CFSR, HFSR, el PC, el LR y la causa en palabras.
+  **Los cuatro bancos pasan limpios.**
+
+- **La pila, medida corriendo.** Se pinta un patrón debajo del tope y al
+  final se mira hasta dónde llegó de verdad, en vez de sumar marcos del
+  `.su` del compilador.
+
+- **`make numeros`: los mismos números en el PC y en la radio, bit a bit.**
+  Un solo fichero de medidas compilado dos veces —para el PC y para el
+  Cortex-M4 bajo qemu— y comparado imprimiendo **los bits del float**, no el
+  número. El banco falla si el algoritmo deja de ser el mismo.
+
+  Y dice algo que no se sabía: el PC y la radio **no calculan igual**, pero
+  no por la precisión. Es que el Cortex-M4 **fusiona multiplicar y sumar**
+  (`vfma.f32`, un solo redondeo) y el PC lo hace en dos instrucciones con
+  dos redondeos. Recompilando el M4 con `-ffp-contract=off` salen
+  exactamente los mismos bits. Lo que importa es cuánto crece esa diferencia
+  de un ulp en los lazos realimentados, y ahora está medido: el **corrector
+  de espejo** la mantiene (0,3 ppm tras 100 bloques), el **lazo de Costas de
+  HFDL** la **borra** (0,000 ppm a las 10.000 muestras) y el **PLL del SAM**
+  la **amplifica unas 100 veces** (34,9 ppm en un segundo). El LDPC de FT8 y
+  su CRC dan bits idénticos en los dos.
+
+### Tres minas desactivadas
+
+- **`ldpc_decode()` pedía 115 kB de pila.** Declaraba dos matrices
+  `float[83][174]` como variables locales. La pila de esta radio son **5.632
+  bytes**, arriba de los 64 kB de TCM. No estaba disparada —`decode.c` usa
+  `bp_decode()`, que tiene esas matrices en la RAM compartida, y tenía la
+  llamada a la otra comentada justo al lado— pero el día que alguien
+  descomentara esa línea la pila se habría salido por veinte veces su
+  tamaño, pisando los buffers del DSP de esa misma TCM y sin un HardFault
+  que lo dijera. Se borra la función y su declaración: ahora descomentar la
+  línea no compila.
+
+- **`sam_init()` se moría en silencio con un parámetro imposible.** Calcula
+  `sqrtf(1 - zeta*zeta)`: con zeta ≥ 1 eso es NaN, `g2` sale NaN y a partir
+  de ahí todo el demodulador SAM es NaN —sin aviso, sin audio y con el
+  espectro pintando como si nada—. Hoy se llama con 0,867, pero ahora los
+  cuatro números pasan por una guarda, escrita con `!(x > 0)` y no con
+  `x <= 0`, que es lo único que también caza un NaN que venga de fuera.
+  `sam_margen_pon()`, que es la otra puerta, lleva la misma.
+
+- **`usb_udelay()` era el único bucle de espera sin clavar a `-O0`.** El de
+  `i2c_bitbang.c`, el de `touch.c` y el de `spi_flash.c` sí lo estaban, y
+  ese descuido ya costó una tarde el 30/07/2026, cuando el proyecto pasó de
+  `-O0` a `-O2` y la espera del I2C se encogió sola: ruido continuo en
+  recepción, sin un solo síntoma que apuntara al bus. Y el del I2C se
+  vigila ahora **por los dos lados**: el banco falla igual si se acelera
+  —suelo de 90 µs por byte, con margen sobre los 4,7 µs mínimos del I2C—
+  que si se frena.
+
+### What's new
+
+**Turning the knob with an adjustment latched to it repainted the ENTIRE
+header on every click.** You can see it by latching the knob to the filter
+bandwidth with the Func button: the only thing moving on screen is a tiny
+chip, and the spectrum still stalls.
+
+The path was `settings_value_redraw()` → outside the menu →
+`aux_row_display_draw()` → `ui_top_draw()`: **83,200 pixels per detent** to
+move a 204 px pill that lives inside the status strip. **Nine** knob targets
+use it: bandwidth, scale, squelch, NR, PGA, backlight, CW tone, RTTY shift
+and the generic adjustment. The two that *were* fixed — tuning and volume —
+were precisely the two that were already cheap.
+
+- **Each repaint now opens a window over what actually changes.** Three new
+  windows in the status strip: the **knob pill** alone, the **chips** alone
+  — which is the only thing that changes when the NCO badge falls behind
+  while you turn the dial — and the whole strip, which is now hardly needed.
+  The pill's window stays on the pill as long as the four chips say the same
+  thing; if one changes text they move, and then it does go to the edge.
+
+- **And rounded corners are computed once, not four times.** The profile
+  said `rr_cov()` — 16 subsamples per corner pixel — took **50.5 %** of the
+  strip repaint. All four corners give the same number by symmetry (not an
+  approximation: with the subsample mirrored the distance comes out negated,
+  and only its square counts), so it is computed once. This makes
+  **everything** with pills cheaper.
+
+Measured on a real Cortex-M4 (`make m4`), same bench against both releases:
+
+```
+                                        V6.38      V6.39
+  one detent, adjustment latched     28,886 us   2,185 us   (13.2x less)
+  the NCO badge while tuning         15,581 us   4,399 us   (3.5x less)
+  changing the tuning step           15,581 us   2,185 us   (7.1x less)
+  the S-meter, every frame              776 us     412 us
+  the whole status strip             15,581 us   9,470 us
+  the whole header                   28,886 us  20,018 us
+  one digit box                         623 us     623 us   (already fixed)
+```
+
+On the radio those are about **1.7x** these numbers. One click with BW
+latched goes from **49 ms to 3.7**, and against a 21 ms frame that is the
+difference between not finishing a frame between detents and not noticing at
+all. The NCO badge, repainted once a second while you turn, goes from
+26.5 ms to 7.5.
+
+It is also **less noise in the audio**: header pixels are pushed by the CPU
+itself over the panel bus, with no DMA, and that injects up to 10 dB of hiss
+— measured back in V6.25. Fewer pixels per detent, less hiss.
+
+Not one pixel changes: `make topfranjas`, `make espectrooro`, `make
+cromorepinta` and `make saltopinta` all green.
+
+### The firmware, running on a real Cortex-M4
+
+The M4 bench (`make m4`) is no longer just a stopwatch:
+
+- **The processor's traps are on.** `UNALIGN_TRP` and `DIV_0_TRP`, which are
+  off on the chip: an unaligned access or a divide by zero now stops dead.
+  And the sixteen fault vectors, which all pointed at reset — a HardFault
+  silently restarted the test — now name the fault, with CFSR, HFSR, PC, LR
+  and the cause in words. **All four benches pass clean.**
+
+- **The stack, measured by running.** A pattern is painted below the top and
+  the high-water mark is read at the end, instead of adding up frames from
+  the compiler's `.su`.
+
+- **`make numeros`: the same numbers on the PC and on the radio, bit for
+  bit.** One measurement file compiled twice — for the PC and for the
+  Cortex-M4 under qemu — and compared by printing **the float's bits**, not
+  the number. The bench fails if the algorithm stops being the same.
+
+  And it says something that was not known: the PC and the radio **do not
+  compute alike**, but not because of precision. It is that the Cortex-M4
+  **fuses multiply-and-add** (`vfma.f32`, one rounding) while the PC uses two
+  instructions with two roundings. Rebuilding the M4 side with
+  `-ffp-contract=off` gives exactly the same bits. What matters is how much
+  that one-ulp difference grows in the feedback loops, and now it is
+  measured: the **mirror corrector** holds it (0.3 ppm after 100 blocks), the
+  **HFDL Costas loop** **erases** it (0.000 ppm at 10,000 samples) and the
+  **SAM PLL** **amplifies it about 100x** (34.9 ppm in one second). FT8's
+  LDPC and its CRC give identical bits on both.
+
+### Three landmines defused
+
+- **`ldpc_decode()` asked for 115 kB of stack.** It declared two
+  `float[83][174]` matrices as local variables. This radio's stack is
+  **5,632 bytes**, at the top of the 64 kB TCM. It was not armed —
+  `decode.c` uses `bp_decode()`, whose matrices live in shared RAM, and had
+  the call to the other one commented out right beside it — but the day
+  someone uncommented that line the stack would have overflowed by twenty
+  times, over the DSP buffers in that same TCM, with no HardFault to say so.
+  The function and its declaration are gone: uncommenting that line no
+  longer compiles.
+
+- **`sam_init()` died silently on an impossible parameter.** It computes
+  `sqrtf(1 - zeta*zeta)`: with zeta ≥ 1 that is NaN, `g2` comes out NaN and
+  from there the whole SAM demodulator is NaN — no warning, no audio, and
+  the spectrum painting as if nothing happened. It is called with 0.867
+  today, but all four numbers now go through a guard, written as `!(x > 0)`
+  rather than `x <= 0`, which is the only form that also catches a NaN
+  arriving from outside. `sam_margen_pon()`, the other door, has the same.
+
+- **`usb_udelay()` was the only busy-wait left unpinned from `-O0`.** The
+  ones in `i2c_bitbang.c`, `touch.c` and `spi_flash.c` were pinned, and that
+  oversight already cost an afternoon on 30/07/2026, when the project moved
+  from `-O0` to `-O2` and the I2C delay shrank by itself: continuous noise
+  in reception, with not one symptom pointing at the bus. And the I2C one is
+  now watched **from both sides**: the bench fails if it speeds up — floor of
+  90 µs per byte, with margin over I2C's 4.7 µs minimum — as well as if it
+  slows down.
+
+---
+
+## V6.38 · 2026-11-02
+
+### Qué cambia
+
+**El espectro y la cascada ya no se frenan al girar el mando, y esta vez
+está medido en un Cortex‑M4 de verdad y no estimado en el PC.**
+
+- **El fallo.** El espectro solo repinta las bandas cuya plantilla ha
+  cambiado desde el cuadro anterior. Para saber si ha cambiado, hasheaba
+  la plantilla **entera en un solo número**: cualquier cambio, por estrecho
+  que fuera, tiraba el atajo del cuadro completo.
+
+  Y el cambio más frecuente es el más estrecho de todos: **la marca
+  central, dos columnas de 756**, que se mueve en cada clic del mando. Con
+  el NCO puesto es lo único que se mueve en toda la pantalla. Y no tiene
+  sentido que cambiar la línea vertical y un dígito de la frecuencia haga
+  que vaya lento todo lo demás, pero lo hacía.
+
+- **El arreglo.** Una firma **por tramo** de 16 columnas en vez de una para
+  todo. El tramo donde está la marca se repinta; los otros cincuenta se
+  siguen saltando. Medido, contando instrucciones del código compilado para
+  el GD32:
+
+  ```
+    traza quieta ...............  7.522 us
+    moviendo la marca, antes ... 13.329 us   (+77 %)
+    moviendo la marca, ahora ...  8.479 us   (+13 %)
+  ```
+
+  En la radio son unos **diez milisegundos menos por cuadro**, y solo
+  mientras giras, que es cuando molestaba. No cambia ni un píxel: el banco
+  de la imagen patrón corre los doce casos con el atajo encendido y apagado
+  contra la misma referencia.
+
+- **Y el degradado de la cabecera**, que hacía cuatro comparaciones de
+  recorte **por píxel** siendo invariantes de la fila: sacadas fuera del
+  bucle, de **30 a 18 instrucciones por píxel**. Esto abarata *todos* los
+  repintados de la cabecera, también los de la radio parada.
+
+- **Un banco nuevo: `make m4`.** Compila el código del firmware con las
+  opciones del firmware **para Cortex‑M4**, lo corre sobre un M4 emulado y
+  **cuenta instrucciones**. Hasta ahora se medía en el PC y se escalaba a
+  ojo, y eso costó varias versiones persiguiendo el sitio equivocado. No
+  cuelga de `make comprueba` porque hace falta `qemu-system-arm`: si no
+  está, lo dice y se salta.
+
+  De paso deja medido y descartado lo que no era: el bus I2C son 195 µs por
+  byte y 1,76 ms una resintonía, o sea que no daba la talla.
+
+- **De dónde salió el sitio:** nueve funciones más que el compilador metía
+  enteras dentro de quien las llama, elegidas una a una midiendo el binario
+  después de cada una. Quedan **64 libres de 491.520** contando la cabecera
+  de `update.bin`.
+
+### What's new
+
+**The spectrum and waterfall no longer stall while you turn the knob — and
+this time it is measured on a real Cortex‑M4 instead of estimated on a PC.**
+
+- **The bug.** The spectrum only repaints the bands whose template changed
+  since the previous frame. To decide that, it hashed the **whole template
+  into a single number**: any change at all, however narrow, threw away the
+  shortcut for the entire frame.
+
+  And the most frequent change is the narrowest one there is: **the centre
+  marker, two columns out of 756**, which moves on every click of the knob.
+  With the NCO on it is the only thing moving on the whole screen. The user
+  said it before any bench did: *"I don't understand how changing the
+  vertical line and one digit of the frequency each time makes everything
+  else slow, it makes no sense."* It didn't.
+
+- **The fix.** One signature **per 16-column run** instead of one for the
+  lot. The run holding the marker is repainted; the other fifty keep being
+  skipped. Measured, counting instructions of the code compiled for the
+  GD32:
+
+  ```
+    trace still .................  7,522 us
+    marker moving, before ....... 13,329 us   (+77 %)
+    marker moving, now ..........  8,479 us   (+13 %)
+  ```
+
+  On the radio that is about **ten milliseconds less per frame**, and only
+  while you turn, which is when it mattered. Not one pixel changes: the
+  reference-image bench runs all twelve cases with the shortcut on and off
+  against the same reference.
+
+- **And the header's gradient**, which was doing four clip comparisons
+  **per pixel** that were invariant for the row: hoisted out of the loop,
+  **30 → 18 instructions per pixel**. That makes *every* header repaint
+  cheaper, including with the radio sitting still.
+
+- **A new bench: `make m4`.** It compiles the firmware's own code with the
+  firmware's own flags **for Cortex‑M4**, runs it on an emulated M4 and
+  **counts instructions**. Until now everything was measured on a PC and
+  scaled by eye, and that cost several releases chasing the wrong place. It
+  is not part of `make comprueba` because it needs `qemu-system-arm`: if
+  that is missing, it says so and skips.
+
+  It also leaves measured and ruled out what was *not* to blame: the I2C
+  bus is 195 µs per byte and 1.76 ms for a retune, nowhere near enough.
+
+- **Where the room came from:** nine more functions the compiler was
+  inlining whole into their callers, picked one at a time by measuring the
+  binary after each. **64 bytes free of 491,520**, counting `update.bin`'s
+  header.
+
+---
+
+## V6.37 · 2026-11-01
+
+### Qué cambia
+
+Todo esta versión es lo mismo: **que el espectro y la cascada no se frenen
+mientras giras el mando**. Tres sitios, los tres medidos.
+
+- **De la lectura de frecuencia se repinta sólo lo que cambia, por los dos
+  lados.** Hasta ahora la caja iba desde el primer dígito que cambiaba
+  **hasta el final**, así que cada clic arrastraba el `,00 kHz`: unos 140
+  px de ancho por 64 de alto. Acotando también por la derecha, un paso de
+  1 kHz mueve un dígito y la caja se queda en unos 30 px. Medido en
+  `make topfranjas`: **de 77 a 14,1 µs**, y desde donde salió esto (V6.30)
+  son 328 → 14,1, o sea **23 veces menos**.
+
+- **La regla de frecuencias ya no se pinta en cada detente.** Cuesta
+  **72,6 µs** —medido ahora en `make cromorepinta`, que es tanto como
+  costaba la lectura entera antes de tocarla— y girando deprisa esos
+  números son un borrón que nadie lee. Mientras lleguen detentes se pinta
+  como mucho una de cada ocho vueltas de bucle, y **en cuanto el mando
+  para se pinta la siguiente**. Lo pendiente nunca se tira: la regla
+  siempre acaba diciendo la verdad.
+
+- **Y la chapa del NCO igual.** El número del NCO vive en la franja de
+  estado, que son **281 µs** de composición —unos 12 ms en la radio— y
+  cambia en cada clic. Se refrescaba cuatro veces por segundo; ahora se
+  refresca **cuando sueltas el mando**, y el plazo largo se queda sólo
+  como seguro para los giros muy largos.
+
+- **De dónde salió el sitio:** `rf_agc_poll()` se llama una sola vez, desde
+  el bucle principal, así que el compilador la metía entera dentro de
+  `main()`. Sacándola aparte —y lo mismo con otras cuatro— volvieron
+  **unos 400 bytes** de flash, que es lo que hizo que las tres cosas
+  entraran en el 450. Quedan **40 libres de 491.520** contando la cabecera
+  de `update.bin`: el 450 esta lleno.
+
+**Lo que queda, dicho claro:** el bus I2C del oscilador va a unos 50 kHz
+porque su espera está clavada a mano, y resintonizar son **2,0 ms con la
+CPU parada** en cada vuelta de bucle mientras giras. Es el trozo más gordo
+que queda. Subir ese reloj ya rompió la radio una vez y **no se toca sin
+medir en antena**; escribir sólo los bytes que cambian lo dejaría en 1,4 ms
+pero cuesta 300 bytes de flash que ahora mismo no hay.
+
+### What's new
+
+This whole release is one thing: **stopping the spectrum and waterfall from
+slowing down while you turn the knob**. Three places, all three measured.
+
+- **The frequency readout now repaints only what changed, on both sides.**
+  The box used to run from the first changed digit **to the end**, so every
+  click dragged `.00 kHz` along with it: about 140 px wide by 64 tall.
+  Bounding the right edge too, a 1 kHz step moves one digit and the box
+  stays around 30 px. Measured by `make topfranjas`: **77 → 14.1 µs**, and
+  **23× less** than where this started in V6.30 (328 µs).
+
+- **The frequency ruler is no longer painted on every detent.** It costs
+  **72.6 µs** —measured now by `make cromorepinta`, as much as the whole
+  readout cost before this work— and while you spin, those numbers are a
+  blur nobody reads. While detents keep arriving it paints at most once
+  every eight loop passes, and **the moment the knob stops it paints on the
+  next one**. Pending work is never dropped: the ruler always ends up
+  telling the truth.
+
+- **And the NCO badge likewise.** The NCO number lives in the status strip,
+  which costs **281 µs** to compose —about 12 ms on the radio— and changes
+  on every click. It used to refresh four times a second; now it refreshes
+  **when you let go of the knob**, with the long timeout left only as a
+  safety net for very long spins.
+
+- **Where the room came from:** `rf_agc_poll()` is called exactly once,
+  from the main loop, so the compiler was inlining the whole body into
+  `main()`. Pulling it out —and four others— gave back **about 400 bytes**
+  of flash, which is what let all three fixes fit on the 450. **40 bytes
+  free of 491,520**, counting `update.bin`'s header: the 450 is full.
+
+**What is left, stated plainly:** the oscillator's I2C bus runs at about
+50 kHz because its delay is pinned by hand, so retuning costs **2.0 ms with
+the CPU stalled** once per loop pass while you turn. That is the biggest
+remaining piece. Raising that clock broke the radio once already and **will
+not be touched without a measurement at the antenna**; writing only the
+bytes that change would bring it to 1.4 ms but costs 300 bytes of flash that
+are not there right now.
+
+---
+
+## V6.36 · 2026-11-01
+
+### Qué cambia
+
+- **La cadena de `CONFIG.CSV` se arregla sola al arrancar.** La cura tenía que
+  entrar en el firmware, así que el sitio hubo que sacarlo de donde fuera.
+
+  Si los clusters del fichero no están seguidos, el guardado suave se
+  niega y **cada** guardado pasa a ser un parón de unos 176 ms con la
+  radio en marcha. Y no se cura solo: se queda roto para siempre.
+
+  Ahora, al arrancar, se mira la cadena y —si hace falta— se lee el
+  fichero, se borra y se vuelve a escribir. El escritor lo coloca seguido
+  y a partir de ahí **todos** los guardados son suaves. Los 176 ms se
+  pagan una vez, con la pantalla aún encendiéndose, donde no los ve nadie.
+  Y ya no hay que tocar nada desde el PC.
+
+  **Antes de borrar nada se comprueba que lo leído cuadra con lo que dice
+  el directorio**, y eso lo pidió el banco: la primera versión de la
+  prueba rompía la cadena de forma que el fichero ya no se leía entero, y
+  sin esa guarda la cura habría borrado el fichero para escribir un trozo.
+  Perder los ajustes arreglando la velocidad. Un fichero de verdad
+  estropeado se queda ahora como está.
+
+- **De dónde salió el sitio:** `grid_fill()` es la función más gorda del
+  firmware —10.348 bytes— y sólo corre al tocar una celda de la rejilla o
+  al cambiar de página. Apretarla para tamaño, **a ella sola**, devolvió
+  **312 bytes** sin que nadie pueda notar la diferencia. El resto del
+  fichero se queda como estaba. Quedan **268 libres de 491.520**.
+
+- Y el banco reproduce la avería entera: `make ajustesflash` muda un
+  cluster del medio a uno libre lejano —con sus datos—, cose la cadena, y
+  comprueba que el fichero **se sigue leyendo bien** pero el camino suave
+  se niega; después aplica la cura y comprueba que la cadena queda seguida,
+  que el camino suave vuelve a aceptarse y que los ajustes son los mismos.
+
+### What's new
+
+- **`CONFIG.CSV`'s chain now repairs itself at boot.** The cure had to live in
+  the firmware, so the space had to come from somewhere.
+
+  If the file's clusters are not contiguous, the smooth save refuses and
+  **every** save becomes a freeze of around 176 ms with the radio running.
+  And it does not heal itself: it stays broken forever.
+
+  Now, at boot, the chain is checked and — if needed — the file is read,
+  deleted and written again. The writer places it contiguously and from
+  then on **every** save is a smooth one. The 176 ms are paid once, while
+  the screen is still coming up, where nobody sees them. And nothing has
+  to be done from the PC any more.
+
+  **Before deleting anything it is checked that what was read matches what
+  the directory says**, and the bench is what asked for that: the first
+  version of the test broke the chain in a way that left the file
+  unreadable in full, and without that guard the cure would have deleted
+  the file to write a fragment. Losing the settings while fixing the
+  speed. A genuinely damaged file is now left alone.
+
+- **Where the space came from:** `grid_fill()` is the largest function in
+  the firmware — 10,348 bytes — and only runs when a grid cell is touched
+  or the page changes. Squeezing it for size, **on its own**, gave back
+  **312 bytes** without anyone being able to tell. The rest of the file is
+  untouched. **268 free out of 491,520** remain.
+
+- And the bench reproduces the whole fault: `make ajustesflash` moves a
+  middle cluster to a distant free one — data and all — stitches the chain
+  back, and checks that the file **still reads correctly** while the
+  smooth path refuses; then it applies the cure and checks that the chain
+  ends up contiguous, that the smooth path is accepted again and that the
+  settings are the same.
+
+---
+
+## V6.35 · 2026-11-01
+
+### Qué cambia
+
+- **Encontrado. No era el mando, ni el dibujo: era guardar `CONFIG.CSV`.**
+
+  Lo dijo la propia radio en cuanto el contador se puso a cero ANTES de
+  girar:
+
+  ```
+  Vuelta del bucle   23 ms (42)
+  tac 2  max 200  pol 176
+  ```
+
+  La peor vuelta fueron **200 ms** y **176 se los llevó el bloque de
+  polls**. Ni `man` (el mando) ni `dib` (el dibujo), que es donde llevaba
+  cinco versiones mirando. Y en ese bloque lo único que puede durar eso es
+  `settings_poll()`.
+
+  **El mecanismo, reproducido en el simulador:** el guardado normal va a
+  trocitos —una página de 256 bytes por vuelta— y no se nota. Pero el
+  camino rápido **se niega si la cadena de clusters del fichero no es
+  seguida**, y entonces cae al bloqueante: borrar 4 kB y regrabarlos de
+  una sentada por un SPI a patadas, a 16 µs por byte, más el bloque del
+  directorio. **Son exactamente esos 176 ms.**
+
+  Y una cadena rota no se arregla sola, así que en esa radio **todos** los
+  guardados son bloqueantes. Como `apply_lo_tune()` marca los ajustes
+  sucios en cada clic del mando y el rebote eran 3 segundos, salía un
+  parón cada vez que el usuario paraba tres segundos. Su pantalla lo
+  decía desde el principio y no lo supe leer: **«21 guardados en 110 s»**,
+  uno cada cinco segundos.
+
+  **El rebote pasa de 3 a 30 segundos.** Eso convierte un parón cada cinco
+  segundos en uno cada treinta. Lo que se arriesga es lo de siempre:
+  apagar la radio dentro de esos treinta segundos pierde el último cambio.
+  No pierde el fichero — de eso se encarga `RESPALDO.BIN` desde la V6.24.
+
+  **Esto alivia, no cura.** La cura está abajo.
+
+- Y queda un banco que reproduce la avería: `make ajustesflash` parte la
+  cadena de `CONFIG.CSV` a propósito y comprueba que el camino suave se
+  niega. Sin él, el día que alguien toque esa decisión nadie se enteraría.
+
+### Cómo curarlo del todo (treinta segundos, desde el PC)
+
+Con la radio en modo disco externo: **copia `CONFIG.CSV` al PC, bórralo de
+la unidad, y vuelve a copiarlo.** El PC lo reescribe con los clusters
+seguidos, el camino rápido vuelve a aceptarse y **todos los guardados
+pasan a ser suaves**. No se pierde ningún ajuste: el fichero es el mismo.
+
+### What's new
+
+- **Found it. It was not the knob, nor the drawing: it was saving
+  `CONFIG.CSV`.**
+
+  The radio said so itself, once the counter was zeroed BEFORE turning:
+
+  ```
+  Loop pass   23 ms (42)
+  tac 2  max 200  pol 176
+  ```
+
+  The worst pass was **200 ms** and **176 of them went to the polls
+  block**. Not `man` (the knob) nor `dib` (the drawing), which is where I
+  had been looking for five releases. And in that block the only thing
+  that can last that long is `settings_poll()`.
+
+  **The mechanism, reproduced in the simulator:** a normal save goes in
+  small pieces — one 256-byte page per loop pass — and is not noticeable.
+  But the fast path **refuses if the file's cluster chain is not
+  contiguous**, and then it falls back to the blocking one: erase 4 kB and
+  reprogram them in one go over a bit-banged SPI at 16 µs per byte, plus
+  the directory block. **That is exactly those 176 ms.**
+
+  And a broken chain does not heal itself, so on that radio **every** save
+  is a blocking one. Since `apply_lo_tune()` marks the settings dirty on
+  every click of the knob and the debounce was 3 seconds, a freeze came
+  every time the user paused for three seconds. His screen had been saying
+  it from the start and I failed to read it: **«21 saves in 110 s»**, one
+  every five seconds.
+
+  **The debounce goes from 3 to 30 seconds.** That turns a freeze every
+  five seconds into one every thirty. What is risked is the usual: turning
+  the radio off within those thirty seconds loses the last change. It does
+  not lose the file — `RESPALDO.BIN` has handled that since V6.24.
+
+  **This relieves, it does not cure.** The cure is below.
+
+- And a bench now reproduces the fault: `make ajustesflash` breaks
+  `CONFIG.CSV`'s chain on purpose and checks that the smooth path refuses.
+  Without it, the day someone touches that decision nobody would notice.
+
+### How to cure it completely (thirty seconds, from the PC)
+
+With the radio in external-disk mode: **copy `CONFIG.CSV` to the PC,
+delete it from the drive, and copy it back.** The PC rewrites it with
+contiguous clusters, the fast path is accepted again and **every save
+becomes a smooth one**. No setting is lost: it is the same file.
+
+---
+
+## V6.34 · 2026-11-01
+
+### Qué cambia
+
+- **Las pastillas que caen fuera de la ventana ya no se redondean.** Tirando
+  del mismo hilo que la V6.33: había mejorado un poco, pero no lo suficiente.
+
+  Seguía sin cuadrar: componer la cabecera costaba **cinco veces más por
+  píxel** que la traza del espectro, dibujando diez veces menos. Así que
+  esta vez lo medí con un perfilador en vez de leyendo, y salió un nombre
+  solo:
+
+  ```
+    rr_cov   38 % de TODO el dibujado
+  ```
+
+  `rr_cov()` es el antialiasing de las esquinas redondeadas: **dieciséis
+  submuestras con sus multiplicaciones por cada píxel de esquina**. Y
+  desde que la cabecera se compone a trozos —sólo la caja de los dígitos
+  que cambian— las pastillas de modo y de banda caen **enteras fuera de
+  la ventana**… y se seguían redondeando igual. Los bucles de esquina
+  miraban la banda **vertical** antes de llamar a `rr_cov()`, pero **no
+  la horizontal**: se calculaban las cuatro esquinas completas y
+  `px_blend()` las tiraba después una a una.
+
+  Ahora se pregunta una vez por rectángulo, en la misma línea que el
+  corte de banda que ya existía.
+
+  **Medido:** componer la cabecera baja de **121 a 81 µs**, y desde los
+  **328 de la V6.30 son cuatro veces menos**. Contra los 283 µs que
+  cuesta un cuadro ENTERO de traza del espectro.
+
+- Y la regla de frecuencias pierde su temporizador: desde que sólo se
+  pinta si fuera a decir otra cosa, en modo NCO no se pinta **ninguna**
+  vez y en los demás modos como mucho una por pasada, que es lo que
+  duraba el plazo. Un contador para capar algo que ya está capado son
+  bytes de flash, y en el GD32F450VET6 quedan **148 libres de 491.520**.
+
+  Por lo mismo se fue el caso aparte de FM ancha: allí el centro del panel
+  sí es la sintonía, pero el oscilador va **en** la frecuencia —no hay
+  desplazamiento—, así que la primera condición ya lo caza.
+
+### What's new
+
+- **Pills that fall outside the window are no longer rounded.** Pulling on the
+  same thread as V6.33: it had improved a little, but not enough.
+
+  It still did not add up: composing the header cost **five times more
+  per pixel** than the spectrum trace, while drawing ten times less. So
+  this time I measured it with a profiler instead of reading, and one
+  name came out:
+
+  ```
+    rr_cov   38 % of ALL drawing
+  ```
+
+  `rr_cov()` is the antialiasing of the rounded corners: **sixteen
+  subsamples with their multiplications for every corner pixel**. And
+  since the header is composed in slices — only the box of the digits that
+  change — the mode and band pills fall **entirely outside the window**…
+  and were still being rounded. The corner loops checked the **vertical**
+  band before calling `rr_cov()`, but **not the horizontal** one: all four
+  corners were computed in full and `px_blend()` threw them away one by
+  one afterwards.
+
+  Now it is asked once per rectangle, on the same line as the band check
+  that was already there.
+
+  **Measured:** composing the header drops from **121 to 81 µs**, and from
+  V6.30's **328 that is four times less**. Against the 283 µs a WHOLE
+  spectrum trace frame costs.
+
+- And the frequency ruler loses its timer: since it is only painted when
+  it would say something different, in NCO mode it is painted **not once**,
+  and in other modes at most once per loop pass, which is what the delay
+  amounted to anyway. A counter to cap something already capped is flash
+  bytes, and the GD32F450VET6 has **148 free out of 491,520**.
+
+  For the same reason the wide-FM special case is gone: there the panel's
+  centre is indeed the dial, but the oscillator sits **on** the frequency —
+  there is no offset — so the first condition already catches it.
+
+---
+
+## V6.33 · 2026-11-01
+
+### Qué cambia
+
+- **Con el NCO puesto, sintonizar ya no repinta la regla de frecuencias.** El
+  razonamiento que faltaba: sin NCO se mueve todo el espectro a la vez, así
+  que ahí la regla sí dice otra cosa en cada clic; con el NCO no se mueve nada
+  de eso.
+
+  Exacto. El centro del panel **es el oscilador, no la sintonía**. Con el
+  NCO el oscilador se queda aparcado y lo que se mueve es el
+  desplazamiento digital, así que la ventana no se desplaza y las
+  etiquetas de la regla dicen **exactamente lo mismo** de un clic al
+  siguiente. Y se repintaban igual: **800 × 26 = 20.800 píxeles por
+  detente** para volver a escribir los mismos números. Era la pieza más
+  cara de las tres, más que la propia cabecera.
+
+  Ahora sólo se repinta si el oscilador o la tasa han cambiado de verdad.
+  En FM ancha el centro **sí** es la sintonía, así que allí no se salta
+  nada.
+
+- **El degradado de las franjas: cuatro colores por fila en vez de
+  ochocientos.** Y no tiene sentido que cambiar la línea vertical y un
+  dígito de la frecuencia haga que vaya lento todo lo demás, pero lo hacía.
+  Y no lo tenía.
+
+  Medido: la traza del espectro compone **157.000 píxeles en 283 µs**
+  —555 por microsegundo— y la cabecera **14.700 en 156** —94 por
+  microsegundo—. **Seis veces más caro el píxel**, dibujando mucho menos.
+
+  La culpa era del bucle del degradado: por cada píxel se pagaban dos
+  índices en la tabla de tramado, una copia de la estructura de color,
+  tres divisiones, seis comparaciones y una llamada a `blend()` que hace
+  otra división y empaqueta a 565. Treinta y tantas operaciones **para un
+  color que sólo depende de la fila**, con un tramado que sólo depende de
+  `x & 3`: en toda la fila no hay más que **cuatro colores distintos**.
+  Ahora se calculan los cuatro una vez, ya empaquetados, y el bucle de
+  columnas se queda en una carga y un guardado. El píxel que sale es el
+  mismo, y el banco lo compara uno a uno contra el repintado completo.
+
+- Y el bucle de las cifras buscaba **cada glifo dos veces** —`text_w()`
+  seguido de `text()` con la misma cadena y la misma fuente—, cuatro veces
+  por repintado porque el compositor va por bandas de 16 filas. Son 72
+  búsquedas para nueve cifras. `gfx2_text()` ya devuelve el avance, y lo
+  devuelve también cuando el glifo cae fuera de la ventana.
+
+  **Resultado acumulado:** componer la cabecera pasa de **328 µs (V6.30) a
+  129**, y con el NCO puesto desaparecen además los 20.800 píxeles de la
+  regla en cada detente.
+
+### What's new
+
+- **With the NCO engaged, tuning no longer repaints the frequency ruler.** The
+  reasoning that was missing: without the NCO the whole spectrum moves at
+  once, so there the ruler really does say something different on every click;
+  with the NCO it does not move at all.
+
+  Exactly. The panel's centre **is the oscillator, not the dial**. With the
+  NCO the oscillator stays parked and what moves is the digital offset, so
+  the window does not shift and the ruler labels read **exactly the same**
+  from one click to the next. They were being repainted anyway: **800 × 26
+  = 20,800 pixels per detent** to rewrite the same numbers. It was the most
+  expensive of the three pieces, more than the header itself.
+
+  Now it is repainted only if the oscillator or the sample rate actually
+  changed. In wide FM the centre **is** the dial, so nothing is skipped
+  there.
+
+- **The strips' gradient: four colours per row instead of eight hundred.** And
+  it makes no sense that changing the vertical line and one digit of the
+  frequency should make everything else go slow, but it did. And it did not.
+
+  Measured: the spectrum trace composes **157,000 pixels in 283 µs** — 555
+  per microsecond — and the header **14,700 in 156** — 94 per microsecond.
+  **Six times more expensive per pixel**, drawing far less.
+
+  The gradient loop was to blame: per pixel it paid two dither-table
+  indices, a colour-struct copy, three divisions, six clipping comparisons
+  and a `blend()` call that does another division and packs to 565. Thirty-
+  odd operations **for a colour that depends only on the row**, with a
+  dither that depends only on `x & 3`: across a whole row there are only
+  **four distinct colours**. Now the four are computed once, already
+  packed, and the column loop is a load and a store. The pixel that comes
+  out is identical, and the bench compares it one by one against the full
+  repaint.
+
+- And the digit loop looked up **every glyph twice** — `text_w()` followed
+  by `text()` with the same string and the same font — four times per
+  repaint, because the compositor works in 16-row bands. That is 72 lookups
+  for nine digits. `gfx2_text()` already returns the advance, and returns
+  it even when the glyph falls outside the window.
+
+  **Cumulative result:** composing the header goes from **328 µs (V6.30) to
+  129**, and with the NCO engaged the ruler's 20,800 pixels per detent are
+  gone as well.
+
+---
+
+## V6.32 · 2026-11-01
+
+### Qué cambia
+
+- **Mover el mando repinta sólo los dígitos que cambian.** La versión anterior
+  seguía ralentizándose igual, y lo que hacía falta era que NO se ralentizara
+  nada.
+
+  Al mover un paso cambia **un dígito**, y se recomponían los nueve más el
+  «kHz», más las pastillas de modo y banda. Ahora se busca el primer
+  carácter que cambia —contando el subrayado del paso de sintonía, que se
+  mueve sin que cambie ninguna cifra— y se compone desde ahí hasta el
+  final de la lectura.
+
+  **Medido:** componer la cabecera baja de **328 a 156 µs**, contra los
+  283 µs que cuesta un cuadro ENTERO de traza del espectro. En su radio,
+  donde la traza son 16 ms, eso es pasar de ~19 ms por detente a ~9.
+
+  Y el degradado de la franja se pide ahora **de la ventana que se está
+  componiendo** y no de los 800 px de ancho: antes se descartaba píxel a
+  píxel lo que cae fuera, pagando el índice del tramado y dos
+  comparaciones por cada uno. El dibujo es idéntico —el color depende de
+  la fila y el tramado de la x absoluta, que se conserva— y lo comprueba
+  el banco píxel a píxel.
+
+  **Lo que suma, con los números de su radio:** antes de la V6.31 el mando
+  añadía ~36 ms a una vuelta de bucle de 27; ahora añade ~11. La vuelta
+  mientras se gira pasa de ~63 a ~38 ms, o sea de unos 16 cuadros por
+  segundo a unos 26, con 37 estando quieto.
+
+  **Sigue sin ser cero y lo digo con el número:** queda una caída de
+  ~30 % mientras se gira. Acotar también el borde derecho de la caja
+  bajaría los 156 µs a 84 —medido, funcionaba— pero son 48 bytes de flash
+  que **el GD32F450VET6 ya no tiene**: quedan 148 libres de 491.520.
+
+- Y queda medido que **sintonizar no encarece la traza del espectro**:
+  1,00 / 1,02 / 0,97 veces lo que cuesta estar quieto, según el estilo.
+  Una banda real con ruido ya repinta todo aunque el dial no se mueva.
+
+### What's new
+
+- **Moving the knob now repaints only the digits that change.** The previous
+  build still slowed down just the same, and what was needed was for it NOT to
+  slow down at all.
+
+  Moving one step changes **one digit**, and all nine were being
+  recomposed along with the «kHz» and the mode and band pills. Now the
+  first character that changes is found — counting the tuning-step
+  underline, which moves without any digit changing — and composition
+  runs from there to the end of the reading.
+
+  **Measured:** composing the header drops from **328 to 156 µs**,
+  against the 283 µs a WHOLE spectrum trace frame costs. On his radio,
+  where the trace is 16 ms, that is ~19 ms per detent down to ~9.
+
+  And the strip's gradient is now requested **for the window being
+  composed** rather than the full 800 px: before, whatever fell outside
+  was discarded pixel by pixel, paying the dither index and two
+  comparisons for each one. The drawing is identical — the colour depends
+  on the row and the dither on the absolute x, which is preserved — and
+  the bench checks it pixel by pixel.
+
+  **What it adds up to, with his radio's numbers:** before V6.31 the knob
+  added ~36 ms to a 27 ms loop pass; now it adds ~11. The pass while
+  turning goes from ~63 to ~38 ms, i.e. from about 16 frames per second
+  to about 26, against 37 when idle.
+
+  **Still not zero, and I say so with the number:** a ~30 % drop remains
+  while turning. Bounding the box's right edge as well would take those
+  156 µs down to 84 — measured, it worked — but it costs 48 bytes of
+  flash the **GD32F450VET6 no longer has**: 148 free out of 491,520.
+
+- And it is now measured that **tuning does not make the spectrum trace
+  any more expensive**: 1.00 / 1.02 / 0.97 times what sitting still
+  costs, depending on style. A real band with noise already repaints
+  everything even when the dial does not move.
+
+---
+
+## V6.31 · 2026-11-01
+
+### Qué cambia
+
+- **Sintonizar con el mando ya no frena el espectro.** El espectro seguía
+  parándose en cuanto se usaba el encoder para mover la frecuencia., con
+  la V6.30 puesta. Tenía razón y mi diagnóstico anterior era falso.
+
+  Lo que lo destapó fue su propia pantalla: la fila **Fotograma** decía
+  `2+0+16(0)+7 ms`. Ese paréntesis es **lo que cuesta empujar píxeles al
+  panel**, y vale **cero de dieciséis**. Los empuja el DMA. O sea que
+  llevaba tres versiones contando píxeles y **los píxeles son gratis**:
+  lo que cuesta es la CPU que los compone —el degradado y los glifos—.
+
+  Midiendo ya lo que importa, en el mismo banco y la misma máquina:
+
+  | | CPU |
+  |---|---|
+  | un cuadro entero de traza del espectro | 283 µs |
+  | `ui_top_draw_freq` — la cabecera | 328 µs |
+  | `ui_top_draw_status` — la franja de estado | 296 µs |
+
+  **Componer la cabecera costaba más que dibujar el espectro entero.** En
+  su radio la traza son 16 ms, así que la cabecera ~19 y la franja de
+  estado ~17, sobre una vuelta de bucle de 27 ms con un tope de fotograma
+  de 22: no le sobraba nada.
+
+  Y por qué con la frecuencia y no con el volumen: su barra dice **NCO
+  +33k**. Con el NCO puesto el oscilador se queda quieto y lo que se mueve
+  es el desplazamiento, así que **el número de esa chapa cambia en cada
+  clic** — y la chapa vive en la franja de estado. Cada detente
+  recomponía **la cabecera entera más la franja entera**.
+
+  Tres cortes, los tres de dibujo y ninguno toca la radiofrecuencia:
+
+  1. **El degradado se recorta también en columnas.** Las filas ya se
+     recortaban desde el 19/10; las columnas no. La cabecera pide un
+     degradado de los 800 px de ancho aunque sólo se le haya pedido
+     componer un trozo, y cada píxel descartado se pagaba uno a uno.
+  2. **Mover un dígito ya no recompone las pastillas de modo y banda.**
+     La ventana llegaba hasta la marquesina; ahora llega hasta donde
+     acaba la lectura. Si cambia el modo, la banda o el ancho del número,
+     se repinta entero — y un banco nuevo lo comprueba, con la prueba al
+     revés hecha.
+  3. **La chapa del NCO se refresca como mucho cuatro veces por
+     segundo.** Nadie lee un número que cambia cuarenta veces por
+     segundo, y al soltar el mando se pone al día en un cuarto de
+     segundo.
+
+  **Lo medido:** componer la cabecera baja de **328 a 240 µs** (−27 %), y
+  la franja de estado pasa de pagarse en cada detente a pagarse cuatro
+  veces por segundo. En su radio eso son unos **36 ms por detente a unos
+  15**: la vuelta mientras se gira baja de ~63 a ~42 ms, o sea de unos 16
+  cuadros por segundo a unos 24.
+
+  **No está arreglado del todo y lo digo con el número delante:** quedan
+  ~14 ms de cabecera por detente que siguen siendo media pantalla de
+  trabajo. El siguiente corte es no recomponer los dígitos que no
+  cambian.
+
+- Y de paso queda descartado el sospechoso anterior, con medida:
+  **sintonizar le cuesta a la traza del espectro lo mismo que estar
+  quieto** (0,72–1,06× según el estilo, `make pixeles`). No era el
+  espectro.
+
+### What's new
+
+- **Tuning with the knob no longer slows the spectrum down.** The spectrum
+  still stopped as soon as the encoder was used to move the frequency., with
+  V6.30 installed. He was right and my previous
+  diagnosis was wrong.
+
+  What cracked it was his own screen: the **Frame** row read
+  `2+0+16(0)+7 ms`. That bracket is **what it costs to push pixels to the
+  panel**, and it is **zero out of sixteen**. The DMA pushes them. So I
+  had spent three releases counting pixels and **pixels are free**: what
+  costs is the CPU that composes them — the gradient and the glyphs.
+
+  Measuring the thing that matters, same bench, same machine:
+
+  | | CPU |
+  |---|---|
+  | a whole spectrum trace frame | 283 µs |
+  | `ui_top_draw_freq` — the header | 328 µs |
+  | `ui_top_draw_status` — the status strip | 296 µs |
+
+  **Composing the header cost more than drawing the entire spectrum.** On
+  his radio the trace is 16 ms, so the header is ~19 and the status strip
+  ~17, on a 27 ms loop pass against a 22 ms frame cap: no headroom at all.
+
+  And why frequency and not volume: his bar reads **NCO +33k**. With the
+  NCO engaged the oscillator stays put and what moves is the offset, so
+  **that badge's number changes on every click** — and the badge lives in
+  the status strip. Every detent recomposed **the whole header plus the
+  whole strip**.
+
+  Three cuts, all of them drawing, none touching the RF path:
+
+  1. **The gradient is now clipped in columns too.** Rows have been
+     clipped since 19/10; columns were not. The header asks for a
+     gradient the full 800 px wide even when only a slice was requested,
+     and every discarded pixel was paid for one at a time.
+  2. **Moving a digit no longer recomposes the mode and band pills.** The
+     window used to run all the way to the marquee; now it stops where
+     the reading ends. If the mode, the band or the number's width
+     changes, the whole thing is repainted — and a new bench checks it,
+     with the negative test done.
+  3. **The NCO badge refreshes at most four times a second.** Nobody
+     reads a number that changes forty times a second, and it catches up
+     within a quarter second of letting go.
+
+  **Measured:** composing the header drops from **328 to 240 µs**
+  (−27 %), and the status strip goes from being paid on every detent to
+  four times a second. On his radio that is roughly **36 ms per detent
+  down to about 15**: the loop pass while turning drops from ~63 to
+  ~42 ms, i.e. from about 16 frames per second to about 24.
+
+  **It is not fully fixed and I say so with the number in hand:** about
+  14 ms of header per detent remain, which is still half a screen's worth
+  of work. The next cut is not recomposing the digits that did not
+  change.
+
+- And the previous suspect is now ruled out, with a measurement: **tuning
+  costs the spectrum trace the same as sitting still** (0.72–1.06×
+  depending on style, `make pixeles`). It was not the spectrum.
+
+---
+
+## V6.30 · 2026-10-31
+
+### Qué cambia
+
+- **Girar el mando ya no frena el espectro ni la cascada.** Al usar el encoder
+  —para subir y bajar el volumen o para mover la frecuencia— la cascada y el
+  espectro se ralentizan, hasta parecer que se paran, y vuelven a su velocidad
+  normal en cuanto se deja de girar.
+
+  No era la radio frenándose: era el mando **repintando media pantalla en
+  cada pasada del bucle**, por el mismo bus EXMC que usa el espectro.
+
+  **El volumen.** Cada detente llamaba a `aux_row_display_draw()`, que es
+  la franja de arriba **entera**: cabecera 800×64 = 51.200 px, franja de
+  estado 800×40 = 32.000 px, más el RDS y dos botones. Más de **83.000
+  píxeles por detente**, cuando un cuadro entero de espectro son 106.564
+  —medido el 30/10 persiguiendo el siseo del panel—. O sea el **78 % de un
+  cuadro, en cada clic**. Y no hacía falta ni un píxel: el número de dB
+  vive en el botón «Volumen» de la barra de abajo; la cabecera no lo
+  enseña, y la franja de estado sólo cambia cuando el mando **cambia de
+  destino**, que es pulsarlo, no girarlo. Ahora se repinta el botón y nada
+  más.
+
+- **La regla de frecuencias, a lo sumo una vez por cuadro.** Al sintonizar
+  se repintaba la regla —800×26 = 20.800 px— en **cada pasada del bucle**,
+  y el bucle pasa más a menudo que los cuadros: de 10 a 35 ms contra 22.
+  Se repintaba hasta dos veces por cuadro, y además **después** de dibujar
+  el espectro, con lo que lo que retrasaba era el cuadro siguiente. Ahora
+  se marca y se suelta como mucho una vez por cuadro. Los dígitos de la
+  frecuencia —que son los que se leen mientras se gira— siguen vivos en
+  cada detente, sin condición.
+
+- Y queda medido lo que cuesta de verdad el bus I2C, que es a mano:
+  **11 µs por medio bit** —contado sobre el bucle compilado a 200 MHz—, o
+  sea 198 µs por byte. Un detente de volumen son dos registros del códec:
+  **1,3 ms**. Un paso de sintonía normal es un bloque de 10 bytes al
+  sintetizador: **2,0 ms**. Sólo cuando cambia el divisor se pagan los
+  ocho escritos enteros, **8,0 ms**, y eso ya estaba acotado con
+  `s_last_div`. Son reales pero no eran lo que se veía: lo que se veía era
+  el dibujo.
+
+### What's new
+
+- **Turning the knob no longer slows the spectrum or the waterfall.** Using
+  the encoder — to raise and lower the volume, or to move the frequency —
+  makes the waterfall and the spectrum slow down, to the point of seeming to
+  stop, and they go back to their normal speed as soon as you stop turning.
+
+  It was not the radio slowing down: it was the knob **repainting half the
+  screen on every pass of the main loop**, over the same EXMC bus the
+  spectrum uses.
+
+  **Volume.** Every detent called `aux_row_display_draw()`, which is the
+  **whole** top strip: header 800×64 = 51,200 px, status strip 800×40 =
+  32,000 px, plus RDS and two buttons. More than **83,000 pixels per
+  detent**, when a whole spectrum frame is 106,564 — measured on 30/10
+  while chasing the panel hiss. That is **78 % of a frame, on every
+  click**. And not one pixel of it was needed: the dB figure lives in the
+  «Volume» button on the bottom bar; the header does not show it, and the
+  status strip only changes when the knob **changes target**, which is
+  pressing it, not turning it. Now the button is repainted and nothing
+  else.
+
+- **The frequency ruler, at most once per frame.** While tuning, the ruler
+  — 800×26 = 20,800 px — was repainted on **every pass of the loop**, and
+  the loop runs more often than frames do: 10 to 35 ms against 22. It was
+  being repainted up to twice per frame, and **after** the spectrum was
+  drawn, so what it delayed was the next frame. Now it is marked and
+  flushed at most once per frame. The frequency digits — the ones you read
+  while turning — stay live on every detent, unconditionally.
+
+- And the real cost of the bit-banged I2C bus is now measured: **11 µs per
+  half-bit**, counted on the compiled loop at 200 MHz, i.e. 198 µs per
+  byte. A volume detent is two codec registers: **1.3 ms**. A normal tuning
+  step is one 10-byte block to the synthesiser: **2.0 ms**. Only when the
+  divider changes are the full eight writes paid, **8.0 ms**, and that was
+  already bounded by `s_last_div`. Real, but not what was visible: what was
+  visible was the drawing.
+
+---
+
+## V6.29 · 2026-10-30
+
+### Qué cambia
+
+- **El corrector de espejo ya se instala con una sola emisora en la
+  banda.** Entrar en modo NCO y salir bajaba la supresión a −46/−47 dB: algo
+  iba mal en la búsqueda del equilibrio, que no siempre se inclinaba a
+  acertar.
+
+  Tenía razón, y el motivo estaba escrito en el propio módulo desde hace
+  días sin que nadie atara los dos cabos. El FIR del espejo tiene **cuatro
+  tomas**, y cuatro incógnitas complejas no se determinan con menos de
+  cinco puntos de medida. Esos puntos salen de las portadoras que vayan
+  cayendo en las dieciséis ranuras del panadaptador. **Con una sola
+  emisora en la banda sólo se llena una ranura, nunca cinco**, así que el
+  FIR no se instalaba jamás y el rechazo se quedaba en lo que da el
+  corrector plano solo: los 19-21 dB de sus fotos.
+
+  Y por eso le funcionaban **tres maniobras distintas**: desintonizar
+  hasta perder la señal y volver, entrar y salir del NCO, y reiniciar y
+  dejarla un rato. Las tres mueven la portadora dentro de la ventana, o
+  sea reparten sus medidas por ranuras distintas hasta juntar cinco.
+  Entonces el FIR entraba de golpe y aparecían los 44, los 46, los 51 dB.
+  La radio funcionaba; lo que no funcionaba era **quedarse quieto en una
+  banda vacía**, que es lo que hace cualquiera.
+
+  Desde hoy, cuando no hay cinco ranuras se ajusta **una sola toma** —una
+  constante compleja: ganancia y fase— que con una ranura se determina de
+  sobra y no puede estar mal condicionada.
+
+  **Las dos caras, medidas, porque un ajuste de una toma es plano:**
+
+  | | sin corregir | plano solo | con la toma |
+  |---|---|---|---|
+  | **donde está la emisora** | 20,2 dB | 20,1 dB | **38,1 dB** |
+  | peor punto del resto de la ventana | 20,2 dB | 20,1 dB | 18,2 dB |
+
+  O sea: **+18 dB donde escuchas y donde mide la fila de Información**, a
+  cambio de **−2 dB en los huecos de la ventana donde no hay nada**. Es el
+  cambio que se ha hecho y es el que hay; no se vende como gratis.
+
+- **Y no se baja el orden si la banda tiene parejas simétricas.** El
+  primer intento de esto salía peor y lo dijo el banco: dejaba la banda
+  llena —la de onda corta, la de HFDL— en 18,6 dB donde antes se quedaba
+  en los 20,2 de no corregir. Con cinco ranuras las limpias le ganan la
+  votación a una sucia; con una no hay votación. Lo que la ensucia es una
+  emisora justo enfrente de otra, que deja la misma huella que un
+  desequilibrio — y eso ya se cuenta y ya se enseña, en la fila **«Choques
+  de banda»** de Información. Si desde el intento anterior se ha visto un
+  solo bloque con pinta de pareja, no se baja el orden.
+
+### What's new
+
+- **The mirror corrector now installs with a single station in the band.**
+  Switching to NCO mode and back brought the suppression down to −46/−47 dB:
+  something was wrong in the balance search, which was not always inclined to
+  get it right.
+
+  He was right, and the reason had been written in the module itself for
+  days without anyone joining the two ends. The mirror FIR has **four
+  taps**, and four complex unknowns are not determined by fewer than five
+  measurement points. Those points come from whatever carriers fall into
+  the sixteen panadapter slots. **With a single station in the band only
+  one slot ever fills, never five**, so the FIR was never installed and
+  rejection stayed at whatever the flat corrector alone gives: the 19-21
+  dB in his photographs.
+
+  Which is why **three different manoeuvres** worked for him: detuning
+  until the signal was lost and coming back, switching NCO on and off, and
+  rebooting and leaving it a while. All three move the carrier within the
+  window, spreading its measurements across different slots until five are
+  gathered. Then the FIR went in at once and the 44, the 46, the 51 dB
+  appeared. The radio was working; what was not working was **sitting
+  still on an empty band**, which is what anybody does.
+
+  From today, when there are not five slots a **single tap** is fitted — a
+  complex constant: gain and phase — which one slot determines amply and
+  which cannot be ill-conditioned.
+
+  **Both sides, measured, because a one-tap fit is flat:**
+
+  | | uncorrected | flat only | with the tap |
+  |---|---|---|---|
+  | **where the station is** | 20.2 dB | 20.1 dB | **38.1 dB** |
+  | worst point elsewhere in the window | 20.2 dB | 20.1 dB | 18.2 dB |
+
+  That is **+18 dB where you listen and where the Information row
+  measures**, in exchange for **−2 dB in the gaps of the window where
+  there is nothing**. That is the trade that was made; it is not sold as
+  free.
+
+- **And the order is not reduced if the band has symmetric pairs.** The
+  first attempt at this came out worse and the bench said so: it left the
+  crowded band — shortwave, HFDL — at 18.6 dB where it used to stay at the
+  20.2 of not correcting. With five slots the clean ones outvote a dirty
+  one; with one there is no vote. What dirties it is one station directly
+  opposite another, which leaves the same fingerprint as an imbalance —
+  and that is already counted and already shown, in the **«Band clashes»**
+  row of Information. If a single block that looks like a pair has been
+  seen since the previous attempt, the order is not reduced.
+
+---
+
+## V6.28 · 2026-10-30
+
+### Qué cambia
+
+- **La fila «Espejo I/Q» ya no se queda clavada en el resultado de la
+  prueba A/B.** La fila llegó una vez a −51 dB y, tras un reinicio, volvió a
+  −19 sin dar señales de mejorar.
+
+  La fila enseña el resultado de la prueba A/B **por encima de la lectura
+  normal**, porque es lo que se acaba de pedir. El fallo es que lo
+  enseñaba **para siempre**: la bandera del resultado sólo la bajaban
+  lanzar otra prueba o abortarla. Quien tocaba la fila una vez se quedaba
+  con ese par de números clavados en la pantalla el resto del encendido.
+
+  Y eso no es un detalle de presentación. Si la prueba cae **antes de que
+  el corrector haya aprendido** —los primeros segundos, o una banda tan
+  vacía que no hay con qué calibrar— los dos lados salen iguales y la fila
+  se queda diciendo `19 → 19` mientras por detrás el corrector sube a 32 y
+  a 44. Quien lo mira concluye que no mejora, **reinicia la radio para
+  arreglarlo, y el reinicio tira el aprendizaje que había**. La pantalla
+  fabricaba el problema que decía estar midiendo.
+
+  Desde hoy el resultado dura **veinte segundos** —la prueba entera dura
+  menos de siete, así que da de sobra para leerlo y compararlo— y después
+  la fila vuelve a la lectura de verdad, que es la que se mueve.
+
+  El corrector no se toca: funcionaba. Lo roto era el número.
+
+### What's new
+
+- **The «I/Q mirror» row no longer stays frozen on the A/B test result.** The
+  row once reached −51 dB and, after a reset, went back to −19 with no sign of
+  improving.
+
+  The row shows the A/B result **on top of the normal reading**, because
+  that is what was just asked for. The bug was that it showed it
+  **forever**: the result flag was only cleared by launching another test
+  or aborting one. Tap the row once and those two numbers were stuck on
+  screen for the rest of the session.
+
+  That is not a presentation detail. If the test lands **before the
+  corrector has learnt anything** — the first few seconds, or a band so
+  empty there is nothing to calibrate against — both sides measure the
+  same and the row sits at `19 → 19` while behind it the corrector climbs
+  to 32 and to 44. Whoever reads it concludes it is not improving,
+  **reboots the radio to fix it, and the reboot throws away the learning**.
+  The display was manufacturing the problem it claimed to be measuring.
+
+  From today the result lasts **twenty seconds** — the whole test takes
+  under seven, so there is time to spare to read it and compare — and then
+  the row goes back to the live reading, which is the one that moves.
+
+  The corrector itself is untouched: it was working. The number was not.
+
+---
+
+## V6.27 · 2026-10-30
+
+### Qué cambia
+
+- **Borrar `RESPALDO.BIN` del disco ya es seguro, y vuelve solo al arrancar.**
+  Las dos preguntas eran si se puede borrar y si vuelve al siguiente inicio.—
+  y la respuesta hasta hoy era **no**, por un fallo de la V6.24.
+
+  Borrar un fichero en FAT marca su entrada y suelta su cadena, **pero no
+  toca los datos**: la firma de la copia se queda en el disco. El barrido del
+  arranque —el que existe para el caso en que el directorio ha quedado en
+  blanco tras un apagón— la encontraba igual… y se la quedaba como sitio
+  donde grabar las copias siguientes. Esos dos bloques ya eran del volumen, y
+  Windows podía habérselos dado a otro fichero: **el remedio estropeando lo
+  de al lado.**
+
+  Ahora lo que el barrido encuentra sirve **sólo para reparar, esa vez**. Al
+  terminar se descarta y el fichero se vuelve a crear por el camino bueno,
+  con su entrada en el directorio y su cadena en la FAT.
+
+  Probado al revés en `make apagon`: con el código anterior, tras borrarlo el
+  arranque **no** lo recreaba.
+
+### What's new
+
+- **Deleting `RESPALDO.BIN` from the disk is now safe, and it comes back by
+  itself on the next boot.** Asked by the user —*"can it be deleted? does it
+  delete it on the next start?"*— and until today the answer was **no**,
+  because of a bug from V6.24.
+
+  Deleting a file in FAT marks its entry and frees its chain, **but does not
+  touch the data**: the copy's signature stays on the disk. The boot-time
+  sweep —the one that exists for when the directory has been left blank by a
+  power cut— found it anyway… and kept it as the place to write future
+  copies. Those two blocks already belonged to the volume, and Windows could
+  have handed them to another file: **the cure damaging the neighbour.**
+
+  Now what the sweep finds is used **only to repair, that once**. Afterwards
+  it is discarded and the file is recreated the proper way, with its
+  directory entry and its FAT chain.
+
+  Tested the other way round in `make apagon`: with the previous code, after
+  deleting it the boot did **not** bring it back.
+
+---
+
+## V6.26 · 2026-10-30
+
+### Qué cambia
+
+- **El corrector de espejo podía quedarse sin aprender después de arrancar, y
+  entonces no corregía nada.** Después de reiniciar el receptor la
+  interferencia de imagen es importante, y desaparece tras alguna maniobra;
+  conmutar el modo NCO parece mejorar el rechazo. Las
+  tres cosas eran el mismo fallo, **y lo metió la V6.23**.
+
+  Esa versión puso una puerta que mira dos cosas —el modo y la distancia al
+  oscilador— y la consultaba en los dos sitios donde esas cosas cambian. El
+  problema es de **orden**: el cambio de modo se aplica **antes** de que la
+  sintonía haya puesto la distancia nueva, así que leía la vieja. Y la vieja,
+  viniendo de FM ancha o de un arranque, es **cero** — que significa «la señal
+  está en continua», o sea puerta cerrada.
+
+  Recién arrancado, eso no es «aprender de menos»: el corrector **no tiene
+  nada aprendido todavía**, así que no corrige absolutamente nada y se oye el
+  espejo entero del aparato. Hasta que tocas el mando: cualquier sintonía
+  vuelve a abrir la puerta y en medio segundo desaparece. De ahí las tres
+  observaciones, incluida la del NCO —conmutarlo reprograma la sintonía—.
+
+  El arreglo no es añadir una tercera llamada en el sitio bueno, porque mañana
+  habría un cuarto camino: la puerta deja de ser un estado que se pone y pasa
+  a ser **una pregunta que se hace en cada vuelta del bucle**. Dos lecturas y
+  una comparación, y ningún orden la puede dejar mal más de una vuelta.
+
+  Medido en el banco, desde el arranque y por el camino de la interrupción:
+  **57,4 dB a los 0,5 s**. El hueco no era de calentamiento; era la puerta.
+
+### What's new
+
+- **The image corrector could end up never learning after a boot, and then it
+  corrected nothing at all.** Reported by a user: *"after rebooting the
+  receiver the mirror interference is significant, but after some manipulation
+  it disappears; switching to and from NCO mode seems to improve image
+  rejection"*. All three were one bug, **introduced in V6.23**.
+
+  That version added a gate looking at two things —the mode and the distance
+  to the oscillator— and asked it at the two places those change. The problem
+  is **ordering**: the mode change is applied **before** tuning has set the new
+  distance, so it read the old one. And the old one, coming from wide FM or
+  from a boot, is **zero** — which means "the signal is at DC", i.e. gate
+  closed.
+
+  Freshly booted that is not "learning less": the corrector has **nothing
+  learned yet**, so it corrects nothing at all and you hear the radio's full
+  native image. Until you touch the dial: any retune reopens the gate and it
+  is gone in half a second. Hence all three observations, the NCO one included
+  — toggling it reprograms the tuning.
+
+  The fix is not a third call in the right place, because tomorrow there would
+  be a fourth path: the gate stops being a state that gets set and becomes
+  **a question asked on every pass of the main loop**. Two reads and a compare,
+  and no ordering can leave it wrong for more than one pass.
+
+  Measured on the bench, from boot and through the interrupt path: **57.4 dB
+  at 0.5 s**. The gap was not warm-up; it was the gate.
+
+---
+
 ## V6.25 · 2026-10-30
 
 ### Qué cambia
 
-- **La pantalla principal mete 2,4 veces menos ruido en el audio.** Avisado
-  por el usuario por tercera vez, y con razón: *«no puede ser que en el menú
-  se escuche mejor y sin interferencias»*.
+- **La pantalla principal mete 2,4 veces menos ruido en el audio.** Dentro
+  del menú se escuchaba mejor y sin interferencias, porque ahí el
+  panadaptador deja de repintar.
 
   Medido sobre el audio de su vídeo, comparando los tramos con el menú
   abierto contra los que tienen el espectro en pantalla: **hasta 10 dB más
@@ -736,7 +3134,8 @@ sticks to the newest again.*
 
   **Sólo ALS162**, que es la única que se decodifica por fase. DCF77 y MSF van
   por amplitud —portadora que se apaga y se enciende— y no pasan por esta
-  puerta: a esas dos no les cambia nada. Ahora, **con la rejilla de segundos ya enganchada**,
+  puerta: a esas dos no les cambia nada. Ahora, **con la rejilla de segundos
+  ya enganchada**,
   caer dentro de la ventana de ±70 ms vale igual que el silencio; y un hueco
   sólo se toma por el segundo 59 si antes han entrado 55 bits, en vez de
   tirar la trama entera por una marca perdida.
@@ -829,7 +3228,8 @@ sticks to the newest again.*
 
   **ALS162 only**, the one station decoded from phase. DCF77 and MSF are
   decoded from amplitude — carrier switched off and on — and do not go through
-  this gate: nothing changes for those two. Now, **once the second grid is locked**, falling inside
+  this gate: nothing changes for those two. Now, **once the second grid is
+  locked**, falling inside
   the ±70 ms window counts as much as the silence; and a gap is only taken
   for second 59 if 55 bits have arrived first, instead of throwing the whole
   frame away over one lost marker.
@@ -1744,7 +4144,8 @@ el demodulador.
   una emisora del ruido de banda. Se compara **consigo mismo** y se para
   donde algo sobresale diez decibelios del más bajo del banco. **La
   primera vuelta las recorre todas** —hasta haberlas visto no hay con qué
-  comparar—, así que no hay que ajustar nada antes de usarlo. Para del todo y hace pip; no
+  comparar—, así que no hay que ajustar nada antes de usarlo. Para del todo
+  y hace pip; no
   sigue solo cuando la señal se va. **Al tocar SCAN la ventana se cierra y
   vuelves a la principal**, con el espectro y la cascada delante; el botón
   **MEM** de arriba se enciende y va cantando el **número de la memoria**
@@ -1809,7 +4210,8 @@ in the demodulator.
   cannot tell a station from band noise. It compares **against itself** and
   stops where something stands ten decibels above the lowest in the bank.
   **The first lap runs through them all** —until it has seen them there is
-  nothing to compare against—, so nothing needs adjusting first. It stops for good and beeps; it does not resume by itself when the
+  nothing to compare against—, so nothing needs adjusting first. It stops
+  for good and beeps; it does not resume by itself when the
   signal goes. **It keeps scanning with the window closed**, so you can
   **Tapping SCAN closes the window and takes you
   back to the main one**, spectrum and waterfall in front of you; the
@@ -2451,7 +4853,8 @@ None of these had shown up yet: they were sitting in the code, waiting.
   |---|---|
   | una copia, en su modo | emisora de verdad |
   | una copia, en el modo contrario | imagen de I/Q, o armónico **impar** |
-  | **dos copias simétricas, una en USB y otra en LSB** | armónico **par**: otra banda metiéndose |
+  | **dos copias simétricas, una en USB y otra en LSB** | armónico **par**:
+  otra banda metiéndose |
 
   Con 180° (2.º armónico) I y Q quedan en contrafase: eso ya no es una señal
   compleja sino **real**, y una señal real sale **dos veces**, una a cada
@@ -2491,7 +4894,8 @@ None of these had shown up yet: they were sitting in the code, waiting.
   |---|---|
   | one copy, in its own mode | a real station |
   | one copy, in the opposite mode | I/Q image, or an **odd** harmonic |
-  | **two symmetric copies, one USB and one LSB** | **even** harmonic: another band leaking in |
+  | **two symmetric copies, one USB and one LSB** | **even** harmonic:
+  another band leaking in |
 
   At 180° (2nd harmonic) I and Q are in antiphase: that is no longer a
   complex signal but a **real** one, and a real signal appears **twice**,
@@ -4360,7 +6764,8 @@ None of these had shown up yet: they were sitting in the code, waiting.
 
 ### Qué cambia
 
-- **Centrado del fax, a mano.** En el panel del fax, al lado de «Sincroniza» y del botón de guardar. Si la
+- **Centrado del fax, a mano.** En el panel del fax, al lado de «Sincroniza» y
+  del botón de guardar. Si la
   carta sale con un trozo del margen pegado al borde derecho, es que el pulso
   de sincronismo de esa emisora no cae donde el decodificador supone. Se corre
   la imagen de 7 en 7 puntos (±49, o sea ±6,5 % de la línea) hasta que el
@@ -4371,7 +6776,8 @@ None of these had shown up yet: they were sitting in the code, waiting.
 
 ### What's new
 
-- **Manual fax centring**, on the fax panel, next to «Sync» and the save button. If a
+- **Manual fax centring**, on the fax panel, next to «Sync» and the save
+  button. If a
   chart comes out with a strip of the margin stuck to the right edge, that
   station's sync pulse does not fall where the decoder assumes. Shift the
   image 7 points at a time (±49, i.e. ±6.5 % of a line) until the margin is
@@ -5831,7 +8237,8 @@ what it costs.
 - **El atenuador de entrada sube a la barra de arriba.** La chapa que ponía
   **NR** ahora pone **ATT**, con su valor al lado y en color: `ATT OFF`,
   `ATT -06`, `ATT -12`. Las tres de tres caracteres y la chapa con ancho
-  reservado, así que al cambiar de estado no se mueve nada de sitio. Se toca y va pasando por los tres, igual que la
+  reservado, así que al cambiar de estado no se mueve nada de sitio. Se toca
+  y va pasando por los tres, igual que la
   casilla de Ajustes → Radio, con el silencio de transición y el reajuste
   del borrador de ruido incluidos. El reductor de ruido sigue donde
   siempre: la casilla **Ruido** de la barra de abajo y su ajuste.
@@ -5857,7 +8264,8 @@ what it costs.
 - **The input attenuator moves up to the top strip.** The chip that read
   **NR** now reads **ATT**, with its value beside it and in colour:
   `ATT OFF`, `ATT -06`, `ATT -12`. All three are three characters wide and
-  the chip reserves a fixed width, so nothing shifts when the state changes. Tapping it steps through the three, exactly
+  the chip reserves a fixed width, so nothing shifts when the state changes.
+  Tapping it steps through the three, exactly
   like the Settings → Radio cell, transition mute and noise-blanker reset
   included. Noise reduction stays where it was: the **Noise** button on the
   bottom bar and its own setting.
@@ -6189,7 +8597,8 @@ what it costs.
 
 ### What's new
 
-- **The application gains 22,036 bytes, and the bootloader drops to two sectors.**
+- **The application gains 22,036 bytes, and the bootloader drops to two
+  sectors.**
   The application had 2,720 bytes left of 475,136. The bootloader was 41,212
   and 11,462 of those were ONE font: the whole of `font_ui_18b`, 117 glyphs,
   of which it draws 68. Trimmed to the ones it uses and dropped to 11 px, the
@@ -6219,7 +8628,8 @@ what it costs.
   to a serial port that is compiled off, so nobody saw them: the first did
   two touch reads every 150 ms while a finger was on the screen, and the
   second dumped the flash chip and scanned the FAT on every boot. 364 bytes
-  of flash, plus work on every boot and every tap. `tools/interruptores_check.py`
+  of flash, plus work on every boot and every tap.
+  `tools/interruptores_check.py`
   now watches for a `#define ... 1` whose own comment promises to turn it off.
 
 - **Ten new light themes, and a spectrum to match.** From a request: with a
@@ -6569,7 +8979,8 @@ what it costs.
 
 ### Qué cambia
 
-- **Con el mapa en pantalla, el mando dejaba de hacer lo que decía la botonera.**
+- **Con el mapa en pantalla, el mando dejaba de hacer lo que decía la
+  botonera.**
   Si lo tenías enganchado con el botón Func al ancho de banda, al squelch, al
   reductor de ruido, a la ganancia o a cualquier ajuste de la lista, girabas y
   lo único que pasaba era que el mapa hacía zoom. Sólo el volumen estaba a
@@ -6840,7 +9251,8 @@ what it costs.
 - Los cinco bancos del relleno entran todos por la puerta de RAM, así que
   los cien mapas salían en verde midiendo un camino que la radio no usa. El
   banco nuevo, **`mapados`**, carga el mismo fichero por las dos puertas y
-  compara el dibujo **píxel a píxel**: 100 de 100 ficheros, 0 píxeles de 230.400.
+  compara el dibujo **píxel a píxel**: 100 de 100 ficheros, 0 píxeles de
+  230.400.
 
 - Y un segundo fallo que hacía invisible al primero: `mapa_bin_quita()` no
   borraba el estilo, así que el banco heredaba el del mapa anterior y pasaba
@@ -9036,7 +11448,8 @@ A thorough review of drawing and refreshes. What you will notice:
 
 - **El Ident ya no dice APRS sobre tres teletipos.** Con varias señales en el
   paso de banda, el detector juntaba el tono de arriba de una con el de abajo de
-  otra y se inventaba un salto de 1.019 Hz, que cae cerca del 1200/2200 del APRS.
+  otra y se inventaba un salto de 1.019 Hz, que cae cerca del 1200/2200 del
+  APRS.
   Ahora agrupa los tonos por cercanía, descarta los saltos que ninguna firma
   puede usar, y **dice cuántas señales hay**: *«3 señales a la vez: estrecha el
   filtro»*. Con tres encima no da el nombre — dice que hay tres, que es lo único
@@ -9077,7 +11490,8 @@ A thorough review of drawing and refreshes. What you will notice:
 - **Less CPU on the audio path.** The clipping check ran outside the window that
   measures cycles — invisible to the file's own instrumentation — and now runs
   inside the loop that already reads those samples; `I²+Q²` was computed three
-  times per block and now once; and WEFAX's phase loop was paying up to 756 sines
+  times per block and now once; and WEFAX's phase loop was paying up to 756
+  sines
   and cosines **inside the interrupt** only to throw the result away afterwards.
 - **CW no longer computes twelve filters nobody reads** when auto-tune is off.
 
@@ -9087,54 +11501,78 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **La radio ya no da la hora de Madrid en Australia.** España no era un ajuste mal
-  puesto: estaba **escrita dentro del programa**, en cuatro sitios —`hora_wwv.c`,
+- **La radio ya no da la hora de Madrid en Australia.** España no era un
+  ajuste mal
+  puesto: estaba **escrita dentro del programa**, en cuatro sitios
+  —`hora_wwv.c`,
   `hora_rbu.c`, el byte 40 del `EMISORAS.BIN` y, el que apareció el último, la
-  conversión de MSF en `dcf77.c`—. Las emisoras que emiten UTC daban hora de pared
-  española con la regla europea del horario de verano, estuvieras donde estuvieras.
-- **El huso es ahora un número en minutos**, no en horas: la India está en +5:30,
+  conversión de MSF en `dcf77.c`—. Las emisoras que emiten UTC daban hora de
+  pared
+  española con la regla europea del horario de verano, estuvieras donde
+  estuvieras.
+- **El huso es ahora un número en minutos**, no en horas: la India está en
+  +5:30,
   Nepal en +5:45 y parte de Australia en +9:30. Se guarda en `CONFIG.CSV`.
 - **Botón nuevo en Hora por radio**, con el valor escrito dentro («Huso +2:00»).
-  Abre una lista con **Medir** arriba y **cincuenta ciudades** debajo, ordenadas por
-  cercanía a tu localizador. Cada ciudad enseña su huso de invierno **y el de hoy**,
+  Abre una lista con **Medir** arriba y **cincuenta ciudades** debajo,
+  ordenadas por
+  cercanía a tu localizador. Cada ciudad enseña su huso de invierno **y el
+  de hoy**,
   para que una regla caducada se note.
-- **Medir** coge el UTC que acaba de dar la emisora, le resta tu reloj y eso es tu
-  huso, redondeado al cuarto de hora. Funciona con MSF, WWV, BPM y RBU; no con DCF77
+- **Medir** coge el UTC que acaba de dar la emisora, le resta tu reloj y eso
+  es tu
+  huso, redondeado al cuarto de hora. Funciona con MSF, WWV, BPM y RBU; no
+  con DCF77
   ni ALS162, que emiten hora local alemana y francesa.
-- **El RDS ya pone el huso**, no sólo la hora: su grupo 4A trae el desplazamiento
-  local de donde estés, con el verano ya dentro. Llevaba desde septiembre usándose
+- **El RDS ya pone el huso**, no sólo la hora: su grupo 4A trae el
+  desplazamiento
+  local de donde estés, con el verano ya dentro. Llevaba desde septiembre
+  usándose
   para sumar y tirándose. Lo que diga una emisora manda sobre cualquier tabla.
-- **La fecha se aplica además de la hora, en las seis fuentes.** Las seis la traían
-  y se estaba tirando; el reloj se quedaba con la fecha de fábrica del chip, y por
+- **La fecha se aplica además de la hora, en las seis fuentes.** Las seis la
+  traían
+  y se estaba tirando; el reloj se quedaba con la fecha de fábrica del chip,
+  y por
   eso ninguna regla de horario de verano podía funcionar.
-- **Cinco reglas de horario de verano** (Europa, EEUU, Australia, Nueva Zelanda y
+- **Cinco reglas de horario de verano** (Europa, EEUU, Australia, Nueva
+  Zelanda y
   Chile) comprobadas contra **24.804 instantes** sacados de la base de husos del
   sistema. El banco encontró dos errores míos antes de ponerse en verde.
 
 ### What's new
 
-- **The radio no longer gives Madrid time in Australia.** Spain was not a badly-set
+- **The radio no longer gives Madrid time in Australia.** Spain was not a
+  badly-set
   option: it was **written into the program**, in four places — `hora_wwv.c`,
   `hora_rbu.c`, byte 40 of `EMISORAS.BIN`, and the one found last, the MSF
   conversion in `dcf77.c`. The stations that broadcast UTC produced Spanish wall
   time, with the European summer-time rule, wherever you were.
-- **The time zone is now a number in minutes**, not hours: India is at +5:30, Nepal
+- **The time zone is now a number in minutes**, not hours: India is at +5:30,
+  Nepal
   at +5:45 and part of Australia at +9:30. It is saved in `CONFIG.CSV`.
 - **A new button on the Radio clock screen**, with the value written on it
-  ("Zone +2:00"). It opens a list with **Measure** at the top and **fifty cities**
+  ("Zone +2:00"). It opens a list with **Measure** at the top and **fifty
+  cities**
   below, sorted by distance from your locator. Each city shows its winter offset
   **and today's**, so a stale rule is visible.
-- **Measure** takes the UTC the station just gave, subtracts your clock, and that is
-  your offset, rounded to the quarter hour. It works with MSF, WWV, BPM and RBU; not
+- **Measure** takes the UTC the station just gave, subtracts your clock, and
+  that is
+  your offset, rounded to the quarter hour. It works with MSF, WWV, BPM and
+  RBU; not
   with DCF77 or ALS162, which broadcast German and French local time.
 - **RDS now sets the offset**, not just the time: its group 4A carries the local
-  offset where you are, with summer time already in it. Since September it was being
+  offset where you are, with summer time already in it. Since September it
+  was being
   used as an addend and thrown away. What a station says overrides any table.
-- **The date is applied as well as the time, from all six sources.** All six carried
-  it and it was being discarded; the clock kept the chip's factory date, which is why
+- **The date is applied as well as the time, from all six sources.** All six
+  carried
+  it and it was being discarded; the clock kept the chip's factory date,
+  which is why
   no summer-time rule could work.
-- **Five summer-time rules** (Europe, USA, Australia, New Zealand and Chile) checked
-  against **24,804 instants** taken from the system time-zone database. The bench
+- **Five summer-time rules** (Europe, USA, Australia, New Zealand and Chile)
+  checked
+  against **24,804 instants** taken from the system time-zone database. The
+  bench
   found two of my own errors before it went green.
 
 ---
@@ -9143,30 +11581,45 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **ALS162 decodifica.** Llevaba desde el 28/09 sin sacar una sola trama, y la causa
-  estaba en una frase de la norma de Allouis que no estaba en el código: *«Additional
-  non-timing data is sent by phase modulation during the rest of each second»*. Medido
-  sobre una grabación real: **6,24 elementos por segundo**, de los cuales sólo 1,05 son
+- **ALS162 decodifica.** Llevaba desde el 28/09 sin sacar una sola trama, y la
+  causa
+  estaba en una frase de la norma de Allouis que no estaba en el código:
+  *«Additional
+  non-timing data is sent by phase modulation during the rest of each
+  second»*. Medido
+  sobre una grabación real: **6,24 elementos por segundo**, de los cuales
+  sólo 1,05 son
   horarios. El contador los sumaba todos y, con más de dos, declaraba ruido.
-- **El detector del segundo se engancha ahora a la rejilla de 1 s** en vez de contar
-  todo lo que suba. Lo que separa el elemento horario del canal de datos no es la forma
+- **El detector del segundo se engancha ahora a la rejilla de 1 s** en vez de
+  contar
+  todo lo que suba. Lo que separa el elemento horario del canal de datos no
+  es la forma
   (idéntica) ni la amplitud (1,809 rad contra 1,904): es que cae cada 1,000 s.
-- **Comprobado contra un reloj que no es el nuestro**: una grabación de WebSDR que trae
-  su hora UTC en el nombre del fichero sale como las **04:21 del sábado 10/10/26**, en
+- **Comprobado contra un reloj que no es el nuestro**: una grabación de WebSDR
+  que trae
+  su hora UTC en el nombre del fichero sale como las **04:21 del sábado
+  10/10/26**, en
   horario de verano — que es exactamente lo que debía salir.
 
 ### What's new
 
-- **ALS162 decodes.** It had not produced a single frame since 28/09, and the cause was
+- **ALS162 decodes.** It had not produced a single frame since 28/09, and the
+  cause was
   one sentence of the Allouis spec that was missing from the code: *"Additional
-  non-timing data is sent by phase modulation during the rest of each second."* Measured
-  on a real recording: **6.24 elements per second**, of which only 1.05 are timing ones.
+  non-timing data is sent by phase modulation during the rest of each
+  second."* Measured
+  on a real recording: **6.24 elements per second**, of which only 1.05 are
+  timing ones.
   The counter added them all up and, past two, called it noise.
-- **The second detector now locks to the 1 s grid** instead of counting every rise. What
-  separates the timing element from the data channel is not its shape (identical) nor its
+- **The second detector now locks to the 1 s grid** instead of counting every
+  rise. What
+  separates the timing element from the data channel is not its shape
+  (identical) nor its
   amplitude (1.809 rad against 1.904): it is that it lands every 1.000 s.
-- **Checked against a clock that is not ours**: a WebSDR recording carrying its UTC time
-  in the filename comes out as **04:21 on Saturday 10/10/26**, in summer time — which is
+- **Checked against a clock that is not ours**: a WebSDR recording carrying
+  its UTC time
+  in the filename comes out as **04:21 on Saturday 10/10/26**, in summer
+  time — which is
   exactly what it had to be.
 
 ---
@@ -9175,34 +11628,52 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **La pantalla de hora dice ahora POR QUÉ se tira cada trama.** Mientras no haya
-  ninguna mala sigue enseñando «raras»; en cuanto hay una, ese hueco pasa a decir
-  «mal N» y el motivo: `corta`, `b0`, `b20`, `z1z2`, `par-min`, `par-hor`, `par-fec`
+- **La pantalla de hora dice ahora POR QUÉ se tira cada trama.** Mientras no
+  haya
+  ninguna mala sigue enseñando «raras»; en cuanto hay una, ese hueco pasa a
+  decir
+  «mal N» y el motivo: `corta`, `b0`, `b20`, `z1z2`, `par-min`, `par-hor`,
+  `par-fec`
   o `rango`. Eso separa «las tramas no se completan» —que es sincronismo— de «se
-  completan y se rechazan» —que es formato o ruido—, y dentro del segundo dice por
-  cuál de las ocho puertas. Antes las dos cosas se veían igual: el contador dando
+  completan y se rechazan» —que es formato o ruido—, y dentro del segundo
+  dice por
+  cuál de las ocho puertas. Antes las dos cosas se veían igual: el contador
+  dando
   vueltas de 0 a 59 y «Aplicar» apagado.
-- **Y en el barrido, un asterisco en las emisoras de fase.** ALS162 y RBU no miden
+- **Y en el barrido, un asterisco en las emisoras de fase.** ALS162 y RBU no
+  miden
   su porcentaje con la misma vara que DCF77, MSF, WWV y BPM: unas dan una razón
-  entre dos niveles y las otras un pico a pico en radianes escalado a ojo. Estaban
-  en la misma columna, con el mismo `%`, ordenadas entre sí. Ahora llevan `*` y un
-  renglón que lo dice. Calibrarlas de verdad es trabajo pendiente y pide una medida
+  entre dos niveles y las otras un pico a pico en radianes escalado a ojo.
+  Estaban
+  en la misma columna, con el mismo `%`, ordenadas entre sí. Ahora llevan
+  `*` y un
+  renglón que lo dice. Calibrarlas de verdad es trabajo pendiente y pide una
+  medida
   de antena, no una cuenta.
 
 ### What's new
 
-- **The radio-clock screen now says WHY each frame is thrown away.** While no frame
-  has failed it still shows "raras"; as soon as one does, that slot becomes "mal N"
-  plus the reason: `corta`, `b0`, `b20`, `z1z2`, `par-min`, `par-hor`, `par-fec` or
+- **The radio-clock screen now says WHY each frame is thrown away.** While no
+  frame
+  has failed it still shows "raras"; as soon as one does, that slot becomes
+  "mal N"
+  plus the reason: `corta`, `b0`, `b20`, `z1z2`, `par-min`, `par-hor`, `par-
+  fec` or
   `rango`. That separates "frames never complete" — a sync problem — from "frames
-  complete and get rejected" — format or noise — and within the second it says which
-  of the eight gates did it. Before, both looked identical: the counter cycling 0 to
+  complete and get rejected" — format or noise — and within the second it
+  says which
+  of the eight gates did it. Before, both looked identical: the counter
+  cycling 0 to
   59 and Apply greyed out.
 - **And an asterisk on the phase stations in the scan.** ALS162 and RBU do not
-  measure their percentage with the same yardstick as DCF77, MSF, WWV and BPM: one
-  is a ratio between two levels, the other a peak-to-peak in radians scaled by eye.
-  They sat in the same column, with the same `%`, ranked against each other. They
-  now carry `*` and a line that says so. Calibrating them properly is pending work
+  measure their percentage with the same yardstick as DCF77, MSF, WWV and
+  BPM: one
+  is a ratio between two levels, the other a peak-to-peak in radians scaled
+  by eye.
+  They sat in the same column, with the same `%`, ranked against each other.
+  They
+  now carry `*` and a line that says so. Calibrating them properly is
+  pending work
   and needs an antenna measurement, not arithmetic.
 
 ---
@@ -9212,19 +11683,28 @@ A thorough review of drawing and refreshes. What you will notice:
 ### Qué cambia
 
 - **La fila «Mult. zona 7» dice también el margen del VCO** (issue #35, segunda
-  vuelta). Enseñaba el multiplicador y el fVCO del dial de ese momento, que sirve para
-  barrer pero no para **elegir**: lo que decide si un valor se puede dejar puesto de
-  fábrica es lo cerca que pasa del borde en los **dos extremos de la zona entera**. Y ahí
-  los dos valores que discute el issue están los dos pegados al borde, cada uno al suyo:
+  vuelta). Enseñaba el multiplicador y el fVCO del dial de ese momento, que
+  sirve para
+  barrer pero no para **elegir**: lo que decide si un valor se puede dejar
+  puesto de
+  fábrica es lo cerca que pasa del borde en los **dos extremos de la zona
+  entera**. Y ahí
+  los dos valores que discute el issue están los dos pegados al borde, cada
+  uno al suyo:
   168 pasa a 2 MHz del suelo y 189 a **0,8 MHz** del techo. Ahora se ve.
 
 ### What's new
 
-- **The "Zone-7 mult." row now also shows the VCO margin** (issue #35, second round). It
-  showed the multiplier and the fVCO for wherever the dial happened to be, which is fine
-  for sweeping but not for **choosing**: what decides whether a value can ship is how
-  close it passes to the edge at **both ends of the whole zone**. And there both values
-  under discussion sit against an edge, each against its own: 168 passes 2 MHz from the
+- **The "Zone-7 mult." row now also shows the VCO margin** (issue #35, second
+  round). It
+  showed the multiplier and the fVCO for wherever the dial happened to be,
+  which is fine
+  for sweeping but not for **choosing**: what decides whether a value can
+  ship is how
+  close it passes to the edge at **both ends of the whole zone**. And there
+  both values
+  under discussion sit against an edge, each against its own: 168 passes 2
+  MHz from the
   floor and 189 **0.8 MHz** from the ceiling. Now you can see it.
 
 ---
@@ -9233,41 +11713,69 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **La pantalla del reloj ya no se queda los toques cuando se abre otro menú encima.** El
-  menú de arriba se pintaba, pero los dedos seguían yendo al reloj. La causa no estaba en el
-  reloj: cada pantalla apagaba a mano las demás y ninguna las apagaba todas. Ahora eso lo
-  hace una sola función, que además suelta lo que la pantalla del reloj había encendido —el
-  decodificador horario, el RDS y tu frecuencia—, cosa que por el camino del QTH no se hacía.
-- **En WSPR el botón de banda ya no tira el minuto que llevas.** Con una captura abierta el
-  cambio se apunta y se hace al cerrarse la ventana. El botón sigue girando por la lista en
+- **La pantalla del reloj ya no se queda los toques cuando se abre otro menú
+  encima.** El
+  menú de arriba se pintaba, pero los dedos seguían yendo al reloj. La causa
+  no estaba en el
+  reloj: cada pantalla apagaba a mano las demás y ninguna las apagaba todas.
+  Ahora eso lo
+  hace una sola función, que además suelta lo que la pantalla del reloj
+  había encendido —el
+  decodificador horario, el RDS y tu frecuencia—, cosa que por el camino del
+  QTH no se hacía.
+- **En WSPR el botón de banda ya no tira el minuto que llevas.** Con una
+  captura abierta el
+  cambio se apunta y se hace al cerrarse la ventana. El botón sigue girando
+  por la lista en
   el acto y enseña a dónde vas; la chapa dice «luego 160 m» mientras espera.
-- **JTTY entra en el Ident** con su fila: 4-FSK de 31,25 Hz a 31,25 baudios. **AIS no**, y a
-  propósito: son 14 kHz de GMSK y el Ident mide en una ventana de 3 kHz, así que en vez de
-  adivinar contesta por la frecuencia —en 161,975 y 162,025 MHz no vive otra cosa—.
-- **El banco de basura por la puerta del aire pasa de 15 decodificadores a 25, y además
-  llama a la mitad cara de cada uno.** Esto segundo era un agujero: el Viterbi, el Fano, las
-  FFT y los ecualizadores viven en el bucle principal y el banco sólo llamaba a la mitad de
-  la interrupción, así que el código con más índices de la radio no había visto nunca una
+- **JTTY entra en el Ident** con su fila: 4-FSK de 31,25 Hz a 31,25 baudios.
+  **AIS no**, y a
+  propósito: son 14 kHz de GMSK y el Ident mide en una ventana de 3 kHz, así
+  que en vez de
+  adivinar contesta por la frecuencia —en 161,975 y 162,025 MHz no vive otra
+  cosa—.
+- **El banco de basura por la puerta del aire pasa de 15 decodificadores a 25,
+  y además
+  llama a la mitad cara de cada uno.** Esto segundo era un agujero: el
+  Viterbi, el Fano, las
+  FFT y los ecualizadores viven en el bucle principal y el banco sólo
+  llamaba a la mitad de
+  la interrupción, así que el código con más índices de la radio no había
+  visto nunca una
   entrada hostil mientras el banco decía «todo correcto».
 
 ### What's new
 
-- **The clock screen no longer swallows touches when another menu opens on top of it.** The
-  menu above was painted, but the taps still went to the clock. The cause was not in the
-  clock: every screen cleared the others by hand and none of them cleared all. One function
-  does it now, and it also releases what the clock screen had switched on —the time decoder,
+- **The clock screen no longer swallows touches when another menu opens on top
+  of it.** The
+  menu above was painted, but the taps still went to the clock. The cause
+  was not in the
+  clock: every screen cleared the others by hand and none of them cleared
+  all. One function
+  does it now, and it also releases what the clock screen had switched on
+  —the time decoder,
   RDS and your frequency— which the QTH path was not doing.
-- **In WSPR the band button no longer throws away the minute in progress.** With a capture
-  open the change is noted and applied when the window closes. The button still steps
-  through the list at once and shows where you are heading; the badge reads "then 160 m"
+- **In WSPR the band button no longer throws away the minute in progress.**
+  With a capture
+  open the change is noted and applied when the window closes. The button
+  still steps
+  through the list at once and shows where you are heading; the badge reads
+  "then 160 m"
   while it waits.
-- **JTTY gets a row in Ident**: 4-FSK of 31.25 Hz at 31.25 baud. **AIS does not**, on
-  purpose: it is 14 kHz of GMSK and Ident measures inside a 3 kHz window, so instead of
-  guessing it answers from the dial — nothing else lives on 161.975 and 162.025 MHz.
-- **The hostile-input bench goes from 15 decoders to 25, and now calls each one's expensive
-  half.** That second part was a hole: the Viterbi, the Fano, the FFTs and the equalisers
-  live in the main loop and the bench only called the interrupt half, so the most
-  index-heavy code in the radio had never seen hostile input while the bench printed "all
+- **JTTY gets a row in Ident**: 4-FSK of 31.25 Hz at 31.25 baud. **AIS does
+  not**, on
+  purpose: it is 14 kHz of GMSK and Ident measures inside a 3 kHz window, so
+  instead of
+  guessing it answers from the dial — nothing else lives on 161.975 and
+  162.025 MHz.
+- **The hostile-input bench goes from 15 decoders to 25, and now calls each
+  one's expensive
+  half.** That second part was a hole: the Viterbi, the Fano, the FFTs and
+  the equalisers
+  live in the main loop and the bench only called the interrupt half, so the
+  most
+  index-heavy code in the radio had never seen hostile input while the bench
+  printed "all
   correct".
 
 ---
@@ -9276,21 +11784,31 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **«Puerto serie USB» sube a la primera página de Información y «Pila» baja a las
-  escondidas.** Es el criterio que ya rige esa pantalla: delante lo que se busca cuando algo
-  no funciona, detrás lo que se mira por curiosidad. El puerto serie es lo que hace falta
-  para usar la radio con WSJT-X y estaba escondido detrás de cinco toques — o sea escondido
-  justo de quien lo necesita, el mismo error que ya se corrigió con «Formatear disco». La
+- **«Puerto serie USB» sube a la primera página de Información y «Pila» baja a
+  las
+  escondidas.** Es el criterio que ya rige esa pantalla: delante lo que se
+  busca cuando algo
+  no funciona, detrás lo que se mira por curiosidad. El puerto serie es lo
+  que hace falta
+  para usar la radio con WSJT-X y estaba escondido detrás de cinco toques —
+  o sea escondido
+  justo de quien lo necesita, el mismo error que ya se corrigió con
+  «Formatear disco». La
   pila es de destripar: quien la mira es quien está añadiendo código.
 - Intercambio exacto: la página 1 tenía doce celdas y sigue teniendo doce.
 
 ### What's new
 
-- **"USB serial port" moves up to Information's first page and "Stack" moves down to the
-  hidden ones.** That is the rule that already governs that screen: what you look for when
-  something is broken goes in front, what you look at out of curiosity goes behind. The
-  serial port is what you need to drive the radio from WSJT-X and it was hidden behind five
-  taps — hidden from exactly the person who needs it, the same mistake already corrected for
+- **"USB serial port" moves up to Information's first page and "Stack" moves
+  down to the
+  hidden ones.** That is the rule that already governs that screen: what you
+  look for when
+  something is broken goes in front, what you look at out of curiosity goes
+  behind. The
+  serial port is what you need to drive the radio from WSJT-X and it was
+  hidden behind five
+  taps — hidden from exactly the person who needs it, the same mistake
+  already corrected for
   "Format disk". The stack is for digging: whoever reads it is adding code.
 - An exact swap: page 1 had twelve cells and still has twelve.
 
@@ -9300,20 +11818,30 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **El contador de huecos de audio contaba uno que no lo era.** Al abrir la grabación se
-  vacía el anillo y se manda la primera trama en el mismo instante, así que sale vacía *por
-  construcción*. Hay que mandarla —en isócrono el flujo tiene que arrancar— pero contarla
-  como corte es mentir, y la mentira importaba: con ese 1 ahí, el colchón parecía justo
-  cuando en toda una sesión de WSJT-X decodificando no había habido **ni un corte**.
+- **El contador de huecos de audio contaba uno que no lo era.** Al abrir la
+  grabación se
+  vacía el anillo y se manda la primera trama en el mismo instante, así que
+  sale vacía *por
+  construcción*. Hay que mandarla —en isócrono el flujo tiene que arrancar—
+  pero contarla
+  como corte es mentir, y la mentira importaba: con ese 1 ahí, el colchón
+  parecía justo
+  cuando en toda una sesión de WSJT-X decodificando no había habido **ni un
+  corte**.
 - Ahora sólo se cuentan los huecos después de que haya salido audio de verdad.
-- **El dispositivo se llama «DeepSDR Audio»** en vez de «CAT de 101», a petición del usuario.
+- **El dispositivo se llama «DeepSDR Audio»** en vez de «CAT de 101», a
+  petición del usuario.
 
 ### What's new
 
-- **The audio-gap counter counted one that was not a gap.** Opening the capture clears the
-  ring and sends the first frame in the same breath, so it goes out empty *by construction*.
-  It has to be sent — an isochronous stream has to start — but counting it as a dropout is a
-  lie, and the lie mattered: with that 1 sitting there the cushion looked tight when a full
+- **The audio-gap counter counted one that was not a gap.** Opening the
+  capture clears the
+  ring and sends the first frame in the same breath, so it goes out empty
+  *by construction*.
+  It has to be sent — an isochronous stream has to start — but counting it
+  as a dropout is a
+  lie, and the lie mattered: with that 1 sitting there the cushion looked
+  tight when a full
   WSJT-X decoding session had produced **no dropouts at all**.
 - Gaps are now counted only once real audio has gone out.
 - **The device is now called "DeepSDR Audio"** instead of "CAT de 101".
@@ -9324,32 +11852,50 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **El audio llegaba destrozado, y era medio sample.** `anillo_mete()` mete *lo que quepa*,
-  que para el puerto serie es lo correcto pero aquí es veneno: si caben 100 bytes de 128,
-  mete 100 — y 100 no es múltiplo de cuatro. A partir de ahí el canal izquierdo son los
-  bytes altos de una muestra y los bajos de la siguiente, para siempre. Medido en una
-  grabación de referencia: **los canales diferían hasta 33.226** cuando la radio manda el mismo
-  valor a los dos, y **el 56,7% de la energía estaba por encima de 8 kHz** cuando este audio
+- **El audio llegaba destrozado, y era medio sample.** `anillo_mete()` mete
+  *lo que quepa*,
+  que para el puerto serie es lo correcto pero aquí es veneno: si caben 100
+  bytes de 128,
+  mete 100 — y 100 no es múltiplo de cuatro. A partir de ahí el canal
+  izquierdo son los
+  bytes altos de una muestra y los bajos de la siguiente, para siempre.
+  Medido en una
+  grabación de referencia: **los canales diferían hasta 33.226** cuando la
+  radio manda el mismo
+  valor a los dos, y **el 56,7% de la energía estaba por encima de 8 kHz**
+  cuando este audio
   no pasa de 4. Ahora es todo o nada.
-- **Y se manda lo que haya, no 192 bytes rellenos de silencio.** El endpoint está declarado
-  asíncrono, que significa exactamente «el reloj lo pongo yo y mando lo que tenga». Rellenar
-  era mentirle al ordenador y meterle silencio: en esa misma grabación salieron 20 rachas de
+- **Y se manda lo que haya, no 192 bytes rellenos de silencio.** El endpoint
+  está declarado
+  asíncrono, que significa exactamente «el reloj lo pongo yo y mando lo que
+  tenga». Rellenar
+  era mentirle al ordenador y meterle silencio: en esa misma grabación
+  salieron 20 rachas de
   ceros en nueve segundos, la mayor de 9,33 ms.
 - Tres asertos nuevos exigen al compilar que todo lo que pasa por ese anillo sea múltiplo de
   una trama estéreo.
 
 ### What's new
 
-- **The audio arrived destroyed, and it was half a sample.** `anillo_mete()` writes *what
-  fits*, which is right for the serial port but poison here: if 100 bytes of 128 fit, it
-  writes 100 — and 100 is not a multiple of four. From then on the left channel is the high
-  byte of one sample and the low byte of the next, forever. Measured from the owner's
-  recording: **the channels differed by up to 33,226** where the radio sends the same value
-  to both, and **56.7% of the energy sat above 8 kHz** where this audio stops at 4. It is now
+- **The audio arrived destroyed, and it was half a sample.** `anillo_mete()`
+  writes *what
+  fits*, which is right for the serial port but poison here: if 100 bytes of
+  128 fit, it
+  writes 100 — and 100 is not a multiple of four. From then on the left
+  channel is the high
+  byte of one sample and the low byte of the next, forever. Measured from
+  the owner's
+  recording: **the channels differed by up to 33,226** where the radio sends
+  the same value
+  to both, and **56.7% of the energy sat above 8 kHz** where this audio
+  stops at 4. It is now
   all or nothing.
-- **And it sends what it has, not 192 bytes padded with silence.** The endpoint is declared
-  asynchronous, which means precisely "I keep my own clock and send what I have". Padding was
-  lying to the host and injecting real silence: that same recording had 20 runs of zeros in
+- **And it sends what it has, not 192 bytes padded with silence.** The
+  endpoint is declared
+  asynchronous, which means precisely "I keep my own clock and send what I
+  have". Padding was
+  lying to the host and injecting real silence: that same recording had 20
+  runs of zeros in
   nine seconds, the longest 9.33 ms.
 - Three new static assertions demand at compile time that everything through that ring is a
   whole stereo frame.
@@ -9360,20 +11906,28 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **La radio contesta a lo que Windows le pregunta del audio.** El anfitrión pide la
-  frecuencia de muestreo al endpoint isócrono aunque el descriptor diga que no se puede
-  cambiar. Contestando STALL —que es lo que hacía— el driver de audio da el dispositivo por
-  roto y **no sale como entrada de grabación**, mientras el COM sigue yendo: el síntoma
+- **La radio contesta a lo que Windows le pregunta del audio.** El anfitrión
+  pide la
+  frecuencia de muestreo al endpoint isócrono aunque el descriptor diga que
+  no se puede
+  cambiar. Contestando STALL —que es lo que hacía— el driver de audio da el
+  dispositivo por
+  roto y **no sale como entrada de grabación**, mientras el COM sigue yendo:
+  el síntoma
   habría sido «el puerto va y el micrófono no».
 - Se contesta la que dice el descriptor, y cualquier intento de cambiarla se acepta y se
   tira: sólo hay una, y el reloj de aquí no se mueve.
 
 ### What's new
 
-- **The radio now answers what Windows asks about the audio.** The host asks the isochronous
-  endpoint for its sampling frequency even though the descriptor says it is not adjustable.
-  STALLing it — which is what the previous version did — makes the audio driver give up and
-  **the device never appears as a recording input**, while the COM port keeps working: the
+- **The radio now answers what Windows asks about the audio.** The host asks
+  the isochronous
+  endpoint for its sampling frequency even though the descriptor says it is
+  not adjustable.
+  STALLing it — which is what the previous version did — makes the audio
+  driver give up and
+  **the device never appears as a recording input**, while the COM port
+  keeps working: the
   symptom would have been "the port works and the microphone does not".
 - It answers with the rate the descriptor declares, and accepts and discards any attempt to
   change it: there is only one, and the clock here does not move.
@@ -9384,20 +11938,29 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **El COM vuelve: `USBD_ITF_MAX_NUM` valía 1 y hacen falta 4 interfaces.** El núcleo USB
-  rechaza con STALL todo lo que vaya dirigido a una interfaz por encima de ese número.
-  Con el puerto serie solo (interfaces 0 y 1) colaba; con el audio (2 y 3) Windows pedía la
-  3, se llevaba un STALL, reiniciaba el equipo y volvía a empezar en bucle — que desde la
-  radio se ve como «esperando» para siempre y desde el PC como ningún COM y ningún error.
+- **El COM vuelve: `USBD_ITF_MAX_NUM` valía 1 y hacen falta 4 interfaces.** El
+  núcleo USB
+  rechaza con STALL todo lo que vaya dirigido a una interfaz por encima de
+  ese número.
+  Con el puerto serie solo (interfaces 0 y 1) colaba; con el audio (2 y 3)
+  Windows pedía la
+  3, se llevaba un STALL, reiniciaba el equipo y volvía a empezar en bucle —
+  que desde la
+  radio se ve como «esperando» para siempre y desde el PC como ningún COM y
+  ningún error.
 - Va bajo `#ifndef` y lo sube sólo la aplicación desde su Makefile: **el cargador sigue
   compilando byte a byte idéntico**.
 
 ### What's new
 
-- **The COM port is back: `USBD_ITF_MAX_NUM` was 1 and four interfaces are needed.** The USB
-  core STALLs anything addressed to an interface above that number. With the serial port
-  alone (interfaces 0 and 1) it passed; with audio (2 and 3) Windows asked for interface 3,
-  got a STALL, reset the device and started over, in a loop — which looks like a permanent
+- **The COM port is back: `USBD_ITF_MAX_NUM` was 1 and four interfaces are
+  needed.** The USB
+  core STALLs anything addressed to an interface above that number. With the
+  serial port
+  alone (interfaces 0 and 1) it passed; with audio (2 and 3) Windows asked
+  for interface 3,
+  got a STALL, reset the device and started over, in a loop — which looks
+  like a permanent
   "waiting" on the radio and no COM port and no error at all on the PC.
 - It sits behind `#ifndef` and only the application raises it from its Makefile: **the
   bootloader still builds byte for byte identical**.
@@ -9408,30 +11971,45 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **La V4.16 no montaba el COM, y era un byte.** El descriptor general de flujo de audio
-  llevaba tipo `0x25` (clase de endpoint) donde tiene que llevar `0x24` (clase de interfaz).
-  El anfitrión veía un descriptor de endpoint sin endpoint al que pegarse y abandonaba la
-  configuración **sin dar ningún error**. El banco no lo cazaba; ahora lleva la regla
+- **La V4.16 no montaba el COM, y era un byte.** El descriptor general de
+  flujo de audio
+  llevaba tipo `0x25` (clase de endpoint) donde tiene que llevar `0x24`
+  (clase de interfaz).
+  El anfitrión veía un descriptor de endpoint sin endpoint al que pegarse y
+  abandonaba la
+  configuración **sin dar ningún error**. El banco no lo cazaba; ahora lleva
+  la regla
   general y se le ha visto fallar.
-- **Y repasando lo nuevo salieron cinco más**: el cambio de modo por CAT entraba por
+- **Y repasando lo nuevo salieron cinco más**: el cambio de modo por CAT
+  entraba por
   `demod_am_set_mode()` en vez de `apply_demod_mode()`, saltándose la ganancia del PGA y el
-  cambio de frecuencia de muestreo; `usb_cdc_para()` vaciaba los anillos desde el bucle
-  mientras dos interrupciones los tocan; encendido sin cable, la fila decía «apagado» y el
-  toque siguiente no lo paraba; una ráfaga de órdenes repintaba la cabecera una vez por
+  cambio de frecuencia de muestreo; `usb_cdc_para()` vaciaba los anillos
+  desde el bucle
+  mientras dos interrupciones los tocan; encendido sin cable, la fila decía
+  «apagado» y el
+  toque siguiente no lo paraba; una ráfaga de órdenes repintaba la cabecera
+  una vez por
   orden; y el volumen cambiado por CAT no se repintaba.
 
 ### What's new
 
-- **V4.16 did not create the COM port, and it was one byte.** The audio AS-general descriptor
-  carried type `0x25` (class-specific endpoint) where it must carry `0x24` (class-specific
-  interface). The host saw an endpoint descriptor with no endpoint to attach to and gave up
-  on configuration **with no error at all**. The bench missed it; it now carries the general
+- **V4.16 did not create the COM port, and it was one byte.** The audio AS-
+  general descriptor
+  carried type `0x25` (class-specific endpoint) where it must carry `0x24`
+  (class-specific
+  interface). The host saw an endpoint descriptor with no endpoint to attach
+  to and gave up
+  on configuration **with no error at all**. The bench missed it; it now
+  carries the general
   rule, and has been seen to fail on it.
 - **Reviewing the new code turned up five more**: CAT mode changes went through
   `demod_am_set_mode()` instead of `apply_demod_mode()`, skipping the PGA bookkeeping and the
-  sample-rate switch; `usb_cdc_para()` cleared the rings from the main loop while two
-  interrupts use them; turned on with no cable the row said "off" and the next tap would not
-  stop it; a burst of commands repainted the header once per command; and a CAT volume change
+  sample-rate switch; `usb_cdc_para()` cleared the rings from the main loop
+  while two
+  interrupts use them; turned on with no cable the row said "off" and the
+  next tap would not
+  stop it; a burst of commands repainted the header once per command; and a
+  CAT volume change
   did not repaint.
 
 ---
@@ -9440,38 +12018,61 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **La radio es ahora, por el mismo cable, un puerto serie Y una tarjeta de sonido.** En
-  WSJT-X o fldigi se elige como entrada de audio y **no hace falta tarjeta de sonido, ni
-  cable de audio, ni ajustar niveles**: lo que llega al PC son exactamente las mismas
+- **La radio es ahora, por el mismo cable, un puerto serie Y una tarjeta de
+  sonido.** En
+  WSJT-X o fldigi se elige como entrada de audio y **no hace falta tarjeta
+  de sonido, ni
+  cable de audio, ni ajustar niveles**: lo que llega al PC son exactamente
+  las mismas
   muestras que van al altavoz, ya con su AGC y su filtro.
-- **Dos descriptores de asociación, y la clase del dispositivo pasa a 0xEF/0x02/0x01.** Con
-  más de una función eso es obligatorio: sin ello Windows ve cuatro interfaces sueltas y
+- **Dos descriptores de asociación, y la clase del dispositivo pasa a
+  0xEF/0x02/0x01.** Con
+  más de una función eso es obligatorio: sin ello Windows ve cuatro
+  interfaces sueltas y
   **no monta el COM**, sin dar ningún error.
-- **El audio sólo se activa cuando un programa abre la grabación.** La interfaz lleva un
-  ajuste alternativo 0 sin endpoints, que es el que el anfitrión deja puesto mientras nadie
-  grabe: así el ancho de banda isócrono no se reserva desde que se enchufa el cable.
-- **El anillo pasó a llevar su sitio fuera**, porque el del CAT mueve órdenes de una docena
-  de bytes y el del audio 192 **cada milisegundo**. Una sola implementación para los dos, y
+- **El audio sólo se activa cuando un programa abre la grabación.** La
+  interfaz lleva un
+  ajuste alternativo 0 sin endpoints, que es el que el anfitrión deja puesto
+  mientras nadie
+  grabe: así el ancho de banda isócrono no se reserva desde que se enchufa
+  el cable.
+- **El anillo pasó a llevar su sitio fuera**, porque el del CAT mueve órdenes
+  de una docena
+  de bytes y el del audio 192 **cada milisegundo**. Una sola implementación
+  para los dos, y
   el banco prueba los dos tamaños.
-- **El banco de descriptores se reescribió entero** para lo compuesto, y con dos cuentas
-  cruzadas nuevas: que el total de la parte de control de audio cuadre, y que **el endpoint
+- **El banco de descriptores se reescribió entero** para lo compuesto, y con
+  dos cuentas
+  cruzadas nuevas: que el total de la parte de control de audio cuadre, y
+  que **el endpoint
   isócrono quepa el formato que se declara** tres descriptores más arriba.
 
 ### What's new
 
-- **Over the same cable, the radio is now both a serial port and a sound card.** In WSJT-X
-  or fldigi you pick it as the audio input and **no sound card, audio cable or level
-  tweaking is needed**: what reaches the PC is exactly the samples going to the speaker.
-- **Two interface association descriptors, and the device class becomes 0xEF/0x02/0x01.**
-  With more than one function that is mandatory: without it Windows sees four loose
+- **Over the same cable, the radio is now both a serial port and a sound
+  card.** In WSJT-X
+  or fldigi you pick it as the audio input and **no sound card, audio cable
+  or level
+  tweaking is needed**: what reaches the PC is exactly the samples going to
+  the speaker.
+- **Two interface association descriptors, and the device class becomes
+  0xEF/0x02/0x01.**
+  With more than one function that is mandatory: without it Windows sees
+  four loose
   interfaces and **does not create the COM port**, with no error of any kind.
-- **Audio only starts when a program opens recording.** Alternate setting 0 carries no
-  endpoints, so isochronous bandwidth is not reserved just by plugging the cable in.
-- **The ring now takes its storage from outside**, because the CAT one carries a dozen bytes
-  and the audio one 192 **every millisecond**. One implementation, and the bench covers both
+- **Audio only starts when a program opens recording.** Alternate setting 0
+  carries no
+  endpoints, so isochronous bandwidth is not reserved just by plugging the
+  cable in.
+- **The ring now takes its storage from outside**, because the CAT one carries
+  a dozen bytes
+  and the audio one 192 **every millisecond**. One implementation, and the
+  bench covers both
   sizes.
-- **The descriptor bench was rewritten** for the composite device, with two new cross-checks:
-  that the audio-control total adds up, and that **the isochronous endpoint fits the format
+- **The descriptor bench was rewritten** for the composite device, with two
+  new cross-checks:
+  that the audio-control total adds up, and that **the isochronous endpoint
+  fits the format
   declared** three descriptors above it.
 
 ---
@@ -9480,46 +12081,75 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **La radio se ve como un Kenwood TS-2000 desde el ordenador.** Información → página 4 →
-  **«Puerto serie USB»**, un toque, y al enchufar el cable sale un puerto serie (COMx /
-  ttyACM0) por el que hablan WSJT-X, JTDX, fldigi y cualquier cosa que use hamlib. Sin
-  drivers y sin tocar la placa. Frecuencia y modo de ida y vuelta; S, volumen y ancho de
+- **La radio se ve como un Kenwood TS-2000 desde el ordenador.** Información →
+  página 4 →
+  **«Puerto serie USB»**, un toque, y al enchufar el cable sale un puerto
+  serie (COMx /
+  ttyACM0) por el que hablan WSJT-X, JTDX, fldigi y cualquier cosa que use
+  hamlib. Sin
+  drivers y sin tocar la placa. Frecuencia y modo de ida y vuelta; S,
+  volumen y ancho de
   lectura. No transmite, y lo dice como lo diría un Kenwood.
-- **Los 48 MHz del USB salen del PLLSAI, no del PLL principal.** De este PLL salen 49,92
-  MHz, un **+4,0%** sobre una tolerancia del ±0,25%: el ordenador ve que se engancha algo y
-  la enumeración no termina nunca. El cargador lo resolvió bajando la CPU a 192 MHz; la
-  aplicación no puede, porque eso arrastra el oscilador de banda baja, el I2S, el reloj del
-  códec y los tiempos del bus de pantalla. **El PLLSAI estaba libre** y da 48,000 MHz
+- **Los 48 MHz del USB salen del PLLSAI, no del PLL principal.** De este PLL
+  salen 49,92
+  MHz, un **+4,0%** sobre una tolerancia del ±0,25%: el ordenador ve que se
+  engancha algo y
+  la enumeración no termina nunca. El cargador lo resolvió bajando la CPU a
+  192 MHz; la
+  aplicación no puede, porque eso arrastra el oscilador de banda baja, el
+  I2S, el reloj del
+  códec y los tiempos del bus de pantalla. **El PLLSAI estaba libre** y da
+  48,000 MHz
   exactos con N=125 y P=4, con la CPU quieta en 199,68.
-- **El pegamento de hardware está escrito aquí y no reutilizado**, porque el del fabricante
-  se llevaría por delante TIMER2 —que es el reloj maestro del códec y el oscilador de banda
+- **El pegamento de hardware está escrito aquí y no reutilizado**, porque el
+  del fabricante
+  se llevaría por delante TIMER2 —que es el reloj maestro del códec y el
+  oscilador de banda
   baja— y cambiaría la agrupación de prioridades de toda la radio.
-- **Se enciende a mano, a propósito.** El núcleo USB y el hardware son lo único de todo
-  esto que no se ha podido medir en el ordenador. Detrás de un toque, si algo va mal la
+- **Se enciende a mano, a propósito.** El núcleo USB y el hardware son lo
+  único de todo
+  esto que no se ha podido medir en el ordenador. Detrás de un toque, si
+  algo va mal la
   radio arranca normal y basta con no tocar la fila.
-- **Dos bancos nuevos**: los descriptores recorridos como los recorre un anfitrión, y el
-  anillo entre la interrupción y el bucle con dos hilos pasándose dos millones de bytes.
+- **Dos bancos nuevos**: los descriptores recorridos como los recorre un
+  anfitrión, y el
+  anillo entre la interrupción y el bucle con dos hilos pasándose dos
+  millones de bytes.
 
 ### What's new
 
-- **The radio appears as a Kenwood TS-2000 to the computer.** Information → page 4 → **"USB
-  serial port"**, one tap, and plugging the cable in gives a serial port (COMx / ttyACM0)
-  that WSJT-X, JTDX, fldigi and anything using hamlib can drive. No drivers, no board
-  changes. Frequency and mode both ways; S-meter, volume and filter width read-only. It
+- **The radio appears as a Kenwood TS-2000 to the computer.** Information →
+  page 4 → **"USB
+  serial port"**, one tap, and plugging the cable in gives a serial port
+  (COMx / ttyACM0)
+  that WSJT-X, JTDX, fldigi and anything using hamlib can drive. No drivers,
+  no board
+  changes. Frequency and mode both ways; S-meter, volume and filter width
+  read-only. It
   does not transmit, and says so the way a Kenwood would.
-- **The USB's 48 MHz comes from PLLSAI, not the main PLL.** The main PLL yields 49.92 MHz,
-  **+4.0%** against a ±0.25% tolerance: the host sees something attach and enumeration never
-  completes. The bootloader solved this by dropping to 192 MHz; the application cannot,
-  because that drags the low-band oscillator, the I2S, the codec clock and the display bus
-  timings with it. **PLLSAI was unused** and gives exactly 48.000 MHz with N=125, P=4, with
+- **The USB's 48 MHz comes from PLLSAI, not the main PLL.** The main PLL
+  yields 49.92 MHz,
+  **+4.0%** against a ±0.25% tolerance: the host sees something attach and
+  enumeration never
+  completes. The bootloader solved this by dropping to 192 MHz; the
+  application cannot,
+  because that drags the low-band oscillator, the I2S, the codec clock and
+  the display bus
+  timings with it. **PLLSAI was unused** and gives exactly 48.000 MHz with
+  N=125, P=4, with
   the CPU untouched at 199.68.
-- **The hardware glue is written here rather than reused**, because the vendor's would take
-  out TIMER2 — the codec's master clock and the low-band oscillator — and change the
+- **The hardware glue is written here rather than reused**, because the
+  vendor's would take
+  out TIMER2 — the codec's master clock and the low-band oscillator — and
+  change the
   interrupt priority grouping of the whole radio.
-- **It is turned on by hand, deliberately.** The USB core and the hardware are the only part
+- **It is turned on by hand, deliberately.** The USB core and the hardware are
+  the only part
   of this that could not be measured on the host.
-- **Two new benches**: the descriptors walked the way a host walks them, and the ring
-  between the interrupt and the main loop with two threads passing two million bytes.
+- **Two new benches**: the descriptors walked the way a host walks them, and
+  the ring
+  between the interrupt and the main loop with two threads passing two
+  million bytes.
 
 ---
 
@@ -9527,34 +12157,57 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **La fila «USB del pincho» ahora barre patillas, y la del conector se nombra sola.** La
-  V4.13 sólo sabía decir sí o no, y dijo **no**: el conector grande no llega a PA11/PA12.
-  Un toque pone como entrada con bajada las **26 patillas que el firmware no configura
-  nunca** —sacadas del propio código, no de una foto—, las lee con el pincho dentro y
-  escribe el nombre de la que se mueva. Cada una se deja exactamente como estaba: se
-  guardan los registros `CTL` y `PUD` enteros de los cuatro puertos antes de tocar nada.
-- **PA9 entra en el barrido aunque la use la consola serie.** Contando las pastillas de ese
-  lado del chip —25 exactas, un lado entero de LQFP100— las dos que el usuario marcó en la
-  foto son la 7ª y la 8ª; si las dos anteriores son las del conector de grabar (PA12 y
-  PA11), las marcadas son **PA10 y PA9**. Barrer sólo PA10 dejaría la otra sin confirmar.
-- **Y una corrección a lo que dije en la V4.13:** los dos cortes del mod **no dejan sin
-  datos al conector de grabar**. Van del lado del conector grande, a soltar sus líneas de
+- **La fila «USB del pincho» ahora barre patillas, y la del conector se nombra
+  sola.** La
+  V4.13 sólo sabía decir sí o no, y dijo **no**: el conector grande no llega
+  a PA11/PA12.
+  Un toque pone como entrada con bajada las **26 patillas que el firmware no
+  configura
+  nunca** —sacadas del propio código, no de una foto—, las lee con el pincho
+  dentro y
+  escribe el nombre de la que se mueva. Cada una se deja exactamente como
+  estaba: se
+  guardan los registros `CTL` y `PUD` enteros de los cuatro puertos antes de
+  tocar nada.
+- **PA9 entra en el barrido aunque la use la consola serie.** Contando las
+  pastillas de ese
+  lado del chip —25 exactas, un lado entero de LQFP100— las dos que el
+  usuario marcó en la
+  foto son la 7ª y la 8ª; si las dos anteriores son las del conector de
+  grabar (PA12 y
+  PA11), las marcadas son **PA10 y PA9**. Barrer sólo PA10 dejaría la otra
+  sin confirmar.
+- **Y una corrección a lo que dije en la V4.13:** los dos cortes del mod **no
+  dejan sin
+  datos al conector de grabar**. Van del lado del conector grande, a soltar
+  sus líneas de
   donde están hoy. **La grabación arrastrando el fichero sobrevive al mod.**
 
 ### What's new
 
-- **The "Stick USB" row now sweeps pins, and the connector's pin names itself.** V4.13 could
-  only say yes or no, and it said **no**: the big connector does not reach PA11/PA12. One
-  tap sets the **26 pins the firmware never configures** —derived from the code itself, not
-  from a photo— to input with pulldown, reads them with the stick in, and writes the name of
-  whichever moves. Every pin is left exactly as it was: the whole `CTL` and `PUD` registers
+- **The "Stick USB" row now sweeps pins, and the connector's pin names
+  itself.** V4.13 could
+  only say yes or no, and it said **no**: the big connector does not reach
+  PA11/PA12. One
+  tap sets the **26 pins the firmware never configures** —derived from the
+  code itself, not
+  from a photo— to input with pulldown, reads them with the stick in, and
+  writes the name of
+  whichever moves. Every pin is left exactly as it was: the whole `CTL` and
+  `PUD` registers
   of all four ports are saved before anything is touched.
-- **PA9 is in the sweep even though the serial console uses it.** Counting the pads on that
-  side of the chip —25 exactly, a full LQFP100 side— the two the owner marked are the 7th
-  and 8th; if the two before them are the flashing connector's (PA12 and PA11), the marked
-  ones are **PA10 and PA9**. Sweeping only PA10 would leave the other unconfirmed.
-- **And a correction to what V4.13 said:** the mod's two cuts **do not strip the flashing
-  connector of its data lines**. They are on the big connector's side, freeing its lines
+- **PA9 is in the sweep even though the serial console uses it.** Counting the
+  pads on that
+  side of the chip —25 exactly, a full LQFP100 side— the two the owner
+  marked are the 7th
+  and 8th; if the two before them are the flashing connector's (PA12 and
+  PA11), the marked
+  ones are **PA10 and PA9**. Sweeping only PA10 would leave the other
+  unconfirmed.
+- **And a correction to what V4.13 said:** the mod's two cuts **do not strip
+  the flashing
+  connector of its data lines**. They are on the big connector's side,
+  freeing its lines
   from where they sit today. **Drag-and-drop flashing survives the mod.**
 
 ---
@@ -9563,32 +12216,48 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **«USB del pincho», una fila nueva en Información que contesta sola dónde está el
-  conector grande.** Para grabar en un pincho el micro tiene que hacer de anfitrión, y en
-  este encapsulado eso sólo cabe en **PA11/PA12 (USBFS)**: el otro par posible —PB14/PB15,
-  USBHS— **son el bus I2S del códec**, con las muestras I/Q entrando por PB15 y el audio
-  saliendo por PB14 (ver `gd32_i2s.c`). La fila se lee con un pincho enchufado y detecta la
-  resistencia de 1,5 kΩ que todo dispositivo USB lleva dentro: si pone «PA12 · D+», el
+- **«USB del pincho», una fila nueva en Información que contesta sola dónde
+  está el
+  conector grande.** Para grabar en un pincho el micro tiene que hacer de
+  anfitrión, y en
+  este encapsulado eso sólo cabe en **PA11/PA12 (USBFS)**: el otro par
+  posible —PB14/PB15,
+  USBHS— **son el bus I2S del códec**, con las muestras I/Q entrando por
+  PB15 y el audio
+  saliendo por PB14 (ver `gd32_i2s.c`). La fila se lee con un pincho
+  enchufado y detecta la
+  resistencia de 1,5 kΩ que todo dispositivo USB lleva dentro: si pone «PA12
+  · D+», el
   conector grande ya llega y **el anfitrión es sólo firmware**.
-- **La página 4 de Información no estaba en el manual.** Ocho filas sin documentar, y el
-  manual decía «veintinueve filas en tres páginas» cuando son treinta y cinco en cuatro. El
+- **La página 4 de Información no estaba en el manual.** Ocho filas sin
+  documentar, y el
+  manual decía «veintinueve filas en tres páginas» cuando son treinta y
+  cinco en cuatro. El
   suelo de `tools/manual_check.py` baja de 171 a 164.
-- **El pie de la fila nueva no cabía:** 246 px de 192. Lo pilló `sim/pie_ancho.c`, al que se
+- **El pie de la fila nueva no cabía:** 246 px de 192. Lo pilló
+  `sim/pie_ancho.c`, al que se
   le han añadido los cuatro pies de esta fila para que no se vuelva a colar.
 
 ### What's new
 
-- **"Stick USB", a new Information row that answers by itself where the big connector
-  goes.** To write to a stick the MCU must act as host, and on this package that only fits
-  on **PA11/PA12 (USBFS)**: the other possible pair —PB14/PB15, USBHS— **is the codec's I2S
+- **"Stick USB", a new Information row that answers by itself where the big
+  connector
+  goes.** To write to a stick the MCU must act as host, and on this package
+  that only fits
+  on **PA11/PA12 (USBFS)**: the other possible pair —PB14/PB15, USBHS— **is
+  the codec's I2S
   bus**, with I/Q samples coming in on PB15 and audio going out on PB14 (see
   `gd32_i2s.c`). The row is read with a stick plugged in and detects the 1.5 kΩ resistor
-  every USB device carries: if it reads "PA12 · D+", the big connector already reaches it
+  every USB device carries: if it reads "PA12 · D+", the big connector
+  already reaches it
   and **host mode is firmware only**.
-- **Information's page 4 was undocumented.** Eight rows missing, and the manual said
-  "twenty-nine rows in three pages" when there are thirty-five in four. The floor in
+- **Information's page 4 was undocumented.** Eight rows missing, and the
+  manual said
+  "twenty-nine rows in three pages" when there are thirty-five in four. The
+  floor in
   `tools/manual_check.py` drops from 171 to 164.
-- **The new row's footer did not fit:** 246 px of 192. Caught by `sim/pie_ancho.c`, which
+- **The new row's footer did not fit:** 246 px of 192. Caught by
+  `sim/pie_ancho.c`, which
   now carries all four of this row's footers so it cannot slip through again.
 
 ---
@@ -9597,36 +12266,57 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **Incidencia 12, los espurios por debajo de 300 kHz: era el filtro de entrada.**
+- **Incidencia 12, los espurios por debajo de 300 kHz: era el filtro de
+  entrada.**
   `rf_lpf_select()` sólo se llamaba desde dentro del driver del MS5351, y por debajo de
-  300 kHz el oscilador no lo hace el MS5351. Así que el filtro se quedaba donde lo dejó la
-  última sintonía de arriba: bajando desde FM se quedaba en el rango de 61–120 MHz, que
-  **corta todo lo de abajo**, y lo que entraba era lo que se colaba por los lados. Ahora el
+  300 kHz el oscilador no lo hace el MS5351. Así que el filtro se quedaba
+  donde lo dejó la
+  última sintonía de arriba: bajando desde FM se quedaba en el rango de
+  61–120 MHz, que
+  **corta todo lo de abajo**, y lo que entraba era lo que se colaba por los
+  lados. Ahora el
   camino del GD32 también lo selecciona.
-- **Y la cuadratura de ese oscilador, medida sin osciloscopio.** La aritmética del
-  temporizador es entera: con el período impar el desfase se quedaba en 90 − 90/cuentas
-  grados — **46,6 dB de rechazo de imagen en el peor caso**, la mitad de las frecuencias
-  afectadas. No era la causa de los espurios, pero **ahora el período se fuerza a par y la
-  cuadratura es exacta por construcción**. Sale gratis: el escalón de frecuencia que eso
+- **Y la cuadratura de ese oscilador, medida sin osciloscopio.** La aritmética
+  del
+  temporizador es entera: con el período impar el desfase se quedaba en 90 −
+  90/cuentas
+  grados — **46,6 dB de rechazo de imagen en el peor caso**, la mitad de las
+  frecuencias
+  afectadas. No era la causa de los espurios, pero **ahora el período se
+  fuerza a par y la
+  cuadratura es exacta por construcción**. Sale gratis: el escalón de
+  frecuencia que eso
   dobla ya se lo comía el NCO desde V4.10.
-- **Banco nuevo `make logen`**, que barre los 294.001 hercios de 6 a 300 kHz. Visto fallar:
+- **Banco nuevo `make logen`**, que barre los 294.001 hercios de 6 a 300 kHz.
+  Visto fallar:
   147.338 casos en rojo sin el ajuste a par.
 
 ### What's new
 
-- **Issue 12, spurious signals below 300 kHz: it was the input filter.** `rf_lpf_select()`
-  was only ever called from inside the MS5351 driver, and below 300 kHz the oscillator is
-  not the MS5351. So the filter stayed wherever the last tune above had left it: coming
-  down from FM it stayed on the 61–120 MHz range, which **cuts everything below**, and what
-  reached the input was whatever leaked past the wrong filter. The GD32 path now selects it
+- **Issue 12, spurious signals below 300 kHz: it was the input filter.**
+  `rf_lpf_select()`
+  was only ever called from inside the MS5351 driver, and below 300 kHz the
+  oscillator is
+  not the MS5351. So the filter stayed wherever the last tune above had left
+  it: coming
+  down from FM it stayed on the 61–120 MHz range, which **cuts everything
+  below**, and what
+  reached the input was whatever leaked past the wrong filter. The GD32 path
+  now selects it
   too.
-- **And that oscillator's quadrature, measured without an oscilloscope.** The timer
-  arithmetic is integer: with an odd period the phase landed at 90 − 90/counts degrees —
-  **46.6 dB of image rejection worst case**, affecting half of all frequencies. Not the
-  cause of the spurs, but **the period is now forced even and the quadrature is exact by
-  construction**. It is free: the doubled frequency step it costs has been absorbed by the
+- **And that oscillator's quadrature, measured without an oscilloscope.** The
+  timer
+  arithmetic is integer: with an odd period the phase landed at 90 −
+  90/counts degrees —
+  **46.6 dB of image rejection worst case**, affecting half of all
+  frequencies. Not the
+  cause of the spurs, but **the period is now forced even and the quadrature
+  is exact by
+  construction**. It is free: the doubled frequency step it costs has been
+  absorbed by the
   NCO since V4.10.
-- **New bench `make logen`**, sweeping all 294,001 hertz from 6 to 300 kHz. Seen to fail:
+- **New bench `make logen`**, sweeping all 294,001 hertz from 6 to 300 kHz.
+  Seen to fail:
   147,338 cases red without the even adjustment.
 
 ---
@@ -9635,31 +12325,49 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **Arreglado el aparcado del NCO en onda larga.** Por debajo de 44 kHz de dial la cuenta
+- **Arreglado el aparcado del NCO en onda larga.** Por debajo de 44 kHz de
+  dial la cuenta
   `freq - off_max` se iba por debajo de cero y, siendo sin signo, daba la vuelta: el
-  oscilador salía a **4.294 MHz**. La sintonía se quedaba donde le daba la gana y el panel
-  se dibujaba alrededor de un número inventado. La radio baja a 30 kHz desde que se
-  añadieron las horarias, así que toda la franja de 30 a 44 kHz estaba rota con el NCO
+  oscilador salía a **4.294 MHz**. La sintonía se quedaba donde le daba la
+  gana y el panel
+  se dibujaba alrededor de un número inventado. La radio baja a 30 kHz desde
+  que se
+  añadieron las horarias, así que toda la franja de 30 a 44 kHz estaba rota
+  con el NCO
   puesto.
-- **Y el punto de reaparcado ya no cae fuera de la banda plana del códec.** El comentario
-  decía «±40 kHz» y los `#define` decían 44.000: al reaparcar bajando, la emisora quedaba
-  al 92% de Nyquist, dentro de la caída del antialias. Por eso después de un salto «no
+- **Y el punto de reaparcado ya no cae fuera de la banda plana del códec.** El
+  comentario
+  decía «±40 kHz» y los `#define` decían 44.000: al reaparcar bajando, la
+  emisora quedaba
+  al 92% de Nyquist, dentro de la caída del antialias. Por eso después de un
+  salto «no
   recibía nada».
-- **El banco probaba el aparcado sólo en 7,15 MHz**, donde el fallo no existe. Ahora barre
-  ocho diales de 30 a 91,3 kHz con los dos topes. Visto fallar: seis de ocho en rojo.
+- **El banco probaba el aparcado sólo en 7,15 MHz**, donde el fallo no existe.
+  Ahora barre
+  ocho diales de 30 a 91,3 kHz con los dos topes. Visto fallar: seis de ocho
+  en rojo.
 
 ### What's new
 
-- **Fixed the NCO parking in the longwave band.** Below 44 kHz of dial, `freq - off_max`
-  went below zero and, being unsigned, wrapped: the oscillator came out at **4,294 MHz**.
-  Tuning ended up wherever it liked and the panel was drawn around an invented number. The
-  radio goes down to 30 kHz since the time stations were added, so the whole 30–44 kHz
+- **Fixed the NCO parking in the longwave band.** Below 44 kHz of dial, `freq
+  - off_max`
+  went below zero and, being unsigned, wrapped: the oscillator came out at
+  **4,294 MHz**.
+  Tuning ended up wherever it liked and the panel was drawn around an
+  invented number. The
+  radio goes down to 30 kHz since the time stations were added, so the whole
+  30–44 kHz
   stretch was broken with the NCO on.
-- **And the re-park point no longer lands outside the codec's flat band.** The comment said
-  "±40 kHz" and the `#define`s said 44,000: re-parking downwards left the station at 92% of
-  Nyquist, inside the antialias roll-off. That is why, after a jump, it "received nothing".
-- **The bench only tested parking at 7.15 MHz**, where the bug cannot happen. It now sweeps
-  eight dials from 30 to 91.3 kHz with both limits. Seen to fail: six of eight red.
+- **And the re-park point no longer lands outside the codec's flat band.** The
+  comment said
+  "±40 kHz" and the `#define`s said 44,000: re-parking downwards left the
+  station at 92% of
+  Nyquist, inside the antialias roll-off. That is why, after a jump, it
+  "received nothing".
+- **The bench only tested parking at 7.15 MHz**, where the bug cannot happen.
+  It now sweeps
+  eight dials from 30 to 91.3 kHz with both limits. Seen to fail: six of
+  eight red.
 
 ---
 
@@ -9667,33 +12375,53 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **Por debajo de 300 kHz el dial podía estar hasta 900 Hz de donde decía.** Ahí el
-  oscilador lo hace un temporizador del GD32, cuyo periodo es un número entero de cuentas:
-  el escalón crece con el cuadrado de la frecuencia (58 Hz a 54 kHz, **1.803 Hz a
-  300 kHz**), y el desplazamiento digital se calculaba contra la frecuencia **pedida**, no
-  contra la que sale. En onda larga de radiodifusión eso es casi un canal. Ahora se guarda
-  la real y el NCO se come el redondeo: el dial vuelve a ser exacto, y la regla del
+- **Por debajo de 300 kHz el dial podía estar hasta 900 Hz de donde decía.**
+  Ahí el
+  oscilador lo hace un temporizador del GD32, cuyo periodo es un número
+  entero de cuentas:
+  el escalón crece con el cuadrado de la frecuencia (58 Hz a 54 kHz, **1.803
+  Hz a
+  300 kHz**), y el desplazamiento digital se calculaba contra la frecuencia
+  **pedida**, no
+  contra la que sale. En onda larga de radiodifusión eso es casi un canal.
+  Ahora se guarda
+  la real y el NCO se come el redondeo: el dial vuelve a ser exacto, y la
+  regla del
   espectro con él.
-- **Y la fila «Cuadratura I/Q» ya dice dónde está ese oscilador.** Ponía «GD32, PA6/PA7» y
-  se acababa: en toda la banda de DCF77, ALS162, RBU y las horarias, la radio no decía
-  dónde tenía el oscilador. Ahora pone la frecuencia que sale de verdad y su desvío contra
+- **Y la fila «Cuadratura I/Q» ya dice dónde está ese oscilador.** Ponía
+  «GD32, PA6/PA7» y
+  se acababa: en toda la banda de DCF77, ALS162, RBU y las horarias, la
+  radio no decía
+  dónde tenía el oscilador. Ahora pone la frecuencia que sale de verdad y su
+  desvío contra
   la pedida, `54025 Hz (+25)`.
-- **Sobre los 66 kHz: el oscilador queda descartado con números** — a esa frecuencia el
+- **Sobre los 66 kHz: el oscilador queda descartado con números** — a esa
+  frecuencia el
   desvío es de 25 Hz, no de medio kilohercio.
 
 ### What's new
 
-- **Below 300 kHz the dial could be up to 900 Hz off from what it read.** There the local
-  oscillator is a GD32 timer whose period is a whole number of counts: the step grows with
-  the square of the frequency (58 Hz at 54 kHz, **1,803 Hz at 300 kHz**), and the digital
-  offset was computed against the **requested** frequency, not the one that comes out. On
-  the longwave broadcast band that is nearly a channel. The real value is now kept and the
-  NCO absorbs the rounding: the dial is exact again, and the spectrum ruler with it.
-- **And the "I/Q quadrature" row now says where that oscillator is.** It read "GD32,
-  PA6/PA7" and stopped: across the whole DCF77 / ALS162 / RBU / time-station band the radio
-  never said where its oscillator was. It now shows the frequency that actually comes out
+- **Below 300 kHz the dial could be up to 900 Hz off from what it read.**
+  There the local
+  oscillator is a GD32 timer whose period is a whole number of counts: the
+  step grows with
+  the square of the frequency (58 Hz at 54 kHz, **1,803 Hz at 300 kHz**),
+  and the digital
+  offset was computed against the **requested** frequency, not the one that
+  comes out. On
+  the longwave broadcast band that is nearly a channel. The real value is
+  now kept and the
+  NCO absorbs the rounding: the dial is exact again, and the spectrum ruler
+  with it.
+- **And the "I/Q quadrature" row now says where that oscillator is.** It read
+  "GD32,
+  PA6/PA7" and stopped: across the whole DCF77 / ALS162 / RBU / time-station
+  band the radio
+  never said where its oscillator was. It now shows the frequency that
+  actually comes out
   and its deviation from the requested one, `54025 Hz (+25)`.
-- **On the 66 kHz report: the oscillator is ruled out with numbers** — the deviation there
+- **On the 66 kHz report: the oscillator is ruled out with numbers** — the
+  deviation there
   is 25 Hz, not half a kilohertz.
 
 ---
@@ -9702,53 +12430,83 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **AIS no decodificaba nada a 48 kHz** y parecía que no había tráfico: el receptor
-  arrancaba con un `96000` escrito a pelo. A 48 kHz salen cinco muestras por bit y no diez,
-  así que el reloj muestreaba un bit sí y otro no. Ahora pregunta la tasa, y el cambio de
+- **AIS no decodificaba nada a 48 kHz** y parecía que no había tráfico: el
+  receptor
+  arrancaba con un `96000` escrito a pelo. A 48 kHz salen cinco muestras por
+  bit y no diez,
+  así que el reloj muestreaba un bit sí y otro no. Ahora pregunta la tasa, y
+  el cambio de
   RATE también reinicia AIS.
-- **La FM se quedaba sorda al pasar por el reloj por radio**, con 4 kHz de audio en vez de
-  15, sin forma de arreglarlo desde la interfaz — y el autoguardado podía dejarlo escrito
+- **La FM se quedaba sorda al pasar por el reloj por radio**, con 4 kHz de
+  audio en vez de
+  15, sin forma de arreglarlo desde la interfaz — y el autoguardado podía
+  dejarlo escrito
   en `CONFIG.CSV` para siempre.
-- **Entrar en el reloj por radio dejaba los decodificadores encendidos**: el botón de Modo
-  se quedaba en `?`, y viniendo de CW los tics de la emisora horaria sonaban como un
+- **Entrar en el reloj por radio dejaba los decodificadores encendidos**: el
+  botón de Modo
+  se quedaba en `?`, y viniendo de CW los tics de la emisora horaria sonaban
+  como un
   silbido, porque seguían pasando por el filtro de 250–1000 Hz.
-- **El borrador de ruido dejaba de borrar medio segundo al tocar el atenuador**, que es
-  justo cuando lo tocas porque la banda se ha puesto ruidosa. Lo pedía su propia cabecera.
-- **El WEFAX dibujaba y guardaba la línea anterior, rota por la mitad**: la bandera se
+- **El borrador de ruido dejaba de borrar medio segundo al tocar el
+  atenuador**, que es
+  justo cuando lo tocas porque la banda se ha puesto ruidosa. Lo pedía su
+  propia cabecera.
+- **El WEFAX dibujaba y guardaba la línea anterior, rota por la mitad**: la
+  bandera se
   publicaba antes de cerrar el buffer.
-- **El identificador de NAVTEX podía ser uno que no existió nunca** — mezcla de la cabecera
+- **El identificador de NAVTEX podía ser uno que no existió nunca** — mezcla
+  de la cabecera
   anterior y la nueva durante medio segundo en cada mensaje.
-- **ALE daba una palabra con la calidad de otra** y perdía la siguiente, y el contador de
-  la pantalla se quedaba descuadrado para siempre. Ahora es un anillo, como los otros nueve.
-- **Y cuatro más**: el puntero del gancho de audio se leía dos veces (ventana de salto a la
-  dirección cero), el contador de bloques perdidos de FT8 marcaba cero justo cuando se
-  perdían, el DSC podía volcar una llamada sin su veredicto, y conmutar a AIS reconfiguraba
+- **ALE daba una palabra con la calidad de otra** y perdía la siguiente, y el
+  contador de
+  la pantalla se quedaba descuadrado para siempre. Ahora es un anillo, como
+  los otros nueve.
+- **Y cuatro más**: el puntero del gancho de audio se leía dos veces (ventana
+  de salto a la
+  dirección cero), el contador de bloques perdidos de FT8 marcaba cero justo
+  cuando se
+  perdían, el DSC podía volcar una llamada sin su veredicto, y conmutar a
+  AIS reconfiguraba
   un filtro que la interrupción estaba usando.
 
 ### What's new
 
-- **AIS decoded nothing at 48 kHz** and it looked like empty traffic: the receiver was
-  started with a hard-coded `96000`. At 48 kHz there are five samples per bit, not ten, so
-  the clock sampled every other bit. It now asks for the rate, and changing RATE restarts
+- **AIS decoded nothing at 48 kHz** and it looked like empty traffic: the
+  receiver was
+  started with a hard-coded `96000`. At 48 kHz there are five samples per
+  bit, not ten, so
+  the clock sampled every other bit. It now asks for the rate, and changing
+  RATE restarts
   AIS too.
-- **FM went dull after a trip through the radio-clock screen** — 4 kHz of audio instead of
-  15, with no way to fix it from the UI, and autosave could write it into `CONFIG.CSV` for
+- **FM went dull after a trip through the radio-clock screen** — 4 kHz of
+  audio instead of
+  15, with no way to fix it from the UI, and autosave could write it into
+  `CONFIG.CSV` for
   good.
-- **Entering the radio-clock screen left the decoders running**: the Mode button stuck at
+- **Entering the radio-clock screen left the decoders running**: the Mode
+  button stuck at
   `?`, and coming from CW the time station's ticks came out as a narrow whistle, still
   going through the 250–1000 Hz filter.
 - **The noise blanker stopped blanking for half a second when you touched the
-  attenuator** — exactly when you touch it because the band got noisy. Its own header asked
+  attenuator** — exactly when you touch it because the band got noisy. Its
+  own header asked
   for this.
-- **WEFAX drew and saved the previous line, torn in half**: the flag was published before
+- **WEFAX drew and saved the previous line, torn in half**: the flag was
+  published before
   the buffer was closed.
-- **The NAVTEX identifier could be one that never existed on the air** — a mixture of the
+- **The NAVTEX identifier could be one that never existed on the air** — a
+  mixture of the
   previous header and the new one for half a second on every message.
-- **ALE returned one word with another word's quality** and dropped the next one, leaving
-  the on-screen counter permanently out of step. It is a ring now, like the other nine.
-- **And four more**: the audio hook pointer was read twice (a window where it branches to
-  address zero), FT8's dropped-block counter read zero exactly when blocks were dropped,
-  DSC could dump a call without its verdict, and switching to AIS reconfigured a filter the
+- **ALE returned one word with another word's quality** and dropped the next
+  one, leaving
+  the on-screen counter permanently out of step. It is a ring now, like the
+  other nine.
+- **And four more**: the audio hook pointer was read twice (a window where it
+  branches to
+  address zero), FT8's dropped-block counter read zero exactly when blocks
+  were dropped,
+  DSC could dump a call without its verdict, and switching to AIS
+  reconfigured a filter the
   interrupt was using.
 
 ---
@@ -9757,48 +12515,73 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **Arreglado: la cabecera de WEFAX escribía seis bytes fuera de su array.** El buffer
-  medía 40 y el peor caso son 46, desde que se le añadió la corrección de inclinación
+- **Arreglado: la cabecera de WEFAX escribía seis bytes fuera de su array.**
+  El buffer
+  medía 40 y el peor caso son 46, desde que se le añadió la corrección de
+  inclinación
   (`+NNNN ppm`). Y no era un caso raro: en cuanto una carta deja aprendida cualquier
-  corrección, el texto se repinta con ese campo **cada 500 ms** hasta salir del modo.
+  corrección, el texto se repinta con ese campo **cada 500 ms** hasta salir
+  del modo.
 - **Dos buffers que cabían por un pelo**, ampliados y con la cuenta atada a un
   `_Static_assert`: el detalle de la hora por RDS (63 de 64) y la fila «Flash externa»
-  (30 de 32, y es justo la fila que existe para detectar chips raros). De paso, un
+  (30 de 32, y es justo la fila que existe para detectar chips raros). De
+  paso, un
   `", descartadas "` que salía en castellano dentro de la frase inglesa.
-- **Una guarda que no cubría lo que venía detrás** en la pantalla de calibración del
+- **Una guarda que no cubría lo que venía detrás** en la pantalla de
+  calibración del
   táctil: reservaba un carácter y se escriben siete.
-- **Dos redes que faltaban en HFDL:** el bucle del sincronizador no cumplía el contrato
-  que su propia cabecera declara (podía escribir más de 16 muestras en arrays de 16 de la
-  pila, o no terminar), y el desentrelazador tenía la vuelta de columna en `push()` pero
+- **Dos redes que faltaban en HFDL:** el bucle del sincronizador no cumplía el
+  contrato
+  que su propia cabecera declara (podía escribir más de 16 muestras en
+  arrays de 16 de la
+  pila, o no terminar), y el desentrelazador tenía la vuelta de columna en
+  `push()` pero
   no en `pop()`.
-- **Un desbordamiento con signo** en el reloj de bit de AIS y APRS, ahora hecho sin signo.
-  Con honestidad: **ningún banco lo cazó** y 400 semillas siguen en verde — la ventana es
+- **Un desbordamiento con signo** en el reloj de bit de AIS y APRS, ahora
+  hecho sin signo.
+  Con honestidad: **ningún banco lo cazó** y 400 semillas siguen en verde —
+  la ventana es
   de un solo valor del acumulador entre 2³². Salió leyendo.
-- **Y una medida incómoda sobre nuestro propio banco de fuzzing:** sólo prueba la mitad
-  delantera de cada decodificador. El «3.780 millones de muestras, limpio» cubre la mitad
+- **Y una medida incómoda sobre nuestro propio banco de fuzzing:** sólo prueba
+  la mitad
+  delantera de cada decodificador. El «3.780 millones de muestras, limpio»
+  cubre la mitad
   del ISR, no el decodificador entero. Queda escrito en los pendientes.
 
 ### What's new
 
-- **Fixed: the WEFAX header wrote six bytes past the end of its array.** The buffer was 40
-  and the worst case is 46, ever since the slant correction (`+NNNN ppm`) was added. Not a
-  rare case either: once a chart leaves any correction learned, the text redraws with that
+- **Fixed: the WEFAX header wrote six bytes past the end of its array.** The
+  buffer was 40
+  and the worst case is 46, ever since the slant correction (`+NNNN ppm`)
+  was added. Not a
+  rare case either: once a chart leaves any correction learned, the text
+  redraws with that
   field **every 500 ms** until you leave the mode.
-- **Two buffers that fitted by one byte**, enlarged with the arithmetic bound to a
+- **Two buffers that fitted by one byte**, enlarged with the arithmetic bound
+  to a
   `_Static_assert`: the RDS clock detail (63 of 64) and the "External flash" row (30 of 32
-  — and that row exists precisely to catch odd chips). Also one Spanish literal that leaked
+  — and that row exists precisely to catch odd chips). Also one Spanish
+  literal that leaked
   into the English sentence.
-- **A guard that did not cover what came after it** in the touch calibration screen: it
+- **A guard that did not cover what came after it** in the touch calibration
+  screen: it
   reserved one character and seven bytes are written.
-- **Two missing safety nets in HFDL:** the symbol-sync loop did not honour the contract its
-  own header states (it could write more than 16 samples into 16-element stack arrays, or
-  never terminate), and the deinterleaver had the column wrap in `push()` but not in
+- **Two missing safety nets in HFDL:** the symbol-sync loop did not honour the
+  contract its
+  own header states (it could write more than 16 samples into 16-element
+  stack arrays, or
+  never terminate), and the deinterleaver had the column wrap in `push()`
+  but not in
   `pop()`.
-- **A signed-overflow UB** in the AIS and APRS bit clock, now done unsigned. Honestly:
-  **no bench caught it** and 400 seeds stay green — the window is a single accumulator
+- **A signed-overflow UB** in the AIS and APRS bit clock, now done unsigned.
+  Honestly:
+  **no bench caught it** and 400 seeds stay green — the window is a single
+  accumulator
   value out of 2³². It came from reading, not measuring.
-- **And an uncomfortable measurement about our own fuzz bench:** it only exercises the
-  front half of each decoder. The "3,780 M samples, clean" covers the ISR half, not the
+- **And an uncomfortable measurement about our own fuzz bench:** it only
+  exercises the
+  front half of each decoder. The "3,780 M samples, clean" covers the ISR
+  half, not the
   whole decoder. Written into the pending list.
 
 ---
@@ -9807,34 +12590,51 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **El margen de ruido del CW, en pantalla.** `cw.c` persigue dos medias —la baja sobre
-  el ruido, la alta sobre la señal— y pone el umbral entre las dos. Las dos tenían
-  función pública desde que se escribieron **y no las llamaba nadie**. Ahora la chapa del
-  panel pone **la separación entre ellas en dB**, al lado de los ppm: por debajo de
-  1,2 dB se han juntado y la radio calla a propósito, ~2 dB es el peor caso que intenta
-  sacar, 10 o más es señal cómoda. Es un diagnóstico, **no** una condición nueva: lo que
+- **El margen de ruido del CW, en pantalla.** `cw.c` persigue dos medias —la
+  baja sobre
+  el ruido, la alta sobre la señal— y pone el umbral entre las dos. Las dos
+  tenían
+  función pública desde que se escribieron **y no las llamaba nadie**. Ahora
+  la chapa del
+  panel pone **la separación entre ellas en dB**, al lado de los ppm: por
+  debajo de
+  1,2 dB se han juntado y la radio calla a propósito, ~2 dB es el peor caso
+  que intenta
+  sacar, 10 o más es señal cómoda. Es un diagnóstico, **no** una condición
+  nueva: lo que
   separa Morse de ruido sigue siendo la forma, no el nivel.
 - **La velocidad ya se detectaba sola** entre 5 y 45 ppm, y sale en la chapa; en
   Ajustes → `CW PPM` salen las dos, la pista que le das y la que ha medido.
-- **Un desbordamiento cazado antes de salir.** El buffer de la chapa medía 16 bytes y el
+- **Un desbordamiento cazado antes de salir.** El buffer de la chapa medía 16
+  bytes y el
   peor caso de CW pasaba a 18. Ahora lleva la cuenta escrita al lado y un
   `_Static_assert` que la ata, y `sim/digi.c` mide que la chapa no invada el botón
   "Aprende".
 
 ### What's new
 
-- **The CW noise margin, on screen.** `cw.c` tracks two running means — the low one on
-  the noise, the high one on the signal — and puts the threshold between them. Both have
-  had public accessors since the day they were written **and nothing called them**. The
-  panel badge now shows **the gap between them in dB**, next to the wpm: under 1.2 dB
-  they have collapsed and the radio stays quiet on purpose, ~2 dB is the worst case it
-  tries to decode, 10 or more is a comfortable signal. It is a diagnostic, **not** a new
+- **The CW noise margin, on screen.** `cw.c` tracks two running means — the
+  low one on
+  the noise, the high one on the signal — and puts the threshold between
+  them. Both have
+  had public accessors since the day they were written **and nothing called
+  them**. The
+  panel badge now shows **the gap between them in dB**, next to the wpm:
+  under 1.2 dB
+  they have collapsed and the radio stays quiet on purpose, ~2 dB is the
+  worst case it
+  tries to decode, 10 or more is a comfortable signal. It is a diagnostic,
+  **not** a new
   condition: what separates Morse from noise is still shape, not level.
-- **Speed was already detected automatically**, 5 to 45 wpm, and shows in the badge;
+- **Speed was already detected automatically**, 5 to 45 wpm, and shows in the
+  badge;
   Settings → `CW PPM` shows both the hint you give it and what it measured.
-- **An overflow caught before it shipped.** The badge buffer was 16 bytes and CW's worst
-  case grew to 18. It now carries the arithmetic beside it and a `_Static_assert` that
-  binds the two, and `sim/digi.c` measures that the badge cannot invade the "Learn"
+- **An overflow caught before it shipped.** The badge buffer was 16 bytes and
+  CW's worst
+  case grew to 18. It now carries the arithmetic beside it and a
+  `_Static_assert` that
+  binds the two, and `sim/digi.c` measures that the badge cannot invade the
+  "Learn"
   button.
 
 ---
@@ -9843,42 +12643,68 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **El AGC estaba escrito dos veces, y una de las dos copias se quedó atrás.** El de FM
-  ancha seguía haciendo una división de coma flotante **por muestra** —192.000 por
-  segundo, el 1,3% del presupuesto de la interrupción más apretada que hay— porque la
-  optimización del 05/10 se aplicó al otro bucle y nadie miraba los dos. Ahora el lazo
-  está **una sola vez**, en `User/agc.c`, y los dos caminos lo llaman: la división
+- **El AGC estaba escrito dos veces, y una de las dos copias se quedó atrás.**
+  El de FM
+  ancha seguía haciendo una división de coma flotante **por muestra**
+  —192.000 por
+  segundo, el 1,3% del presupuesto de la interrupción más apretada que hay—
+  porque la
+  optimización del 05/10 se aplicó al otro bucle y nadie miraba los dos.
+  Ahora el lazo
+  está **una sola vez**, en `User/agc.c`, y los dos caminos lo llaman: la
+  división
   desaparece por construcción. **160 bytes menos de flash.**
-- **Y en los silencios ya no se divide nunca.** Quedaba viva una división por muestra
-  para el caso sin señal —la mitad del tiempo que se escucha una radio—; ahora se calcula
+- **Y en los silencios ya no se divide nunca.** Quedaba viva una división por
+  muestra
+  para el caso sin señal —la mitad del tiempo que se escucha una radio—;
+  ahora se calcula
   una vez por bloque.
-- **Primer banco de pruebas de la cadena de audio.** El simulador no compilaba ni una
-  línea del camino del sonido: todos los decodificadores tenían banco, lo que suena por
-  el altavoz no tenía ninguno. `make agc` compila `agc.c` **de verdad** y lo compara
-  muestra a muestra con un AGC de libro: 8 señales × 2 caminos × 3 relajaciones, y
+- **Primer banco de pruebas de la cadena de audio.** El simulador no compilaba
+  ni una
+  línea del camino del sonido: todos los decodificadores tenían banco, lo
+  que suena por
+  el altavoz no tenía ninguno. `make agc` compila `agc.c` **de verdad** y lo
+  compara
+  muestra a muestra con un AGC de libro: 8 señales × 2 caminos × 3
+  relajaciones, y
   **1 LSB** de diferencia máxima. Visto fallar de dos maneras, hasta 28.414 LSB.
-- **Revisado y limpio:** el notch adaptativo, el reductor de ruido, el volumen y la PGA.
-- **Abierto a propósito:** el silenciador corta en seco y eso es un chasquido en cada
-  apertura; y `sdr_rx.c` manda al audio los bloques que ha marcado como corruptos. Las
+- **Revisado y limpio:** el notch adaptativo, el reductor de ruido, el volumen
+  y la PGA.
+- **Abierto a propósito:** el silenciador corta en seco y eso es un chasquido
+  en cada
+  apertura; y `sdr_rx.c` manda al audio los bloques que ha marcado como
+  corruptos. Las
   dos piden una decisión, no un parche.
 
 ### What's new
 
-- **The AGC existed twice, and one copy fell behind.** Wide-FM was still doing one
-  floating-point division **per sample** — 192,000 a second, 1.3% of the tightest
-  interrupt budget in the radio — because the 05/10 optimisation was applied to the other
-  loop and nothing looked at both. The loop now lives **once**, in `User/agc.c`, and both
-  paths call it: the division is gone by construction. **160 bytes of flash saved.**
-- **And silence no longer divides at all.** One per-sample division survived for the
-  below-floor case — half the time you listen to a radio; it is now computed once per
+- **The AGC existed twice, and one copy fell behind.** Wide-FM was still doing
+  one
+  floating-point division **per sample** — 192,000 a second, 1.3% of the
+  tightest
+  interrupt budget in the radio — because the 05/10 optimisation was applied
+  to the other
+  loop and nothing looked at both. The loop now lives **once**, in
+  `User/agc.c`, and both
+  paths call it: the division is gone by construction. **160 bytes of flash
+  saved.**
+- **And silence no longer divides at all.** One per-sample division survived
+  for the
+  below-floor case — half the time you listen to a radio; it is now computed
+  once per
   block.
-- **First bench for the audio chain.** The simulator compiled none of the sound path:
-  every decoder had a bench, what comes out of the speaker had none. `make agc` compiles
-  the **real** `agc.c` and compares it sample by sample against a textbook AGC: 8 signals
-  × 2 paths × 3 release settings, **1 LSB** worst-case difference. Seen to fail two ways,
+- **First bench for the audio chain.** The simulator compiled none of the
+  sound path:
+  every decoder had a bench, what comes out of the speaker had none. `make
+  agc` compiles
+  the **real** `agc.c` and compares it sample by sample against a textbook
+  AGC: 8 signals
+  × 2 paths × 3 release settings, **1 LSB** worst-case difference. Seen to
+  fail two ways,
   up to 28,414 LSB.
 - **Reviewed and clean:** the adaptive notch, the noise reducer, volume and PGA.
-- **Left open on purpose:** the squelch cuts dead, which is a click on every open; and
+- **Left open on purpose:** the squelch cuts dead, which is a click on every
+  open; and
   `sdr_rx.c` still feeds blocks it has marked corrupt to the audio. Both need a decision,
   not a patch.
 
@@ -9888,42 +12714,69 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **El multiplicador de la zona 7 se puede barrer desde la radio** (issue #35). Fila
-  nueva en Información, **«Mult. zona 7»**: un toque pasa al siguiente valor, 168…189 y
-  vuelta a empezar, rehaciendo la maniobra de los 90° **sin mover el dial**. Así el
-  barrido entero se hace sobre la misma emisora en una sesión, leyendo la sensibilidad
-  en el espectro y el rechazo de imagen en «Espejo I/Q», en vez de recompilar veintidós
+- **El multiplicador de la zona 7 se puede barrer desde la radio** (issue
+  #35). Fila
+  nueva en Información, **«Mult. zona 7»**: un toque pasa al siguiente
+  valor, 168…189 y
+  vuelta a empezar, rehaciendo la maniobra de los 90° **sin mover el dial**.
+  Así el
+  barrido entero se hace sobre la misma emisora en una sesión, leyendo la
+  sensibilidad
+  en el espectro y el rechazo de imagen en «Espejo I/Q», en vez de
+  recompilar veintidós
   veces. No se guarda: al arrancar vuelve a 168.
-- **Y la respuesta al issue, con números.** Los dos valores que discute —168 y 189— son
-  justo **los dos extremos del mismo rango válido** (167 saca el VCO por abajo, 190 por
-  arriba). El error de frecuencia es ≤ 0,15 Hz con los dos; el divisor del multisynth es
+- **Y la respuesta al issue, con números.** Los dos valores que discute —168 y
+  189— son
+  justo **los dos extremos del mismo rango válido** (167 saca el VCO por
+  abajo, 190 por
+  arriba). El error de frecuencia es ≤ 0,15 Hz con los dos; el divisor del
+  multisynth es
   el multiplicador exacto en los dos; la maniobra de los 90° no depende del
-  multiplicador; el ruido de fase favorece a 189 por **1,0 dB**; y el tercer armónico se
-  mueve **0,003 dB**. O sea que **el compromiso que describe el issue no sale de las
-  cuentas** — por eso el número tiene que salir de la radio. Y la razón de que hubiera un
-  168 es que **la sensibilidad nunca fue un criterio** al derivar la tabla: 168 es el
+  multiplicador; el ruido de fase favorece a 189 por **1,0 dB**; y el tercer
+  armónico se
+  mueve **0,003 dB**. O sea que **el compromiso que describe el issue no
+  sale de las
+  cuentas** — por eso el número tiene que salir de la radio. Y la razón de
+  que hubiera un
+  168 es que **la sensibilidad nunca fue un criterio** al derivar la tabla:
+  168 es el
   mínimo que cabe y se cogió el mínimo.
-- **Los asertos de la tabla ahora cubren todo el rango que se puede pedir**, no sólo el
+- **Los asertos de la tabla ahora cubren todo el rango que se puede pedir**,
+  no sólo el
   valor por omisión.
 
 ### What's new
 
-- **Zone 7's multiplier can now be swept from the radio** (issue #35). New row in Info,
-  **"Zone-7 mult."**: one tap moves to the next value, 168…189 and back around, redoing
-  the 90° manoeuvre **without moving the dial**. The whole sweep happens on the same
-  station in one session, reading sensitivity off the spectrum and image rejection off
-  the "I/Q mirror" row next to it, instead of rebuilding twenty-two times. Not saved: it
+- **Zone 7's multiplier can now be swept from the radio** (issue #35). New row
+  in Info,
+  **"Zone-7 mult."**: one tap moves to the next value, 168…189 and back
+  around, redoing
+  the 90° manoeuvre **without moving the dial**. The whole sweep happens on
+  the same
+  station in one session, reading sensitivity off the spectrum and image
+  rejection off
+  the "I/Q mirror" row next to it, instead of rebuilding twenty-two times.
+  Not saved: it
   returns to 168 at boot.
-- **And the answer to the issue, with numbers.** The two values under discussion — 168
-  and 189 — are exactly **the two ends of the same valid range** (167 drops the VCO below
-  600 MHz, 190 pushes it past 908). The synthesised-frequency error is ≤ 0.15 Hz for
-  both; the Multisynth divider is the multiplier exactly for both; the 90° manoeuvre does
-  not depend on the multiplier; phase noise favours 189 by **1.0 dB**; and the third
-  harmonic moves **0.003 dB**. So **the trade-off the issue describes does not follow
-  from the arithmetic** — which is why the number has to come off the radio. And the
-  reason 168 is there at all: **sensitivity was never a criterion** when the table was
+- **And the answer to the issue, with numbers.** The two values under
+  discussion — 168
+  and 189 — are exactly **the two ends of the same valid range** (167 drops
+  the VCO below
+  600 MHz, 190 pushes it past 908). The synthesised-frequency error is ≤
+  0.15 Hz for
+  both; the Multisynth divider is the multiplier exactly for both; the 90°
+  manoeuvre does
+  not depend on the multiplier; phase noise favours 189 by **1.0 dB**; and
+  the third
+  harmonic moves **0.003 dB**. So **the trade-off the issue describes does
+  not follow
+  from the arithmetic** — which is why the number has to come off the radio.
+  And the
+  reason 168 is there at all: **sensitivity was never a criterion** when the
+  table was
   derived. 168 is the minimum that fits, and the minimum is what was taken.
-- **The table's static assertions now cover the whole range that can be requested**, not
+- **The table's static assertions now cover the whole range that can be
+  requested**, not
   just the default value.
 
 ---
@@ -9933,63 +12786,100 @@ A thorough review of drawing and refreshes. What you will notice:
 ### Qué cambia
 
 - **El medidor de velocidad del Ident, arreglado de raíz.** Medía *la racha más
-  corta que se repite*: con una alternancia limpia eso es el símbolo, pero con datos
-  cifrados las rachas duran varios símbolos y se agarraba al ruido —610,8 Bd a 3 kHz
-  son cinco muestras por racha—. Ahora se busca **el período que explica todos los
-  grupos a la vez**: cada candidato se prueba como un peine con púas en T, 2T, 3T…,
-  se le descuenta lo que recogería por puro azar (un peine corto tiene más púas) y se
-  exige que la fundamental esté poblada. Contra la vara de medir: `sitorb` de 3% a
+  corta que se repite*: con una alternancia limpia eso es el símbolo, pero
+  con datos
+  cifrados las rachas duran varios símbolos y se agarraba al ruido —610,8 Bd
+  a 3 kHz
+  son cinco muestras por racha—. Ahora se busca **el período que explica
+  todos los
+  grupos a la vez**: cada candidato se prueba como un peine con púas en T,
+  2T, 3T…,
+  se le descuenta lo que recogería por puro azar (un peine corto tiene más
+  púas) y se
+  exige que la fundamental esté poblada. Contra la vara de medir: `sitorb`
+  de 3% a
   **1%**, `navtex8424` de **511% a 1%**, `stanag4481_fsk` de **748% a 0%**. Y si
   ningún peine destaca, no dice nada en vez de inventarse un número.
 - **`sim/det_velocidad.c` entra en `make comprueba`.** Llevaba fuera a propósito
-  porque salía en rojo. Un banco que se deja fuera para que no cante es la versión
+  porque salía en rojo. Un banco que se deja fuera para que no cante es la
+  versión
   educada de no tener banco.
-- **El Ident dice cuánto encaja, en tanto por ciento.** Al lado del nombre. No es una
-  probabilidad —no hay con qué calcularla— sino **lo lejos que está la señal de dejar
+- **El Ident dice cuánto encaja, en tanto por ciento.** Al lado del nombre. No
+  es una
+  probabilidad —no hay con qué calcularla— sino **lo lejos que está la señal
+  de dejar
   de cuadrar con esa fila**: lo centrado que cae en cada rango, la calidad de la
-  medida que manda, y si la fila se ha visto alguna vez en antena. Se queda con el
-  peor de los tres, porque una cadena vale lo que su eslabón más flojo. Si cuadran
-  varias filas, todas bajan. En el corpus: lo correcto sale entre 70% y 100%, y la
-  identificación falsa de «CW (Morse)» sobre una grabación de 5339 kHz sale al 40%.
-- **NAVTEX con los tonos poco claros, ya se identifica.** La grabación de 8424 kHz no
-  cuadraba porque el motor **no le ve dos tonos** (205 Hz de ancho, demasiado juntos y
-  desvanecidos), no por la velocidad. Pero el alfabeto sí se ve: 78% a 100 Bd. Fila
+  medida que manda, y si la fila se ha visto alguna vez en antena. Se queda
+  con el
+  peor de los tres, porque una cadena vale lo que su eslabón más flojo. Si
+  cuadran
+  varias filas, todas bajan. En el corpus: lo correcto sale entre 70% y
+  100%, y la
+  identificación falsa de «CW (Morse)» sobre una grabación de 5339 kHz sale
+  al 40%.
+- **NAVTEX con los tonos poco claros, ya se identifica.** La grabación de 8424
+  kHz no
+  cuadraba porque el motor **no le ve dos tonos** (205 Hz de ancho,
+  demasiado juntos y
+  desvanecidos), no por la velocidad. Pero el alfabeto sí se ve: 78% a 100
+  Bd. Fila
   nueva que va por ancho **más alfabeto**.
-- **Un cargador viejo ya no puede quedarse rondando.** `customboot.bin` vivía en tres
-  sitios con tres contenidos, y el README mandaba grabar el de `rescate\`, que llevaba
+- **Un cargador viejo ya no puede quedarse rondando.** `customboot.bin` vivía
+  en tres
+  sitios con tres contenidos, y el README mandaba grabar el de `rescate\`,
+  que llevaba
   dos versiones de retraso. Ahora la copia de la raíz la hace la compilación y
   `make comprueba` falla si alguna se separa. Un manual atrasado se lee raro; un
   cargador atrasado **se graba**.
 
 ### What's new
 
-- **The Ident's baud meter, fixed at the root.** It measured *the shortest repeating
-  run*: with clean alternation that is the symbol, but with encrypted data runs last
-  several symbols and it latched onto noise — 610.8 Bd at 3 kHz is five samples per
-  run. It now looks for **the period that explains all the groups at once**: each
-  candidate is tried as a comb with teeth at T, 2T, 3T…, what it would catch by pure
-  chance is subtracted (a short comb has more teeth), and the fundamental is required
+- **The Ident's baud meter, fixed at the root.** It measured *the shortest
+  repeating
+  run*: with clean alternation that is the symbol, but with encrypted data
+  runs last
+  several symbols and it latched onto noise — 610.8 Bd at 3 kHz is five
+  samples per
+  run. It now looks for **the period that explains all the groups at once**:
+  each
+  candidate is tried as a comb with teeth at T, 2T, 3T…, what it would catch
+  by pure
+  chance is subtracted (a short comb has more teeth), and the fundamental is
+  required
   to carry weight. Against the measuring stick: `sitorb` from 3% to **1%**,
   `navtex8424` from **511% to 1%**, `stanag4481_fsk` from **748% to 0%**. And if no
   comb stands out, it says nothing rather than inventing a number.
-- **`sim/det_velocidad.c` now runs in `make comprueba`.** It had been left out on
-  purpose because it was red. A bench kept out so it won't complain is the polite
+- **`sim/det_velocidad.c` now runs in `make comprueba`.** It had been left out
+  on
+  purpose because it was red. A bench kept out so it won't complain is the
+  polite
   version of having no bench.
-- **The Ident now says how well it fits, as a percentage.** Next to the name. It is
-  not a probability — there is nothing to compute one from — but **how far the signal
+- **The Ident now says how well it fits, as a percentage.** Next to the name.
+  It is
+  not a probability — there is nothing to compute one from — but **how far
+  the signal
   is from no longer matching that row**: how centred it falls in each range, the
-  quality of the measurement that rules that row, and whether the row has ever been
-  seen on the air. It keeps the worst of the three, because a chain is worth what its
-  weakest link is worth. If several rows match, all of them drop. Across the corpus:
-  correct answers land between 70% and 100%, and the false "CW (Morse)" on a 5339 kHz
+  quality of the measurement that rules that row, and whether the row has
+  ever been
+  seen on the air. It keeps the worst of the three, because a chain is worth
+  what its
+  weakest link is worth. If several rows match, all of them drop. Across the
+  corpus:
+  correct answers land between 70% and 100%, and the false "CW (Morse)" on a
+  5339 kHz
   recording comes out at 40%.
-- **NAVTEX with unclear tones is now identified.** The 8424 kHz recording did not
-  match because the engine **cannot see two tones** in it (205 Hz wide, too close and
+- **NAVTEX with unclear tones is now identified.** The 8424 kHz recording did
+  not
+  match because the engine **cannot see two tones** in it (205 Hz wide, too
+  close and
   too faded), not because of the baud rate. But the alphabet is visible: 78% at
   100 Bd. New row that goes by width **plus alphabet**.
-- **A stale bootloader can no longer linger.** `customboot.bin` lived in three places
-  with three contents, and the README told you to flash the one in `rescate\`, two
-  versions behind. The root copy is now made by the build, and `make comprueba` fails
+- **A stale bootloader can no longer linger.** `customboot.bin` lived in three
+  places
+  with three contents, and the README told you to flash the one in
+  `rescate\`, two
+  versions behind. The root copy is now made by the build, and `make
+  comprueba` fails
   if any copy drifts. A stale manual just reads oddly; a stale bootloader **gets
   flashed**.
 
@@ -9997,64 +12887,98 @@ A thorough review of drawing and refreshes. What you will notice:
 
 ### Qué cambia
 
-- **La radio ya dice POR QUÉ se reinició.** Un usuario reporta en la V4.01 reinicios
-  aleatorios, que al volver no recupera el modo ni la configuración de pantalla, y
-  uno de ellos recibiendo FT8. Antes de tocar nada: en esta radio **un fallo de CPU
-  cuelga, no reinicia** —no hay perro guardián en ningún sitio, el `HardFault_Handler`
-  es un bucle infinito, no hay WFI ni standby, y el único reinicio por software de
-  todo el árbol lo pide el usuario a mano desde la fila de DFU—. Así que un reinicio
+- **La radio ya dice POR QUÉ se reinició.** Un usuario reporta en la V4.01
+  reinicios
+  aleatorios, que al volver no recupera el modo ni la configuración de
+  pantalla, y
+  uno de ellos recibiendo FT8. Antes de tocar nada: en esta radio **un fallo
+  de CPU
+  cuelga, no reinicia** —no hay perro guardián en ningún sitio, el
+  `HardFault_Handler`
+  es un bucle infinito, no hay WFI ni standby, y el único reinicio por
+  software de
+  todo el árbol lo pide el usuario a mano desde la fila de DFU—. Así que un
+  reinicio
   de verdad sólo puede ser tensión, la patilla de reset, software o un perro que
-  nadie enciende. Y **el chip lo sabe**: `RCU_RSTSCK` guarda la causa y este firmware
+  nadie enciende. Y **el chip lo sabe**: `RCU_RSTSCK` guarda la causa y este
+  firmware
   no la miraba nunca. Nueva fila **Reinicios** en Información: la causa de este
   arranque, cuántos arranques van desde el último en frío, y el historial de los
-  ocho últimos. `T` tensión, `P` patilla, `S` software, `G` perro, `B` bajo consumo.
+  ocho últimos. `T` tensión, `P` patilla, `S` software, `G` perro, `B` bajo
+  consumo.
   `T T T` es una batería que se cae; `T P T` es otra cosa. No evita ni un reinicio:
   convierte "se reinicia random" en una letra.
-- **Cinco esperas de hardware sin salida, ahora con tope.** Todas colgaban la radio
+- **Cinco esperas de hardware sin salida, ahora con tope.** Todas colgaban la
+  radio
   (pantalla congelada con el audio sonando, que va por DMA), no la reiniciaban:
-  - `sdr_rx_stop()` esperaba que el DMA de recepción soltara su bit de activo. Se
-    recorre **cada cambio de modo** que cruce un cambio de tasa de muestreo. Y tenía
-    además el orden mal: no apagaba la petición del lado del SPI antes del canal, que
-    es justo lo que su gemela de audio documenta como la regla a seguir —dos funciones
+  - `sdr_rx_stop()` esperaba que el DMA de recepción soltara su bit de
+  activo. Se
+  recorre **cada cambio de modo** que cruce un cambio de tasa de muestreo. Y
+  tenía
+  además el orden mal: no apagaba la petición del lado del SPI antes del
+  canal, que
+  es justo lo que su gemela de audio documenta como la regla a seguir —dos
+  funciones
     iguales y sólo una la cumplía—.
-  - Las dos del DMA de audio, una de ellas **en el arranque en frío**: si se quedaba
+  - Las dos del DMA de audio, una de ellas **en el arranque en frío**: si se
+  quedaba
     ahí, la radio no llegaba a pintar nada.
   - La transferencia por SPI de la flash en el **cargador**, que se recorre en
     **todos** los arranques buscando `update.bin`: colgaba con la pantalla negra
-    antes de nada. Ahora un byte perdido es un `0xFF`, la cabecera no cuadra y el
+  antes de nada. Ahora un byte perdido es un `0xFF`, la cabecera no cuadra y
+  el
     cargador arranca la aplicación, que es infinitamente mejor.
   - El retardo de USB del cargador, que esperaba una variable que sólo mueve una
     interrupción: colgaba el modo actualización en "USB: conectando…".
 
 ### What's new
 
-- **The radio now says WHY it restarted.** A user reports random reboots on V4.01,
-  coming back without the previous mode or the screen settings, one of them while
-  receiving FT8. Before changing anything: on this radio **a CPU fault hangs, it does
-  not reboot** — there is no watchdog anywhere, `HardFault_Handler` is an infinite
-  loop, there is no WFI or standby, and the only software reset in the whole tree is
-  the one the owner asks for by hand from the DFU row. So a real reboot can only be
-  supply voltage, the reset pin, software, or a watchdog nobody enables. And **the
-  chip knows**: `RCU_RSTSCK` holds the cause and this firmware never read it. New
-  **Resets** row in Information: this boot's cause, how many boots since the last
-  cold start, and the last eight. `T` voltage, `P` pin, `S` software, `G` watchdog,
+- **The radio now says WHY it restarted.** A user reports random reboots on
+  V4.01,
+  coming back without the previous mode or the screen settings, one of them
+  while
+  receiving FT8. Before changing anything: on this radio **a CPU fault
+  hangs, it does
+  not reboot** — there is no watchdog anywhere, `HardFault_Handler` is an
+  infinite
+  loop, there is no WFI or standby, and the only software reset in the whole
+  tree is
+  the one the owner asks for by hand from the DFU row. So a real reboot can
+  only be
+  supply voltage, the reset pin, software, or a watchdog nobody enables. And
+  **the
+  chip knows**: `RCU_RSTSCK` holds the cause and this firmware never read
+  it. New
+  **Resets** row in Information: this boot's cause, how many boots since the
+  last
+  cold start, and the last eight. `T` voltage, `P` pin, `S` software, `G`
+  watchdog,
   `B` low power. `T T T` is a sagging battery; `T P T` is something else. It prevents
   no reboot at all: it turns "random reboots" into a letter.
-- **Five unbounded hardware waits now have a limit.** All of them froze the radio
+- **Five unbounded hardware waits now have a limit.** All of them froze the
+  radio
   (screen locked with audio still playing, since audio runs on DMA) rather than
   rebooting it:
-  - `sdr_rx_stop()` waited for the receive DMA channel to drop its enable bit. This
-    runs on **every mode change** that crosses a sample-rate change. It also had the
-    ordering wrong: it did not disable the SPI-side request before the channel, which
-    is exactly the rule its own audio-side twin documents — two functions doing the
+  - `sdr_rx_stop()` waited for the receive DMA channel to drop its enable
+  bit. This
+  runs on **every mode change** that crosses a sample-rate change. It also
+  had the
+  ordering wrong: it did not disable the SPI-side request before the
+  channel, which
+  is exactly the rule its own audio-side twin documents — two functions
+  doing the
     same thing and only one following it.
-  - Both audio DMA waits, one of them **during cold boot**: stuck there, the radio
+  - Both audio DMA waits, one of them **during cold boot**: stuck there, the
+  radio
     would never draw anything.
-  - The **bootloader's** SPI flash byte transfer, which runs on **every** boot looking
-    for `update.bin`: it hung with a black screen before anything appeared. Now a lost
+  - The **bootloader's** SPI flash byte transfer, which runs on **every**
+  boot looking
+  for `update.bin`: it hung with a black screen before anything appeared.
+  Now a lost
     byte becomes `0xFF`, the header fails to match, and the bootloader boots the
     application instead.
-  - The bootloader's USB delay, which waited on a variable only an interrupt moves: it
+  - The bootloader's USB delay, which waited on a variable only an interrupt
+  moves: it
     hung update mode at "USB: connecting…".
 
 ## V4.02 · 2026-10-08
@@ -10075,7 +12999,8 @@ A thorough review of drawing and refreshes. What you will notice:
 - **El manual era tres manuales.** Había tres `MANUAL_V2_ES.md` con tres
   contenidos distintos y dos `.docx`, y el banco de cobertura medía la copia más
   vieja: llevaba dos días diciendo que la tabla del Ident tiene 27 firmas cuando
-  tiene 28. Ahora sólo hay uno, en `manual/`, y un control nuevo tumba la entrega
+  tiene 28. Ahora sólo hay uno, en `manual/`, y un control nuevo tumba la
+  entrega
   si aparece una segunda copia.
 - **Fuera el almacén de imágenes en flash** (`img_store.c`, 26 funciones): nunca
   llegó a usarse —las capturas van al disco USB como BMP— y su banco llevaba
@@ -10102,7 +13027,8 @@ A thorough review of drawing and refreshes. What you will notice:
 - **The manual was three manuals.** Three `MANUAL_V2_ES.md` files with three
   different contents and two `.docx`, and the coverage bench was measuring the
   oldest copy: for two days it claimed the Ident table has 27 signatures when it
-  has 28. Now there is only one, in `manual/`, and a new check fails the build if
+  has 28. Now there is only one, in `manual/`, and a new check fails the
+  build if
   a second copy appears.
 - **The flash image store is gone** (`img_store.c`, 26 functions): it was never
   used — screenshots go to the USB disk as BMP — and its bench had been
@@ -10129,7 +13055,8 @@ encontrados y arreglados**. Los que se notan:
   primer sector del directorio, y grababa la entrada en el bloque equivocado.
   Además el camino rápido daba por hecho que el fichero no estaba troceado y
   podía escribir encima de otro.
-- **El notch automático no funcionaba en AM ni en SAM.** Se podía poner "a saco",
+- **El notch automático no funcionaba en AM ni en SAM.** Se podía poner "a
+  saco",
   la etiqueta cambiaba, y el heterodino seguía igual: la llamada estaba sólo en
   el camino de banda lateral.
 - **El modo DSC se quedaba sordo tras la primera llamada**, hasta salir y volver
@@ -10161,7 +13088,8 @@ The ones you would notice:
   *below* the release threshold — inverted hysteresis — so the key chattered and
   the quality gate never opened. Fixed and re-measured: the weak 4XZ recording
   now yields **six callsigns instead of two**.
-- **Saving settings could corrupt the flash.** The background save wrote 32 bytes
+- **Saving settings could corrupt the flash.** The background save wrote 32
+  bytes
   past its scratch buffer whenever CONFIG.CSV was not in the first directory
   sector, and wrote the entry to the wrong block. The fast path also assumed the
   file was unfragmented and could overwrite another one.
@@ -10282,14 +13210,17 @@ The ones you would notice:
 - El Morse tiene una regla: la raya dura tres puntos. La radio la da por buena,
   y acierta, porque es lo que manda casi todo el mundo. Pero hay estaciones que
   teclean fuera de norma. La naval israelí **4XZ** en 4.330 kHz manda los puntos
-  de dos tamaños (40 y 80 ms) y las rayas de dos (160 y 200): con la regla puesta
+  de dos tamaños (40 y 80 ms) y las rayas de dos (160 y 200): con la regla
+  puesta
   la radio no saca ni una letra de ella.
 - Con el botón **encendido**, la radio deja de suponer y **mide** cómo teclea esa
-  estación: dónde caen los cortos, dónde los largos, y pone la frontera en medio.
+  estación: dónde caen los cortos, dónde los largos, y pone la frontera en
+  medio.
   De esa grabación pasa a salir `VVV DE 4XZ` limpio.
 - Con el botón **apagado** no cambia absolutamente nada — está comprobado letra
   por letra contra la versión anterior. Y **arranca siempre apagado**: medir en
-  vez de suponer cuesta precisión con el Morse normal, así que es una herramienta
+  vez de suponer cuesta precisión con el Morse normal, así que es una
+  herramienta
   para una estación concreta, no un ajuste que se queda puesto.
 - Sigue callándose con ruido estando encendido. Eso es lo que más se ha medido:
   un minuto de ruido blanco, cero caracteres.
@@ -11478,8 +14409,10 @@ The ones you would notice:
   (ASCII / ITA2 / HEX) tampoco respondía, así que esa rueda no se había podido
   usar nunca.
 - **La fila «Formatear disco» ya se desarma al salir de Información.** Si salías
-  con «BORRA TODO: confirma» puesto, al volver el **primer** toque ya formateaba:
-  la confirmación se la habías dado sin saberlo, un rato antes y en otra pantalla.
+  con «BORRA TODO: confirma» puesto, al volver el **primer** toque ya
+  formateaba:
+  la confirmación se la habías dado sin saberlo, un rato antes y en otra
+  pantalla.
   Y el veredicto de la vez anterior ya no te recibe diciendo «hecho».
 - Los tres salieron de repasar el firmware para escribir el manual, no de usar
   la radio. Un botón que no hace nada es lo último que se nota.

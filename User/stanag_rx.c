@@ -1445,6 +1445,7 @@ static void dein_pasa(const int8_t *ent, int8_t *sal)
  * la 1. Probandolo al reves la comprobacion de paridad del codigo daba
  * 0,5 en las 3584 combinaciones que llegue a barrer.
  */
+__attribute__((noinline))
 static void mete_blandos(const int8_t *g)
 {
     uint8_t rep = repeticiones();
@@ -1649,6 +1650,7 @@ static void pon_hex(uint8_t v)
     pon_char(' ');
 }
 
+__attribute__((noinline))
 static void pon_bit(uint8_t b)
 {
     if (s_fmt == STANAG_RX_ITA2) {
@@ -1963,6 +1965,7 @@ static void auto_siguiente(void)
  * arranque; el Viterbi decide igual y el ber que sale no mide la señal,
  * mide el relleno. Por eso lo primero de todo es la cuenta de grupos.
  */
+__attribute__((noinline))
 static uint8_t auto_paso(void)
 {
     if (!s_auto) { return 0U; }

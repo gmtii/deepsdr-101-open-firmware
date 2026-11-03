@@ -1044,6 +1044,7 @@ static void fondo_fila(gfx2_surf_t *s, const ui_digi_state_t *st,
     gfx2_fill(s, 0, y, GFX2_W, UDG_LINE_H, gfx2_rgb(c));
 }
 
+__attribute__((noinline))
 static gfx2_rgba_t tinta_fila(const ui_digi_state_t *st, uint8_t i,
                               uint8_t ultimo, gfx2_rgba_t viva, gfx2_rgba_t vieja)
 {

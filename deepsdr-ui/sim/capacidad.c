@@ -127,8 +127,8 @@ int main(void)
      * hay que creerle al JEDEC.
      */
     /*
-     * EL FALSO ALIAS - 20/10/2026, preguntado por el usuario: "¿puede ser
-     * que un chip de 2 MB lo estemos viendo como de 1?".
+     * EL FALSO ALIAS - 20/10/2026. ¿Puede ser que un chip de 2 MB lo
+     * estemos viendo como de 1?
      *
      * Con una sola ventana de 64 bytes, si: basta que en 0x100000 haya por
      * casualidad lo mismo que en 0 -una copia del sector de arranque, por

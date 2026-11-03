@@ -24,8 +24,7 @@
  * 48 Y 48, COMO FT8 - 28/10/2026
  * ======================================================================
  *
- * *** Pedido por el usuario: "amplia a 48 aceptando que se borre al
- * salir". ***
+ * *** LA LISTA PASA A 48, Y SE BORRA AL SALIR DEL MODO. ***
  *
  * Eran 14 renglones y 20 aviones. El numero que importaba era el de
  * AVIONES, porque la tabla no la lee solo el panel: la lee EL MAPA (ver
@@ -3138,6 +3137,7 @@ void hfdl_modo_mete(const float *i_in, const float *q_in, uint32_t n)
 #define HFDL_PREKEY_COH    0.80f   /* ruido y datos dan ~1/raiz(24) = 0,20 */
 #define HFDL_PREKEY_SEGUID 6U      /* ventanas seguidas que hacen falta: 80 ms de tono */
 
+__attribute__((noinline))
 static void prekey_simbolo(float zi, float zq)
 {
     float coh;

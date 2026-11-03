@@ -75,9 +75,9 @@ uint32_t nb_process(float *i_buf, float *q_buf, uint32_t n);
  *
  * Con el tope en 256 esto no reventaba: nb_process() comprueba `n` y se
  * va por la puerta devolviendo 0. O sea que al poner 192 kHz el
- * quitapulsos se habria apagado solo, sin un aviso, y el usuario habria
- * visto "el quitapulsos ya no hace nada a 192" sin ninguna pista de por
- * que. Un apagado silencioso es peor que un fallo.
+ * quitapulsos se habria apagado solo, sin un aviso: a 192 kHz dejaria de
+ * hacer nada y sin ninguna pista de por que. Un apagado silencioso es peor
+ * que un fallo.
  *
  * Y VA DELANTE DEL DIEZMADOR A PROPOSITO: el diezmador es un FIR de 35
  * tomas, o sea que reparte un pulso de dos muestras entre treinta y

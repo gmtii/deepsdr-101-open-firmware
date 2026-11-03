@@ -215,7 +215,8 @@ static uint32_t tinta_legible(const mapa_tinte_t *t)
  * EL TOPE ES EL DEL BUFFER, Y NADA MAS - 28/10/2026
  * ======================================================================
  *
- * *** Avisado por el usuario: "12 en modo lista, 5 en modo mapa". ***
+ * *** DOCE EN MODO LISTA Y CINCO EN MODO MAPA, Y TENIAN QUE SER LOS
+ * MISMOS. ***
  *
  * Aqui ponia esto:
  *

@@ -113,8 +113,7 @@ int main(void)
      * LA TABLA DE AVIONES VIVE EN LA MEMORIA PRESTADA - 28/10/2026
      * ==================================================================
      *
-     * *** Pedido por el usuario: "amplia a 48 aceptando que se borre al
-     * salir". ***
+     * *** LA LISTA PASA A 48, Y SE BORRA AL SALIR DEL MODO. ***
      *
      * Al pasar de 20 aviones a 48, la tabla y los renglones se mudaron de
      * .bss a la cabecera del prestamo (ver HFDL_RAM_AVIONES en

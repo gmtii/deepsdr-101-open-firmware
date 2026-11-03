@@ -149,7 +149,9 @@
  *    el arranque del AGC en cada ranura (ninguno de los dos cambia nada).
  */
 #define FT8_ADAPTER_SAMPLE_RATE_HZ 6400 /* era 3200, y antes 800 - ver ft8_decimator.h para el remuestreador que hace falta */
+#ifndef FT8_ADAPTER_TIME_OSR
 #define FT8_ADAPTER_TIME_OSR       1   /* A/B tested against the ft8_lib WAV corpus: TIME_OSR alone costs no measured decode sensitivity (still decodes the same reference signals as the original (2,2) design across 5 corpus files) */
+#endif
 /*
  * 2 -> 1, EL 25/09/2026, Y ES UN CAMBIO CON PRECIO. Lo elige el usuario del
  * proyecto despues de ver la radio en antena: oye 2,4 kHz de emisiones y
@@ -176,9 +178,44 @@
  * frecuencias se queda sin decodificar al borde de la sensibilidad. Ver el
  * bloque "LO QUE ESTO ES HOY" al principio de este fichero.
  */
-#define FT8_ADAPTER_FREQ_OSR       1   /* ver el bloque de arriba (era 2) - A/B testing showed THIS is the axis that actually matters: reducing it to 1 (alone or combined with TIME_OSR=1) lost a real decode (CT3IQ EI8GVB IO63, -9dB) that the (2,2) and (1,2) configs both still get */
+/*
+ * LOS TRES SE PUEDEN FIJAR DESDE FUERA, con -D. No es un adorno: los
+ * bancos de sensibilidad (sim/ft8_sensible.c) tienen que poder correr la
+ * MISMA geometria que la radio y otra al lado para comparar, y copiar el
+ * fichero para cambiar un numero es como se acaba teniendo dos
+ * decodificadores que un dia dicen cosas distintas.
+ */
+/*
+ * *** Y VUELVE A 2 - 02/11/2026, con la ventana entera de 3.200 Hz. ***
+ *
+ * El bloque de arriba explica por que bajo a 1: mag[] no cabia de otra
+ * forma. Lo que no se habia medido entonces era EL PRECIO, y resulta que
+ * no es una perdida de sensibilidad repartida sino un AGUJERO: una
+ * emision que cae en el centro de un bin se lee siempre y una que cae a
+ * medio bin no se lee casi nunca. Medido en sim/ft8_sensible.c, sumando
+ * de -8 a -17 dB:
+ *
+ *     en el centro del bin ...... 216 de 216
+ *     a medio bin ...............  13 de 216
+ *
+ * Y una emisora cae donde le da la gana. Con FREQ_OSR=2 el medio bin
+ * pasa a 216 de 216 y el peor caso es un cuarto de bin, que ya no tiene
+ * agujero.
+ *
+ * LO QUE LO PAGA: tres bits por celda en vez de cuatro (ver
+ * FT8_ADAPTER_MAG_BITS) y el analizador, que se quito entero. La cuenta
+ * completa esta en NOVEDADES.md.
+ *
+ * LO QUE NO ARREGLA: el eje del TIEMPO. TIME_OSR sigue en 1 y su agujero
+ * -de 40 a 80 ms dentro del simbolo- se queda igual, medido antes y
+ * despues: 117 de 192 las dos veces. Cerrarlo serian otros 35.712 bytes
+ * y no los hay.
+ */
+#ifndef FT8_ADAPTER_FREQ_OSR
+#define FT8_ADAPTER_FREQ_OSR       2   /* ver el bloque de aqui arriba */
+#endif
 #define FT8_ADAPTER_BLOCK_SIZE     1024 /* = FT8_ADAPTER_SAMPLE_RATE_HZ * FT8_SYMBOL_PERIOD */
-#define FT8_ADAPTER_SUBBLOCK_SIZE  1024 /* = FT8_ADAPTER_BLOCK_SIZE / FT8_ADAPTER_TIME_OSR - one snapshot per full symbol period (160ms), since TIME_OSR=1 leaves no time-subdivision to fill */
+#define FT8_ADAPTER_SUBBLOCK_SIZE  (FT8_ADAPTER_BLOCK_SIZE / FT8_ADAPTER_TIME_OSR) /* = FT8_ADAPTER_BLOCK_SIZE / FT8_ADAPTER_TIME_OSR - one snapshot per full symbol period (160ms), since TIME_OSR=1 leaves no time-subdivision to fill */
 #define FT8_ADAPTER_NFFT           2048 /* MUST equal ft8_fft.h's FT8_FFT_SIZE, enforced in the .c file */
 
 /*
@@ -238,11 +275,37 @@
  * Bloques del desvio - ver el comentario de `lado` en ft8_shared_ram.h.
  *
  * Son los que la captura puede escribir mientras dura una decodificacion, a
- * 160 ms por bloque: 24 son 3,84 segundos. La decodificacion tarda menos de
- * uno, asi que sobra margen; y si algun dia no sobrara, no se pierde en
- * silencio - lo cuenta ft8_waterfall_desbordes() y sale en la barra.
+ * 160 ms por bloque; y si algun dia no bastaran, no se pierde en silencio:
+ * lo cuenta ft8_waterfall_desbordes() y sale en la barra.
+ *
+ * ======================================================================
+ * DE 24 A 8, CON LA MEDIDA DELANTE - 02/11/2026.
+ * ======================================================================
+ *
+ * Eran 24 -3,84 s- con la nota "la decodificacion tarda menos de uno, asi
+ * que sobra margen". Lo de "menos de uno" era una suposicion: nadie lo
+ * habia cronometrado en la CPU de la radio, solo en el anfitrion, donde
+ * la misma ranura se decodifica en 7 ms y eso no dice nada.
+ *
+ * Ahora esta medido, en un Cortex-M4 de verdad y con la banda llena de
+ * veinte emisiones distintas (make m4 -> m4_ft8):
+ *
+ *     capturar la ranura ....  540 ms repartidos en los 15 s
+ *     DECODIFICARLA .........  352 ms = 3 bloques
+ *
+ * Ocho bloques son 1,28 s: casi cuatro veces el peor caso medido, y el
+ * banco se pone rojo si la decodificacion se acerca a la mitad del
+ * desvio. Los dieciseis bloques que se dejan de reservar son lo que
+ * paga, junto con la FFT de entrada real, el submuestreo en frecuencia.
  */
-#define FT8_ADAPTER_LADO_BLOQUES   24
+/*
+ * DE 8 A 12 BLOQUES - 02/11/2026. Con FREQ_OSR=2 el decodificador tarda
+ * el doble: 686 ms en vez de 352 medidos en m4/m4_ft8.c, o sea 5 bloques
+ * en vez de 3. Ocho bloques de desvio contra cinco de decodificacion es
+ * menos del doble, y el banco lo canta. Doce vuelven a dejar margen
+ * ancho. Cuestan 1.536 bytes con tres bits por celda.
+ */
+#define FT8_ADAPTER_LADO_BLOQUES   12
 
 #define FT8_ADAPTER_MAX_BLOCKS     93  /* = (int)(FT8_SLOT_TIME / FT8_SYMBOL_PERIOD) - unchanged */
 
@@ -258,7 +321,7 @@
  * Con cuatro bits quedan 16 escalones (FTX_MAG4_PASO_DB a partir de
  * FTX_MAG4_BASE_DB, en Ft8Lib/ft8/decode.h, que es quien los
  * descodifica). Las dos ramas -4 y 8 bits- se pueden compilar desde
- * fuera con -DFT8_ADAPTER_MAG_BITS y -DFTX_MAG_4BITS, que es como se
+ * fuera con -DFT8_ADAPTER_MAG_BITS y -DFTX_MAG_BITS, que es como se
  * eligieron el paso y la base: barriendolos con sim/ft8_banda.c y
  * sim/ft8_snr.c y comparando contra los 8 bits de siempre.
  *
@@ -300,20 +363,40 @@
  * PARA QUE: para que quepan 512 bins -la banda entera de 0 a 3.200 Hz- en
  * la misma memoria que hoy ocupan 256. mag[] no crece ni un byte.
  *
- * Esto obliga a que FT8_ADAPTER_MAG_BITS y FTX_MAG_4BITS (decode.h) digan
+ * Esto obliga a que FT8_ADAPTER_MAG_BITS y FTX_MAG_BITS (decode.h) digan
  * lo mismo. No se deja al cuidado de nadie: ft8_waterfall_adapter.c tiene
  * un _Static_assert que no deja compilar si se separan.
  */
+/*
+ * Y TRES DESDE EL 02/11/2026, que es lo que paga el submuestreo en
+ * frecuencia. El porque entero, con las cifras, esta en el comentario de
+ * FTX_MAG_BITS en Ft8Lib/ft8/decode.h; aqui basta con que los dos
+ * numeros digan lo mismo, y de eso se encarga el _Static_assert del .c.
+ */
 #ifndef FT8_ADAPTER_MAG_BITS
-#define FT8_ADAPTER_MAG_BITS       4
+#define FT8_ADAPTER_MAG_BITS       3
 #endif
 
-/* Celdas por bloque, y los bytes que ocupan los dos buffers. La division
- * entre 8 es exacta con cualquier NUM_BINS par, que son todos los que esta
- * radio ha usado. */
+/* Celdas por bloque, y los bytes que ocupan los dos buffers.
+ *
+ * CON TRES BITS LA DIVISION ENTRE 8 YA NO ES GRATIS: con cuatro salia
+ * exacta con cualquier numero par de celdas, y con tres hace falta que
+ * las celdas por bloque sean multiplo de 8 (porque 3 y 8 no comparten
+ * divisor). Con 512 bins y FREQ_OSR=2 son 1.024, y 1.024*3/8 = 384
+ * bytes justos por bloque. No se deja al cuidado de nadie: el .c lo
+ * comprueba con un _Static_assert.
+ *
+ * Y EL BYTE DE RELLENO: la ultima celda de cada buffer se parte entre su
+ * byte y el siguiente, asi que ftx_mag3_pon() escribe uno mas del final.
+ * Ese byte existe a proposito. Ver el comentario de FTX_MAG_BITS. */
 #define FT8_ADAPTER_CELDAS_BLOQUE  (FT8_ADAPTER_TIME_OSR * FT8_ADAPTER_FREQ_OSR * FT8_ADAPTER_NUM_BINS)
 #define FT8_ADAPTER_MAG_BYTES      ((FT8_ADAPTER_MAX_BLOCKS * FT8_ADAPTER_CELDAS_BLOQUE * FT8_ADAPTER_MAG_BITS) / 8)
 #define FT8_ADAPTER_LADO_BYTES     ((FT8_ADAPTER_LADO_BLOQUES * FT8_ADAPTER_CELDAS_BLOQUE * FT8_ADAPTER_MAG_BITS) / 8)
+#if FT8_ADAPTER_MAG_BITS == 3
+#define FT8_ADAPTER_MAG_RELLENO    1
+#else
+#define FT8_ADAPTER_MAG_RELLENO    0
+#endif
 /*
  * 64 -> 96 BINS, o sea 400 -> 600 Hz de ventana. 25/09/2026.
  *
@@ -369,7 +452,9 @@
  * ft8_lib tendria que leer de dos sitios segun el bloque, o sea meterle mano
  * por dentro al decodificador. Se deja escrito, no hecho.
  */
+#ifndef FT8_ADAPTER_NUM_BINS
 #define FT8_ADAPTER_NUM_BINS      512 /* 3.200 Hz: LA BANDA ENTERA - ver arriba */
+#endif
 #define FT8_ADAPTER_MIN_RAW_BIN    0   /* first ft8_fft_compute_db() output bin included in the search window - 0 = start right at DC-adjacent content */
 
 /*

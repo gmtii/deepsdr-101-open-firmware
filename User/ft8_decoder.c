@@ -520,6 +520,16 @@ int ft8_decoder_dt_medio_ms(void)
     return (int)(m + (m < 0.0f ? -0.5f : 0.5f));
 }
 
+/*
+ * Lo que se llama cada pocos milisegundos mientras se buscan candidatos.
+ * Lo pone ft8_modo.c -que es quien sabe del remuestreador- para que este
+ * fichero no tenga que incluirlo. Cero = no hacer nada, que es lo que
+ * quieren los bancos.
+ */
+static void (*s_respira)(void);
+
+void ft8_decoder_set_respira(void (*f)(void)) { s_respira = f; }
+
 void ft8_decoder_slot_empieza(void)
 {
     /* ---------------------------------------------------------------
@@ -604,7 +614,24 @@ void ft8_decoder_slot_empieza(void)
     s_wf_snap.block_stride = FT8_ADAPTER_TIME_OSR * FT8_ADAPTER_FREQ_OSR * FT8_ADAPTER_NUM_BINS;
     s_wf_snap.protocol = FTX_PROTOCOL_FT8;
 
-    s_num_cand = ftx_find_candidates(&s_wf_snap, FT8_DECODER_MAX_CANDIDATES, candidate_list, FT8_DECODER_MIN_SCORE);
+    /*
+     * CON EL GANCHO, para que el remuestreador no se quede sin vaciar
+     * mientras esto corre. Ver el comentario de ftx_find_candidates_respira()
+     * en Ft8Lib/ft8/decode.c: son 308 ms de un tiron contra 320 de colchon,
+     * o sea audio de la ranura siguiente perdido en silencio.
+     *
+     * Y SIN ORDENAR AQUI: ftx_find_candidates() ya los devuelve ordenados
+     * de mas fuerte a mas flojo -lo dice su propio comentario, "at the end
+     * the elements will be sorted in descending order"-. El 02/11/2026 se
+     * metio aqui una ordenacion por insercion que no hacia falta; se quito
+     * el mismo dia, al leer el final de esa funcion en vez de suponerlo.
+     * La prueba 6 de sim/ft8_sensible.c sigue en verde sin ella, que es
+     * como se comprobo.
+     */
+    s_num_cand = ftx_find_candidates_respira(&s_wf_snap, FT8_DECODER_MAX_CANDIDATES,
+                                             candidate_list, FT8_DECODER_MIN_SCORE,
+                                             s_respira);
+
     s_last_num_candidates = s_num_cand;
     s_cand_i = 0;
     s_num_seen = 0;

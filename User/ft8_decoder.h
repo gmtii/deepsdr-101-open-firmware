@@ -200,6 +200,12 @@ void ft8_decoder_process_slot(void);
  * El trabajo total es el mismo. Lo que cambia es que ya no se hace seguido.
  */
 void    ft8_decoder_slot_empieza(void);
+
+/* Quien llame a esto antes de decodificar, recibe una llamada cada pocos
+ * milisegundos DENTRO de la busqueda de candidatos, que es el unico trozo
+ * del camino que no se puede partir. En la radio lo usa ft8_modo.c para
+ * vaciar el remuestreador. Ver ftx_find_candidates_respira(). */
+void    ft8_decoder_set_respira(void (*f)(void));
 uint8_t ft8_decoder_slot_paso(void);
 
 /* Pulls one queued decoded-message line. Returns true and fills *out

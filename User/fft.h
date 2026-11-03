@@ -16,7 +16,7 @@
 /*
  * EL TAMAÑO SE PUEDE FORZAR DESDE FUERA, Y SOLO PARA MEDIR - 24/10/2026.
  *
- * *** Pedido por el usuario: "empieza a medir". ***
+ * *** EL PRIMER NUMERO, QUE ES POR DONDE SE EMPIEZA. ***
  *
  * A 192 kHz el bin son 750 Hz en vez de 375, porque la FFT sigue siendo de
  * 256 puntos sobre el doble de tramo. Una emisora de fonia cabe entonces en
@@ -37,8 +37,7 @@
  * 512 OTRA VEZ, Y PARA TODOS - 24/10/2026.
  * ======================================================================
  *
- * *** Avisado por el usuario: "creo que en 192 estoy viendo señales que no
- * terminan en pico". Y tenia razon. ***
+ * *** A 192 kHz HABIA SEÑALES QUE NO TERMINABAN EN PICO. ***
  *
  * HISTORIA, que explica por que esto ha ido y venido: eran 512 cuando todo
  * iba a 192 kHz, bajaron a 128 al mover AM/SSB/NFM a 48, y volvieron a 256

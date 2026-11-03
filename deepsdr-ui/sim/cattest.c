@@ -56,8 +56,25 @@ static uint8_t  v_lee(void)            { return s_vol; }
 static void     v_pon(uint8_t v)       { s_vol = v; }
 static uint16_t a_lee(void)            { return s_bw; }
 
+/* La vuelta del bucle: numeros inventados pero con la forma de los de
+ * verdad, que es lo que hay que comprobar -el ancho de cada hueco-. */
+static void d_lee(cat_diag_t *d)
+{
+    uint8_t k;
+
+    d->vueltas   = 37U;
+    d->detentes  = 12U;
+    d->nr        = 1U;
+    d->carga     = 49U;
+    d->vuelta_us = 28431UL;
+    for (k = 0U; k < CAT_DIAG_TRAMOS; k++) {
+        d->tramo_us[k] = (uint32_t)k * 100UL;
+    }
+    d->tramo_us[0] = 123456UL;   /* se tiene que topar a 99999 */
+}
+
 static const cat_radio_t k_radio = {
-    f_lee, f_pon, m_lee, m_pon, s_lee, v_lee, v_pon, a_lee
+    f_lee, f_pon, m_lee, m_pon, s_lee, v_lee, v_pon, a_lee, d_lee
 };
 
 /* Mete una orden entera y devuelve lo que contesta, terminado en cero. */
@@ -97,6 +114,15 @@ static void a_mano(void)
     iguales("dice que esta encendida",       "PS;", "PS1;");
     iguales("la informacion automatica, apagada", "AI;", "AI0;");
     iguales("da la frecuencia con 11 cifras", "FA;", "FA00007110000;");
+    /*
+     * LA VUELTA DEL BUCLE, HUECO A HUECO. 2 + 4 + 4 + 1 + 3 + 5 + 18 x 5 + 1
+     * = 110 caracteres, que caben en CAT_SALIDA_MAX. Si
+     * alguien añade un tramo sin tocar CAT_DIAG_TRAMOS, esto se cae aqui
+     * y no en la radio.
+     */
+    iguales("la vuelta del bucle, de ancho fijo", "DG;",
+            "DG0037001210492843199999001000020000300004000050000600007000"
+            "0800009000100001100012000130001400015000160001700;");
     iguales("y acepta que se la cambien",     "FA00014074000;", "");
     iguales("  (y se queda cambiada)",        "FA;", "FA00014074000;");
     iguales("da el modo",                     "MD;", "MD1;");

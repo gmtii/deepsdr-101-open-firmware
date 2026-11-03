@@ -751,7 +751,7 @@ def main():
     # Y ENCIMA, EL REGISTRO OFICIAL - 26/10/2026.
     # ------------------------------------------------------------------
     #
-    # Pedido por el usuario: "añade tambien hfcc, evita duplicados".
+    # Se añade tambien HFCC, evitando duplicados.
     #
     # LO DIFICIL ES LO SEGUNDO, y no es un detalle de implementacion: la
     # MISMA transmision esta en las tres listas con TRES NOMBRES DISTINTOS.

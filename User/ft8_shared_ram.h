@@ -120,7 +120,7 @@ typedef union
     {
         /* Bytes, no celdas: desde el 28/10/2026 cada celda ocupa medio
          * byte. Ver FT8_ADAPTER_MAG_BITS en ft8_waterfall_adapter.h. */
-        uint8_t mag[FT8_ADAPTER_MAG_BYTES];
+        uint8_t mag[FT8_ADAPTER_MAG_BYTES + FT8_ADAPTER_MAG_RELLENO];
         /*
          * EL DESVIO. 25/09/2026, sustituye a la copia entera de mag[].
          *
@@ -144,8 +144,15 @@ typedef union
          *
          * Y sale barato porque no hacen falta 93 bloques: solo los que la
          * captura alcance a escribir MIENTRAS dura la decodificacion, a 160
-         * ms por bloque. Con 24 bloques hay 3,84 segundos de margen, de sobra
-         * para una decodificacion que tarda menos de uno.
+         * ms por bloque. Entonces eran 24 bloques, 3,84 segundos, "de sobra
+         * para una decodificacion que tarda menos de uno".
+         *
+         * YA NO SON 24 NI LA DECODIFICACION TARDA MENOS DE UNO: hoy son
+         * FT8_ADAPTER_LADO_BLOQUES -12, o sea 1,92 s- y con la banda llena
+         * la decodificacion se pasa de ahi. Por eso existe el tope de reloj
+         * de ft8_modo_poll(), que corta antes de llegar: lo que se pierde
+         * son los candidatos mas flojos de ESTA ranura y no el audio de la
+         * siguiente.
          *
          * Lo que se gana: 23.808 - 6.144 = 17.664 bytes, con los que la banda
          * de dibujo vuelve a sus 16 filas y el espectro a su velocidad.
@@ -159,9 +166,24 @@ typedef union
          * que no quepa se pierde. No en silencio: lo cuenta
          * ft8_waterfall_desbordes() y sale en la pantalla.
          */
-        uint8_t lado[FT8_ADAPTER_LADO_BYTES];
-        float fft_re[FT8_FFT_SIZE];
-        float fft_im[FT8_FFT_SIZE];
+        uint8_t lado[FT8_ADAPTER_LADO_BYTES + FT8_ADAPTER_MAG_RELLENO];
+        /*
+         * LA MITAD, DESDE EL 02/11/2026: la entrada de la FFT es REAL.
+         *
+         * Eran FT8_FFT_SIZE floats cada uno -16.384 bytes- para una
+         * transformada compleja de 2.048 puntos con la parte imaginaria
+         * puesta a cero, de la que ademas se tiraba la mitad de la
+         * salida. Ahora se reparten las muestras pares e impares entre
+         * las dos mitades de una de 1.024 y se desenreda al final: la
+         * misma salida -lo comprueba sim/ft8_fftreal.c, 0,03 dB en el
+         * peor bin contra un escalon de 1,5- con 8.192 bytes menos y
+         * aproximadamente la mitad de mariposas.
+         *
+         * Esos 8.192 bytes son lo primero que se junto para pagar el
+         * submuestreo en frecuencia. Ver FT8_ADAPTER_FREQ_OSR.
+         */
+        float fft_re[FT8_FFT_SIZE / 2U];
+        float fft_im[FT8_FFT_SIZE / 2U];
         /*
          * *** AQUI ESTABAN LAS CUATRO TABLAS, Y EL SELLO - 10/10/2026. ***
          *
@@ -191,8 +213,13 @@ typedef union
         int16_t window[FT8_ADAPTER_NFFT];
         /* Solo los bins que el adaptador lee: ver FT8_ADAPTER_DB_BINS.
          * Con la FFT en 2.048 eran 1.024 floats y se miraba uno de cada
-         * dos. */
-        float dbout[FT8_ADAPTER_DB_BINS];
+         * dos.
+         *
+         * Y ENTEROS DESDE EL 02/11/2026: con FREQ_OSR=2 se leen los 1.024
+         * y en flotante costaban 4.096 bytes. En cuartos de decibelio
+         * (FT8_FFT_DB_ESCALA) son 2.048 y el cuantizador no nota la
+         * diferencia: reparte en escalones de 6,8 dB. */
+        int16_t dbout[FT8_ADAPTER_DB_BINS];
 
         /*
          * ==============================================================

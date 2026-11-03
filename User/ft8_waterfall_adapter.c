@@ -28,13 +28,17 @@
  * posible porque se parece a una banda vacia. Este aserto lo convierte en
  * un error de compilacion.
  */
-#if FT8_ADAPTER_MAG_BITS == 4
-_Static_assert(FTX_MAG_4BITS == 1,
-               "FT8_ADAPTER_MAG_BITS vale 4 pero decode.h no empaqueta");
-#else
-_Static_assert(FTX_MAG_4BITS == 0,
-               "FT8_ADAPTER_MAG_BITS vale 8 pero decode.h empaqueta");
-#endif
+_Static_assert(FT8_ADAPTER_MAG_BITS == FTX_MAG_BITS,
+               "FT8_ADAPTER_MAG_BITS y FTX_MAG_BITS no dicen lo mismo");
+/*
+ * Y QUE UN BLOQUE CAIGA EN BYTE ENTERO. Con cuatro bits salia solo; con
+ * tres hace falta que las celdas por bloque sean multiplo de 8. Si no, un
+ * bloque empieza a mitad de byte y toda la aritmetica de bytes de aqui
+ * abajo -la del desvio, sobre todo- apunta a la celda equivocada sin
+ * avisar. Ver FT8_ADAPTER_CELDAS_BLOQUE.
+ */
+_Static_assert(((FT8_ADAPTER_CELDAS_BLOQUE * FT8_ADAPTER_MAG_BITS) % 8) == 0,
+               "un bloque de mag[] no cae en byte entero");
 
 static ftx_waterfall_t s_wf;
 static int s_time_sub; /* 0..FT8_ADAPTER_TIME_OSR-1: which subblock within the CURRENT symbol block this feed will land in */
@@ -299,18 +303,24 @@ void ft8_waterfall_feed_subblock(const int16_t *audio_samples)
              * ya no guarda los bins que no se leen. Ver
              * FT8_ADAPTER_DB_BINS. */
             int src_bin = (bin * FT8_ADAPTER_FREQ_OSR) + freq_sub;
-            float db = s_dbout[src_bin] + FT8_ADAPTER_DB_OFFSET;
-#if FT8_ADAPTER_MAG_BITS == 4
+            /* s_dbout guarda CUARTOS de decibelio desde el 02/11/2026:
+             * ver FT8_FFT_DB_ESCALA. Aqui se vuelve a decibelios una sola
+             * vez, que es donde tiene que estar la division. */
+            float db = ((float)s_dbout[src_bin] / FT8_FFT_DB_ESCALA)
+                       + FT8_ADAPTER_DB_OFFSET;
+#if FT8_ADAPTER_MAG_BITS == 3 || FT8_ADAPTER_MAG_BITS == 4
             /* La inversa exacta de WF_MAG_AT (decode.h), que es quien
              * define la escalera: q = (dB - base) / paso. El +0,5 redondea
-             * al escalon mas cercano en vez de truncar hacia abajo. */
-            int q = (int)((db - FTX_MAG4_BASE_DB) / FTX_MAG4_PASO_DB + 0.5f);
-            const int q_tope = 15;
+             * al escalon mas cercano en vez de truncar hacia abajo.
+             * Sirve igual para tres bits y para cuatro porque la escalera
+             * se describe sola: ver FTX_MAG_PASO_DB. */
+            int q = (int)((db - FTX_MAG_BASE_DB) / FTX_MAG_PASO_DB + 0.5f);
+            const int q_tope = WF_MAG_NIVELES - 1;
 #else
             /* Lo de siempre: medio dB por escalon en un byte entero. Esta
              * rama se conserva PARA PODER MEDIR, que es como se decidio
-             * pasar a cuatro bits: se compila el banco con las dos y se
-             * comparan los numeros. */
+             * pasar a cuatro bits y luego a tres: se compila el banco con
+             * las dos y se comparan los numeros. */
             int q = (int)(2.0f * db + 240.0f);
             const int q_tope = 255;
 #endif

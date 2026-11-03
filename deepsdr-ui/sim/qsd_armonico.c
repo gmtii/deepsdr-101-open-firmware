@@ -1,14 +1,14 @@
 /*
  * POR DONDE SE METE UNA BANDA EN OTRA: EL MEZCLADOR Y SUS ARMONICOS.
  *
- * *** Avisado por el usuario, el 24/10/2026: "si voy disminuyendo la
- * frecuencia solo deberian de aparecerme señales por la izquierda, y
- * tambien me aparecen señales por la derecha". Y acto seguido, el
- * diagnostico que resulto ser el bueno: "en la banda de 40 hay muy poca
- * gente ahora mismo pero en la banda de 20m hay concurso y creo que se
- * estan metiendo las de 20m en la de 40m". ***
+ * *** BAJANDO EL DIAL APARECEN SEÑALES POR LA DERECHA, Y NO DEBERIAN.
+ * 24/10/2026. ***
  *
- * LAS CUENTAS DE SU CASO. Dial en 7.100 kHz, oscilador en 7.076. El doble
+ * Y el diagnostico que vino detras, que resulto ser el bueno: 40 metros
+ * estaba casi vacio y en 20 metros habia concurso, asi que las de 20 se
+ * estaban metiendo en la pantalla de 40.
+ *
+ * LAS CUENTAS DE ESE CASO. Dial en 7.100 kHz, oscilador en 7.076. El doble
  * son 14.152 kHz, dentro del concurso. Barriendo 40 metros enteros -de
  * 7.000 a 7.200- el doble va de 13.952 a 14.352: LA BANDA DE 20 METROS
  * ENTERA cae dentro de la pantalla de 40.
@@ -368,9 +368,8 @@ int main(void)
     /*
      * 5. Y LA PREGUNTA QUE LO CIERRA: ¿EN QUE MODO SE OYE CADA COPIA?
      *
-     * *** Preguntada por el usuario: "un armonico el 20m que emite en usb
-     * se puede escuchar en 40m en lsb? me refiero sin cambiar yo el
-     * modo". ***
+     * *** ¿UN ARMONICO DE 20 m QUE EMITE EN USB SE OYE EN 40 m EN LSB,
+     * SIN TOCAR EL MODO? ***
      *
      * La respuesta sale de la misma cuenta de arriba. Con el armonico par,
      * z = (1-j) * Re{u}: la copia de arriba lleva u y la de abajo lleva su

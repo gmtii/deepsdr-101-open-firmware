@@ -25,6 +25,39 @@
 void sam_init(sam_t *s, float32_t sample_rate_hz, float32_t pll_fmax_hz,
         float32_t omega_n_hz, float32_t zeta)
 {
+    /*
+     * ===================================================================
+     * LOS CUATRO NUMEROS, ANTES DE USARLOS - 02/11/2026, banco del M4.
+     * ===================================================================
+     *
+     * g2 lleva un sqrtf(1 - zeta*zeta). Con zeta >= 1 eso es la raiz de un
+     * numero negativo, o sea NaN, y a partir de ahi NaN se propaga por
+     * TODO el lazo: omega2, el audio y el enganche. Y lo hace EN SILENCIO:
+     * no hay aviso, no hay audio y el espectro sigue pintando igual.
+     *
+     * Lo mismo con una tasa de muestreo de cero -division entre cero, o
+     * sea infinito en omega_min y omega_max- y con un margen o un ancho de
+     * lazo negativos, que dan un lazo que empuja al reves.
+     *
+     * Hoy la radio llama con 65/75 = 0,867 y no dispara ninguno: esto no
+     * arregla un fallo vivo. Es que un lazo que se muere sin decirlo no
+     * puede depender de que los cuatro numeros vengan siempre de un sitio
+     * de confianza. Lo encontro el banco del Cortex-M4 comparando contra
+     * el PC: los dos daban NaN, pero con el signo distinto, y por ahi se
+     * vio. Ver deepsdr-ui/m4/numeros_cuerpo.h.
+     *
+     * Las comparaciones van con ! y > a proposito: "!(x > 0)" tambien es
+     * cierto con NaN, y "x <= 0" no.
+     */
+    if (!(sample_rate_hz > 0.0f)) { sample_rate_hz = 48000.0f; }
+    if (!(pll_fmax_hz    > 0.0f)) { pll_fmax_hz    = 1000.0f; }
+    if (!(omega_n_hz     > 0.0f)) { omega_n_hz     = 100.0f; }
+    if (!(zeta           > 0.0f)) { zeta           = 0.707f; }
+    /* Y por debajo de uno con holgura: en uno justo la raiz da cero -lazo
+     * criticamente amortiguado, que es valido- pero un pelo por encima por
+     * redondeo ya es NaN. */
+    if (zeta > 0.99f)             { zeta           = 0.99f; }
+
     s->pll_fmax = pll_fmax_hz;
     s->zeta = zeta;
     s->omegaN = omega_n_hz;
@@ -74,6 +107,13 @@ void sam_init(sam_t *s, float32_t sample_rate_hz, float32_t pll_fmax_hz,
  * en un valor que ya no es alcanzable. */
 void sam_margen_pon(sam_t *s, float32_t pll_fmax_hz, float32_t sample_rate_hz)
 {
+    /* La misma guarda que sam_init(), y por la misma razon: esto lo llama
+     * el bucle cuando el ajuste del margen se mueve con la radio andando,
+     * asi que es la OTRA puerta por la que puede entrar un numero que deje
+     * el lazo sin topes. */
+    if (!(sample_rate_hz > 0.0f)) { sample_rate_hz = 48000.0f; }
+    if (!(pll_fmax_hz    > 0.0f)) { pll_fmax_hz    = 1000.0f; }
+
     s->pll_fmax = pll_fmax_hz;
     s->omega_min = -SAM_TPI * pll_fmax_hz / sample_rate_hz;
     s->omega_max =  SAM_TPI * pll_fmax_hz / sample_rate_hz;

@@ -385,3 +385,16 @@ panel: User/main.c
 
 all: panel
 update: panel
+
+# ---------------------------------------------------------------------
+# -Oz EN LO QUE NO CORRE EN EL CAMINO CALIENTE (02/11/2026)
+#
+# El proyecto entero va a -Os y los CALIENTES a -O2. -Oz es lo mismo que
+# -Os pero sin la clausula de "salvo que perjudique mucho a la velocidad":
+# aprieta todo lo que puede. En un camino caliente eso se paga; en un
+# decodificador que corre dos veces por segundo, no.
+#
+# La lista es a dedo y MEDIDA uno a uno: no todos ganan, y alguno sale
+# mas grande. Ver el barrido de tools/.
+MENUDOS = mapa.o
+$(addprefix $(BUILD_DIR)/,$(MENUDOS)): CFLAGS += -Oz

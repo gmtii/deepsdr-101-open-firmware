@@ -1195,6 +1195,7 @@ static void cw_gate_update(void)
  * lo que se decodifico mientras tanto se vuelve a leer del historial de
  * duraciones cuando la puerta abre, ver cw_replay().
  */
+__attribute__((noinline))
 static void cw_emit(char c)
 {
     if (s_gate) {

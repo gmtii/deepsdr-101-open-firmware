@@ -359,6 +359,7 @@ float sstv_hz_de_nivel(uint8_t v)
 
 /* Con el desvio restado, igual que todo lo demas: si no, una señal 200 Hz
  * baja pinta la foto entera mas oscura de lo que es. */
+__attribute__((noinline))
 static uint8_t nivel_de_hz(float hz)
 {
     float t = ((hz - s_off_hz) - SSTV_NEGRO_HZ) / (SSTV_BLANCO_HZ - SSTV_NEGRO_HZ);
@@ -549,6 +550,7 @@ static void piso_reinicia(float fs)
  * del PULSO y no del ruido. Ver SUAVE_PISO.
  */
 /* El desvio que dice el suelo, acotado a lo mismo que admite la cabecera. */
+__attribute__((noinline))
 static float piso_desvio(void)
 {
     float d = s_piso_min - SSTV_SYNC_HZ;

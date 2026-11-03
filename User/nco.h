@@ -203,8 +203,8 @@ static inline void nco_sen_cos_fase(uint32_t fase, float *sen, float *cos_)
  * y lo que hace que el panorama se quede quieto.
  *
  * ======================================================================
- * EL AGUJERO DEL CENTRO YA NO EXISTE - 30/10/2026, pedido por el usuario:
- * "que recorra los 192 sin saltar en absolutamente nada".
+ * EL AGUJERO DEL CENTRO YA NO EXISTE - 30/10/2026: el dial recorre los
+ * 192 kHz sin saltar en absolutamente nada.
  * ======================================================================
  *
  * Aqui ponia que la distancia no podia ser ni negativa ni pequeña, porque

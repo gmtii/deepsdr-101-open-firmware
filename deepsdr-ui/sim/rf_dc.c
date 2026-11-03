@@ -3,8 +3,8 @@
  * LA FUGA DEL OSCILADOR EN LOS PASOS PEGADOS AL CENTRO - 25/10/2026
  * ======================================================================
  *
- * Reportado por un usuario: "se oyen artefactos en los pasos de sintonia
- * pegados a la frecuencia intermedia cero".
+ * EL SINTOMA: se oyen artefactos en los pasos de sintonia pegados a la
+ * frecuencia intermedia cero.
  *
  * QUE ESTABA PASANDO. El oscilador local se auto-mezcla consigo mismo y
  * deja una CONTINUA encima de la I y de la Q. Esta radio la aparta

@@ -283,8 +283,8 @@ uint32_t nco_lo_aparcado(uint32_t freq_hz, uint32_t lo_actual_hz,
 
     /*
      * ==================================================================
-     * Y POR ABAJO, CON EL OSCILADOR POR ENCIMA - 24/10/2026, avisado por
-     * el usuario: "el NCO no barre toda la pantalla".
+     * Y POR ABAJO, CON EL OSCILADOR POR ENCIMA - 24/10/2026: el NCO no
+     * barria toda la pantalla.
      * ==================================================================
      *
      * Y no la barria. Aqui ponia que las distancias NEGATIVAS no se

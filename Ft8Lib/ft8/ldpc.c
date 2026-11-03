@@ -26,83 +26,33 @@ static float fast_atanh(float x);
 // plain is a return value, 174 ints, to be 0 or 1.
 // max_iters is how hard to try.
 // ok == 87 means success.
-void ldpc_decode(float codeword[], int max_iters, uint8_t plain[], int* ok)
-{
-    float m[FTX_LDPC_M][FTX_LDPC_N]; // ~60 kB
-    float e[FTX_LDPC_M][FTX_LDPC_N]; // ~60 kB
-    int min_errors = FTX_LDPC_M;
+/*
+ * ===========================================================================
+ * ldpc_decode() SE HA IDO, Y NO ES UNA LIMPIEZA - 02/11/2026, banco del M4.
+ * ===========================================================================
+ *
+ * Aqui habia una segunda version del decodificador, la de la biblioteca
+ * original, que NADIE llamaba: decode.c usa bp_decode() y tenia la llamada
+ * a esta comentada al lado. El enlazador ya la tiraba con --gc-sections, o
+ * sea que en la radio no ocupaba ni un byte.
+ *
+ * Pero declaraba DOS matrices de float[83][174] COMO LOCALES: unos 115 kB
+ * de pila. Y la pila de esta radio son 5.632 bytes (_Min_Stack_Size =
+ * 0x1600 en GD32F450VE_FLASH.ld), arriba del todo de los 64 kB de TCM. O
+ * sea que el dia que alguien descomentara esa linea -que esta ahi, a mano,
+ * invitando- la pila se saldria por VEINTE VECES su tamaño, pisando los
+ * buffers del DSP que viven en esa misma TCM, y sin un HardFault que lo
+ * dijera: por debajo de 0x10000000 simplemente no hay nada.
+ *
+ * Lo midio el banco del Cortex-M4 pintando la pila y mirando hasta donde
+ * llegaba de verdad: 116.388 bytes. Ver deepsdr-ui/m4/start.c.
+ *
+ * Se borra la funcion Y su declaracion de ldpc.h, para que descomentar la
+ * llamada de decode.c ya no compile en vez de reventar en marcha. Lo que
+ * se usa, bp_decode(), hace lo mismo con sus matrices en la RAM
+ * compartida: ver el comentario de ahi abajo.
+ */
 
-    for (int j = 0; j < FTX_LDPC_M; j++)
-    {
-        for (int i = 0; i < FTX_LDPC_N; i++)
-        {
-            m[j][i] = codeword[i];
-            e[j][i] = 0.0f;
-        }
-    }
-
-    for (int iter = 0; iter < max_iters; iter++)
-    {
-        for (int j = 0; j < FTX_LDPC_M; j++)
-        {
-            for (int ii1 = 0; ii1 < kFTX_LDPC_Num_rows[j]; ii1++)
-            {
-                int i1 = kFTX_LDPC_Nm[j][ii1] - 1;
-                float a = 1.0f;
-                for (int ii2 = 0; ii2 < kFTX_LDPC_Num_rows[j]; ii2++)
-                {
-                    int i2 = kFTX_LDPC_Nm[j][ii2] - 1;
-                    if (i2 != i1)
-                    {
-                        a *= fast_tanh(-m[j][i2] / 2.0f);
-                    }
-                }
-                e[j][i1] = -2.0f * fast_atanh(a);
-            }
-        }
-
-        for (int i = 0; i < FTX_LDPC_N; i++)
-        {
-            float l = codeword[i];
-            for (int j = 0; j < 3; j++)
-                l += e[kFTX_LDPC_Mn[i][j] - 1][i];
-            plain[i] = (l > 0) ? 1 : 0;
-        }
-
-        int errors = ldpc_check(plain);
-
-        if (errors < min_errors)
-        {
-            // Update the current best result
-            min_errors = errors;
-
-            if (errors == 0)
-            {
-                break; // Found a perfect answer
-            }
-        }
-
-        for (int i = 0; i < FTX_LDPC_N; i++)
-        {
-            for (int ji1 = 0; ji1 < 3; ji1++)
-            {
-                int j1 = kFTX_LDPC_Mn[i][ji1] - 1;
-                float l = codeword[i];
-                for (int ji2 = 0; ji2 < 3; ji2++)
-                {
-                    if (ji1 != ji2)
-                    {
-                        int j2 = kFTX_LDPC_Mn[i][ji2] - 1;
-                        l += e[j2][i];
-                    }
-                }
-                m[j1][i] = l;
-            }
-        }
-    }
-
-    *ok = min_errors;
-}
 
 //
 // does a 174-bit codeword pass the FT8's LDPC parity checks?

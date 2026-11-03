@@ -79,6 +79,13 @@ static int16_t  s_dt_visto;       /* el ultimo DT medio, para la pantalla */
 static uint8_t  s_decodificando;
 static uint32_t s_ms_ini;
 static uint16_t s_ms_dec;   /* lo que tardo la ultima decodificacion */
+/*
+ * Ranuras que se cortaron por el tope de reloj. No es lo mismo que
+ * perder audio -eso es ft8_modo_perdidos()- y por eso va aparte: aqui la
+ * captura esta intacta y lo que falta son los candidatos mas flojos de la
+ * ranura que se corto. Ver el tope en ft8_modo_poll().
+ */
+static uint16_t s_cortadas;
 
 /* En la memoria compartida desde el 10/10/2026 (1.408 bytes). Es el
  * historico que se ve en el panel y solo existe mientras FT8 esta puesto:
@@ -215,6 +222,7 @@ void ft8_modo_start(float fs_hz)
     waterfall_presta(1U);
     ft8_decimator_reset_perdidos();
     ft8_waterfall_reset_desbordes();   /* el otro sumando de ft8_modo_perdidos() */
+    s_cortadas = 0U;                   /* y el del tope de reloj, que es otra cosa */
     s_ms_dec = 0U;
 
     /*
@@ -240,6 +248,20 @@ void ft8_modo_start(float fs_hz)
     ft8_waterfall_arranca();
     ft8_waterfall_reset();
     ft8_decoder_init();
+    /*
+     * Y QUE EL REMUESTREADOR RESPIRE MIENTRAS SE BUSCAN CANDIDATOS.
+     * 02/11/2026, noche.
+     *
+     * ft8_decoder_slot_empieza() es el unico trozo del camino que corre de
+     * un tiron: el tope de reloj de mas abajo mira ENTRE candidatos y por
+     * ahi no pasa. Medido en m4/m4_ft8.c son 308 ms de instrucciones
+     * contra los 320 de colchon del remuestreador, o sea que no cabe, y
+     * el audio que se pierde es el de la ranura SIGUIENTE.
+     *
+     * Con esto, cada cinco milisegundos aproximadamente se vacia igual que
+     * en el bucle normal.
+     */
+    ft8_decoder_set_respira(ft8_decimator_poll);
 
     /*
      * Y NINGUN ARRANQUE PENDIENTE DE LA SESION ANTERIOR. 23/10/2026.
@@ -375,11 +397,13 @@ void ft8_modo_borra(void)
 }
 
 uint16_t ft8_modo_ms(void)        { return s_ms_dec; }
+uint16_t ft8_modo_cortadas(void)  { return s_cortadas; }
 uint16_t ft8_modo_perdidos(void)
 {
     /* Los dos sitios por donde se puede perder audio, sumados: el
      * remuestreador si el bucle principal tarda mas de 320 ms, y el desvio
-     * si la decodificacion tarda mas de 3,84 s. Un solo numero en pantalla
+     * si la decodificacion tarda mas de lo que aguanta el desvio -hoy
+     * 12 bloques, 1,92 s-. Un solo numero en pantalla
      * porque la respuesta es la misma en los dos casos: si no es cero, a la
      * captura le faltan trozos. */
     return (uint16_t)(ft8_decimator_perdidos() + ft8_waterfall_desbordes());
@@ -455,6 +479,41 @@ void ft8_modo_come(const float *muestras, uint16_t n)
 #define FT8_PASO_MS 8UL
 
 /*
+ * Cuantos bloques de desvio se dejan gastar antes de cortar la
+ * decodificacion por las bravas. Ver el comentario del tope en
+ * ft8_modo_poll(): dos por debajo de lo que cabe, para que la vuelta en
+ * la que se decide parar quepa de sobra.
+ */
+#define FT8_TOPE_BLOQUES  (FT8_ADAPTER_LADO_BLOQUES - 2U)
+
+/*
+ * Y EL MISMO TOPE, EN EL RELOJ - 03/11/2026.
+ *
+ * Lo que mide un bloque del desvio son 160 ms de audio, asi que diez
+ * bloques son 1,6 s y las dos formas de decir el tope deberian dar lo
+ * mismo. En la radio NO lo dieron: con el tope puesto hubo ranuras que
+ * tardaron 2,4 s, o sea ochocientos milisegundos por encima de un tope
+ * que mira bloques.
+ *
+ * NO SE SABE POR QUE el contador de bloques se queda corto ahi. Se
+ * descartaron tres explicaciones mirando el codigo -que el desvio no
+ * avanzara durante la busqueda (avanza: ft8_decimator_poll() llama a
+ * ft8_waterfall_feed_subblock()), que el desbordamiento apagara el
+ * desvio (no lo apaga) y que el contador no se reiniciara (se reinicia en
+ * ft8_waterfall_cierra_ranura())- y ninguna era.
+ *
+ * Y NO HACE FALTA SABERLO PARA ARREGLARLO. El tope quiere decir "no
+ * tardes mas de esto", y eso se mide con un reloj, no con un contador de
+ * bloques que es un sustituto. Se dejan los dos, con O: el que llegue
+ * primero corta. El de bloques sigue valiendo por si algun dia el desvio
+ * se llena antes de tiempo; el del reloj no se puede despistar.
+ *
+ * Si alguien averigua por que se despistaba el de bloques, que lo
+ * escriba aqui. Mientras tanto, la radio no se pasa.
+ */
+#define FT8_TOPE_MS       1600UL
+
+/*
  * ======================================================================
  * AQUI VIVIA s_perdidas, Y NO PODIA CONTAR NADA - 23/10/2026
  * ======================================================================
@@ -486,7 +545,9 @@ void ft8_modo_come(const float *muestras, uint16_t n)
  * la chapa, sumados en ft8_modo_perdidos():
  *
  *   ft8_decimator_perdidos()   el bucle principal tardo mas de 320 ms
- *   ft8_waterfall_desbordes()  la decodificacion tardo mas de 3,84 s
+ *   ft8_waterfall_desbordes()  la decodificacion se paso del desvio
+ *                              (FT8_ADAPTER_LADO_BLOQUES bloques a 160
+ *                              ms: hoy 12, o sea 1,92 s)
  *
  * El segundo es exactamente el sintoma que s_perdidas perseguia, medido
  * donde pasa en vez de donde se suponia.
@@ -702,6 +763,60 @@ void ft8_modo_tick(void)
         while (sigue && ((uint32_t)(g_msticks - t0) < FT8_PASO_MS)) {
             sigue = ft8_decoder_slot_paso();
             ft8_decimator_poll();
+        }
+
+        /*
+         * ==============================================================
+         * *** EL TOPE DE RELOJ - 02/11/2026, noche. ***
+         * ==============================================================
+         *
+         * LO QUE PASABA. El trozo de arriba mira el reloj ANTES de cada
+         * candidato, y un candidato no se puede partir: es la extraccion
+         * de los 79 simbolos mas el LDPC entero. Medido por el cable con
+         * la banda llena, UN candidato cuesta de 46 a 54 ms en el chip de
+         * verdad, o sea que el trozo de 8 ms se pasa seis veces y no hay
+         * nada que lo pare.
+         *
+         * Con 62 candidatos -que es lo que da 40 m a las nueve de la
+         * noche- son mas de tres segundos de reloj. El desvio aguanta
+         * FT8_ADAPTER_LADO_BLOQUES bloques, hoy 1,92 s. Lo que pasa de
+         * ahi es audio de la ranura SIGUIENTE que se pierde, y una ranura
+         * a la que le falta audio no decodifica nada aunque suene llena.
+         * Se veia como "hay pasadas que no sacan ni una", con el contador
+         * de perdidos subiendo.
+         *
+         * LO QUE SE HACE. Pararse a tiempo. Al llegar a FT8_TOPE_BLOQUES
+         * se deja lo que quede y se reintegra: se pierden los candidatos
+         * que falten de ESTA ranura en vez de la SIGUIENTE entera.
+         *
+         * Y por eso los candidatos van ordenados de mas fuerte a mas
+         * flojo (ver ft8_decoder_slot_empieza): lo que se queda sin hacer
+         * es siempre lo de abajo del todo.
+         *
+         * EL NUMERO. Dos bloques por debajo del desvio, no el desvio
+         * entero: entre que esto decide parar y ft8_waterfall_reintegra()
+         * corre, la captura sigue entrando. Dos bloques son 320 ms de
+         * holgura sobre un paso de bucle que en el peor caso medido son
+         * 67 ms.
+         *
+         * NO ES UN APAÑO PARA NO ARREGLAR LA VELOCIDAD. Es la red: por
+         * rapido que se ponga el decodificador, siempre habra una banda
+         * lo bastante llena como para no acabar, y lo que no puede pasar
+         * es que eso cueste la ranura de al lado.
+         */
+        /* Y SOLO CON LA CAPTURA DESVIADA, que es lo que hace que
+         * ft8_waterfall_bloques() cuente bloques DEL DESVIO. Sin esta
+         * guarda devolveria los de la captura viva -hasta 93- y el tope
+         * saltaria en el primer candidato de cada ranura. Las dos
+         * banderas se encienden y se apagan juntas, pero atar el tope a
+         * esa coincidencia es justo la clase de cosa que se rompe sola el
+         * dia que una de las dos cambie. */
+        if (sigue
+            && (((uint32_t)(g_msticks - s_ms_ini) >= FT8_TOPE_MS)
+                || (ft8_waterfall_desviada()
+                    && ft8_waterfall_bloques() >= FT8_TOPE_BLOQUES))) {
+            s_cortadas++;
+            sigue = 0U;
         }
 
         if (!sigue) {

@@ -140,6 +140,7 @@ ui_top_hit_t ui_top_hit(uint16_t x, uint16_t y)
     return UI_TOP_HIT_NONE;
 }
 
+__attribute__((noinline))
 static const char *knob_name(ui_knob_t k)
 {
     switch (k) {
@@ -172,7 +173,24 @@ static void draw_header(gfx2_surf_t *s, void *ctx)
     int16_t x, i;
     const char *p;
 
-    gfx2_vgrad(s, 0, 0, GFX2_W, UI_TOP_H,
+    /*
+     * EL DEGRADADO, SOLO DE LA VENTANA QUE SE ESTA COMPONIENDO.
+     * 01/11/2026.
+     *
+     * Aqui ponia (0, 0, GFX2_W, ...), o sea los 800 px de ancho SIEMPRE,
+     * y gfx2_vgrad() descartaba uno a uno los que caen fuera de la
+     * ventana: por cada pixel tirado se pagaba el indice del tramado y
+     * dos comparaciones. Desde que esta franja se compone a trozos -solo
+     * los digitos que cambian al girar el mando- eso era casi todo el
+     * trabajo.
+     *
+     * Pidiendolo de s->x con s->w sale EXACTAMENTE el mismo dibujo: el
+     * color depende solo de la fila, y el tramado de la x ABSOLUTA, que
+     * se conserva porque se pasa la x de verdad y no un cero. Lo vigila
+     * el banco de sim/top_franjas.c, que compara los repintados
+     * parciales contra el completo pixel a pixel.
+     */
+    gfx2_vgrad(s, s->x, 0, s->w, UI_TOP_H,
                gfx2_rgb(PAL_HDR_TOP), gfx2_rgb(PAL_SURF_1));
     gfx2_hline(s, 0, UI_TOP_H - 1, GFX2_W, gfx2_rgb(PAL_LINE));
 
@@ -187,19 +205,35 @@ static void draw_header(gfx2_surf_t *s, void *ctx)
         int16_t aw;
         int hi = (i == st->freq_digit);
         b[0] = *p; b[1] = 0;
-        aw = gfx2_text_w(b, &font_num_44);
-        gfx2_text(s, x, 2, b, &font_num_44, hi ? acc : ink);
+        /*
+         * EL ANCHO SALE DE PINTARLO, NO DE MEDIRLO APARTE - 01/11/2026.
+         *
+         * Aqui habia un gfx2_text_w() seguido de un gfx2_text() con la
+         * MISMA cadena y la MISMA fuente: dos busquedas del glifo por
+         * cada cifra. Y esto corre una vez POR BANDA del compositor -la
+         * franja son 64 filas y las bandas 16, o sea cuatro-, asi que
+         * eran 72 busquedas por repintado para 9 cifras.
+         *
+         * gfx2_text() devuelve el avance, y lo devuelve TAMBIEN cuando el
+         * glifo cae fuera de la ventana y no pinta nada -ver
+         * gfx2_text_uno(), que sale por `return g->adv`-. O sea que la x
+         * sigue saliendo bien cuando se compone solo un trozo, que es lo
+         * que hace falta para repintar un digito suelto.
+         */
+        aw = gfx2_text(s, x, 2, b, &font_num_44, hi ? acc : ink);
         if (hi) {
             gfx2_fill(s, x, 50, (int16_t)(aw - 2), 3, acc);
         }
         x = (int16_t)(x + aw);
     }
-    gfx2_text(s, (int16_t)(x + 6), 26, "kHz", &font_ui_18b, dim); /* ETAPA 4: era "MHz" y el numero eran Hz - ver tune_freq_format_khz() en main.c */
+    /* Lo mismo con el "kHz": se pintaba y despues se media otra vez para
+     * s_freq_x2. Una busqueda por banda menos. */
+    i = gfx2_text(s, (int16_t)(x + 6), 26, "kHz", &font_ui_18b, dim); /* ETAPA 4: era "MHz" y el numero eran Hz - ver tune_freq_format_khz() en main.c */
 
     /* Fin de la lectura de frecuencia, para ui_top_freq_hit(): el final del
      * "kHz" mas un margen, y siempre por delante del chip de modo (que
      * empieza en x+62). Ver el comentario de s_freq_x2. */
-    s_freq_x2 = (int16_t)(x + 6 + gfx2_text_w("kHz", &font_ui_18b) + 12);
+    s_freq_x2 = (int16_t)(x + 6 + i + 12);
 
     /* --- modo, como chip con acento --- */
     {
@@ -608,6 +642,47 @@ static int16_t knob_w_fijo(void)
 
 static int16_t s_knob_right = 0;   /* donde acaba la pastilla del mando */
 
+/*
+ * QUE DICEN LOS CHIPS AHORA MISMO.
+ *
+ * El repintado del mando iba hasta el borde derecho de la pantalla porque
+ * los chips se colocan de derecha a izquierda: si el ancho de filtro cambia
+ * de "2,4k" a "12k", el chip crece y empuja a los que tiene a su izquierda.
+ * Mientras ninguno de los cuatro cambie de texto, esos pixeles de ahi a la
+ * derecha ya dicen lo que tienen que decir, y volver a empujarlos por el
+ * bus de la pantalla a cada paso del mando es trabajo tirado -y ruido en el
+ * audio, que es como se nota-.
+ *
+ * Asi que se resume lo que decide el ancho y la posicion de los chips en un
+ * numero. Si el numero no ha cambiado desde el ultimo repintado, la ventana
+ * se queda en la pastilla; si ha cambiado, va hasta el borde como antes.
+ */
+static uint32_t chips_firma(const ui_top_state_t *st)
+{
+    uint32_t    f = 2166136261UL;
+    const char *v[4];
+    uint8_t     i;
+
+    v[0] = st->agc;
+    v[1] = st->bw;
+    v[2] = st->att;
+    v[3] = st->nco_on ? st->nco_off : 0;
+    for (i = 0U; i < 4U; i++) {
+        const char *p = v[i];
+        f = (f ^ (uint32_t)(i + 1U)) * 16777619UL;
+        while (p && *p) { f = (f ^ (uint32_t)(uint8_t)*p++) * 16777619UL; }
+    }
+    f = (f ^ (uint32_t)((st->nco_on ? 1U : 0U)
+                        | (st->jmp_on ? 2U : 0U)
+                        | (st->spk_muted ? 4U : 0U)
+                        | (st->ovr ? 8U : 0U))) * 16777619UL;
+    return f;
+}
+
+/* La firma de los chips TAL Y COMO ESTAN PINTADOS en la pantalla. La ponen
+ * los dos repintados que cubren la franja entera. */
+static uint32_t s_chips_vista;
+
 static void draw_status(gfx2_surf_t *s, void *ctx)
 {
     const ui_top_state_t *st = (const ui_top_state_t *)ctx;
@@ -752,8 +827,8 @@ static void draw_status(gfx2_surf_t *s, void *ctx)
             kw_max = (int16_t)(ST_CHIP_R - fijos - 10 - kx);
 
             /*
-             * EL ANCHO ES FIJO. Pedido por el usuario: "hazle un ancho fijo
-             * a la chapa de sintonia".
+             * EL ANCHO ES FIJO, y es lo que se pidio para la chapa de
+             * sintonia.
              *
              * La pastilla mide siempre lo mismo, con el mando en lo que sea
              * y con sobrecarga o sin ella. Lo que cede, si el contenido no
@@ -1118,6 +1193,7 @@ void ui_top_draw(const ui_top_state_t *st)
     /* Despues de la cabecera y no dentro: necesita su propia banda para
      * recortarse al hueco. Ver draw_header(). */
     ui_top_draw_rds(st);
+    s_chips_vista = chips_firma(st);
     gfx2_render(0, UI_STATUS_Y, GFX2_W, UI_STATUS_H, draw_status, (void *)st);
     /* Esto tambien es la franja entera: apunta la chapa del NCO igual que
      * ui_top_draw_status(). Ver s_nco_pintado. */
@@ -1184,6 +1260,7 @@ uint8_t ui_top_nco_al_dia(const ui_top_state_t *st)
 
 void ui_top_draw_status(const ui_top_state_t *st)
 {
+    s_chips_vista = chips_firma(st);
     gfx2_render(0, UI_STATUS_Y, GFX2_W, UI_STATUS_H, draw_status, (void *)st);
     nco_apunta(st);
 }
@@ -1264,6 +1341,74 @@ void ui_top_draw_status(const ui_top_state_t *st)
  */
 #define ST_MOVIL_Y1  6     /* la primera fila que se mueve con la señal */
 #define ST_MOVIL_Y2  32    /* la primera que ya no */
+
+/*
+ * ===========================================================================
+ * Y LA PARTE QUE SE MUEVE CON EL MANDO - 02/11/2026.
+ * ===========================================================================
+ *
+ * El hermano del de abajo, por el otro lado de la franja. Con el mando
+ * enganchado al ancho de filtro en pantalla solo se mueven los valores de
+ * la chapa del BW, que es una zona enana, y aun asi se ralentizaba.
+ *
+ * Al girar un ajuste enganchado cambian DOS cosas y las dos viven a la
+ * derecha de knob_x(): la pastilla del mando -que dice que ajuste es y
+ * cuanto vale- y el chip de ese ajuste, si lo tiene. Lo que queda a la
+ * izquierda -la barra de S, las unidades y el dBm- se mueve con la SEÑAL y
+ * tiene su propia ventana (ui_top_draw_smeter), asi que repintarlo aqui es
+ * trabajo tirado.
+ *
+ * El limite es knob_x(), el mismo numero que decide donde empieza la
+ * pastilla: un solo sitio para las dos cosas, para que mover la pastilla no
+ * pueda dejar la ventana apuntando a donde ya no esta.
+ *
+ * Y hasta el borde derecho y no hasta s_knob_right: los chips se colocan de
+ * derecha a izquierda y su ancho depende de lo que digan, asi que cambiar
+ * el ancho de filtro mueve los que tiene a su izquierda. La ventana los
+ * coge a todos.
+ */
+void ui_top_draw_mando(const ui_top_state_t *st)
+{
+    int16_t  x0 = knob_x(st);
+    int16_t  w  = (int16_t)(GFX2_W - x0);
+    uint32_t f  = chips_firma(st);
+
+    /* Ver chips_firma(): mientras los cuatro chips digan lo mismo, no se
+     * han movido, y la ventana se queda en la pastilla. s_knob_right lo
+     * deja el repintado anterior; a cero -nada pintado todavia- se va por
+     * el camino ancho. */
+    if ((f == s_chips_vista) && (s_knob_right > x0)
+        && ((int16_t)(s_knob_right + 2) < GFX2_W)) {
+        w = (int16_t)(s_knob_right + 2 - x0);
+    }
+    s_chips_vista = f;
+
+    gfx2_render(x0, UI_STATUS_Y, w, UI_STATUS_H, draw_status, (void *)st);
+}
+
+/*
+ * SOLO LOS CHIPS, DE LA PASTILLA A LA DERECHA.
+ *
+ * El hermano por el otro lado de ui_top_draw_mando(). Lo pide quien cambia
+ * un chip sin tocar la pastilla: el rotulo del NCO al girar el dial, que
+ * antes se llevaba por delante la franja ENTERA -9.500 us de composicion,
+ * unos 16 ms en la radio- cada vez que se quedaba atrasado.
+ *
+ * Empieza donde acabo la pastilla, que lo deja apuntado el repintado
+ * anterior. Mientras no haya ninguno -s_knob_right a cero- arranca en
+ * knob_x(), que es coger tambien la pastilla: mas ancho, pero nunca menos
+ * de lo que hay que pintar.
+ */
+void ui_top_draw_chips(const ui_top_state_t *st)
+{
+    int16_t kx = knob_x(st);
+    int16_t x0 = (s_knob_right > kx) ? (int16_t)(s_knob_right + 2) : kx;
+
+    if (x0 >= GFX2_W) { return; }
+    s_chips_vista = chips_firma(st);
+    gfx2_render(x0, UI_STATUS_Y, (int16_t)(GFX2_W - x0), UI_STATUS_H,
+                draw_status, (void *)st);
+}
 
 void ui_top_draw_smeter(const ui_top_state_t *st)
 {
@@ -1391,9 +1536,218 @@ void ui_top_draw_hora(const ui_top_state_t *st)
  * de los digitos, el chip del modo y la pastilla, y mientras no se
  * separen, cualquier medida que dependa de ellos tiene este mismo riesgo.)
  */
+/*
+ * ======================================================================
+ * MOVER UN DIGITO NO RECOMPONE LAS PASTILLAS DE MODO Y BANDA.
+ * 01/11/2026: seguia parandose en cuanto se usaba el mando para mover la
+ * frecuencia.
+ * ======================================================================
+ *
+ * MEDIDO: componer esta franja entera cuesta 351 us en el banco, contra
+ * 283 us de un cuadro ENTERO de traza del espectro (make topfranjas y
+ * make pixeles, misma maquina). En la radio del usuario la traza son 16
+ * ms, asi que esto son unos 20 - y su vuelta de bucle va a 27 ms con un
+ * tope de fotograma de 22. No le sobra nada, y esto se pagaba en CADA
+ * DETENTE del mando.
+ *
+ * Y lo que se pagaba de mas: la ventana iba de 0 a rds_x1(), o sea hasta
+ * donde empieza la marquesina, metiendo dentro la pastilla de MODO y la
+ * de BANDA. Al mover un digito esas dos no cambian. Lo que cambia es la
+ * lectura, que acaba en s_freq_x2.
+ *
+ * Asi que se compone solo hasta ahi, y se repinta el resto cuando de
+ * verdad hace falta, que son tres casos y los tres se preguntan:
+ *
+ *   - la lectura cambia de ANCHO (cruzar 9.999, o entrar en FM), que
+ *     empuja las dos pastillas a otro sitio;
+ *   - cambia el MODO;
+ *   - cambia la BANDA, que al sintonizar pasa al cruzar un borde.
+ *
+ * Los dos ultimos se preguntan por el PUNTERO, y se puede: los dos
+ * salen de tablas constantes -k_band_presets[].label[idioma()] y
+ * k_demod_modes[].label-, asi que cada banda y cada modo tienen su
+ * cadena y dos distintos nunca comparten direccion. Cambiar de idioma
+ * tambien cambia el puntero, que es lo que hace falta. Si algun dia una
+ * de las dos pasara a escribirse en un buffer compartido, esto dejaria
+ * de valer y habria que comparar el texto; el banco de abajo -"el
+ * repintado estrecho se entera de modo y banda"- es el que se pondria
+ * rojo.
+ *
+ * El caso de "ha crecido" ya estaba y se queda tal cual: draw_header
+ * calcula s_band_x2 MIENTRAS dibuja, asi que hasta terminar la primera
+ * pasada no se sabe.
+ */
+/* Lo que cabe de la lectura: "144.500,00" son diez, y con el cero final
+ * sobra de largo. Si alguna vez no cupiera, la guarda de `entera` se va
+ * por el camino ancho y sigue siendo correcto, solo que mas caro. */
+#define FREQ_PINT_N  20
+
+/* Anota la lectura para la proxima comparacion. Se copia DESDE `i`, que
+ * es el primer caracter que cambia: todo lo de antes ya es igual, asi que
+ * recorrerlo otra vez es trabajo tirado. Con i = 0 copia entera, que es lo
+ * que pide el camino ancho. */
+/*
+ * UNA PUNTA DE LA CAJA, en pixeles, medida sobre la cadena ANOTADA y sin
+ * copiarla: se le pone el cero donde toca, se mide y se le devuelve su
+ * caracter. Devuelve el ancho en vez de escribirlo por puntero -los dos
+ * bordes se piden con dos llamadas- porque asi no hay que guardar y
+ * recuperar la direccion, y en el 450 eso son los bytes que decidian si
+ * esto entraba.
+ */
+__attribute__((noinline))
+static int16_t freq_punta(char *s, int16_t i)
+{
+    char    g = s[i];
+    int16_t w;
+
+    s[i] = '\0';
+    w = (int16_t)gfx2_text_w(s, &font_num_44);
+    s[i] = g;
+    return w;
+}
+
+static void freq_apunta(char *dst, const char *src, size_t i)
+{
+    for (; i + 1U < (size_t)FREQ_PINT_N && src[i] != '\0'; i++) {
+        dst[i] = src[i];
+    }
+    dst[i] = '\0';
+}
+
 void ui_top_draw_freq(const ui_top_state_t *st)
 {
-    int16_t x1 = rds_x1();
+    static const char *s_modo_pint  = 0;
+    static const char *s_banda_pint = 0;
+    static char        s_freq_pint[FREQ_PINT_N] = { 0 };
+    static int8_t      s_dig_pint = -1;
+    const char *f  = (st->freq != 0) ? st->freq : "";
+    int16_t f2 = s_freq_x2;
+    int16_t x1;
+    uint8_t entera = (uint8_t)(f2 <= 0
+                               || s_modo_pint  != st->mode
+                               || s_banda_pint != st->band);
+
+    if (!entera) {
+        /*
+         * ==============================================================
+         * Y DE LA LECTURA, SOLO LOS DIGITOS QUE CAMBIAN - 01/11/2026.
+         * ==============================================================
+         *
+         * Al mover el mando un paso cambia UN DIGITO, y se recomponian
+         * los nueve mas el "kHz". Medido: la franja entera son 328 us y
+         * la lectura sola 240, contra 283 que cuesta dibujar un cuadro
+         * ENTERO de traza del espectro. En la radio del usuario eso son
+         * ~14 ms en cada detente, sobre una vuelta de bucle de 27 con un
+         * tope de fotograma de 22.
+         *
+         * Asi que se busca el PRIMER y el ULTIMO caracter que cambia y se
+         * compone solo esa caja. "Cambia" incluye el SUBRAYADO: mover el
+         * paso de sintonia no toca ninguna cifra pero mueve la raya
+         * ambar, y son dos sitios -de donde se va y a donde llega-, que
+         * el rango de abajo cubre por construccion.
+         *
+         * Si la lectura cambia de LARGO -cruzar 9.999, o entrar en FM- todo
+         * se desplaza, y entonces el PRIMER caracter que cambia es el
+         * primero de la cadena: la caja sale siendo la lectura entera,
+         * que es lo correcto. Y como ademas cambia s_freq_x2, la guarda
+         * de abajo repinta tambien lo que hay a la derecha.
+         */
+        /*
+         * UN SOLO RECORRIDO: se comparan los caracteres y se suman los
+         * anchos a la vez. Las cifras son tabulares pero el punto y la
+         * coma NO miden lo mismo, asi que la x hay que acumularla; y
+         * hacerlo en el mismo bucle que la comparacion ahorra recorrer
+         * la cadena dos veces, que en el 450 son bytes de flash que no
+         * hay.
+         */
+        /*
+         * EL PRIMER CARACTER QUE CAMBIA, y su x con UNA sola medida.
+         *
+         * La primera version sumaba el ancho carcter a carcter dentro
+         * del mismo bucle. Es lo natural y costaba 400 bytes de flash,
+         * que en el 450 no hay. Partirlo en dos -un bucle de comparar,
+         * que no llama a nadie, y UNA llamada a gfx2_text_w() sobre el
+         * trozo que no cambia- da exactamente la misma x y cabe.
+         */
+        int16_t i, pri = -1, ult = -1, x0, xe;
+        int16_t d1 = (int16_t)st->freq_digit;
+        int16_t d0 = (int16_t)s_dig_pint;
+
+        for (i = 0; f[i] != '\0'; i++) {
+            if (f[i] != s_freq_pint[i] || (i == d1) != (i == d0)) {
+                if (pri < 0) { pri = i; }
+                ult = (int16_t)(i + 1);
+            }
+        }
+        if (pri < 0) { return; }   /* ni un pixel que tocar */
+        i = pri;
+
+        /*
+         * Y EL TROZO SE MIDE SOBRE LA CADENA ANOTADA, sin copiarlo.
+         * Hasta `i` las dos cadenas son iguales -el bucle de arriba sale
+         * en el primer caracter que no lo es-, asi que medir una o la
+         * otra da lo mismo, y esta es nuestra: se le pone el cero al
+         * final, se mide y se le devuelve su caracter. Un buffer y un
+         * memcpy menos, que en el 450 son los bytes que faltaban.
+         *
+         * Dos pixeles de margen: el antialias del glifo se sale de su
+         * avance, y el subrayado empieza en la misma x.
+         */
+        x0 = (int16_t)(8 + freq_punta(s_freq_pint, i));
+        xe = (int16_t)(12 + freq_punta(s_freq_pint, ult));
+
+        /*
+         * Y EL BORDE DERECHO TAMBIEN, QUE ES LO QUE DE VERDAD COSTABA.
+         * 01/11/2026.
+         *
+         * Hasta hoy la caja iba del primer caracter que cambia hasta el
+         * FINAL de la lectura, y eso arrastraba ",00 kHz" en cada clic:
+         * unos 140 px de ancho por 64 de alto. Medido con callgrind
+         * sobre el repintado suelto, el degradado se llevaba el 25 % y
+         * los glifos el 30 %, y en la radio del usuario eso son unos 20
+         * ms por detente -sacados de un video suyo: la cascada baja de
+         * 28,5 a 18,3 lineas por segundo mientras gira-.
+         *
+         * Acotando tambien por la derecha, un paso de 1 kHz mueve UN
+         * digito y la caja se queda en unos 30 px. Cinco veces menos
+         * degradado y un glifo en vez de seis.
+         *
+         * Vale medir sobre la cadena anotada aunque los caracteres sean
+         * otros: las cifras son TABULARES -todas miden lo mismo- y los
+         * separadores no se mueven mientras la lectura tenga el mismo
+         * largo. Si cambia de largo, el primero que cambia es el primero
+         * de la cadena, la caja sale entera, y ademas cambia s_freq_x2 y
+         * la guarda de abajo repinta lo que haya a la derecha.
+         */
+
+
+        /*
+         * DE AHI HASTA EL FINAL DE LA LECTURA, y no hasta el ultimo
+         * caracter que cambia. Acotar los dos lados pedia un segundo
+         * recorrido entero -hay que seguir sumando anchos despues del
+         * ultimo cambio- y en el 450 eso son bytes de flash que no hay:
+         * quedan 268 libres. La derecha fija cuesta unos pocos glifos de
+         * mas y ahorra el bucle; y en el caso que de verdad pasa -girar
+         * el mando, que mueve la cifra de mas a la derecha- la caja sale
+         * practicamente la misma.
+         */
+        gfx2_render(x0, 0, (int16_t)(xe - x0), UI_TOP_H, draw_header,
+                    (void *)st);
+
+        /* Y si al componerla la lectura ha cambiado de ancho, lo de la
+         * derecha se ha movido: hay que pintarlo igualmente. */
+        if (s_freq_x2 == f2) {
+            s_dig_pint = st->freq_digit;
+            freq_apunta(s_freq_pint, f, (size_t)i);
+            return;
+        }
+    }
+
+    x1 = rds_x1();
+    s_modo_pint  = st->mode;
+    s_banda_pint = st->band;
+    s_dig_pint   = st->freq_digit;
+    freq_apunta(s_freq_pint, f, 0U);
 
     gfx2_render(0, 0, x1, UI_TOP_H, draw_header, (void *)st);
     if (rds_x1() > x1) {
@@ -1434,6 +1788,8 @@ int16_t ui_top_movil_w_dbg(void)
     return knob_x(&st);
 }
 int16_t ui_top_read_x_dbg(void)   { return (int16_t)ST_READ_X; }
+int16_t ui_top_knob_right_dbg(void) { return s_knob_right; }
+
 int16_t ui_top_knob_x_dbg(uint8_t con_dbm)
 {
     ui_top_state_t t;

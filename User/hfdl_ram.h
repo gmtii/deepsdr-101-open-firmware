@@ -109,8 +109,7 @@ uint8_t *hfdl_scope_get_hfdl_ram(uint32_t *capacity_out);
  * Y LA TABLA DE AVIONES Y SUS RENGLONES, TAMBIEN AQUI - 28/10/2026
  * ======================================================================
  *
- * *** Pedido por el usuario: "amplia a 48 aceptando que se borre al
- * salir". ***
+ * *** LA LISTA PASA A 48, Y SE BORRA AL SALIR DEL MODO. ***
  *
  * LA PREGUNTA ERA: ¿por que la lista de aviones de HFDL se quedo en 14
  * renglones y 20 aviones cuando la de FT8 paso a 48?
