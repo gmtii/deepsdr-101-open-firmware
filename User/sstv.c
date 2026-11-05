@@ -380,6 +380,7 @@ static disc_fm_t s_disc;
 static uint8_t   s_modo;          /* indice en k_modos */
 static sstv_plan_t s_pl;          /* el plan del modo, en segundos */
 static uint32_t  s_n_linea;       /* muestras por linea transmitida */
+static uint32_t  s_paso;          /* el ritmo MEDIDO, que no es el de la tabla */
 static uint32_t  s_n_sync;        /* muestras del pulso de sincronismo */
 static uint32_t  s_n_off[CH_MAX]; /* donde empieza cada canal, en muestras */
 static uint32_t  s_n_scan[CH_MAX];/* cuanto dura cada uno, en muestras */
@@ -611,6 +612,7 @@ static void modo_aplica(uint8_t i)
     if (!sstv_plan(i, &s_pl)) { return; }
     s_modo = i;
     s_n_linea = (uint32_t)(s_pl.linea * s_fs + 0.5f);
+    s_paso    = s_n_linea;
     s_n_sync  = (uint32_t)(s_pl.sync * s_fs + 0.5f);
     for (c = 0U; c < CH_MAX; c++) {
         s_n_off[c]  = (uint32_t)(s_pl.off[c] * s_fs + 0.5f);
@@ -1651,6 +1653,26 @@ void sstv_process(const float *audio, uint32_t n)
             if (s_bajo_n >= (s_n_sync / 2U)) {
                 uint32_t ini = s_muestra - s_bajo_n - 1UL;   /* donde empezo */
 
+                /*
+                 * Y EL PULSO SE MARCA POR SU CENTRO, NO POR SU BORDE.
+                 *
+                 * Donde EMPIEZA el pulso depende de cuando la frecuencia
+                 * medida cruza el umbral, y eso lo mueve el ruido: el borde
+                 * se adelanta o se atrasa segun por donde ande el estimador
+                 * en esa muestra. El CENTRO no, porque los dos bordes se
+                 * mueven y el centro promedia lo que uno se adelanta con lo
+                 * que el otro se atrasa.
+                 *
+                 * Se le resta medio pulso para volver al origen de siempre -
+                 * el principio del sincronismo -, asi que todo lo que viene
+                 * despues no cambia de significado. Con un pulso entero sale
+                 * exactamente lo mismo que antes; lo que cambia es el pulso
+                 * al que el ruido le ha comido un borde.
+                 */
+                { uint32_t medio = ini + (s_bajo_n / 2UL);
+                  uint32_t mitad = s_n_sync / 2U;
+                  ini = (medio > mitad) ? (medio - mitad) : 0UL; }
+
                 if (!s_hay_t0) {
                     s_t0 = ini; s_hay_t0 = 1U;
                     /* El primero NO cuenta como rejilla buena: con un solo
@@ -1662,7 +1684,73 @@ void sstv_process(const float *audio, uint32_t n)
                     uint32_t d = ini - s_t0;
                     if (d > (s_n_linea * 4U) / 5U && d < (s_n_linea * 6U) / 5U) {
                         linea_cierra();
-                        s_t0 = ini;
+                        /*
+                         * LA REJILLA NO SE CREE UN PULSO ENTERO SI YA TIENE
+                         * RITMO.
+                         *
+                         * Hasta aqui, cada pulso aceptado ponia el origen
+                         * EXACTAMENTE donde el pulso cayo. Eso esta bien
+                         * para enganchar, pero con señal ya enganchada
+                         * significa que todo el ruido que mueve el pulso se
+                         * mete entero en la foto: la linea sale corrida
+                         * tanto como se haya movido ese pulso, y como cada
+                         * linea se mueve distinto, el borde vertical de la
+                         * imagen sale como una escalera.
+                         *
+                         * Pero el ritmo de una emisora no cambia de una
+                         * linea a la siguiente, y el ruido si. Asi que con
+                         * rejilla buena el origen avanza UN PASO y solo se
+                         * corrige un cuarto del error medido; y el PASO -que
+                         * arranca siendo el de la tabla- se corrige a su vez
+                         * un treintaidosavo, que es lo que absorbe el error
+                         * de reloj del transmisor sin que quede un sesgo
+                         * permanente.
+                         *
+                         * Y SOLO MIENTRAS EL ERROR SEA PEQUEÑO. Si el pulso
+                         * cae a mas de 1/64 de linea de donde se le espera,
+                         * eso ya no es ruido - es un hueco de audio o un
+                         * cambio de verdad - y entonces lo correcto es
+                         * creerselo entero y volver a arrancar el paso, que
+                         * es lo que se hacia siempre. Sin esa condicion, un
+                         * hueco de 11 ms tardaba once lineas en recuperarse
+                         * en vez de una: medido en sim/sstv_hueco.c, 31
+                         * renglones estropeados contra 0.
+                         *
+                         * MEDIDO en sim/sstv_fase.c, que cuenta en columnas
+                         * cuanto baila el borde izquierdo de la foto:
+                         *
+                         *   Martin 1, ruido 0,25 .... 0,77 -> 0,18 columnas
+                         *   Martin 1, ruido 0,50 .... 1,65 -> 0,66
+                         *   Scottie 1, ruido 0,10 ... 0,29 -> 0,11
+                         *   Scottie 1, ruido 0,25 ... 2,07 -> 0,74
+                         *   PD120, sin ruido ........ 0,36 -> 0,09
+                         *   Martin 1, -500 ppm ...... 0,82 -> 0,22
+                         *   Martin 1, +500 ppm ...... 0,50 -> 0,24
+                         *
+                         * Y sim/sstv_hueco.c sale igual que antes: esto no
+                         * se paga con la recuperacion tras un corte.
+                         */
+                        if (s_t0_de_sync) {
+                            int32_t err  = (int32_t)d - (int32_t)s_paso;
+                            int32_t pelo = (int32_t)(s_n_linea / 64U) + 1;
+
+                            if (err > -pelo && err < pelo) {
+                                int32_t tope = (int32_t)(s_n_linea / 32U) + 1;
+                                int32_t p;
+
+                                s_t0 = s_t0 + s_paso + (uint32_t)(err / 4);
+
+                                /* Y el paso, con tope: un ritmo que se vaya
+                                 * mas de un 3% de lo que dice la tabla no es
+                                 * un reloj desviado, es que algo va mal. */
+                                p = (int32_t)s_paso + (err / 32);
+                                if (p < (int32_t)s_n_linea - tope) { p = (int32_t)s_n_linea - tope; }
+                                if (p > (int32_t)s_n_linea + tope) { p = (int32_t)s_n_linea + tope; }
+                                s_paso = (uint32_t)p;
+                            } else {
+                                s_t0 = ini; s_paso = s_n_linea;
+                            }
+                        } else { s_t0 = ini; s_paso = s_n_linea; }
                         /* DOS pulsos seguidos a la distancia que toca: eso
                          * ya es una rejilla y se puede conservar. */
                         s_t0_de_sync = 1U;
@@ -1770,7 +1858,7 @@ void sstv_process(const float *audio, uint32_t n)
                  * donde se este, que es lo que se hacia siempre.
                  */
                 if (s_t0_de_sync && s_cierres_seguidos < 3U) {
-                    s_t0 += s_n_linea;
+                    s_t0 += s_paso;
                     s_cierres_seguidos++;
                 } else {
                     s_t0 = s_muestra;

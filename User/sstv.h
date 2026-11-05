@@ -38,10 +38,21 @@
  * duracion de linea que trae escrita a mano da 113,2 s de imagen cuando el
  * modo dura 114,3.
  *
- * LO QUE NO ESTA: los modos Robot y PD. Robot 36 y 72 no mandan rojo, verde y
- * azul sino luminancia y color a media resolucion, alternando de una linea a
- * la siguiente; es otra maquina, no un modo mas de esta tabla. Se pueden
- * anadir despues.
+ * LAS FAMILIAS. Martin y Scottie mandan rojo, verde y azul, un barrido
+ * entero por canal. Robot y PD mandan luminancia y color a media
+ * resolucion - y Robot 36 encima ALTERNANDO, una diferencia de color en
+ * cada linea -, asi que no son un modo mas de la tabla sino otra manera de
+ * repartir la linea. Por eso cada modo lleva su familia y el plan de linea
+ * se calcula distinto para cada una. Ver sstv_plan() y croma_de_linea().
+ *
+ * ESTAN LOS CATORCE: Martin 1, Martin 2, Scottie 1, Scottie 2, Scottie DX,
+ * Robot 36, Robot 72, PD50, PD90, PD120, PD160, PD180, PD240 y PD290. Y van
+ * nombrados UNO A UNO a proposito, sin abreviar en "Martin 1 y 2": una
+ * abreviatura es justo donde se cuela el que falta, y asi lo puede
+ * comprobar tools/sstv_modos_check.py contra la tabla. La lista de verdad es
+ * k_modos[] en sstv.c y es la unica que manda; esta frase esta aqui para
+ * que quien abra la cabecera no tenga que ir a buscarla, no para
+ * sustituirla. Si no cuadran, el que miente es este comentario.
  */
 
 /* Todo se muestrea a este ancho, sea cual sea el del modo: el muestreador

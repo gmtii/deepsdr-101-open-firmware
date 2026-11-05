@@ -51,6 +51,18 @@
 /* El nombre de la cadena, o 0 si ese codigo no esta en la lista. */
 const char *rds_pi_nombre(uint16_t pi);
 
+/*
+ * El renglon fijo de la cabecera de FM: la cadena si su codigo esta en la
+ * lista, y si no, el nombre que manda la emisora y el codigo en crudo. Ver
+ * el comentario de rds_rotulo() en rds_pi.c, que lleva el porque y el
+ * agujero que se cerro con el.
+ *
+ * `tope` es el tamano del buffer, cierre incluido. Devuelve los bytes
+ * escritos sin contar el cierre.
+ */
+uint8_t rds_rotulo(char *out, uint8_t tope, uint8_t tiene_pi, uint16_t pi,
+                   uint8_t tiene_ps, const char *ps);
+
 /* Cuantas hay, y la fila i. Para el banco del simulador, que comprueba que
  * no haya codigos repetidos ni nombres demasiado largos para el hueco. */
 uint16_t rds_pi_cuantas(void);

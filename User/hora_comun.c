@@ -185,3 +185,32 @@ void hora_suma_minutos(int16_t minutos,
         *dia_semana = hora_dia_semana(*dia, *mes, *anno2);
     }
 }
+
+/*
+ * El sello de hora de un mensaje recibido. Ver hora_comun.h para por que
+ * son siempre seis caracteres y por que con el reloj sin poner salen
+ * guiones en vez de una hora.
+ */
+void hora_sello(char *out, uint8_t hay, uint8_t hora, uint8_t minuto)
+{
+    if (out == 0) { return; }
+
+    if (hay) {
+        /* El recorte NO es decoracion: un RTC que devuelva basura -o un
+         * llamante que se equivoque de campo- escribiria un caracter
+         * fuera del alfabeto y la rejilla de texto enseñaria un simbolo
+         * raro donde deberia ir la hora. Con el recorte, lo peor que
+         * puede salir es una hora equivocada, que al menos se lee. */
+        if (hora   > 23U) { hora   = 23U; }
+        if (minuto > 59U) { minuto = 59U; }
+        out[0] = (char)('0' + (hora   / 10U));
+        out[1] = (char)('0' + (hora   % 10U));
+        out[3] = (char)('0' + (minuto / 10U));
+        out[4] = (char)('0' + (minuto % 10U));
+    } else {
+        out[0] = '-'; out[1] = '-'; out[3] = '-'; out[4] = '-';
+    }
+    out[2] = ':';
+    out[5] = ' ';
+    out[6] = '\0';
+}

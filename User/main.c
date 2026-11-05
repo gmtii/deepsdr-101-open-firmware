@@ -450,7 +450,12 @@ static uint32_t s_gir_salt, s_gir_bandas;
  * que hay que comparar la media de siempre. Un maximo de una poblacion con
  * un pico periodico dentro no mide la poblacion: mide el pico.
  */
-static uint32_t s_gir_suma, s_gir_n;
+/* s_gir_suma se quito el 05/11/2026: estaba declarada y no la escribia ni la
+ * leia nadie - el que acumula es s_gir_bsuma, aqui debajo-. El compilador lo
+ * decia y el aviso llevaba semanas sin verse, por lo mismo que los otros
+ * tres: main.c solo se recompila cuando se toca main.c. El razonamiento de
+ * arriba sigue valiendo entero, que es de lo que iba el comentario. */
+static uint32_t s_gir_n;
 /* Y la media de la VUELTA ENTERA mientras se gira, por el mismo motivo: el
  * maximo de la vuelta tambien lo gana siempre el refresco periodico. Lo que
  * se quiere comparar es media contra media. */
@@ -20344,19 +20349,34 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
         aj_u2s(buf, (uint32_t)(u_fft / 1000U));
         while (buf[i] != '\0') { i++; }
         buf[i++] = '+';
-        aj_u2s(&buf[i], (uint32_t)(s_chrome_us / 1000U));
+        aj_u2s(&buf[i], (uint32_t)(u_chrome / 1000U));
         while (buf[i] != '\0') { i++; }
         buf[i++] = '+';
-        /* El espectro SIN el marco: el cronometro de fuera los mide juntos. */
-        aj_u2s(&buf[i], (uint32_t)((s_spec_us > s_chrome_us)
-                                   ? ((s_spec_us - s_chrome_us) / 1000U) : 0U));
+        /*
+         * El espectro SIN el marco: el cronometro de fuera los mide juntos.
+         *
+         * Y SALEN DE u_*, NO DE s_*_us - 05/11/2026. Aqui ponia s_chrome_us
+         * y s_spec_us, o sea EL ULTIMO CUADRO, mientras la FFT y la vuelta
+         * de al lado salian de la media del giro y el renglon se rotulaba
+         * "gir". Tres de los cinco numeros eran de otro cuadro que los
+         * otros dos, y nada lo decia.
+         *
+         * Es exactamente la familia de fallo que persiguio toda la revision
+         * del arrastre: un renglon que se rotula de una cosa y enseña otra.
+         * Las tres medias estaban CALCULADAS dos docenas de lineas mas
+         * arriba y se tiraban; el compilador lo decia en tres avisos de
+         * variable sin usar, y no se veian porque main.c solo se recompila
+         * cuando se toca main.c.
+         */
+        aj_u2s(&buf[i], (uint32_t)((u_spec > u_chrome)
+                                   ? ((u_spec - u_chrome) / 1000U) : 0U));
         while (buf[i] != '\0') { i++; }
         buf[i++] = '(';
         /* De la traza, lo que se fue solo en empujar pixeles al panel. Si
          * este numero es casi toda la traza, el problema es el bus o la
          * falta de un DMA; si es una parte pequena, el problema es el bucle
          * que decide los pixeles, y el bus no tiene nada que ver. */
-        aj_u2s(&buf[i], (uint32_t)(s_push_us / 1000U));
+        aj_u2s(&buf[i], (uint32_t)(u_push / 1000U));
         while (buf[i] != '\0') { i++; }
         buf[i++] = ')';
         /* SIN "while (buf[i] != 0) i++;" aqui. Lo puse y era un fallo de
@@ -26503,47 +26523,18 @@ static void rds_marq_sync(void)
     /*
      * EL RENGLON FIJO: que cadena es.
      *
-     * El codigo de programa identifica la CADENA, no el transmisor: todos
-     * los repetidores de COPE en Espana mandan el mismo. Asi que se puede
-     * traducir a un nombre - ver User/rds_pi.h para como esta hecho el
-     * codigo y de donde sale la lista.
+     * LA DECISION VIVE EN rds_rotulo(), en User/rds_pi.c, y no aqui: main.c
+     * no se compila en el simulador, asi que mientras estuvo escrito en
+     * este sitio no hubo banco que lo mirara - y ahi se quedo un agujero,
+     * un PS en blanco que tapaba el codigo, durante semanas. Los casos de
+     * borde estan en sim/rdstest.c, apartado 8.
      *
-     * Si el codigo no esta en la lista se enseña EL CODIGO, no un hueco
-     * vacio: asi se puede anotar y anadirlo despues, que es literalmente
-     * como se hacen estas listas. Un hueco vacio se leeria como "no hay
-     * RDS", que seria mentira.
-     *
-     * El codigo en crudo desaparecio de la marquesina el mismo dia a peticion
-     * del usuario, y con razon: ahi era un numero suelto estorbando. Aqui es
-     * otra cosa - es la identidad de la emisora cuando no sabemos su nombre.
+     * En corto: la cadena si su codigo esta en la lista, y si no, el nombre
+     * que manda la emisora Y el codigo en crudo, que es lo que hay que
+     * poder anotar para ampliar la lista.
      */
-    {
-        const char *n = in.tiene_pi ? rds_pi_nombre(in.pi) : 0;
-        uint8_t k = 0U;
-
-        if (n) {
-            /* Lo mejor: la cadena, por su codigo de programa. */
-            while (n[k] != '\0' && k < (uint8_t)(sizeof s_rds_nom - 1U)) {
-                s_rds_nom[k] = n[k]; k++;
-            }
-        } else if (in.tiene_ps) {
-            /* Lo segundo: el nombre que manda la propia emisora. Son ocho
-             * caracteres y los rellena con espacios, asi que se recortan. */
-            for (k = 0U; k < 8U; k++) { s_rds_nom[k] = in.ps[k]; }
-            while (k > 0U && s_rds_nom[k - 1U] == ' ') { k--; }
-        } else if (in.tiene_pi) {
-            /* Y si no hay ni una cosa ni la otra, EL CODIGO EN CRUDO. No un
-             * hueco vacio, que se leeria como "no hay RDS": asi se puede
-             * anotar y anadirlo a la lista despues, que es literalmente como
-             * se hacen estas listas. */
-            static const char hx[] = "0123456789ABCDEF";
-            s_rds_nom[k++] = hx[(in.pi >> 12) & 0xFU];
-            s_rds_nom[k++] = hx[(in.pi >> 8) & 0xFU];
-            s_rds_nom[k++] = hx[(in.pi >> 4) & 0xFU];
-            s_rds_nom[k++] = hx[in.pi & 0xFU];
-        }
-        s_rds_nom[k] = '\0';
-    }
+    (void)rds_rotulo(s_rds_nom, (uint8_t)sizeof s_rds_nom,
+                     in.tiene_pi, in.pi, in.tiene_ps, in.ps);
 }
 
 /*
@@ -33368,10 +33359,87 @@ static void fax_poll(void)
  * el texto formateado con su salto de linea al final: una trama es una linea,
  * y no hay tramas a medias -o pasa la comprobacion o no sale-.
  */
+/*
+ * ======================================================================
+ * LA HORA DE RECEPCION, DELANTE DE CADA TRAMA - 04/11/2026
+ * ======================================================================
+ *
+ * *** Pedido por un usuario del proyecto: las tramas de APRS caen en el
+ * panel de texto una detras de otra y no hay forma de saber si la de
+ * arriba llego hace un minuto o hace media hora. ***
+ *
+ * El sello se pone AQUI y no en ax25.c, y eso importa por dos cosas:
+ *
+ *   - ax25_process() corre DENTRO DE LA INTERRUPCION del audio, y
+ *     trama_texto() con ella. Leer el RTC ahi es pedir problemas: hay
+ *     que esperar a que los registros se sincronicen, y eso no se hace
+ *     en una interrupcion que tiene que devolver antes de la siguiente
+ *     muestra. Este desague corre en el bucle principal, donde leer el
+ *     reloj no estorba a nadie.
+ *   - y ax25.c no tiene por que saber que existe un reloj. Entrega
+ *     tramas; de ponerles hora se encarga quien las enseña.
+ *
+ * LA HORA ES LA DEL DESAGUE, NO LA DEL DECODIFICADOR, y la diferencia
+ * son los milisegundos que la trama pasa en el anillo hasta que el bucle
+ * da la vuelta: como mucho una vuelta, que son decenas de milisegundos.
+ * A resolucion de minuto eso no se nota, y dos tramas del mismo minuto
+ * comparten sello porque de verdad llegaron en el mismo minuto.
+ *
+ * SOLO APRS. El panel de texto lo comparten tambien RTTY, PSK31, NAVTEX
+ * y CW, y ahi NO se pone: AX.25 entrega TRAMAS, con principio y final
+ * claros, y en RTTY o en CW lo que llega es un chorro continuo sin
+ * fronteras. Poner hora por renglon alli marcaria donde partio la
+ * rejilla de texto, no cuando llego nada.
+ */
+#define APRS_SELLO_COLS 6U   /* "HH:MM " - ver hora_sello() */
+
+static uint8_t s_aprs_inicio = 1U;   /* la siguiente trama empieza renglon */
+
+static void aprs_sello_pon(void)
+{
+    rtc_hw_datetime_t t;
+    char b[7];
+    uint8_t i;
+
+    /*
+     * La MISMA pregunta que se hace FT8 antes de fiarse del reloj:
+     * rtc_hw_has_ever_synced() lo marca rtc_hw_set(), por donde pasan
+     * todos los caminos que ponen la hora -el teclado, el RDS, el
+     * DCF77-, y vive en el dominio de respaldo. Sin eso, la radio marca
+     * una hora que no significa nada y sellar con ella seria mentir.
+     */
+    if (rtc_hw_has_ever_synced()) {
+        rtc_hw_get(&t);
+        hora_sello(b, 1U, t.hour, t.minute);
+    } else {
+        hora_sello(b, 0U, 0U, 0U);
+    }
+    for (i = 0U; i < APRS_SELLO_COLS; i++) { rtty_text_push(b[i]); }
+}
+
 static void ax25_poll(void)
 {
     char c;
-    while (ax25_get_char(&c)) { rtty_text_push(c); }
+
+    while (ax25_get_char(&c)) {
+        /* El salto de linea que cierra una trama NO lleva sello delante:
+         * si no, una trama vacia dejaria un renglon con la hora y nada
+         * mas. El sello se pone con el PRIMER caracter de verdad. */
+        if (s_aprs_inicio && c != '\n') {
+            aprs_sello_pon();
+            s_aprs_inicio = 0U;
+        }
+        rtty_text_push(c);
+        if (c == '\n') { s_aprs_inicio = 1U; }
+    }
+
+    /*
+     * Y si el decodificador se para a mitad de trama -cambio de modo,
+     * cambio de banda-, el siguiente arranque empieza renglon limpio.
+     * Sin esto, la primera trama despues de volver se quedaria sin hora
+     * por haber heredado un "ya estoy a mitad" de la sesion anterior.
+     */
+    if (!ax25_activo()) { s_aprs_inicio = 1U; }
 }
 
 /* ==========================================================================
@@ -39748,7 +39816,7 @@ static void sdr_spectrum_waterfall_tick(void)
         uint32_t c = s_wf_ciclos / (SystemCoreClock / 1000000U);
         uint32_t sa, to;
 
-        /* Media, no maximo: ver s_gir_suma. Se acumula en microsegundos y
+        /* Media, no maximo: ver s_gir_n. Se acumula en microsegundos y
          * se divide al enseñarlo, que es una division por repintado de la
          * ventana y no una por cuadro. */
         s_gir_tot    += (uint32_t)s_fft_us + (uint32_t)s_spec_us + c;

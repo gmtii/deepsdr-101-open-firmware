@@ -18,6 +18,349 @@ ordered by date, does not spare the detail, and is not published.
 
 ---
 
+## V6.61 · 2026-11-05
+
+### Qué cambia
+
+**Rock FM entra en la lista de cadenas: `E2CF`.** Confirmada **en el aire**
+en 101,7 MHz, que es la única fuente que vale aquí — ninguno de estos
+códigos se copia de ningún sitio sin comprobarlo.
+
+Y entró por el camino que la versión de ayer acababa de abrir. Con el
+enganche flojo la cabecera enseñó **`E2CF` a secas**: el código va en el
+bloque A de todos los grupos y aguanta lo que el nombre no. Al mover la
+radio y coger mejor cobertura apareció el nombre al lado. **Con la V6.59
+ese renglón se habría quedado en blanco y no habría habido nada que
+anotar.**
+
+- **Confirmada en el aire, no copiada.** Es la misma prueba que metió a
+  COPE y a Intereconomía: verla en esta radio, con su nombre al lado de su
+  código.
+- **Y encaja con su vecina.** `E2CA` es COPE, y las referencias de programa
+  consecutivas se reparten dentro de la misma casa, igual que RNE 1,
+  Clásica y 3 van seguidas en `E211`, `E212` y `E213`.
+
+**Y el banco de la cabecera mide ahora el renglón largo.** Hasta hoy sólo
+comprobaba que los nombres de la lista caben en el hueco. Con el formato
+nuevo —nombre de la emisora **y** código— hacía falta saber cuánto mide eso:
+
+```
+  el hueco de la cabecera en FM ........ 121 px
+  "Rock FM · E2CF" ..................... 115 px   cabe
+  el peor caso de ocho letras anchas ... 172 px   lo recorre la marquesina
+```
+
+No cuenta como fallo si no cabe, y la diferencia es real: un nombre de la
+lista que no quepa lo elegimos nosotros y habría que acortarlo; esos ocho
+caracteres los manda la emisora y no los elige nadie. Lo que no vale es no
+saberlo.
+
+### What's new
+
+**Rock FM joins the network list: `E2CF`.** Confirmed **on air** at
+101.7 MHz, which is the only source that counts here — none of these codes
+is copied from anywhere without being checked.
+
+And it got in through the path yesterday's release had just opened. With a
+weak lock the header showed **`E2CF` on its own**: the code travels in
+block A of every group and survives what the name does not. Moving the
+radio for better coverage brought the name up beside it. **On V6.59 that
+line would have been blank and there would have been nothing to write
+down.**
+
+- **Confirmed on air, not copied.** It is the same evidence that got COPE
+  and Intereconomía in: seeing it on this radio, with its name beside its
+  code.
+- **And it fits its neighbour.** `E2CA` is COPE, and consecutive programme
+  references are handed out within the same group, just as RNE 1, Clásica
+  and 3 run together in `E211`, `E212` and `E213`.
+
+**And the header bench now measures the long line.** Until today it only
+checked that the list's names fit the slot. With the new format — the
+station's name **and** the code — it had to know how wide that gets:
+
+```
+  the FM header slot ................... 121 px
+  "Rock FM · E2CF" ..................... 115 px   fits
+  worst case of eight wide letters ..... 172 px   the line scrolls it
+```
+
+Not a failure if it does not fit, and the difference is real: a list name
+that does not fit is one we chose and would have to shorten; those eight
+characters come from the station and nobody chooses them. What is not
+acceptable is not knowing.
+
+---
+
+## V6.60 · 2026-11-05
+
+### Qué cambia
+
+**El código PI del RDS ya se ve.** Pedido por un usuario del proyecto. La
+radio lo decodificaba desde siempre, pero sólo asomaba en la pantalla de
+hora por RDS y sólo si la emisora no estaba en la lista de nombres: en la
+cabecera de FM no salía nunca.
+
+Ahora el renglón fijo dice:
+
+```
+  COPE                 <- su código está en la lista: el nombre manda y basta
+  RADIO 1 · 7201       <- no está: el nombre que manda la emisora Y el código
+  7201                 <- todavía no ha llegado el nombre
+```
+
+- **Si el código está en la lista, se enseña sólo la cadena.** Nadie
+  necesita ver «COPE · E2CA».
+- **Y si no está, las dos cosas.** El código es lo que identifica la
+  emisora cuando el nombre no dice nada, y es lo que hay que anotar para
+  poder añadirla a la lista.
+
+**Y con eso se cae un agujero que había.** Esto eran tres ramas
+excluyentes —lista, si no el nombre, si no el código—, así que **en cuanto
+llegaba un nombre el código dejaba de ser alcanzable**. Y el nombre se da
+por recibido con que haya pasado el CRC **un** segmento de dos caracteres:
+si ese segmento son dos espacios —señal floja, o una emisora con nombre
+dinámico que manda un hueco entre palabras—, los ocho caracteres son
+espacios, el recorte deja la cadena vacía y **el renglón se quedaba en
+blanco con el código perfectamente sabido**. El comentario del propio
+código decía que un hueco vacío se leería como «no hay RDS» y que eso sería
+mentira; era exactamente lo que pasaba.
+
+La decisión se ha sacado de `main.c` a `rds_pi.c` para que un banco pueda
+mirarla: `main.c` no se compila en el simulador, y mientras estuvo escrita
+allí no hubo nada que la probara. Los ocho casos están en `sim/rdstest.c`,
+y uno de ellos cazó un desbordamiento de un byte en el código nuevo el
+mismo día que se escribió.
+
+**Cuatro avisos del compilador que llevaban semanas escondidos.** Y uno de
+ellos era un fallo de verdad: el renglón de diagnóstico de la pantalla de
+ajustes se rotula **«gir»** y enseñaba **el último cuadro** en tres de sus
+cinco números, mientras los otros dos sí eran la media del giro. Las tres
+medias estaban calculadas y se tiraban. Es exactamente la familia de fallo
+que persiguió toda la revisión del arrastre: un renglón que se rotula de
+una cosa y enseña otra.
+
+No se veían porque un `.o` sólo se recompila cuando cambia su `.c`, y
+`main.c` no se tocaba desde entonces. Ahora **`-Werror=unused-variable`**
+para `User/`: el día que se introduce uno, el `make` se para. Que es el
+único momento en que sirve de algo.
+
+### What's new
+
+**The RDS PI code is now visible.** Asked for by a project user. The radio
+has always decoded it, but it only ever showed on the RDS clock screen, and
+only when the station was not in the name list: it never appeared in the FM
+header.
+
+The fixed line now reads:
+
+```
+  COPE                 <- code is in the list: the name is enough
+  RADIO 1 · 7201       <- not in the list: the station's own name AND the code
+  7201                 <- the name has not arrived yet
+```
+
+- **If the code is in the list, only the network name shows.** Nobody needs
+  to see "COPE · E2CA".
+- **And if it is not, both.** The code is what identifies the station when
+  the name says nothing, and it is what you have to write down to add it to
+  the list.
+
+**And that closes a hole.** These were three exclusive branches — list,
+else the name, else the code — so **the moment a name arrived the code
+became unreachable**. And the name counts as received once a *single*
+two-character segment has passed CRC: if that segment is two spaces — weak
+signal, or a station using dynamic PS that sends a gap between words — all
+eight characters are spaces, the trim leaves an empty string, and **the
+line went blank with the code perfectly well known**. The code's own
+comment said an empty gap would read as "no RDS" and that this would be a
+lie; that is exactly what it did.
+
+The decision has been moved out of `main.c` into `rds_pi.c` so a bench can
+look at it: `main.c` is not compiled in the simulator, and while it lived
+there nothing tested it. The eight cases are in `sim/rdstest.c`, and one of
+them caught a one-byte overflow in the new code the same day it was
+written.
+
+**Four compiler warnings that had been hiding for weeks.** One of them was
+a real bug: the diagnostics line on the settings screen is labelled
+**"gir"** and was showing **the last frame** in three of its five numbers,
+while the other two really were the turn's average. The three averages were
+computed and thrown away. It is exactly the family of bug the whole drag
+investigation was chasing: a line labelled one thing showing another.
+
+They were invisible because a `.o` is only recompiled when its `.c`
+changes, and `main.c` had not been touched since. Now
+**`-Werror=unused-variable`** for `User/`: the day one is introduced, the
+build stops. Which is the only moment it is any use.
+
+---
+
+## V6.59 · 2026-11-04
+
+### Qué cambia
+
+**El sincronismo de línea de SSTV ya no se cree un solo pulso.** Pedido por
+un usuario que montó un banco con un transceptor y un teléfono haciendo de
+emisor: decía que funcionaba pero que el sincronismo podía ir mejor. Tenía
+razón, y ahora hay con qué medirlo.
+
+- **El pulso se marca por su centro, no por su borde de entrada.** Dónde
+  *empieza* el pulso lo mueve el ruido, porque depende de cuándo la
+  frecuencia medida cruza el umbral. El centro no: los dos bordes se
+  mueven y lo que uno se adelanta el otro se atrasa.
+- **Con la rejilla ya enganchada, el origen avanza un paso y sólo corrige
+  un cuarto del error.** Antes cada pulso recolocaba el origen entero, así
+  que todo el ruido de ese pulso se metía en la foto y el borde vertical
+  salía como una escalera. El ritmo de una emisora no cambia de una línea a
+  la siguiente; el ruido sí.
+- **Y el paso se corrige solo**, un treintaidosavo por línea, que es lo que
+  absorbe el error de reloj del transmisor sin dejar sesgo.
+- **Si el pulso cae lejos, se lo cree entero**, como siempre: a más de
+  1/64 de línea eso ya no es ruido sino un hueco de audio, y ahí lo
+  correcto es recolocarse. Sin esa condición un hueco de 11 ms tardaba
+  once líneas en recuperarse en vez de una.
+
+Medido en un banco nuevo, `sim/sstv_fase.c`, que cuenta **en columnas
+cuánto baila el borde izquierdo** de la foto —que es lo que se ve cuando el
+sincronismo va justo—:
+
+```
+  Martin 1,  ruido 0,25 ....  0,77 -> 0,18 columnas de 320
+  Martin 1,  ruido 0,50 ....  1,65 -> 0,66
+  Scottie 1, ruido 0,10 ....  0,29 -> 0,11
+  Scottie 1, ruido 0,25 ....  2,07 -> 0,74
+  PD120,     sin ruido  ....  0,36 -> 0,09
+  Martin 1,  -500 ppm   ....  0,82 -> 0,22
+  Martin 1,  +500 ppm   ....  0,50 -> 0,24
+```
+
+Y `sim/sstv_hueco.c` da exactamente los mismos números que antes: esto no se
+paga con la recuperación tras un corte de audio.
+
+**Y la cabecera de SSTV decía una mentira.** `User/sstv.h` afirmaba que los
+modos Robot y PD "no están" y que "se pueden añadir después". Se escribió
+cuando era verdad y se quedó ahí cuando dejó de serlo: están los catorce,
+PD240 incluido, desde hace semanas. El repositorio es público, así que un
+usuario leyó la cabecera en vez de la tabla y pidió un modo que la radio ya
+decodifica. Ahora la cabecera los nombra uno a uno y
+`tools/sstv_modos_check.py` compara esa lista con la tabla de verdad en cada
+`make comprueba`.
+
+### What's new
+
+**SSTV line sync no longer trusts a single pulse.** Asked for by a user who
+built a test rig with a transceiver and a phone as the encoder: he said it
+worked but that line sync quality could be better. He was right, and now
+there is something to measure it with.
+
+- **The pulse is marked by its centre, not its leading edge.** Where the
+  pulse *starts* moves with noise, because it depends on when the measured
+  frequency crosses the threshold. The centre does not: both edges move,
+  and what one gains the other loses.
+- **Once the grid is locked, the origin advances one step and corrects only
+  a quarter of the error.** Before, every pulse repositioned the origin
+  outright, so all of that pulse's noise went into the picture and the
+  vertical edge came out as a staircase. A station's line rate does not
+  change from one line to the next; noise does.
+- **And the step corrects itself**, a thirty-second per line, which absorbs
+  the transmitter's clock error without leaving a standing bias.
+- **If the pulse lands far away it is believed outright**, as always: beyond
+  1/64 of a line that is not noise but an audio gap, and there repositioning
+  is the right answer. Without that condition an 11 ms gap took eleven lines
+  to recover instead of one.
+
+Measured on a new bench, `sim/sstv_fase.c`, which counts **in columns how
+much the left edge wobbles** — which is what you see when line sync is
+marginal:
+
+```
+  Martin 1,  noise 0.25 ....  0.77 -> 0.18 columns out of 320
+  Martin 1,  noise 0.50 ....  1.65 -> 0.66
+  Scottie 1, noise 0.10 ....  0.29 -> 0.11
+  Scottie 1, noise 0.25 ....  2.07 -> 0.74
+  PD120,     no noise   ....  0.36 -> 0.09
+  Martin 1,  -500 ppm   ....  0.82 -> 0.22
+  Martin 1,  +500 ppm   ....  0.50 -> 0.24
+```
+
+And `sim/sstv_hueco.c` gives exactly the same numbers as before: none of
+this is paid for with recovery after an audio dropout.
+
+**And the SSTV header told a lie.** `User/sstv.h` claimed the Robot and PD
+modes were "not there" and "could be added later". It was written when that
+was true and stayed when it stopped being true: all fourteen are in, PD240
+included, and have been for weeks. The repository is public, so a user read
+the header instead of the table and asked for a mode the radio already
+decodes. The header now names them one by one, and
+`tools/sstv_modos_check.py` compares that list against the real table on
+every `make comprueba`.
+
+---
+
+## V6.58 · 2026-11-04
+
+### Qué cambia
+
+**Las tramas de APRS salen con la hora a la que llegaron.** Pedido por un
+usuario del proyecto, y lleva razón: caían en el panel de texto una detrás
+de otra y no había forma de saber si la de arriba era de hace un minuto o
+de hace media hora.
+
+```
+  21:47 EA4XYZ-9>APRS,WIDE1-1:!4133.00N/00042.00E>
+```
+
+- **Seis columnas fijas, siempre.** `HH:MM ` de las 66 que tiene el panel.
+  Un sello que a veces ocupe y a veces no desalinearía la rejilla —es de
+  ancho fijo— y las tramas dejarían de empezar todas en la misma columna.
+- **Y con el reloj sin poner, `--:--`**, no una hora inventada. Una radio
+  recién sacada de la caja marca algo que no significa nada; sellar con
+  eso sería peor que no sellar, porque quien lo lee no tiene forma de
+  saber que es mentira. Se le pregunta a la misma función que ya consulta
+  FT8 antes de fiarse del reloj.
+- **Sólo APRS.** El panel lo comparten RTTY, PSK31, NAVTEX y CW, y ahí no
+  se pone: AX.25 entrega **tramas**, con principio y final claros, y en
+  RTTY o CW lo que llega es un chorro continuo. Poner hora por renglón
+  allí marcaría dónde partió la rejilla, no cuándo llegó nada.
+
+La hora se pone al vaciar la cola, en el bucle principal, y no dentro del
+decodificador: ése corre en la interrupción del audio, y leer el reloj del
+hardware desde ahí es pedir problemas. La diferencia son unas decenas de
+milisegundos, que a resolución de minuto no se notan.
+
+### What's new
+
+**APRS frames now show the time they arrived.** Asked for by a project
+user, and they are right: frames landed in the text panel one after
+another with no way to tell whether the top one came in a minute ago or
+half an hour ago.
+
+```
+  21:47 EA4XYZ-9>APRS,WIDE1-1:!4133.00N/00042.00E>
+```
+
+- **Six fixed columns, always.** `HH:MM ` out of the panel's 66. A stamp
+  that sometimes takes space and sometimes does not would break the
+  alignment — the grid is fixed-width — and frames would stop starting in
+  the same column.
+- **And `--:--` when the clock has never been set**, not an invented time.
+  A radio straight out of the box shows something meaningless; stamping
+  with it would be worse than not stamping, because the reader has no way
+  to know it is a lie. It asks the same function FT8 already asks before
+  trusting the clock.
+- **APRS only.** The panel is shared with RTTY, PSK31, NAVTEX and CW, and
+  there it is not added: AX.25 delivers **frames**, with clear starts and
+  ends, while RTTY and CW deliver a continuous stream. A per-line time
+  there would mark where the text grid wrapped, not when anything arrived.
+
+The stamp is applied when the queue is drained, in the main loop, not
+inside the decoder: that one runs in the audio interrupt, and reading the
+hardware clock from there is asking for trouble. The difference is tens of
+milliseconds, invisible at minute resolution.
+
+---
+
 ## V6.57 · 2026-11-03
 
 ### Qué cambia

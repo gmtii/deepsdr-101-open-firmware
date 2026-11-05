@@ -127,4 +127,38 @@ void hora_suma_horas(int8_t desplazamiento,
                      uint8_t *hora, uint8_t *dia, uint8_t *mes,
                      uint8_t *anno2, uint8_t *dia_semana);
 
+/*
+ * ======================================================================
+ * EL SELLO DE HORA DE UN MENSAJE RECIBIDO - 04/11/2026
+ * ======================================================================
+ *
+ * *** Pedido por un usuario del proyecto, y lleva razon: el panel de
+ * texto enseña las tramas una detras de otra y no hay forma de saber si
+ * la de arriba es de hace un minuto o de hace media hora. ***
+ *
+ * Escribe SEIS caracteres y el cero final -o sea que `out` tiene que
+ * tener sitio para SIETE-, siempre los mismos seis:
+ *
+ *     "HH:MM "      con el reloj puesto
+ *     "--:-- "      cuando nadie lo ha puesto nunca
+ *
+ * LAS DOS DECISIONES QUE LLEVA DENTRO, y las dos son a proposito:
+ *
+ *   - SIEMPRE SEIS. Un sello que a veces ocupa y a veces no desalinearia
+ *     la rejilla de texto, que es de ancho fijo: las tramas dejarian de
+ *     empezar todas en la misma columna y leer la lista costaria mas que
+ *     no tener hora.
+ *
+ *   - Y CON GUIONES, NO CON UNA HORA INVENTADA. `hay` lo decide quien
+ *     llama, preguntandole a rtc_hw_has_ever_synced(), que es la misma
+ *     pregunta que ya se hace FT8 antes de fiarse del reloj. Una radio
+ *     recien sacada de la caja marca una hora que no significa nada, y
+ *     sellar con ella seria peor que no sellar: el que lo lee no tiene
+ *     forma de saber que es mentira.
+ *
+ * Vive aqui y no en main.c porque asi lo puede medir el banco: main.c no
+ * compila en el simulador. Ver sim/calendariotest.c.
+ */
+void hora_sello(char *out, uint8_t hay, uint8_t hora, uint8_t minuto);
+
 #endif /* HORA_COMUN_H */

@@ -216,6 +216,28 @@ int main(void)
             printf("    y un codigo desconocido, en crudo: %d px\n", w);
             if (w > hueco) { fallos++; }
         }
+
+        /*
+         * Y DESDE LA V6.60, EL CASO LARGO: nombre de la emisora Y codigo,
+         * juntos, cuando la cadena no esta en la lista. Ver rds_rotulo().
+         *
+         * Esto se MIDE pero NO cuenta como fallo si no cabe, y la
+         * diferencia con los de arriba es real: un nombre de la lista que
+         * no quepa es un nombre que elegimos nosotros y que habria que
+         * acortar, mientras que esto son ocho caracteres que manda la
+         * emisora y no los elige nadie. Si no cabe, la marquesina del
+         * renglon lo recorre, que es para lo que esta - ver rds_nom_off en
+         * ui_top.c-. Lo que no vale es no saberlo.
+         */
+        {
+            int16_t wreal = ui_top_txtw_dbg("Rock FM \xC2\xB7 E2CF", 14);
+            int16_t wpeor = ui_top_txtw_dbg("WWWWWWWW \xC2\xB7 E2CF", 14);
+            printf("    nombre mas codigo: \"Rock FM . E2CF\" %d px, "
+                   "el peor caso de ocho letras %d px  (%s)\n",
+                   wreal, wpeor,
+                   (wpeor <= hueco) ? "cabe hasta el peor"
+                                    : "el peor lo recorre la marquesina");
+        }
     }
 
     printf("\n  %s\n", fallos ? "HAY FALLOS" : "TODO CORRECTO (0 fallos)");

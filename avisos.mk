@@ -23,10 +23,30 @@
 # miran codigo propio. Que es lo que se quiere: -Werror en codigo ajeno
 # significa que un dia no compila por algo que no es nuestro.
 #
-# -Werror SOLO en duplicated-cond: de todos estos es el que no tiene falsos
-# positivos, y es exactamente el que fallo. Los demas avisan y ya.
+# -Werror SOLO en duplicated-cond y en unused-variable: de todos estos son
+# los dos que no tienen falsos positivos, y son exactamente los dos que han
+# fallado. Los demas avisan y ya.
+#
+# unused-variable SE PONE EL 05/11/2026, Y POR UN FALLO QUE COSTO SEMANAS.
+#
+# La revision del arrastre dejo en main.c tres medias calculadas -u_chrome,
+# u_spec, u_push- que no las usaba nadie: el renglon de diagnostico se
+# rotulaba "gir" y enseñaba EL ULTIMO CUADRO en tres de sus cinco numeros.
+# Y dejo ademas una variable, s_gir_suma, declarada y muerta.
+#
+# El compilador lo dijo. Cuatro avisos, en el sitio, con su numero de
+# linea. Y se perdieron entre las mil lineas que escupe un `make`, porque
+# un aviso que no para nada no lo lee nadie.
+#
+# Lo que NO arregla esto, y hay que saberlo: los .o solo se recompilan
+# cuando cambia su .c o una de sus cabeceras, asi que estos cuatro avisos
+# estuvieron semanas sin volver a salir - main.c no se tocaba-. Pero eso
+# no hace falta arreglarlo: el dia que se introduce el aviso, el fichero SI
+# se esta compilando, y con -Werror ese dia el make se para. Que es el
+# unico momento en que sirve de algo.
 WARN_USER    = -Wduplicated-cond -Werror=duplicated-cond -Wduplicated-branches \
-               -Wlogical-op -Wnull-dereference -Wjump-misses-init
+               -Wlogical-op -Wnull-dereference -Wjump-misses-init \
+               -Werror=unused-variable
 USER_OBJECTS = $(addprefix $(BUILD_DIR)/,$(notdir $(patsubst %.c,%.o,$(wildcard User/*.c))))
 $(USER_OBJECTS): CFLAGS += $(WARN_USER)
 

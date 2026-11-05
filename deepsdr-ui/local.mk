@@ -937,6 +937,32 @@ comprueba: novedades
 mando: ; python3 tools/mando_check.py $(FIRMWARE)/User/main.c
 comprueba: mando
 
+# QUE LAS TRAMAS DE APRS SIGAN SALIENDO CON SU HORA - 04/11/2026.
+#
+# Pedido por un usuario: las tramas caian en el panel de texto una detras
+# de otra y no habia forma de saber si la de arriba era de hace un minuto o
+# de hace media hora.
+#
+# El FORMATO del sello tiene banco de verdad -sim/calendariotest.c mide
+# hora_sello(): ancho fijo, guiones sin reloj y recorte de basura-. Lo que
+# ese banco no puede ver es si alguien lo LLAMA, porque el enganche vive en
+# ax25_poll(), dentro de main.c, que no compila en el simulador.
+#
+# Y es un enganche que se rompe en silencio: volver al desague de una linea
+# que habia antes compila, pasa todos los bancos y deja las tramas sin
+# hora. Esto lo mira. Ver tools/aprs_hora_check.py.
+.PHONY: aprshora
+aprshora: ; python3 tools/aprs_hora_check.py $(FIRMWARE)/User/main.c
+comprueba: aprshora
+
+# QUE LA CABECERA DE SSTV NO MIENTA SOBRE QUE MODOS HAY. Decia que los
+# Robot y los PD no estaban cuando llevaban semanas decodificando, y un
+# usuario de fuera lo leyo y pidio PD240, que ya estaba. Ver
+# tools/sstv_modos_check.py.
+.PHONY: sstvmodos
+sstvmodos: ; python3 tools/sstv_modos_check.py $(FIRMWARE)/User/sstv.c $(FIRMWARE)/User/sstv.h
+comprueba: sstvmodos
+
 # QUE LA RAMA B DEL PANEL NO CAMBIE SIN QUERER - 05/10/2026.
 #
 # Es la rama que usa la radio del usuario. El 05/10 se rehicieron las tres
@@ -1377,9 +1403,9 @@ comprueba: repinta
 # Banco del RDS. rds.c y nco.c no dependen de nada del GD32 a proposito, asi
 # que el banco mide EL MISMO codigo que corre en la placa - incluida la
 # division polinomica del CRC, que el banco llama en vez de reimplementar.
-out/rdstest: sim/rdstest.c $(FIRMWARE)/User/rds.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c
+out/rdstest: sim/rdstest.c $(FIRMWARE)/User/rds.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c $(FIRMWARE)/User/rds_pi.c
 	@mkdir -p out
-	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ sim/rdstest.c $(FIRMWARE)/User/rds.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c $(LDLIBS)
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ sim/rdstest.c $(FIRMWARE)/User/rds.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c $(FIRMWARE)/User/rds_pi.c $(LDLIBS)
 
 rds: out/rdstest ; ./out/rdstest
 
@@ -1467,6 +1493,17 @@ out/sstvaire: sim/sstvaire.c $(FIRMWARE)/User/sstv.c $(FIRMWARE)/User/disc_fm.c 
 	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ sim/sstvaire.c $(FIRMWARE)/User/sstv.c $(FIRMWARE)/User/disc_fm.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c $(LDLIBS)
 
 sstv: out/sstvtest ; ./out/sstvtest
+
+# CUANTO BAILA EL BORDE IZQUIERDO: la calidad del sincronismo de linea
+# medida en columnas. Herramienta de medir, NO comprobacion: no cuelga de
+# `comprueba`. Ver sim/sstv_fase.c.
+out/sstvfase: sim/sstv_fase.c sim/sstv_genera.h $(FIRMWARE)/User/sstv.c \
+              $(FIRMWARE)/User/disc_fm.c $(FIRMWARE)/User/nco.c \
+              $(FIRMWARE)/User/nco_tabla.c $(FIRMWARE)/User/sstv.h
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ sim/sstv_fase.c $(FIRMWARE)/User/sstv.c $(FIRMWARE)/User/disc_fm.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c $(LDLIBS)
+
+sstvfase: out/sstvfase ; ./out/sstvfase
 
 comprueba: sstv
 

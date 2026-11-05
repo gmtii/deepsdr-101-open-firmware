@@ -17,6 +17,7 @@
  */
 #include <stdio.h>
 #include <stdint.h>
+#include <string.h>
 #include "hora_comun.h"
 #include "husos.h"
 #include "cambios_generado.h"
@@ -182,6 +183,83 @@ int main(void)
         }
         printf("  suma de horas: %u casos de arrastre (fin de año, 29 de febrero, atras)\n",
                (unsigned)(sizeof(k_casos) / sizeof(k_casos[0])));
+    }
+
+    /*
+     * ==================================================================
+     * EL SELLO DE HORA DE UN MENSAJE RECIBIDO - 04/11/2026
+     * ==================================================================
+     *
+     * *** Pedido por un usuario: las tramas de APRS caian en el panel de
+     * texto sin hora y no habia forma de saber si la de arriba era de
+     * hace un minuto o de hace media hora. ***
+     *
+     * Lo que este banco defiende no es el formato, que se ve de un
+     * vistazo: es el ANCHO FIJO. La rejilla de texto de la radio es de
+     * ancho fijo, asi que un sello que a veces ocupe seis columnas y a
+     * veces ninguna desalinea todas las tramas y deja la lista peor que
+     * sin hora. Seis SIEMPRE, con reloj y sin el.
+     *
+     * Y el recorte, que es la otra mitad: un RTC con basura dentro -o un
+     * llamante que confunda el campo- no puede escribir un caracter que
+     * no sea un digito, porque eso saldria por pantalla.
+     */
+    {
+        static const struct { uint8_t hay, h, m; const char *e; } k_sellos[] = {
+            { 1U,  0U,  0U, "00:00 " },   /* medianoche, con sus ceros */
+            { 1U,  9U,  5U, "09:05 " },   /* un digito en cada campo */
+            { 1U, 23U, 59U, "23:59 " },   /* el ultimo minuto del dia */
+            { 1U, 14U, 30U, "14:30 " },
+            { 0U, 14U, 30U, "--:-- " },   /* reloj sin poner: NO se inventa */
+            { 0U,  0U,  0U, "--:-- " },
+            { 1U, 99U, 99U, "23:59 " },   /* basura: se recorta, no se escupe */
+            { 1U, 24U, 60U, "23:59 " },   /* justo fuera por arriba */
+        };
+        unsigned k;
+        int anchos_ok = 1;
+
+        for (k = 0; k < sizeof(k_sellos) / sizeof(k_sellos[0]); k++) {
+            char b[7];
+            unsigned j;
+
+            /* Se ensucia el buffer antes: asi un sello que no escriba
+             * los seis caracteres y el cero se nota, en vez de pasar
+             * porque la pila estuviera a cero por casualidad. */
+            for (j = 0; j < sizeof b; j++) { b[j] = '#'; }
+
+            hora_sello(b, k_sellos[k].hay, k_sellos[k].h, k_sellos[k].m);
+
+            if (strcmp(b, k_sellos[k].e) != 0) {
+                printf("    FALLO sello hay=%u %02u:%02u -> \"%s\", esperaba \"%s\"\n",
+                       k_sellos[k].hay, k_sellos[k].h, k_sellos[k].m,
+                       b, k_sellos[k].e);
+                fallos++;
+            }
+            if (strlen(b) != 6U) { anchos_ok = 0; }
+        }
+
+        if (!anchos_ok) {
+            printf("    FALLO el sello no mide siempre seis columnas:"
+                   " la rejilla de texto se desalinea\n");
+            fallos++;
+        }
+
+        /* Y que no se le olvide el cero final: quien lo recibe lo trata
+         * como cadena. */
+        {
+            char b[7];
+            unsigned j;
+            for (j = 0; j < sizeof b; j++) { b[j] = '#'; }
+            hora_sello(b, 1U, 7U, 7U);
+            if (b[6] != '\0') {
+                printf("    FALLO el sello no deja el cero final\n");
+                fallos++;
+            }
+        }
+
+        printf("  sello de hora: %u casos, siempre seis columnas,"
+               " guiones sin reloj y recorte de basura\n",
+               (unsigned)(sizeof(k_sellos) / sizeof(k_sellos[0])));
     }
 
     if (fallos == 0) { printf("  TODO CORRECTO (0 fallos)\n"); }

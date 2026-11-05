@@ -16,6 +16,7 @@
  * con ruido solo NO se invente una hora.
  */
 #include "rds.h"
+#include "rds_pi.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -664,6 +665,109 @@ int main(void)
                   "un tipo sostenido si se confirma");
         comprueba(info.tp == 0U, "y el TP vuelve a cero cuando la emisora lo baja");
         rds_stop();
+    }
+
+    /*
+     * EL RENGLON FIJO DE LA CABECERA, CASO A CASO - 05/11/2026.
+     *
+     * Esto no pasa por la subportadora: rds_rotulo() es una funcion pura que
+     * decide QUE se escribe en el renglon de identidad a partir de lo que el
+     * decodificador haya conseguido. Antes vivia dentro de main.c y por eso
+     * no habia banco que la mirara - y ahi se quedo el agujero que el caso
+     * (e) de aqui abajo reproduce.
+     *
+     * El buffer de verdad son 20 bytes (s_rds_nom en main.c), asi que se le
+     * pasan 20 para medir lo que de verdad pasa.
+     */
+    printf("\n  8. el renglon fijo de la cabecera (rds_rotulo)\n");
+    {
+        char r[20];
+
+        /* (a) La cadena esta en la lista: el nombre manda y basta. Nadie
+         * necesita ver "COPE . E2CA". */
+        rds_rotulo(r, (uint8_t)sizeof r, 1U, 0xE2CAU, 1U, "COPE    ");
+        printf("    en la lista, con PS        -> \"%s\"\n", r);
+        comprueba(strcmp(r, "COPE") == 0, "la cadena de la lista sale sola");
+
+        /* (a2) Y la que se anadio el 05/11/2026 confirmandola en el aire.
+         * Esta aqui porque el camino por el que entro -verla como codigo en
+         * crudo primero y como nombre despues- es justo el que arregla la
+         * version anterior: si el renglon se hubiera quedado en blanco, no
+         * habria habido nada que anotar. */
+        rds_rotulo(r, (uint8_t)sizeof r, 1U, 0xE2CFU, 1U, "ROCK FM ");
+        printf("    E2CF, ya en la lista       -> \"%s\"\n", r);
+        comprueba(strcmp(r, "Rock FM") == 0, "E2CF sale por su nombre");
+
+        /* (b) No esta en la lista: el nombre de la emisora Y el codigo. Es
+         * lo que pidio el usuario. */
+        rds_rotulo(r, (uint8_t)sizeof r, 1U, 0x7201U, 1U, "RADIO 1 ");
+        printf("    fuera de la lista, con PS  -> \"%s\"\n", r);
+        comprueba(strcmp(r, "RADIO 1 \xC2\xB7 7201") == 0,
+                  "fuera de la lista salen el nombre y el codigo");
+
+        /* (c) Solo el codigo: todavia no ha llegado ningun segmento de
+         * nombre. Sin separador delante, que no hay nada que separar. */
+        rds_rotulo(r, (uint8_t)sizeof r, 1U, 0x7201U, 0U, "        ");
+        printf("    solo codigo                -> \"%s\"\n", r);
+        comprueba(strcmp(r, "7201") == 0, "sin PS sale el codigo solo");
+
+        /* (d) Solo el nombre: hay PS y no hay codigo. Pasa poco -el codigo
+         * va en el bloque A de TODOS los grupos- pero el caso existe. */
+        rds_rotulo(r, (uint8_t)sizeof r, 0U, 0x0000U, 1U, "RADIO 1 ");
+        printf("    solo PS                    -> \"%s\"\n", r);
+        comprueba(strcmp(r, "RADIO 1") == 0, "sin codigo sale el nombre solo");
+
+        /* (e) EL AGUJERO QUE HABIA: PS dado por recibido pero todo espacios.
+         * Pasa con un solo segmento de dos espacios que haya pasado el CRC
+         * -señal floja, o PS dinamico con un hueco entre palabras-. Antes el
+         * renglon se quedaba EN BLANCO con el codigo perfectamente sabido,
+         * porque las tres ramas eran excluyentes y el PS ya habia ganado. */
+        rds_rotulo(r, (uint8_t)sizeof r, 1U, 0x7201U, 1U, "        ");
+        printf("    PS en blanco, con codigo   -> \"%s\"\n", r);
+        comprueba(strcmp(r, "7201") == 0,
+                  "un PS en blanco NO tapa el codigo (el agujero de antes)");
+
+        /* (f) Ni una cosa ni la otra: vacio de verdad, que es lo honrado. */
+        rds_rotulo(r, (uint8_t)sizeof r, 0U, 0x0000U, 0U, "        ");
+        printf("    sin nada                   -> \"%s\"\n", r);
+        comprueba(r[0] == '\0', "sin PS ni codigo, el renglon va vacio");
+
+        /* (g) Que el buffer no se desborde ni salga medio codigo escrito.
+         *
+         * La cuenta: ocho de nombre, CUATRO de separador -el punto volado
+         * son dos bytes en UTF-8- y cuatro del codigo son 16, mas el
+         * cierre, 17. En 17 justo cabe; en 16 no cabe y sale el nombre
+         * solo.
+         *
+         * Este caso cazo un desbordamiento de uno en rds_rotulo() el mismo
+         * dia que se escribio: la condicion pedia siete bytes para
+         * separador mas codigo en vez de ocho, y el cierre caia una
+         * posicion mas alla del buffer. Con el tope de verdad -veinte- no
+         * se veia. Por eso el banco aprieta el tope, y no lo prueba solo con
+         * el que usa la radio. */
+        {
+            char corto[17];
+            rds_rotulo(corto, (uint8_t)sizeof corto, 1U, 0x7201U, 1U, "RADIOUNO");
+            printf("    en 17 bytes                -> \"%s\"\n", corto);
+            comprueba(strcmp(corto, "RADIOUNO \xC2\xB7 7201") == 0,
+                      "en 17 bytes entran el nombre y el codigo enteros");
+        }
+        {
+            char corto[16];
+            rds_rotulo(corto, (uint8_t)sizeof corto, 1U, 0x7201U, 1U, "RADIOUNO");
+            printf("    en 16 bytes                -> \"%s\"\n", corto);
+            comprueba(strcmp(corto, "RADIOUNO") == 0,
+                      "si no cabe el codigo ENTERO no se escribe ni un digito");
+        }
+
+        /* (h) Y el nombre de la lista tampoco desborda, aunque sea largo. */
+        {
+            char corto[6];
+            rds_rotulo(corto, (uint8_t)sizeof corto, 1U, 0xE239U, 0U, 0);
+            printf("    \"Cadena SER\" en 6 bytes    -> \"%s\" (%u bytes)\n",
+                   corto, (unsigned)strlen(corto));
+            comprueba(strlen(corto) == 5U, "un nombre largo se corta en el tope");
+        }
     }
 
     printf("\n  %s\n", fallos ? "HAY FALLOS" : "TODO CORRECTO (0 fallos)");

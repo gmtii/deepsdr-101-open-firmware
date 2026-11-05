@@ -60,7 +60,8 @@ def pares(raiz_fw, raiz_sim):
     # mismo fallo que trajo aqui a mando_check.py.
     for n in ("emisoras_pack.py", "datos_pack.py", "icao24_recorta.py",
               "emisoras_check.py", "icao24.py", "novedades_check.py",
-              "mando_check.py", "cat_vuelta.ps1",
+              "mando_check.py", "cat_vuelta.ps1", "aprs_hora_check.py",
+              "sstv_modos_check.py",
               "paises_xy.csv", "sitios_xy.csv"):
         orig = os.path.join(raiz_fw, "tools", n)
         if os.path.isfile(orig):
