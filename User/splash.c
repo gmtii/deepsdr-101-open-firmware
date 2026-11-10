@@ -117,12 +117,33 @@ static uint8_t n_glifos(void)
     /* Cuantos caracteres tiene la fuente de lluvia, contando sus rangos: asi
      * si manana se le anaden o quitan katakana, esto no se queda corto ni se
      * sale de la tabla. */
-    uint8_t i, n = 0;
+    uint16_t n = 0U;   /* ver abajo: en uint8_t esto se puede dar la vuelta */
+    uint8_t  i;
+
     if (s_fuente == 0) { return 1U; }
     for (i = 0; i < s_fuente->n_ranges; i++) {
-        n = (uint8_t)(n + (s_fuente->ranges[i].hi - s_fuente->ranges[i].lo + 1));
+        n = (uint16_t)(n + (s_fuente->ranges[i].hi - s_fuente->ranges[i].lo + 1));
     }
-    return n;
+
+    /*
+     * Y NUNCA CERO, NI AUNQUE SE DE LA VUELTA - 08/11/2026.
+     *
+     * El acumulador era un uint8_t y esta funcion se usa SIEMPRE como
+     * `rnd() % n_glifos()`. Con la fuente de hoy -45 katakana- no hay
+     * problema, pero el comentario de arriba dice que esto esta escrito
+     * para que "si manana se le anaden o quitan katakana, esto no se quede
+     * corto", y con 256 glifos justos el uint8_t daba 0 y la division por
+     * cero es un fallo duro EN EL ARRANQUE, que es el peor sitio donde
+     * tenerlo: la radio no llegaria ni a encender la pantalla.
+     *
+     * O sea que la funcion prometia una robustez que no tenia. Ahora el
+     * acumulador es de 16 bits, se acota a 255 -que es lo que cabe en el
+     * indice del glifo- y nunca devuelve cero. Lo encontro el analizador
+     * de clang en la revision a fondo del 08/11.
+     */
+    if (n == 0U)   { return 1U; }
+    if (n > 255U)  { return 255U; }
+    return (uint8_t)n;
 }
 
 /* Codepoint del glifo numero `k` de la fuente de lluvia. */

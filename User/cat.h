@@ -152,6 +152,119 @@ typedef struct {
                                           * espectro, bit9 reductor de ruido */
 } cat_dibujo_t;
 
+/*
+ * ==========================================================================
+ * "DA": EL CAMINO DEL AUDIO, QUE ES DONDE SUENA EL SISEO - 06/11/2026.
+ * ==========================================================================
+ *
+ * POR QUE EXISTE. El usuario oye un siseo en FM que DESAPARECE al entrar en
+ * el menu principal. Eso ya dice mucho: lo causa algo que corre en la
+ * pantalla principal y no en el menu, o sea la FFT, la cascada, la traza o
+ * el empuje de pixeles al panel. El tactil NO entra en la lista: se mira en
+ * las dos pantallas (ver la guardia de demo_touch_poll() en main.c, que
+ * dice con todas las letras que ahi no se mira s_menu_open).
+ *
+ * Y LOS CONTADORES QUE LO MEDIRIAN YA EXISTEN TODOS. Lo que no habia era
+ * forma de leerlos sin tener la radio delante y un dedo en la pantalla de
+ * Informacion. Eso es esto.
+ *
+ * SON DOS AVERIAS DISTINTAS Y HAY QUE SABER CUAL:
+ *
+ *   - LA ENTRADA: la interrupcion del audio llega tan tarde que las dos
+ *     banderas del DMA estan puestas y se pierde media captura (`tarde`), o
+ *     el periferico se queda sin sitio (`over`). Eso son muestras que NO
+ *     ESTAN, y suenan.
+ *   - LA SALIDA: el I2S se queda sin palabra que mandar (`under`, TXURERR).
+ *     El comentario de gd32_i2s.h dice exactamente de quien se sospecha:
+ *     "la que sube si algo le roba acceso a la SRAM al DMA del audio - el
+ *     blit de la pantalla, el IPA". Que es, palabra por palabra, la
+ *     hipotesis que el sintoma propone.
+ *
+ * Y UNA TERCERA QUE NO ES AVERIA SINO MARGEN: `hmin` y `hmax` dicen donde
+ * cae la escritura DENTRO de la mitad del buffer, en palabras de `pal`. Los
+ * dos bajos = la interrupcion va sobrada; los dos altos = esta llegando al
+ * final de su presupuesto. Un margen que se come la pantalla principal y no
+ * el menu es la misma respuesta aunque `under` siga a cero, y llega ANTES
+ * de que se rompa nada.
+ *
+ * LOS CUATRO CONTADORES VAN EN DIFERENCIA desde la consulta anterior, como
+ * los de "DD", porque lo que se compara son dos tandas de un minuto. `hmin`
+ * y `hmax` no: son extremos y van en crudo, asi que para que signifiquen
+ * algo hay que ponerlos a cero antes de cada tanda tocando el renglon de
+ * audio de la ventana de Informacion.
+ *
+ * Y VA `estado` TAMBIEN AQUI, aunque "DD" ya lo lleve. Una tanda de "DA"
+ * sola tiene que poder leerse sin la de al lado: el bit del menu es
+ * justamente la variable del experimento, y una medida en la que no consta
+ * el estado de la radio no puede refutar nada. Esa leccion costo tres
+ * tandas en la revision del arrastre.
+ */
+#define CAT_AUDIO_HUECOS  14U
+
+typedef struct {
+    uint32_t tarde;      /* la ISR de entrada llego tarde y se perdio media
+                          * captura. DIFERENCIA desde la consulta anterior */
+    uint32_t over;       /* RXORERR de entrada. Diferencia */
+    uint32_t under;      /* TXURERR de salida: el DMA se quedo sin palabra.
+                          * Diferencia. EL SOSPECHOSO */
+    uint32_t repes;      /* mitades repetidas del ping-pong. Diferencia */
+    uint32_t hmin;       /* donde cae la escritura en la mitad, lo mas bajo
+                          * visto, en palabras. EN CRUDO, no diferencia */
+    uint32_t hmax;       /* lo mas alto visto. En crudo */
+    uint32_t pal;        /* palabras que tiene una mitad (1024 en WFM) */
+    uint32_t carga;      /* carga de audio, %. EN FM ANCHA sale de
+                          * demod_wfm_get_last_cycles() y no del de AM: el
+                          * camino de WFM es otro y el de AM se queda a
+                          * cero, que es lo que salio en las dos primeras
+                          * tandas - un hueco que miente por omision -. */
+    uint32_t estado;     /* los mismos bits que cat_dibujo_t.estado */
+    /*
+     * Y LOS DOS MANDOS QUE SE ESTAN TOCANDO - 06/11/2026.
+     *
+     * El siseo de la FM resulto no ser audio perdido -los cuatro
+     * contadores de arriba salieron CERO en las dos pantallas, y el
+     * margen plano al 45% en las dos- sino algo que escala con el
+     * trafico al panel: la velocidad de la cascada lo cambia y el brillo
+     * no, probado por el usuario.
+     *
+     * Y los dos mandos que mueven ese trafico YA EXISTEN y ya se tocan a
+     * dedo: la velocidad de la cascada desde Ajustes y el tiempo de dato
+     * del bus EXMC desde la ventana de Informacion -ver
+     * rm68120_bus_dato_pon()-. Lo que faltaba no era el mando: era que la
+     * tanda APUNTARA en que posicion estaba cada uno. Sin eso el CSV no se
+     * puede interpretar despues, y con treinta y cinco filas y dos mandos
+     * movidos a mano eso es una tanda perdida.
+     *
+     * Es la misma leccion que el bit del NCO y que el del menu, por
+     * tercera vez: una medida en la que no consta el estado de la radio no
+     * puede refutar nada.
+     */
+    uint32_t bus;        /* ciclos de setup de DATO del EXMC (campo DSET) */
+    uint32_t wfvel;      /* indice de velocidad de la cascada, 0 = la mas
+                          * rapida. Ver k_wf[] en main.c */
+    /*
+     * Y LOS TRES QUE FALTABAN - 06/11/2026, repasando la tanda del bus.
+     *
+     * Son los otros tres interruptores de la ventana de Informacion que
+     * cambian COMO llega la cascada al panel, y por tanto cuanto trabajo
+     * hace la radio por cada volcado:
+     *
+     *   pend  la pendiente de los pines del bus (0 = 2 MHz, 2 = la de
+     *         arranque, 50 MHz). Es el mando del di/dt, y es el que yo
+     *         confundi con el tiempo de dato: ese cambia CUANDO ocurren
+     *         los flancos, este cuanto empinados son.
+     *   ipa   si el volcado va por el acelerador o por el camino de CPU.
+     *   dma   si el panel se llena por DMA.
+     *
+     * Van los tres porque la leccion ya ha costado tres tandas: el bit del
+     * NCO, el del menu y el del bus. No se vuelve a tomar una tanda en la
+     * que no conste el estado de lo que se esta tocando.
+     */
+    uint32_t pend;       /* 0..3, nivel de pendiente de los pines del bus */
+    uint32_t ipa;        /* 1 = el volcado va por el acelerador */
+    uint32_t dma;        /* 1 = el panel se llena por DMA */
+} cat_audio_t;
+
 typedef struct {
     uint32_t (*freq_lee)(void);          /* Hz */
     void     (*freq_pon)(uint32_t hz);
@@ -163,6 +276,7 @@ typedef struct {
     uint16_t (*ancho_lee)(void);         /* Hz */
     void     (*diag_lee)(cat_diag_t *d); /* "DG": la vuelta del bucle */
     void     (*dibujo_lee)(cat_dibujo_t *d); /* "DD": dentro del dibujo */
+    void     (*audio_lee)(cat_audio_t *a);   /* "DA": el camino del audio */
 } cat_radio_t;
 
 /*
@@ -170,8 +284,39 @@ typedef struct {
  * "DG": 2 + 4 + 4 + 1 + 3 + 5 + 18 x 5 + ';' = 110. El buffer vive en la
  * pila de usb_cdc_poll(), y el margen de pila medido son 2.048 bytes.
  * "DD" son 2 + 4 + 19 x 5 + ';' = 102, o sea que no mueve el techo.
+ * "DA" son 2 + 14 x 5 + ';' = 73, menos todavia.
  */
 #define CAT_SALIDA_MAX  112U
+
+/*
+ * Y ESTO NO ES DECORACION - 08/11/2026.
+ *
+ * Esas tres cuentas de arriba eran lo UNICO que separaba este buffer de
+ * un desbordamiento, y una de las tres estaba mal: decia "11 x 5 = 58"
+ * cuando "DA" lleva catorce huecos desde que se escribio, o sea 73. No
+ * rompia nada -73 cabe de sobra en 112- pero el que fuera a anadir
+ * huecos nuevos haria la cuenta desde ese 58 y se creeria con 54 bytes
+ * de margen cuando tiene 39.
+ *
+ * Un comentario no para un make. Estas tres lineas si: si alguien anade
+ * un tramo a "DG", un hueco a "DD" o un contador a "DA" y la respuesta
+ * deja de caber, la compilacion se para AQUI, con el nombre de la que se
+ * ha pasado, y no en la pila de usb_cdc_poll() con la radio delante.
+ *
+ * Las cuentas son las de los emisores de cat.c, hueco a hueco:
+ *   DG  "DG" + vueltas(4) + detentes(4) + nr(1) + carga(3) + vuelta(5)
+ *       + CAT_DIAG_TRAMOS x 5 + ';'
+ *   DD  "DD" + cuadros(4) + CAT_DIBUJO_HUECOS x 5 + ';'
+ *   DA  "DA" + CAT_AUDIO_HUECOS x 5 + ';'
+ */
+_Static_assert((2U + 4U + 4U + 1U + 3U + 5U + (CAT_DIAG_TRAMOS * 5U) + 1U)
+               <= CAT_SALIDA_MAX,
+               "la respuesta de DG ya no cabe en CAT_SALIDA_MAX: o sube el "
+               "tope o quita un tramo");
+_Static_assert((2U + 4U + (CAT_DIBUJO_HUECOS * 5U) + 1U) <= CAT_SALIDA_MAX,
+               "la respuesta de DD ya no cabe en CAT_SALIDA_MAX");
+_Static_assert((2U + (CAT_AUDIO_HUECOS * 5U) + 1U) <= CAT_SALIDA_MAX,
+               "la respuesta de DA ya no cabe en CAT_SALIDA_MAX");
 
 void cat_init(const cat_radio_t *radio);
 

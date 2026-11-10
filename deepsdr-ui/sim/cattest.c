@@ -73,6 +73,31 @@ static void d_lee(cat_diag_t *d)
     d->tramo_us[0] = 123456UL;   /* se tiene que topar a 99999 */
 }
 
+/*
+ * Y EL CAMINO DEL AUDIO. `under` y `tarde` con numeros distintos a
+ * proposito: son las dos averias que hay que poder distinguir, y si el
+ * orden de los huecos se cambia alguna vez, dos numeros iguales no lo
+ * notarian. `hmin` a cero es el caso de "aun no se ha escrito ninguna
+ * mitad", que main.c traduce del 0xFFFFFFFF de gd32_i2s.
+ */
+static void da_lee(cat_audio_t *a)
+{
+    a->tarde  = 7UL;
+    a->over   = 3UL;
+    a->under  = 12UL;
+    a->repes  = 1UL;
+    a->hmin   = 98UL;
+    a->hmax   = 1001UL;
+    a->pal    = 1024UL;
+    a->carga  = 61UL;
+    a->estado = 0x15UL;
+    a->bus    = 5UL;     /* lo que deja el cargador de serie */
+    a->wfvel  = 1UL;     /* "Rapida", la de siempre */
+    a->pend   = 2UL;     /* el de arranque: 50 MHz */
+    a->ipa    = 1UL;
+    a->dma    = 1UL;
+}
+
 /* Y lo de DENTRO del dibujo, igual: numeros inventados con la forma de los
  * de verdad. `saltadas` se topa para comprobar que el hueco aguanta. */
 static void dd_lee(cat_dibujo_t *d)
@@ -100,7 +125,8 @@ static void dd_lee(cat_dibujo_t *d)
 }
 
 static const cat_radio_t k_radio = {
-    f_lee, f_pon, m_lee, m_pon, s_lee, v_lee, v_pon, a_lee, d_lee, dd_lee
+    f_lee, f_pon, m_lee, m_pon, s_lee, v_lee, v_pon, a_lee, d_lee, dd_lee,
+    da_lee
 };
 
 /* Mete una orden entera y devuelve lo que contesta, terminado en cero. */
@@ -157,6 +183,14 @@ static void a_mano(void)
     iguales("dentro del dibujo, de ancho fijo", "DD;",
             "DD00440110002200033000440005500999990005200017001310000500002"
             "0000701763000350000100023019900000900021;");
+    /*
+     * Y EL CAMINO DEL AUDIO. 2 + 14 x 5 + 1 = 73 caracteres -decia 9 x 5
+     * = 48 hasta el 08/11/2026, de cuando tenia nueve huecos-. Va aparte de
+     * "DD" porque no es un desglose de nada de alli: son los contadores de
+     * la interrupcion del audio y del DMA de salida, que es otra maquina.
+     */
+    iguales("el camino del audio, de ancho fijo", "DA;",
+            "DA0000700003000120000100098010010102400061000210000500001000020000100001;");
     iguales("y acepta que se la cambien",     "FA00014074000;", "");
     iguales("  (y se queda cambiada)",        "FA;", "FA00014074000;");
     iguales("da el modo",                     "MD;", "MD1;");
@@ -192,6 +226,23 @@ static void a_mano(void)
     printf("\n  y la mugre del cable\n");
     s_s = 7U;
     iguales("minusculas",                      "sm0;", "SM00007;");
+    /*
+     * Y UNA QUE EMPIECE POR 'a', QUE ES EL BORDE - 08/11/2026.
+     *
+     * La linea de arriba ya probaba las minusculas, pero con 's' y 'm', y
+     * eso deja sin mirar el extremo del rango. cat.c sube la letra con
+     * "if ((c >= 'a') && (c <= 'z'))": cambiando ese ">=" por un ">" -o
+     * sea dejando la 'a' fuera- el banco entero seguia en verde, porque
+     * ninguna orden en minusculas de la lista llevaba una 'a'. Lo encontro
+     * la pasada de mutantes de la revision a fondo del 08/11.
+     *
+     * "ag0;" es el volumen y empieza justo por ahi. El otro extremo, la
+     * 'z', no se prueba porque NO HAY ninguna orden con una 'z' dentro:
+     * romper ese lado no cambiaria nada en la radio, y un caso que no
+     * puede fallar no vale (ver lo que paso en sim/dirlleno.c).
+     */
+    s_vol = 66U;
+    iguales("minusculas empezando por 'a'",    "ag0;", "AG0066;");
     iguales("con retorno de carro delante",    "\r\nSM0;", "SM00007;");
     iguales("un punto y coma suelto",          ";", "");
     {

@@ -120,6 +120,19 @@ uint8_t waterfall_prestada(void);
 void waterfall_pinta_en(gfx2_surf_t *sf, int16_t px, int16_t py,
                         const uint16_t *lut);
 
+/*
+ * La cascada en bucle: no se desplaza, se escribe una sola fila por linea.
+ * 756 escrituras al panel en vez de 54.432. Ver su comentario en
+ * waterfall.c, que lleva el porque y la medida.
+ */
+/* "El proximo volcado, entero": en bucle solo se escribe la fila nueva, asi
+ * que lo que alguien pinte encima se queda. Lo llaman el arranque, el
+ * cambio de modo y la vuelta del prestamo de FT8. Ver waterfall.c. */
+void    waterfall_entero(void);
+
+uint8_t waterfall_bucle(void);
+void    waterfall_bucle_pon(uint8_t on);
+
 void waterfall_blit(uint16_t x, uint16_t y, const uint16_t *lut);
 
 /* Acceso directo a una fila del buffer (0 = mas reciente/arriba), por si

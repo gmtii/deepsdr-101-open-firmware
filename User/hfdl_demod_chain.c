@@ -16,6 +16,35 @@ void hfdl_demod_chain_init(hfdl_demod_chain_t *c)
 		c->resamp_buf_q[i] = 0.0f;
 	}
 	c->resamp_buf_fill = 0u;
+
+	/*
+	 * Y LA ARIDAD, QUE FALTABA - 08/11/2026.
+	 *
+	 * hfdl_demod_chain_process() lee c->bits_por_simbolo en CADA simbolo
+	 * -se lo pasa a hfdl_costas_step_mpsk(), que decide con el si el
+	 * detector es BPSK, 4-PSK u 8-PSK- y esta funcion, que es la que
+	 * promete dejar la cadena lista para usar, no lo escribia.
+	 *
+	 * En la radio no se notaba, y conviene decir por que, porque es
+	 * suerte y no diseño: hfdl_modo.c hace un "memset(e, 0, sizeof *e)"
+	 * justo ANTES de llamar aqui, asi que el campo llegaba a cero, y
+	 * step_mpsk() trata el cero igual que el uno (BPSK). O sea que el
+	 * contrato de esta init estaba incompleto y lo tapaba el que llama.
+	 *
+	 * Quien NO lo tapa es el banco de este mismo modulo:
+	 * hfdl_demod_chain_selftest() declara su "hfdl_demod_chain_t chain"
+	 * en la pila, llama aqui, y se ponia a demodular con una aridad que
+	 * era basura de la pila. Lo encontro valgrind en la cuarta pasada de
+	 * la revision a fondo: "conditional jump depends on uninitialised
+	 * value" en hfdl_costas.c:133, que es justo el "if
+	 * (bits_por_simbolo <= 1U)".
+	 *
+	 * Se pone 1 -BPSK- y no 0 porque es lo que vale mientras se busca
+	 * preambulo, que SIEMPRE es BPSK, y es lo que hfdl_modo.c escribe a
+	 * mano en sus tres sitios. La radio se comporta exactamente igual
+	 * que antes: 0 y 1 toman la misma rama.
+	 */
+	c->bits_por_simbolo = 1u;
 }
 
 void hfdl_demod_chain_process(hfdl_demod_chain_t *c,

@@ -8,7 +8,7 @@ static const char *const k_modo_fam_nombres[MODO_TABLA_FAMS][MODO_TABLA_IDIOMAS]
     { "Aeronáutica", "Aeronautical" },
 };
 
-#define MODO_TABLA_N 28
+#define MODO_TABLA_N 29
 static const struct { const char *label;
                      const char *desc[MODO_TABLA_IDIOMAS]; int fam;
                      const char *demod; }
@@ -30,6 +30,7 @@ static const struct { const char *label;
     { "SSTV-FM", { "Fotos por radio (FM)", "Pictures, narrow FM" }, 2, "DEMOD_MODE_NFM" },
     { "HELL", { "Texto dibujado", "Drawn text" }, 2, "DEMOD_MODE_USB" },
     { "APRS", { "Paquete AX.25", "AX.25 packet" }, 1, "DEMOD_MODE_NFM" },
+    { "APRS9K6", { "AX.25 a 9600", "AX.25 at 9600" }, 1, "DEMOD_MODE_NFM" },
     { "PKT300", { "Paquete de HF", "HF packet" }, 1, "DEMOD_MODE_LSB" },
     { "DSC", { "Llamada marítima", "Maritime DSC" }, 1, "DEMOD_MODE_USB" },
     { "FT8", { "Digital de HF", "HF digital" }, 1, "DEMOD_MODE_USB" },

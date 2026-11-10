@@ -22,6 +22,25 @@ de leido del desensamblado.
 Hace falta `qemu-system-arm`. Si no esta, el objetivo lo dice y se salta,
 no falla: en la maquina del usuario no tiene por que estar instalado.
 
+## Que bancos hay
+
+La lista, con una linea por banco, esta en `deepsdr-ui/local.mk`, justo
+encima de las reglas `out/m4_*.elf` — **ahi y no aqui**, para que no haya
+dos listas que puedan decir cosas distintas. `make m4todo` los corre todos.
+
+Dos de ellos merecen una nota porque no miden una pieza sino una pregunta:
+
+- **`m4_arbitro.c`** existe porque dos bancos daban dos numeros distintos
+  para la misma funcion. Le da **un segundo exacto** de audio al detector de
+  STANAG y cuenta la tanda entera, que es lo unico que no admite
+  interpretacion. (Los dos tenian razon: el detector cuesta el triple con la
+  banda vacia.)
+- **`m4_piezas.c`** desmonta una ventana de ese detector y cronometra cada
+  trozo. Se trae `stanag_det.c` con un `#include` para ver las funciones
+  internas, asi que lleva **copiado** el preambulo de `stanag_det_paso()`;
+  contra eso tiene una red, que es comprobar que las piezas sumen la ventana
+  entera medida por la puerta de siempre.
+
 ## Como se lee el numero
 
 El reloj es el SysTick del M4 emulado con `-icount shift=0`, o sea que el

@@ -110,62 +110,126 @@ def main(ruta):
     return 0
 
 
+def _cuerpo(src, firma):
+    """El cuerpo de una funcion, contando llaves desde su apertura."""
+    m = re.search(re.escape(firma) + r'\s*\{', src)
+    if not m:
+        return None
+    i = m.end() - 1
+    prof = 0
+    for j in range(i, len(src)):
+        if src[j] == '{':
+            prof += 1
+        elif src[j] == '}':
+            prof -= 1
+            if prof == 0:
+                return src[i + 1:j]
+    return None
+
+
+def _sin_comentarios(t):
+    t = re.sub(r'/\*.*?\*/', '', t, flags=re.S)
+    return re.sub(r'//[^\n]*', '', t)
+
+
+# Las cuatro clases de panel que comparten el hueco de en medio, y a quien
+# hay que avisar de cada una cuando lo de encima se va. Ver PANEL_CLASE_* y
+# panel_capa_repinta() en main.c.
+CLASES = (
+    ('sstv_panel_reinicia',  'la cinta del SSTV'),
+    ('fax_panel_reinicia',   'la cinta del fax'),
+    ('hell_panel_reinicia',  'la cinta de HELL'),
+    ('ft8_panel_reinicia',   'el panel entero'),
+    ('rtty_text_force_redraw', 'la rejilla de texto'),
+)
+
+
 def comprueba_rama_reinicia(src):
     """
-    Y QUE EL REPINTADO AL CERRARSE UN MENU NO VUELVA A SER UNA LISTA.
+    QUE LA LISTA DE CLASES DE PANEL VIVA EN UN SOLO SITIO.
 
-    POR QUE SE ANADE ESTO - 19/10/2026
-    ----------------------------------
-    El bucle principal reparte el repintado al cerrarse un menu encima del
-    panel. Esa rama tenia esto escrito a mano:
+    POR QUE SE ANADE ESTO - 19/10/2026, reescrito el 09/11/2026
+    -----------------------------------------------------------
+    El hueco entre la franja de arriba y la barra de botones lo pintan
+    CUATRO cosas distintas -el panel entero, la rejilla de texto, las
+    cintas de imagen y nada- y nunca dos a la vez. Cada vez que algo las
+    tapa -un menu, el cartel de una captura- y se va, hay que avisar a la
+    que este puesta: lo de debajo sigue siendo bueno, pero los pixeles ya
+    no estan.
 
-        ft8_modo_activo() || hfdl_modo_activo() || wspr_modo_activo() ||
-        ais_modo_activo() || ale_modo_activo() || jtty_modo_activo()
+    Esa lista se ha escrito a mano SIETE veces en main.c y siete veces le
+    ha faltado un modo:
 
-    y le faltaban STANAG e IDENT, que usan EXACTAMENTE el mismo panel.
-    Sexta vez de la misma familia de fallo.
+      - digi_panel_active() se dejo WSPR, AIS y ALE. Tres veces el mismo
+        olvido, y por eso existe este fichero.
+      - la rama del cierre de menu se dejo STANAG e IDENT (19/10/2026).
+      - el boton Borrar se dejo HELL (08/10/2026).
+      - la rama de imagen de ese mismo cierre de menu, escrita como "si es
+        SSTV, sstv; si no, fax", se dejo HELL otra vez (09/11/2026).
+      - y capt_restaura() avisaba SOLO al panel entero, asi que guardar
+        una captura en APRS dejaba el hueco NEGRO hasta tocar el boton
+        Borrar - que tampoco se veia, porque vive ahi dentro (09/11/2026).
 
-    No se veia porque el panel se repintaba ENTERO en cuanto cambiaba
-    cualquier cosa, varias veces por segundo, y tapaba el menu casi al
-    instante. Desde que solo se repintan los renglones sucios
-    (ui_digi_draw_cambios()), lo que no cambia ya no se repinta: el fallo
-    sale a la luz y el menu se queda puesto.
+    El sintoma siempre fue suave mientras el panel se repintaba entero
+    varias veces por segundo: tapaba el fallo casi al instante. Desde que
+    solo se repintan los renglones sucios, deja de taparse solo.
 
-    La pregunta que contesta esa rama es "¿este modo pinta con
-    ft8_panel_draw()?", que es literalmente modo_panel_entero(). Esto
-    comprueba que lo siga preguntando asi.
+    Asi que ahora la lista vive en panel_capa_repinta() y en ningun otro
+    sitio. Esto comprueba las dos mitades de eso: que esa funcion las
+    nombre TODAS, y que capt_restaura() no nombre ninguna por su cuenta.
+
+    LO QUE NO COMPRUEBA, y hay que decirlo: que el resto de main.c no
+    escriba una octava lista en algun sitio nuevo. Las cuatro funciones de
+    clase se llaman tambien, y con razon, desde donde se entra en un modo
+    o se toca su boton Borrar, asi que no se puede prohibir nombrarlas.
+    Esto vigila los dos sitios donde la lista ya se ha roto.
     """
-    m = re.search(r'ft8_panel_reinicia\(\);', src)
-    if not m:
-        print('  nadie llama a ft8_panel_reinicia()  MAL')
+    cuerpo = _cuerpo(src, 'static void panel_capa_repinta(void)')
+    if cuerpo is None:
+        print('  no encuentro panel_capa_repinta() en main.c  MAL')
+        print('  Es la funcion donde vive la lista de clases de panel.')
         return 1
 
-    # La rama del bucle principal: el `else if` que la envuelve.
-    i = src.rfind('} else if (', 0, m.start())
-    if i < 0:
-        print('  no encuentro la rama de repintado del bucle  MAL')
-        return 1
-    cond = src[i:src.index(')', i) + 1]
+    limpio = _sin_comentarios(cuerpo)
+    faltan = [q for (f, q) in CLASES if f not in limpio]
+    fallos = []
+    if faltan:
+        fallos.append('panel_capa_repinta() no avisa a: ' + ', '.join(faltan))
+    if 'modo_panel_entero' not in limpio:
+        fallos.append('panel_capa_repinta() ya no pregunta '
+                      'modo_panel_entero(): el panel entero ha vuelto a ser '
+                      'una lista de modos a mano')
 
-    if 'modo_panel_entero' in cond:
+    capt = _cuerpo(src, 'static void capt_restaura(void)')
+    if capt is None:
+        print('  no encuentro capt_restaura() en main.c  MAL')
+        return 1
+    capt = _sin_comentarios(capt)
+    if 'panel_capa_repinta' not in capt:
+        fallos.append('capt_restaura() ya no llama a panel_capa_repinta(): '
+                      'guardar una captura vuelve a dejar el hueco negro en '
+                      'todo lo que no sea panel entero')
+    sueltas = [f for (f, q) in CLASES if f in capt]
+    if sueltas:
+        fallos.append('capt_restaura() nombra clases a mano (%s): eso es la '
+                      'lista volviendo, y es exactamente como se quedo sin '
+                      'APRS' % ', '.join(sueltas))
+
+    if not fallos:
         return 0
 
-    sueltos = sorted(set(re.findall(r'\b(\w+_activo)\s*\(\)', cond)))
     print('')
-    print('  LA RAMA QUE REPINTA AL CERRARSE UN MENU VUELVE A SER UNA LISTA:')
+    print('  LA LISTA DE CLASES DE PANEL VUELVE A ESTAR EN DOS SITIOS:')
     print('')
-    print('    %s' % cond.strip())
+    for f in fallos:
+        print('    - %s' % f)
     print('')
-    if sueltos:
-        print('  nombra %d modos a mano: %s' % (len(sueltos),
-                                                ', '.join(sueltos)))
-        print('')
-    print('  Tiene que preguntar modo_panel_entero(), que es justo "¿este')
-    print('  modo pinta con ft8_panel_draw()?". Escrita a mano se quedo sin')
-    print('  STANAG y sin IDENT, y con el repintado por renglones sucios eso')
-    print('  deja el menu puesto encima del panel.')
+    print('  Cuatro cosas se reparten ese hueco y solo una esta puesta.')
+    print('  Avisar a la que no es deja la pantalla negra hasta que el')
+    print('  usuario toca un boton que tampoco se ve. Ha pasado siete')
+    print('  veces; la lista tiene que vivir en panel_capa_repinta().')
     print('')
-    print('  *** 1 ***')
+    print('  *** %d ***' % len(fallos))
     return 1
 
 

@@ -66,10 +66,30 @@ __pycache__/
 #              comparar el dibujado nuevo contra el viejo. Es codigo del
 #              fabricante y no hay licencia que invocar.
 #
-# Los veinte objetivos que usan vendor/ se saltan solos cuando no esta:
+# Los objetivos que usan vendor/ se saltan solos cuando no esta. Lo que
+# importa de verdad, y es lo unico que hay que exigir, es que "make
+# comprueba" SALGA CON CERO en un clon: el numero de bancos que corren
+# cambia cada semana y no es una promesa.
 #
-#   con vendor/    175 "TODO CORRECTO", exit 0
-#   sin vendor/    158 "TODO CORRECTO", exit 0   <- lo que ve quien clona
+# Lo vigila tools/../deepsdr-ui/tools/vendor_check.py, que en cada tanda
+# comprueba las dos mitades: que toda linea "comprueba: X" de local.mk que
+# llegue a vendor/ este dentro de su ifneq, y que todo objetivo de la linea
+# "comprueba:" de Makefile que use vendor/ este nombrado en el sed de
+# trampolin.mk.
+#
+# Comprobado de verdad el 08/11/2026, moviendo vendor/ fuera y lanzando la
+# tanda entera: SALE CON CERO. Eso es lo unico que se promete aqui.
+#
+# Y A PROPOSITO NO SE ESCRIBE CUANTOS BANCOS CORREN. Aqui ponia "con
+# vendor/ 175, sin vendor/ 158", de una medida del 03/11. Para el 08/11
+# eran 251 y 230 -setenta y seis de diferencia- y mientras se escribia
+# esta misma correccion se anadio un banco mas y el primero ya era 252. O
+# sea que el numero caduca en el tiempo que se tarda en apuntarlo.
+#
+# Un numero que nadie vuelve a mirar envejece solo; media caja de
+# herramientas de este proyecto existe por eso. Cuando quieras saber
+# cuantos hay, lanza la tanda, que los cuenta ella. Lo que no puede
+# cambiar es la salida: cero.
 deepsdr-ui/out/
 deepsdr-ui/sim/muestras/
 deepsdr-ui/vendor/

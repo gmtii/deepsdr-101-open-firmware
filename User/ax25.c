@@ -91,6 +91,76 @@ static float    s_nivel;
 static uint32_t s_fase, s_inc;
 static uint8_t  s_sig_ant;
 
+/*
+ * ======================================================================
+ * EL CAMINO DIRECTO: 9600 G3RUH, SIN TONOS - 09/11/2026.
+ * ======================================================================
+ *
+ * En 145,825 no solo esta la ISS: KNACKSAT-2 digipite ahi a 9.600 bits por
+ * segundo, y eso NO es dos tonos. Es FSK directa con la banda base
+ * aleatorizada: el transmisor desvia la portadora +-3 kHz de pico al ritmo
+ * de los bits -el maximo que marca la hoja del modem de G3RUH- asi que lo
+ * que sale del discriminador no es "suena 1200 o suena 2200" sino un nivel
+ * positivo o uno negativo. Los dos correladores de arriba no tienen nada
+ * que correlar.
+ *
+ * PERO TODO LO DEMAS YA ESTA AQUI. Detras del detector de tonos este
+ * fichero lleva el lazo de reloj, el NRZI, el HDLC con su relleno de bits,
+ * la comprobacion y el troceado de la trama, y nada de eso sabe ni le
+ * importa a que velocidad ha llegado -lo dice ax25.h desde que entro el
+ * paquete de HF-. Asi que el camino directo no es un decodificador nuevo:
+ * es OTRA PUERTA DE ENTRADA a este mismo.
+ *
+ * Lo que cambia son tres cosas y nada mas:
+ *
+ *   1. QUITAR LA CONTINUA. El discriminador da la desviacion instantanea
+ *      MAS el desvio de sintonia: si la radio esta 500 Hz fuera, toda la
+ *      senal se va para un lado y el cortador de cero decide siempre lo
+ *      mismo. Es el mismo razonamiento que en ais_rx.c, y por el mismo
+ *      motivo, porque es el mismo tipo de senal.
+ *   2. UNA MEDIA MOVIL DE UN BIT en vez de los dos correladores. Para NRZ
+ *      -que es lo que es esto- esa media ES el filtro adaptado optimo, no
+ *      una aproximacion: aqui encaja mejor incluso que en el AIS, que es
+ *      GMSK y reparte cada bit entre sus vecinos.
+ *   3. EL DESALEATORIZADOR. G3RUH pasa los bits por un registro de
+ *      desplazamiento de 17 etapas antes de transmitirlos, para que una
+ *      tira larga de ceros no deje al lazo de reloj sin flancos. Se
+ *      deshace con tres XOR y se engancha solo: no hay nada que
+ *      sincronizar.
+ *
+ * LA VENTANA NO CUESTA RAM: se reusa s_mi[], que en este camino no se usa
+ * para nada porque no hay correlador de marca. Son diez muestras de las
+ * noventa y seis que ya estaban reservadas.
+ */
+static uint8_t  s_g3ruh;      /* 1 = camino directo, 0 = los dos tonos */
+static float    s_dc;         /* la continua que se le quita */
+static uint32_t s_scram;      /* los ultimos bits recibidos, sin desaleatorizar */
+
+/*
+ * EL POLINOMIO, QUE ES EL DE G3RUH Y NO OTRO: 1 + x^12 + x^17.
+ *
+ * Esta copiado de la hoja de su modem, que lo describe como "uno de los
+ * ocho generadores de longitud maxima posibles con un registro de 17 bits
+ * y una sola toma". Una toma distinta no es un ajuste fino: no sale ni una
+ * trama, y lo comprueba deepsdr-ui/sim/g3ruh.c moviendo un solo bit.
+ *
+ * Es AUTOSINCRONIZANTE, y eso es la mitad de la gracia: el receptor no
+ * tiene que saber en que estado esta el registro del transmisor, porque lo
+ * que sale de aqui depende solo de los diecisiete bits RECIBIDOS. Los
+ * diecisiete primeros bits de cada rafaga salen mal y los demas bien, y a
+ * eso le sobra con el preambulo de banderas.
+ */
+#define G3RUH_T1  11U   /* x^12: el bit recibido hace doce, o sea el 11 */
+#define G3RUH_T2  16U   /* x^17: el de hace diecisiete */
+
+static uint8_t descram(uint8_t b)
+{
+    uint8_t sale = (uint8_t)((b ^ (uint8_t)(s_scram >> G3RUH_T1)
+                                ^ (uint8_t)(s_scram >> G3RUH_T2)) & 1U);
+    s_scram = (s_scram << 1) | (uint32_t)b;
+    return sale;
+}
+
 /* --- 3. NRZI y HDLC --- */
 static uint8_t  s_nrzi_ant;
 static uint8_t  s_hay_ant;
@@ -155,11 +225,52 @@ void ax25_start_fsk(float fs_hz, float baud, float marca_hz, float espacio_hz)
 
     s_cab = s_col = 0U;
     memset(&s_info, 0, sizeof s_info);
+    s_g3ruh = 0U; s_dc = 0.0f; s_scram = 0UL;
     s_on = 1U;
+}
+
+/*
+ * Y LA PUERTA DEL CAMINO DIRECTO. Ver el bloque de s_g3ruh.
+ *
+ * DEVUELVE SI HA PODIDO, y no es un adorno: a 9.600 baudios hacen falta
+ * diez muestras por bit, o sea 96 kHz. La radio tambien corre a 48 -es la
+ * casilla RATE de Ajustes- y ahi salen cinco. ax25_start_fsk() recorta
+ * cualquier cosa por debajo de ocho a ocho, asi que con 48 kHz el lazo se
+ * configuraria para ocho muestras sobre una senal que trae cinco: no
+ * decodificaria ni una trama y el panel se quedaria vacio, que es
+ * exactamente igual que "no hay trafico". Un fallo disfrazado de que no
+ * pasa nada es el peor de todos, y en el AIS ya paso una vez (ver el
+ * comentario de la tasa en ais_modo.c).
+ *
+ * Asi que aqui se dice que no y el que llama avisa.
+ */
+uint8_t ax25_start_g3ruh(float fs_hz)
+{
+    if (fs_hz < (AX25_G3RUH_BAUD * 8.0f)) { return 0U; }
+
+    ax25_start_fsk(fs_hz, AX25_G3RUH_BAUD, 0.0f, 0.0f);
+    if (!s_on) { return 0U; }
+
+    /*
+     * LA CONSTANTE DE LA CONTINUA. Tiene que seguir al desvio de sintonia
+     * -que se mueve despacio- y NO a los datos, que cambian cada bit. Una
+     * centesima por muestra da una memoria de cien muestras, o sea diez
+     * bits: suficientemente lenta para no comerse una tira de unos y
+     * suficientemente rapida para enganchar dentro del preambulo.
+     */
+    s_dc = 0.0f;
+    s_scram = 0UL;
+    s_g3ruh = 1U;
+    return 1U;
 }
 
 void ax25_stop(void)      { s_on = 0U; }
 uint8_t ax25_activo(void) { return s_on; }
+
+/* Si lo que esta puesto es el camino directo. Lo pregunta la tabla de
+ * modos para distinguir la fila de 1200 de la de 9600: las dos llevan NFM
+ * y ax25=1. */
+uint8_t ax25_g3ruh_activo(void) { return (uint8_t)(s_on && s_g3ruh); }
 
 /*
  * LOS DOS TONOS QUE ESTA MIRANDO AHORA MISMO - 19/10/2026.
@@ -411,7 +522,10 @@ static void discriminador(float d)
      * una tarde en el NAVTEX.
      */
     if (s_fase < fase_ant) {
-        nrzi_bit(sig);
+        /* En el camino directo los bits vienen aleatorizados; en el de dos
+         * tonos no. Una bifurcacion por BIT, no por muestra: a 9.600 bits
+         * son 9.600 al segundo contra las 96.000 muestras. */
+        nrzi_bit(s_g3ruh ? descram(sig) : sig);
     }
 
     /*
@@ -457,11 +571,83 @@ static void discriminador(float d)
 /* ==========================================================================
  * LA ENTRADA
  * ========================================================================== */
-void ax25_process(const float *audio, uint32_t n)
+/*
+ * ======================================================================
+ * *** LOS DOS OSCILADORES, EN LINEA Y CON LA FASE EN UN REGISTRO.
+ *     08/11/2026. ***
+ * ======================================================================
+ *
+ * APRS a 1200 baudios es el segundo decodificador mas caro de la radio
+ * -7,52 % de cada segundo, medido en deepsdr-ui/m4/m4_digi2.c- y no
+ * porque haga nada raro: es que corre a 96 kHz, no a 12.
+ *
+ * De las 157 instrucciones por muestra, unas 52 se iban en LLAMAR a
+ * nco_paso() dos veces. La cuenta de dentro es barata -dos consultas a la
+ * tabla y dos interpolaciones- pero la llamada no: prologo, epilogo, y
+ * sobre todo devolver dos floats POR PUNTERO, o sea escribirlos a memoria
+ * y volverlos a leer, dos veces por muestra.
+ *
+ * Eso ya estaba escrito en nco.h cuando se hizo nco_sen_cos_fase():
+ * "el que la usa la llama una vez por muestra dentro de la interrupcion de
+ * audio, y a ese ritmo el prologo y el epilogo de una llamada, mas los
+ * cuatro accesos a memoria para devolver dos floats por puntero, cuestan
+ * tanto como la cuenta". Lo que pasa es que ax25.c no se habia enterado.
+ *
+ * ES LA MISMA CUENTA, NO UNA PARECIDA. nco_paso() no hace mas que llamar a
+ * nco_sen_cos_fase() con o->fase y luego sumarle o->inc; aqui se hace
+ * exactamente eso, con la fase en una local que se devuelve a su sitio al
+ * salir. Ni un bit de diferencia, y lo comprueba sim/ax25test.c, que
+ * decodifica tramas de verdad.
+ */
+/*
+ * EL CAMINO DIRECTO, muestra a muestra. Ver el bloque de s_g3ruh.
+ *
+ * Es deliberadamente igual de corto que el otro y hace exactamente lo
+ * mismo que ais_rx_mete(), porque es el mismo problema: quitar la
+ * continua, promediar un bit y darselo al lazo de reloj.
+ */
+static void proceso_directo(const float *disc, uint32_t n)
 {
     uint32_t k;
 
+    for (k = 0U; k < n; k++) {
+        float x = disc[k];
+        float y;
+
+        s_muestra++;
+
+        s_dc += 0.01f * (x - s_dc);
+        y = x - s_dc;
+
+        /* La media movil de un bit, sobre la ventana del correlador de
+         * marca: aqui no hay marca que correlar y esa memoria esta libre. */
+        s_smi += y - s_mi[s_hidx];
+        s_mi[s_hidx] = y;
+        s_hidx++;
+        if (s_hidx >= s_spb) { s_hidx = 0U; }
+
+        if (s_llenado < s_spb) { s_llenado++; continue; }
+
+        {
+            float a = (s_smi < 0.0f) ? -s_smi : s_smi;
+            s_nivel += 0.0005f * ((a * 300.0f) - s_nivel);
+            if (s_nivel < 0.0f) { s_nivel = 0.0f; }
+        }
+
+        discriminador(s_smi);
+    }
+}
+
+void ax25_process(const float *audio, uint32_t n)
+{
+    uint32_t k;
+    uint32_t fm, fe, im, ie;
+
     if (!s_on || !audio) { return; }
+    if (s_g3ruh) { proceso_directo(audio, n); return; }
+
+    fm = s_nco_m.fase; im = s_nco_m.inc;
+    fe = s_nco_e.fase; ie = s_nco_e.inc;
 
     for (k = 0U; k < n; k++) {
         float x = audio[k];
@@ -469,9 +655,9 @@ void ax25_process(const float *audio, uint32_t n)
 
         s_muestra++;
 
-        nco_paso(&s_nco_m, &sn, &cs);
+        nco_sen_cos_fase(fm, &sn, &cs);  fm += im;
         mi = x * cs;  mq = -x * sn;
-        nco_paso(&s_nco_e, &sn, &cs);
+        nco_sen_cos_fase(fe, &sn, &cs);  fe += ie;
         ei = x * cs;  eq = -x * sn;
 
         s_smi += mi - s_mi[s_hidx];  s_mi[s_hidx] = mi;
@@ -491,4 +677,7 @@ void ax25_process(const float *audio, uint32_t n)
 
         discriminador(pm - pe);
     }
+
+    s_nco_m.fase = fm;
+    s_nco_e.fase = fe;
 }

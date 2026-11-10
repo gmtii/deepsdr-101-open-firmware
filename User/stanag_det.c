@@ -1332,29 +1332,178 @@ static uint8_t hay_valle(float fa, float fb)
  * que no cuenta. Lo comprueban identtest e identgrab, que miden las
  * nueve grabaciones de referencia y no se mueven ni un acierto.
  */
+/*
+ * ======================================================================
+ * *** POR QUE realce() YA NO ES UN BUCLE SINO TRES - 08/11/2026. ***
+ * ======================================================================
+ *
+ * Esta funcion era, CON LA BANDA VACIA, el 79 % de lo que cuesta una
+ * ventana entera del detector. Medido en deepsdr-ui/m4/m4_piezas.c, que
+ * desmonta stanag_det_paso() pieza a pieza:
+ *
+ *     una ventana entera             8.271.520 instrucciones
+ *     de ellas, mide_espectro()      6.849.000
+ *     y de ellas, aqui dentro        6.560.080   en 564 llamadas
+ *
+ * Son 564 llamadas porque sin señal el espectro esta lleno de maximos
+ * locales y la puerta barata de mide_espectro() -estar a menos de 20 dB
+ * del pico- no descarta casi ninguno: cuando no hay pico, todo esta cerca
+ * del pico. Con una FSK encima son 27 llamadas y 363.520 instrucciones.
+ * O sea que el detector costaba el TRIPLE cuando no encontraba nada, que
+ * es ademas lo que le pasa a la radio casi todo el rato.
+ *
+ * LO QUE HACIA: recorrer las 413 casillas del entorno preguntandole a cada
+ * una "¿a que distancia en hercios estas de fc?" -pasar el indice a float,
+ * multiplicar, restar, valor absoluto y hasta tres comparaciones de coma
+ * flotante, cada una con su vmrs- para meterla en uno de los dos montones
+ * o en ninguno. Veintiocho instrucciones por casilla, y veinte de ellas
+ * para decidir en que monton va.
+ *
+ * PERO ESA DISTANCIA NO DEPENDE DE LOS DATOS: solo del indice. Los dos
+ * montones son dos tramos SEGUIDOS de k, y se sabe cuales son sin mirar el
+ * espectro. Asi que se buscan los bordes una vez y luego se recorren
+ * seguidos: cinco instrucciones por casilla y ninguna comparacion de coma
+ * flotante dentro del bucle.
+ *
+ * Y SALE EL MISMO NUMERO, NO UNO PARECIDO:
+ *
+ *   - Los bordes se buscan con realce_dist(), que es la MISMA cuenta que
+ *     hacia el bucle, casilla a casilla. No se despeja una formula: se
+ *     parte de una estimacion y se corrige hasta que la casilla del borde
+ *     cumple la condicion y la de al lado no. Asi no hay ni una casilla de
+ *     diferencia por un redondeo.
+ *   - Se suma en el MISMO ORDEN -k de menor a mayor, el anillo de abajo
+ *     antes que el de arriba- y sobre el mismo acumulador, porque sumar
+ *     floats en otro orden da otro resultado. De ahi que realce_suma()
+ *     reciba la suma de antes en vez de devolver un trozo suelto.
+ *
+ * Lo comprueba deepsdr-ui/sim/realce_igual.c sobre espectros al azar,
+ * exigiendo el MISMO BIT, no un parecido.
+ */
+
+/* La distancia en hercios de la casilla k a fc, calculada EXACTAMENTE como
+ * la calculaba el bucle de antes: casilla_a_audio(I_DE_K(k)) vale
+ * 1500 + k*HZ_CASILLA para todo k de K_MIN a K_MAX, con k negativo o no. */
+static float realce_dist(int32_t k, float fc)
+{
+    float f = 1500.0f + (float)k * HZ_CASILLA;
+    return (f > fc) ? (f - fc) : (fc - f);
+}
+
+/*
+ * El primer k de {d <= t} dentro de [k0,k1], y el ultimo. La distancia
+ * baja y vuelve a subir -tiene forma de uve-, asi que ese conjunto es un
+ * tramo seguido y basta con buscar sus dos puntas desde una estimacion
+ * cualquiera: el primer bucle sale del tramo hacia fuera y el segundo
+ * entra. Ninguno de los dos da mas de dos o tres pasos.
+ */
+static int32_t realce_bajo(float fc, float t, int32_t est,
+                           int32_t k0, int32_t k1)
+{
+    int32_t k = est;
+    if (k < k0) { k = k0; }
+    if (k > k1) { k = k1; }
+    while (k > k0 && realce_dist(k - 1, fc) <= t) { k--; }
+    while (k <= k1 && realce_dist(k, fc) > t)     { k++; }
+    return k;            /* k1+1 si el tramo esta vacio */
+}
+
+static int32_t realce_alto(float fc, float t, int32_t est,
+                           int32_t k0, int32_t k1)
+{
+    int32_t k = est;
+    if (k > k1) { k = k1; }
+    if (k < k0) { k = k0; }
+    while (k < k1 && realce_dist(k + 1, fc) <= t) { k++; }
+    while (k >= k0 && realce_dist(k, fc) > t)     { k--; }
+    return k;            /* k0-1 si el tramo esta vacio */
+}
+
+/*
+ * Sumar y buscar el maximo sobre un tramo seguido de k. El indice da la
+ * vuelta en k = 0 -las frecuencias negativas viven en la mitad de arriba
+ * de s_fft[]-, asi que el tramo se parte ahi y nada mas.
+ */
+static float realce_suma(float s, int32_t p, int32_t q)
+{
+    int32_t k;
+
+    if (p > q) { return s; }
+    if (p < 0) {
+        const float *b = &s_fft[2U * NFFT];   /* k < 0  ->  i = k + NFFT */
+        int32_t z = (q < 0) ? q : -1;
+        for (k = p; k <= z; k++) { s += b[2 * k]; }
+        if (q < 0) { return s; }
+        p = 0;
+    }
+    for (k = p; k <= q; k++) { s += s_fft[2 * k]; }
+    return s;
+}
+
+static float realce_max(float m, int32_t p, int32_t q)
+{
+    int32_t k;
+
+    if (p > q) { return m; }
+    if (p < 0) {
+        const float *b = &s_fft[2U * NFFT];
+        int32_t z = (q < 0) ? q : -1;
+        for (k = p; k <= z; k++) { if (b[2 * k] > m) { m = b[2 * k]; } }
+        if (q < 0) { return m; }
+        p = 0;
+    }
+    for (k = p; k <= q; k++) { if (s_fft[2 * k] > m) { m = s_fft[2 * k]; } }
+    return m;
+}
+
+/* Que la casilla mas cercana a fc caiga SIEMPRE dentro del pico y dentro
+ * del hueco: si no, los dos tramos del anillo se solaparian y habria
+ * casillas contadas dos veces. Con 1,46 Hz por casilla sobra, pero esto es
+ * lo que sujeta la cuenta si algun dia cambia NFFT. */
+_Static_assert(TONO_ANCHO  > HZ_CASILLA, "el pico no llega ni a una casilla");
+_Static_assert(TONO_HUECO  > TONO_ANCHO, "el hueco esta dentro del pico");
+_Static_assert(TONO_ENTORNO > TONO_HUECO, "el anillo esta dentro del hueco");
+
 static float realce(float fc)
 {
     float pico = 0.0f, suma = 0.0f;
-    uint32_t n = 0U;
-    int32_t k, k0, k1;
+    uint32_t n;
+    int32_t k0, k1, kc;
+    int32_t a50, b50, a75, b75, a300, b300;
     /* +2 de holgura por el redondeo de los dos extremos. */
     const int32_t semi = (int32_t)(TONO_ENTORNO / HZ_CASILLA) + 2;
 
-    k0 = K_DE_HZ(fc) - semi; if (k0 < K_MIN) { k0 = K_MIN; }
-    k1 = K_DE_HZ(fc) + semi; if (k1 > K_MAX) { k1 = K_MAX; }
+    kc = K_DE_HZ(fc);
+    k0 = kc - semi; if (k0 < K_MIN) { k0 = K_MIN; }
+    k1 = kc + semi; if (k1 > K_MAX) { k1 = K_MAX; }
+    if (k1 < k0) { return 0.0f; }
 
-    for (k = k0; k <= k1; k++) {
-        uint32_t i = I_DE_K(k);
-        float f = casilla_a_audio(i);
-        float d = (f > fc) ? (f - fc) : (fc - f);
+    /* Las estimaciones se quedan cortas a proposito -de ahi el -1 y el +1-
+     * y las corrigen los bucles de realce_bajo() y realce_alto(). */
+    a300 = realce_bajo(fc, TONO_ENTORNO,
+                       kc - (int32_t)(TONO_ENTORNO / HZ_CASILLA) - 1, k0, k1);
+    b300 = realce_alto(fc, TONO_ENTORNO,
+                       kc + (int32_t)(TONO_ENTORNO / HZ_CASILLA) + 1, k0, k1);
+    a75  = realce_bajo(fc, TONO_HUECO,
+                       kc - (int32_t)(TONO_HUECO / HZ_CASILLA) - 1, k0, k1);
+    b75  = realce_alto(fc, TONO_HUECO,
+                       kc + (int32_t)(TONO_HUECO / HZ_CASILLA) + 1, k0, k1);
+    a50  = realce_bajo(fc, TONO_ANCHO,
+                       kc - (int32_t)(TONO_ANCHO / HZ_CASILLA) - 1, k0, k1);
+    b50  = realce_alto(fc, TONO_ANCHO,
+                       kc + (int32_t)(TONO_ANCHO / HZ_CASILLA) + 1, k0, k1);
 
-        if (d <= TONO_ANCHO) {
-            if (s_fft[2U*i] > pico) { pico = s_fft[2U*i]; }
-        } else if (d > TONO_HUECO && d <= TONO_ENTORNO) {
-            suma += s_fft[2U*i];
-            n++;
-        }
-    }
+    pico = realce_max(pico, a50, b50);
+
+    /* El anillo, en el mismo orden que recorria el bucle de antes: el
+     * tramo de abajo entero y luego el de arriba. */
+    suma = realce_suma(suma, a300, a75 - 1);
+    suma = realce_suma(suma, b75 + 1, b300);
+
+    n = 0U;
+    if ((a75 - 1) >= a300)  { n += (uint32_t)((a75 - 1) - a300 + 1); }
+    if (b300 >= (b75 + 1))  { n += (uint32_t)(b300 - (b75 + 1) + 1); }
+
     if (n == 0U || suma <= 0.0f || pico <= 0.0f) { return 0.0f; }
     return 10.0f * log10f(pico / (suma / (float)n));
 }

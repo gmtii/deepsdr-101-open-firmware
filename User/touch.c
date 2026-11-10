@@ -276,6 +276,27 @@ uint8_t touch_is_pressed(void)
  * la media de las 3 centrales, descartando el minimo y el maximo -
  * filtro de mediana simplificado, barato y efectivo contra el ruido
  * puntual tipico de un tactil resistivo. */
+/*
+ * CON MENOS DE TRES MUESTRAS ESTO NO SE PUEDE HACER - 08/11/2026.
+ *
+ * La funcion de abajo tira el minimo y el maximo y promedia lo que queda,
+ * o sea n-2 muestras. Con n = 2 eso son CERO muestras y la ultima linea
+ * divide entre cero; con n = 1 o n = 0 es peor, porque "(uint8_t)(n - 1)"
+ * da 0 y 255 respectivamente y el segundo recorre el array hasta la
+ * posicion 254, que no es suya.
+ *
+ * Hoy no puede pasar: los dos unicos que la llaman le pasan
+ * TOUCH_SAMPLES, que son 5. Pero eso es una propiedad de los dos sitios
+ * que la llaman, no de la funcion, y el dia que alguien baje TOUCH_SAMPLES
+ * "para que el tactil responda antes" no hay nada que se lo impida. Lo
+ * encontro el analizador estatico de clang en la revision a fondo del
+ * 08/11, y se cierra donde se decide: aqui, al compilar, sin gastar un
+ * byte de flash ni un ciclo.
+ */
+_Static_assert(TOUCH_SAMPLES >= 3,
+               "filtered_average() tira el minimo y el maximo: con menos de "
+               "tres muestras divide entre cero");
+
 static uint16_t filtered_average(uint16_t *samples, uint8_t n)
 {
     uint8_t i, j;

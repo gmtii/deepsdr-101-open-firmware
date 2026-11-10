@@ -79,6 +79,23 @@ $DIBUJO = @("cuadros","fft","chr","esp","emp","cas",
             "frqn","rgln","chrn","lotd","lotn","chapan","arrn","arru",
             "wflin","estado")
 
+# Los huecos de "DA;", en el orden de cat_audio_t. Todos de cinco cifras.
+# Esto es el camino del AUDIO, que no tiene nada que ver con el dibujo: son
+# los contadores de la interrupcion de entrada y del DMA de salida.
+$AUDIO = @("tarde","over","under","repes","hmin","hmax","pal","acarga","aestado",
+           "bus","wfvel")
+
+$QUE3 = @{
+    "tarde" = "la ISR de entrada llego tarde: MUESTRAS PERDIDAS"
+    "over"  = "el periferico de entrada se quedo sin sitio (RXORERR)"
+    "under" = "el DMA de salida se quedo sin palabra (TXURERR) <- EL SOSPECHOSO"
+    "repes" = "mitades repetidas del ping-pong (peine a 375 Hz)"
+    "hmin"  = "lo mas pronto que se escribio dentro de la mitad, en palabras"
+    "hmax"  = "lo mas tarde que se escribio: si se acerca a pal, no hay margen"
+    "bus"   = "ciclos de setup de dato del bus del panel (Informacion)"
+    "wfvel" = "velocidad de la cascada, 0 = la mas rapida (Ajustes)"
+}
+
 $QUE2 = @{
     "fft"    = "la transformada"
     "chr"    = "la regla, el marco y las etiquetas"
@@ -186,6 +203,7 @@ try {
     # La primera consulta solo sirve para poner los contadores a cero.
     $p.Write("DG;"); Start-Sleep -Milliseconds 200; $p.ReadExisting() | Out-Null
     $p.Write("DD;"); Start-Sleep -Milliseconds 200; $p.ReadExisting() | Out-Null
+    $p.Write("DA;"); Start-Sleep -Milliseconds 200; $p.ReadExisting() | Out-Null
 
     $fin = (Get-Date).AddSeconds($Segundos)
     while ((Get-Date) -lt $fin) {
@@ -233,6 +251,25 @@ try {
             }
         }
 
+        # --- y el camino del audio, que es otra maquina ---
+        #
+        # Los cuatro primeros van en DIFERENCIA desde la consulta anterior,
+        # asi que una fila dice lo que paso en ese medio segundo. hmin y
+        # hmax son extremos EN CRUDO: para que signifiquen algo hay que
+        # ponerlos a cero antes de la tanda tocando el renglon de audio de
+        # la ventana de Informacion.
+        $p.DiscardInBuffer()
+        $p.Write("DA;")
+        Start-Sleep -Milliseconds 120
+        $r3 = ($p.ReadExisting() -replace "[^0-9A-Za-z;]","")
+        foreach ($c in $AUDIO) { $m[$c] = 0 }
+        if ($r3 -match ("^DA(\d{" + (5*$AUDIO.Count) + "});$")) {
+            $d3 = $Matches[1]
+            for ($k = 0; $k -lt $AUDIO.Count; $k++) {
+                $m[$AUDIO[$k]] = [int]$d3.Substring(5*$k, 5)
+            }
+        }
+
         $muestras += ,(Apunta $m)
 
         $marca = if ($m["detentes"] -gt 0) { "MOVIENDO" } else { "quieto  " }
@@ -244,13 +281,20 @@ try {
         $est = $est + $(if ($e -band 8) { " PE" } else { "   " })
         $est = $est + (" z{0}" -f (($e -shr 4) -band 15))
         $est = $est + $(if ($e -band 256) { " ROT" } else { " ---" })
+        # EL BIT DEL MENU ES LA VARIABLE DEL EXPERIMENTO DEL SISEO: sin el
+        # en el renglon, dos tandas no se pueden comparar. Va el ultimo y
+        # en mayusculas para que se vea de un vistazo cual es cual.
+        $est = $est + $(if ($e -band 2) { " MENU" } else { " prin" })
 
-        "{0} v{1,4}/c{2,4} vuelta {3,6} dib {4,6} | fft {5,5} chr {6,5} esp {7,5} emp {8,5} cas {9,5} | salta {10,3}/{11,3} lect {12,4} | tac {13,5} arr {14,5} lot {15,4}x{16,3} frq {17,5} | chrn {18,3} frqn {19,3} pasos {20,4} | {21}" -f `
+        "{0} v{1,4}/c{2,4} vuelta {3,6} dib {4,6} | fft {5,5} chr {6,5} esp {7,5} emp {8,5} cas {9,5} | salta {10,3}/{11,3} lect {12,4} | tac {13,5} arr {14,5} lot {15,4}x{16,3} frq {17,5} | chrn {18,3} frqn {19,3} pasos {20,4} | AUDIO tarde {21,3} over {22,3} under {23,3} rep {24,3} mitad {25,4}-{26,4}/{27,4} | bus {29,2} wf {30,1} | {28}" -f `
             $marca, $m["vueltas"], $m["cuadros"], $m["vuelta"], $m["dib"], `
             $m["fft"], $m["chr"], $m["esp"], $m["emp"], $m["cas"], `
             $m["salta"], $m["bandas"], $m["lect"], `
             $m["tac"], $m["arru"], $m["lotd"], $m["lotn"], $m["frq"], `
-            $m["chrn"], $m["frqn"], $m["detentes"], $est
+            $m["chrn"], $m["frqn"], $m["detentes"], `
+            $m["tarde"], $m["over"], $m["under"], $m["repes"], `
+            $m["hmin"], $m["hmax"], $m["pal"], $est, `
+            $m["bus"], $m["wfvel"]
     }
 }
 catch [System.IO.IOException], [System.UnauthorizedAccessException] {
@@ -401,6 +445,113 @@ function Veredicto($nom, $q, $g) {
 
 Veredicto "sin NR" $qs $gs
 Veredicto "con NR" $qn $gn
+
+#
+# EL VEREDICTO DEL AUDIO: PANTALLA PRINCIPAL CONTRA MENU - 06/11/2026.
+#
+# Este NO se reparte por quieto/moviendo como los de arriba: la variable del
+# experimento del siseo es OTRA -en que pantalla estas- y mezclar los dos
+# repartos daria cuatro casillas con dos o tres muestras cada una, que es
+# como no medir.
+#
+# Se reparte por el bit 1 del estado, que es s_menu_open. Lo bueno de que la
+# radio lo diga ella es que no hay que apuntar a mano cuando se entro y
+# cuando se salio: la tanda se toma seguida, se entra en el menu a la mitad,
+# y el reparto sale solo.
+#
+function Suma($lista, $campo) {
+    if ($lista.Count -eq 0) { return 0 }
+    $t = 0
+    foreach ($x in $lista) { $t += [int]$x.$campo }
+    return $t
+}
+
+#
+# EL BARRIDO DE LOS DOS MANDOS - 06/11/2026.
+#
+# El siseo resulto NO ser audio perdido: los cuatro contadores salieron cero
+# en las dos pantallas y el margen plano al 45%. Lo que si lo mueve es el
+# trafico al panel - la velocidad de la cascada lo cambia y el brillo no -.
+#
+# Los dos mandos que mueven ese trafico se tocan A DEDO mientras la tanda
+# corre: la velocidad de la cascada en Ajustes y el tiempo de dato del bus
+# en la ventana de Informacion. Esto agrupa las muestras por la pareja
+# (bus, cascada) y saca lo que cuesta cada posicion, que es la unica forma
+# de leer despues una tanda en la que se han movido dos cosas a mano.
+#
+# Y SE PUBLICA `cas`, que es el volcado al panel - waterfall_push_line() mas
+# waterfall_blit() -, porque es el que paga la factura: en la tanda del
+# 06/11 eran 5.400 us de los 8.500 de la vuelta.
+#
+function Barrido($lista, $nom) {
+    if ($lista.Count -eq 0) { return }
+    $claves = $lista | ForEach-Object { "{0}/{1}" -f [int]$_.bus, [int]$_.wfvel } |
+              Select-Object -Unique | Sort-Object
+    if ($claves.Count -le 1) { return }
+
+    Write-Host ""
+    Write-Host ("  EL BARRIDO DE LOS MANDOS ({0})" -f $nom)
+    Write-Host "    bus  casc   n   cas us  vuelta   tarde over under rep"
+    foreach ($k in $claves) {
+        $b, $w = $k.Split("/")
+        $g = @($lista | Where-Object {
+            [int]$_.bus -eq [int]$b -and [int]$_.wfvel -eq [int]$w })
+        if ($g.Count -eq 0) { continue }
+        Write-Host ("    {0,3}  {1,4} {2,3}  {3,7} {4,7}   {5,5} {6,4} {7,5} {8,3}" -f `
+            $b, $w, $g.Count, (Media $g "cas"), (Media $g "vuelta"), `
+            (Suma $g "tarde"), (Suma $g "over"), (Suma $g "under"), (Suma $g "repes"))
+    }
+    Write-Host "    (bus = ciclos de setup de dato; casc = 0 la mas rapida, 4 la mas lenta)"
+}
+
+$prin = @($muestras | Where-Object { (([int]$_.aestado) -band 2) -eq 0 })
+$menu = @($muestras | Where-Object { (([int]$_.aestado) -band 2) -ne 0 })
+
+Write-Host ""
+Write-Host "  EL CAMINO DEL AUDIO"
+Write-Host ("    muestras: {0} en la pantalla principal, {1} en el menu" -f $prin.Count, $menu.Count)
+
+if ($prin.Count -eq 0 -or $menu.Count -eq 0) {
+    Write-Host "    *** FALTA UNA DE LAS DOS MITADES ***"
+    Write-Host "    La tanda tiene que pasar un rato en cada pantalla, o no hay"
+    Write-Host "    nada que comparar. Entra en el menu a la mitad y sal al final."
+} else {
+    Write-Host ""
+    Write-Host "                     principal      menu"
+    foreach ($c in @("tarde","over","under","repes")) {
+        Write-Host ("    {0,-8} {1,12} {2,9}   {3}" -f $c, (Suma $prin $c), (Suma $menu $c), $QUE3[$c])
+    }
+    $pal = [int]($muestras[0].pal)
+    Write-Host ("    margen   {0,12} {1,9}   lo mas tarde que se escribio, de {2} palabras" -f `
+                (Media $prin "hmax"), (Media $menu "hmax"), $pal)
+    Write-Host ("    carga    {0,12} {1,9}   % de audio" -f (Media $prin "acarga"), (Media $menu "acarga"))
+
+    Write-Host ""
+    $tp = (Suma $prin "tarde") + (Suma $prin "over") + (Suma $prin "under") + (Suma $prin "repes")
+    $tm = (Suma $menu "tarde") + (Suma $menu "over") + (Suma $menu "under") + (Suma $menu "repes")
+    if ($tp -eq 0 -and $tm -eq 0) {
+        Write-Host "    LAS CUATRO AVERIAS A CERO EN LAS DOS PANTALLAS."
+        Write-Host "    O sea que el siseo NO son muestras perdidas ni el DMA quedandose"
+        Write-Host "    seco. Hay que mirar a otro sitio - acoplamiento del bus o del PWM"
+        Write-Host "    de la retroiluminacion en el camino analogico - y eso es otro"
+        Write-Host "    instrumento, no este. Mira el margen de arriba antes de darlo por"
+        Write-Host "    cerrado: si en la principal se acerca a las palabras de la mitad,"
+        Write-Host "    va justo aunque todavia no se rompa."
+    } elseif ($tp -gt 0 -and $tm -eq 0) {
+        Write-Host "    SOLO SE ROMPE EN LA PANTALLA PRINCIPAL. Eso es lo que decia el"
+        Write-Host '    sintoma, y ahora esta contado. El tramo "dib" de DG dice cual de'
+        Write-Host "    las cinco cosas del dibujo se come el tiempo."
+    } elseif ($tm -gt 0 -and $tp -eq 0) {
+        Write-Host "    SE ROMPE EN EL MENU Y NO EN LA PRINCIPAL. Eso es lo contrario de"
+        Write-Host "    lo que dice el oido, asi que o la tanda esta mal tomada o el"
+        Write-Host "    siseo no es esto."
+    } else {
+        Write-Host "    SE ROMPE EN LAS DOS. Mira cual de los cuatro y en que proporcion:"
+        Write-Host "    si la principal no es MUCHO peor, el siseo no viene de aqui."
+    }
+}
+
+Barrido $prin "pantalla principal"
 
 try {
     Write-Host ""

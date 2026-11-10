@@ -109,6 +109,25 @@ def main(raiz):
 
     rel = lambda x: os.path.relpath(x, raiz).replace(os.sep, '/')
     print('  %d ficheros mirados' % mirados)
+    #
+    # Y SI NO HA MIRADO NADA, NO DICE "TODO BIEN" - 08/11/2026.
+    #
+    # Un guardian al que le dan una ruta equivocada -o que un dia se queda
+    # mirando un directorio vacio porque alguien movio una carpeta- recorria
+    # cero ficheros y terminaba con su mensaje de correcto y salida 0. O sea
+    # que dejaba de vigilar SIN QUE NADIE SE ENTERARA, que es la peor forma
+    # de fallar que tiene un guardian.
+    #
+    # La leccion ya estaba escrita en este mismo arbol -copias_check.py tiene
+    # su "NO HE COMPARADO NADA" y version_check.py dice con todas las letras
+    # que "un guardian que no encuentra nada no dice todo bien, dice no se
+    # donde mirar"-, solo que no se habia aplicado aqui. Encontrado en la
+    # revision a fondo del 08/11.
+    #
+    if (mirados == 0):
+        print('  *** NO HE MIRADO NI UN FICHERO: la ruta no es la que creia ***')
+        return 1
+
     if malos:
         print('\n  INTERRUPTORES DE PRUEBA ENCENDIDOS:\n')
         for p, lin, nombre, frase in malos:

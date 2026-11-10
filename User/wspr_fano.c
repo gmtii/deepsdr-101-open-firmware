@@ -1,5 +1,6 @@
 #include "wspr_fano.h"
 #include <string.h>
+#include "pump.h"
 
 #define WSPR_POLY1 0xF2D05351UL
 #define WSPR_POLY2 0xE4613C47UL
@@ -162,6 +163,41 @@ uint8_t wspr_fano_ex(const int8_t blandos[2U * WSPR_BITS_ENTRA],
         uint8_t  b, ultimo;
 
         pasos++;
+        /*
+         * ======================================================================
+         * *** EL LATIDO, Y POR QUE JUSTO AQUI - 08/11/2026. ***
+         * ======================================================================
+         *
+         * Medido en deepsdr-ui/m4/m4_digi2.c sobre el Cortex-M4: cerrar
+         * una ranura de WSPR SIN emision cuesta
+         *
+         *     417.628.240 instrucciones = 2,09 s
+         *
+         * y es UNA SOLA LLAMADA, de un tiron. Son los 200.000 pasos del
+         * tope, a 2.088 instrucciones el paso, porque sin señal no hay
+         * camino bueno y la busqueda agota el presupuesto entero. Con
+         * emision sale en 19.876.080 -veintiuna veces menos- asi que esto
+         * NO es el caso raro: es lo que hace la radio cada dos minutos
+         * mientras nadie transmite, que es casi siempre.
+         *
+         * Dos segundos aqui dentro son dos segundos sin mirar el tactil, y
+         * un toque dura 150 ms. O sea: en WSPR, la pantalla se queda
+         * muerta un rato largo cada dos minutos. Es exactamente lo que
+         * paso en STANAG y en IDENT el 29/10 y lo que hizo nacer pump.h.
+         *
+         * NO SE TOCA NADA DE LA DECODIFICACION. El tope sigue en 200.000,
+         * la pila sigue igual y lo que sale es bit por bit lo mismo: lo
+         * unico que cambia es que cada 256 pasos -unos 4 ms- se mira el
+         * tactil. 781 latidos en la ranura peor, que al lado de 417
+         * millones de instrucciones no se miden.
+         *
+         * 256 y no 4.096: el techo duro son 75 ms entre miradas (ver
+         * pump.h), que a 2.088 instrucciones el paso serian unos 4.300
+         * pasos. Se deja con holgura de diecisiete veces porque el paso
+         * no cuesta siempre lo mismo -recorrer la pila depende de cuantos
+         * haya- y porque un latido de mas no cuesta nada.
+         */
+        if ((pasos & 255UL) == 0UL) { pump(); }
 
         /* El de mejor metrica. Recorrer los 512 es mas barato que
          * mantener un monticulo y mucho mas facil de creerse. */

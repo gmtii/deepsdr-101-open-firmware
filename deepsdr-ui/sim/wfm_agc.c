@@ -29,6 +29,16 @@
 #include "sdr_rx.h"
 #include "agc.h"
 #include "demod_stubs.h"
+/* <stdlib.h> POR abs() - 08/11/2026.
+ *
+ * Se usaba abs() sin declararlo. Hoy gcc lo da por bueno con un aviso -se
+ * inventa un "int abs(int)" que resulta ser el bueno- pero las
+ * declaraciones implicitas son un error desde C23, y gcc 14 ya las trata
+ * asi: este banco dejaria de compilar el dia que la maquina de turno
+ * traiga un compilador mas nuevo, y no por nada que este mal aqui.
+ * Encontrado en la tercera pasada de la revision a fondo del 08/11.
+ */
+#include <stdlib.h>
 
 #define FS     192000.0
 #define NBLK   SDR_RX_BLOCK_SAMPLES_WFM

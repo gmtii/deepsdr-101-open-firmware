@@ -55,8 +55,31 @@ extern volatile uint32_t g_msticks; /* same free-running ms counter touch.c/touc
  *
  * Lo reproduce make ajustesflash, que parte la cadena a proposito y
  * comprueba que el camino suave se niega.
+ *
+ * ======================================================================
+ * *** Y DE TREINTA DE VUELTA A TRES - 10/11/2026. LO DE ARRIBA ESTABA
+ * CURANDO EL SINTOMA DE OTRA COSA. ***
+ * ======================================================================
+ *
+ * "Una cadena rota no se arregla sola, asi que en esa radio TODOS los
+ * guardados son bloqueantes". Cierto el sintoma, falso el diagnostico: la
+ * cadena de aquella radio no estaba rota. Lo que estaba mal era la PRUEBA
+ * -contaba los clusters dividiendo por 512 en un volumen con clusters de
+ * 4 kB, o sea que para CONFIG.CSV no podia cuadrar nunca-. Todo el porque
+ * esta en spi_flash_cadena_seguida(), arreglado el 10/11/2026.
+ *
+ * Con la cuenta buena, el camino suave vuelve a aceptarse en los discos
+ * que formatea la propia radio: el guardado va a 256 bytes por vuelta del
+ * bucle y no se ve. O sea que los treinta segundos ya no compran nada, y
+ * lo que costaban era lo que conto el usuario que destapo todo esto:
+ * apagar, o entrar en modo disco, dentro de esos treinta segundos pierde
+ * el cambio - y en un disco recien formateado eso es CONFIG.CSV no
+ * llegando a existir.
+ *
+ * Tres segundos es lo que habia cuando esto funcionaba, y el desgaste que
+ * supone es el mismo que tuvo durante meses.
  */
-#define SETTINGS_SAVE_DEBOUNCE_MS 30000UL
+#define SETTINGS_SAVE_DEBOUNCE_MS 3000UL
 
 static uint8_t s_dirty = 0U;
 
@@ -812,8 +835,19 @@ void settings_cadena_repara(void)
     if (!spi_flash_fichero_borra(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3)) {
         return;
     }
-    (void)spi_flash_write_or_update_file(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3,
-                                         s_async_csv_buf, n);
+    /*
+     * Y SI LA REESCRITURA FALLA, QUE SE OIGA - 10/11/2026.
+     *
+     * Aqui habia un (void). El fichero YA ESTA BORRADO cuando se llega a
+     * esta linea, asi que un fallo aqui no es "la cura no ha podido ser":
+     * es los ajustes perdidos. Un (void) delante de la unica llamada que
+     * puede dejar la radio sin CONFIG.CSV es justo donde no va.
+     */
+    if (!spi_flash_write_or_update_file(CONFIG_FILE_NAME8, CONFIG_FILE_EXT3,
+                                        s_async_csv_buf, n)) {
+        debug_print("settings_cadena_repara: *** la reescritura ha fallado y CONFIG.CSV queda borrado ***\n");
+        s_fallos++;
+    }
 }
 
 void settings_mark_dirty(void)

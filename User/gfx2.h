@@ -384,6 +384,11 @@ uint8_t gfx2_text_cabe(const char *str, const gfx2_font_t *f, int16_t tope,
  * paga la banda compositora. La conversion a color se hace aqui con la LUT,
  * lo que tiene un efecto secundario util: cambiar de colormap repinta todo
  * el historial, no solo las filas nuevas. */
+/* Una sola fila de la cascada, para el modo en bucle. Ver su comentario en
+ * gfx2.c: es la diferencia entre 756 escrituras al panel y 54.432. */
+void gfx2_wf_fila(int16_t x, int16_t y, int16_t w,
+                  const uint8_t *idx, const uint16_t *cmap);
+
 void gfx2_wf_blit(int16_t x, int16_t y, int16_t w, int16_t rows,
                   const uint8_t *idx, int16_t stride, int16_t head,
                   const uint16_t *cmap);

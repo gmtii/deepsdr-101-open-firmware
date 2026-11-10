@@ -242,4 +242,69 @@ static void linea(tx_t *t, uint8_t modo, int y)
 }
 
 
+/*
+ * LO DECODIFICADO CONTRA EL PATRON, que es la otra mitad de medir: el
+ * sincronismo puede ir finisimo y la imagen salir mal igualmente.
+ *
+ * Estaba repartido en dos ficheros y con el mismo nombre para dos cosas
+ * distintas. Desde el 05/11/2026 la primitiva vive aqui y la usan los tres
+ * bancos, por lo mismo que el generador: dos copias se desincronizan y
+ * entonces un banco mide una cosa y el otro otra creyendo que miden lo
+ * mismo.
+ *
+ * `desp` es el desplazamiento VERTICAL en renglones de lo decodificado
+ * respecto al patron. Hace falta porque un banco que engancha a mitad de
+ * imagen -sim/sstv_auto.c- no tiene por que empezar en el renglon 0, y
+ * comparar sin eso mediria el desplazamiento y no la calidad.
+ */
+static double error_desp(int hasta, uint8_t vdec, int desp)
+{
+    double suma = 0.0; long n = 0;
+    int x, y;
+    if (hasta <= 0) { return 999.0; }
+    for (y = 0; y < hasta; y++) {
+        for (x = 0; x < (int)SSTV_ANCHO; x++) {
+            uint8_t r, g, b;
+            int ly = (y + desp) * (int)vdec;
+            if (ly >= (int)SSTV_ALTO) { continue; }
+            patron(x, ly, &r, &g, &b);
+            suma += fabs((double)g_img[y][x][0] - r);
+            suma += fabs((double)g_img[y][x][1] - g);
+            suma += fabs((double)g_img[y][x][2] - b);
+            n += 3;
+        }
+    }
+    return n ? suma / (double)n : 999.0;
+}
+
+/*
+ * El caso de siempre: la imagen empieza donde tiene que empezar, porque la
+ * cabecera se leyo. Error medio por componente, de 0 a 255.
+ *
+ * Y NO ES error_desp(n, vdec, 0), aunque lo parezca: esta DEJA FUERA los dos
+ * primeros renglones y cuatro columnas por cada lado. Los renglones porque
+ * el enganche todavia se esta asentando y las columnas por el filo del
+ * barrido. Lo primero que hice al juntar las dos fue escribirla como el caso
+ * desp=0 de la otra, y con eso los numeros de este banco cambiaban en
+ * silencio y dejaban de poderse comparar con los que hay escritos en
+ * CAMBIOS.md. Una medida cuya definicion cambia sin decirlo no es la misma
+ * medida. 05/11/2026.
+ */
+static double error_medio(int n, uint8_t vdec)
+{
+    double e = 0.0; long m = 0;
+    int y, x, c;
+    for (y = 2; y < n; y++) {
+        for (x = 4; x < (int)SSTV_ANCHO - 4; x++) {
+            uint8_t p[3];
+            patron(x, y * (int)vdec, &p[0], &p[1], &p[2]);
+            for (c = 0; c < 3; c++) {
+                double d = (double)g_img[y][x][c] - (double)p[c];
+                e += (d < 0 ? -d : d); m++;
+            }
+        }
+    }
+    return m ? e / m : 999.0;
+}
+
 #endif /* SSTV_GENERA_H */

@@ -199,4 +199,30 @@ uint8_t  exti_interrupt_flag_get(uint32_t linex);
 void     exti_interrupt_flag_clear(uint32_t linex);
 void     nvic_irq_enable(uint8_t irq, uint8_t pre, uint8_t sub);
 
+/*
+ * LAS DOS DEL NVIC QUE FALTABAN - 08/11/2026.
+ *
+ * User/ft8_decimator.c cierra la interrupcion para cambiar de buffer y
+ * llama a __disable_irq()/__enable_irq(). En la radio las trae el CMSIS;
+ * aqui esta cabecera lo suplanta, no las declaraba, y el banco del M4
+ * -m4/m4_ft8.c, que SI las define vacias- compilaba con dos avisos de
+ * declaracion implicita en CADA tanda.
+ *
+ * Hoy gcc lo da por bueno inventandose un "void f(void)" que resulta ser
+ * el correcto, pero las declaraciones implicitas son un ERROR desde C23 y
+ * gcc 14 ya las trata asi: el banco del M4 dejaria de compilar el dia que
+ * la maquina traiga un compilador mas nuevo, y no por nada que este mal.
+ * Es el mismo caso que el abs() de sim/wfm_agc.c, encontrado en la misma
+ * revision.
+ *
+ * Esto NO toca la radio: alli se incluye el gd32f4xx.h de verdad, el del
+ * CMSIS, que las trae como funciones en linea. Y en los bancos de PC
+ * tampoco entra, porque ft8_decimator.c solo incluye esta cabecera
+ * cuando compila para ARM; fuera de ahi se pone sus propios tapones.
+ *
+ * Misma regla de siempre: aqui se DECLARA, el banco DEFINE.
+ */
+void     __disable_irq(void);
+void     __enable_irq(void);
+
 #endif

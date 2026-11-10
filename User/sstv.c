@@ -588,6 +588,15 @@ typedef enum {
     V_BITS
 } vis_est_t;
 
+/*
+ * Cuanto tiene que separarse del umbral el bit mas justo para que la
+ * cabecera MANDE en vez de solo proponer. Los tonos estan a 100 Hz del
+ * umbral, asi que esto es "al menos un tercio del camino". Ver donde se
+ * usa. El barrido que lo eligio esta en sim/sstv_fase.c.
+ */
+#ifndef VIS_MARGEN_HZ
+#define VIS_MARGEN_HZ 35.0f
+#endif
 static uint8_t   s_vis_est;
 static uint32_t  s_cnt_lider;     /* presencia de 1900 Hz */
 static uint32_t  s_cnt_1200;      /* presencia de 1200 Hz */
@@ -597,6 +606,17 @@ static uint32_t  s_vis_t0;        /* muestra en la que empieza el bit 0 */
 static uint8_t   s_vis_bit;
 static uint8_t   s_vis_val;
 static uint8_t   s_vis_par;
+/*
+ * EL BIT MAS DUDOSO DE LOS OCHO, EN HERCIOS - 05/11/2026.
+ *
+ * Cada bit se decide comparando su promedio contra 1200 Hz, y los tonos
+ * estan a 1100 y a 1300: o sea que un bit limpio cae a 100 Hz del umbral y
+ * uno que cae a dos hercios es una moneda al aire. Esa distancia ya se
+ * calcula para decidir el bit y hasta hoy se tiraba. Aqui se guarda la mas
+ * pequeña de las ocho, que es lo que dice si la lectura entera es de fiar.
+ * Ver donde se usa, mas abajo.
+ */
+static float     s_vis_margen;
 static float     s_bit_sum;       /* el tercio central del bit, promediado */
 static uint32_t  s_bit_n;
 
@@ -1478,6 +1498,7 @@ static void vis_paso(float hz)
             s_vis_plazo = s_muestra + (uint32_t)(0.5f * s_fs);
             s_vis_t0 = s_ini_1200 + ms30;   /* el bit 0 empieza tras el arranque */
             s_vis_bit = 0U; s_vis_val = 0U; s_vis_par = 0U;
+            s_vis_margen = 1e9f;
             s_bit_sum = 0.0f; s_bit_n = 0UL;
         }
         break;
@@ -1522,7 +1543,11 @@ static void vis_paso(float hz)
              * los lideres. Lo vio un banco instrumentado, imprimiendo el
              * desvio paso a paso: -189, -190, y aun asi VIS=127.
              */
-            uint8_t b = (uint8_t)(((s_bit_sum / (float)s_bit_n) - s_off_hz) < 1200.0f);
+            float   v = (s_bit_sum / (float)s_bit_n) - s_off_hz;
+            uint8_t b = (uint8_t)(v < 1200.0f);
+            float   d = (v < 1200.0f) ? (1200.0f - v) : (v - 1200.0f);
+
+            if (d < s_vis_margen) { s_vis_margen = d; }
             s_bit_sum = 0.0f; s_bit_n = 0UL;
 
             if (s_vis_bit < 7U) {
@@ -1538,7 +1563,48 @@ static void vis_paso(float hz)
                     if (k_modos[i].vis == s_vis_val) {
                         modo_aplica(i);
                         s_estado = SSTV_IMAGEN;
-                        s_info.como = (uint8_t)SSTV_COMO_VIS;
+                        /*
+                         * Y AQUI SE DECIDE SI ESTA CABECERA MANDA O SOLO
+                         * PROPONE - 05/11/2026.
+                         *
+                         * EL PROBLEMA. La paridad caza UN bit malo, no dos.
+                         * Medido con veinte semillas por punto en
+                         * sim/sstv_fase.c, apartado 6: entre 18 y 21 dB de
+                         * señal/ruido hay una franja de tres decibelios
+                         * donde el VIS no se calla, sino que PASA LA
+                         * PARIDAD CON OTRO VALOR - salieron Robot 36,
+                         * Robot 72 y Martin 2 - en un 5 a 15% de los
+                         * intentos.
+                         *
+                         * Y UNA CABECERA QUE MIENTE ERA PEOR QUE UNA QUE NO
+                         * SE LEE, porque como = SSTV_COMO_VIS le PROHIBE a
+                         * auto_pulso() corregir el modo (ver su primera
+                         * linea). Medido en el mismo banco: a 20,7 dB sin
+                         * cabecera salian 89 renglones recuperados por
+                         * ritmo, y a 18,7 con una cabecera mentirosa, 191
+                         * renglones con error 106 de 255 y cien
+                         * sincronismos malos. Con MEJOR señal, peor foto.
+                         *
+                         * EL ARREGLO NO ES RECHAZARLA. Se probo exigir un
+                         * margen minimo para dar la cabecera por buena, y
+                         * funciona -a 50 Hz no miente ni una vez- pero se
+                         * lleva por delante lecturas BUENAS donde hoy
+                         * funciona: a 23 dB pasaba de 19 aciertos de 20 a
+                         * 14. Cambiar un fallo por otro no es arreglar.
+                         *
+                         * Lo que se hace es NO BLOQUEAR. Una cabecera con
+                         * los ocho bits holgados manda, como siempre. Una
+                         * que ha pasado la paridad raspando pone el modo
+                         * igual -es la mejor pista que hay- pero se marca
+                         * como si la hubiera medido el ritmo, y entonces
+                         * auto_pulso() puede desautorizarla si los
+                         * sincronismos dicen otra cosa. No se pierde ni una
+                         * lectura buena y las malas dejan de ser
+                         * definitivas.
+                         */
+                        s_info.como = (uint8_t)((s_vis_margen >= VIS_MARGEN_HZ)
+                                                ? SSTV_COMO_VIS
+                                                : SSTV_COMO_RITMO);
                         s_off_bueno = 1U;   /* ahora si: ver s_off_bueno */
                         s_hay_t0 = 0U; s_t0_de_sync = 0U; s_cierres_seguidos = 0U;
                         s_y = 0U;

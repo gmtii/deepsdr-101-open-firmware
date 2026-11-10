@@ -260,6 +260,32 @@ static uint8_t procesa(const char *o, uint8_t n, char *s)
         return j;
     }
 
+    /* --- "DA": el camino del audio. Ver cat_audio_t en cat.h --- */
+    if (dos(o, 'D', 'A')) {
+        cat_audio_t a;
+
+        if (n != 2U) { return error(s); }
+        if (s_r->audio_lee == 0) { return error(s); }
+        s_r->audio_lee(&a);
+        j = pon(s, 0U, "DA");
+        j = pon_num(s, j, tope5(a.tarde),  5U);
+        j = pon_num(s, j, tope5(a.over),   5U);
+        j = pon_num(s, j, tope5(a.under),  5U);
+        j = pon_num(s, j, tope5(a.repes),  5U);
+        j = pon_num(s, j, tope5(a.hmin),   5U);
+        j = pon_num(s, j, tope5(a.hmax),   5U);
+        j = pon_num(s, j, tope5(a.pal),    5U);
+        j = pon_num(s, j, tope5(a.carga),  5U);
+        j = pon_num(s, j, tope5(a.estado), 5U);
+        j = pon_num(s, j, tope5(a.bus),    5U);
+        j = pon_num(s, j, tope5(a.wfvel),  5U);
+        j = pon_num(s, j, tope5(a.pend),   5U);
+        j = pon_num(s, j, tope5(a.ipa),    5U);
+        j = pon_num(s, j, tope5(a.dma),    5U);
+        s[j++] = ';';
+        return j;
+    }
+
     /* --- el bloque gordo --- */
     if (dos(o, 'I', 'F')) {
         if (n != 2U) { return error(s); }

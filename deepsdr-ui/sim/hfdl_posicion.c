@@ -119,7 +119,19 @@ static uint32_t arma(uint8_t *b, int sobre, const char *vuelo,
     b[p++] = version;
     b[p++] = pata;
     b[p++] = gs;
-    return 47U + (uint32_t)(sobre ? 0U : 0U);   /* el modulo pide 47 */
+    /*
+     * SIEMPRE 47, CON SOBRE Y SIN EL.
+     *
+     * Aqui ponia "47U + (sobre ? 0U : 0U)", que es un 47 escrito de forma
+     * que parece depender del sobre y no depende: las dos ramas del
+     * interrogante son el mismo cero. Resto de un apaño a medias, y gcc
+     * lo caza con -Wduplicated-branches. Se probo tambien con "? 1U : 0U"
+     * y el banco sale igual de verde, o sea que ese byte no lo mira
+     * nadie: lo que cuenta es que el modulo pide una PDU de 47 bytes
+     * exactos, y el relleno a cero del memset de arriba lo completa tanto
+     * si el sobre esta como si no.
+     */
+    return 47U;   /* el modulo pide 47 */
 }
 
 static int cerca(double a, double b, double tol)

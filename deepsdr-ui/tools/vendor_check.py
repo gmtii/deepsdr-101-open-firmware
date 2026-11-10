@@ -41,6 +41,7 @@ SIN la carpeta, y para eso o se borra -que no se va a hacer en mitad de una
 tanda- o se lee el grafo. Se lee el grafo.
 """
 import os
+import io
 import re
 import sys
 
@@ -69,6 +70,72 @@ def lee_lineas(ruta):
         fuera.append((l, n0))
         i += 1
     return fuera
+
+
+def makefile_y_trampolin():
+    """La OTRA mitad, que este guion no miraba - 08/11/2026.
+
+    Este fichero solo leia local.mk. Y hay un segundo makefile, Makefile,
+    con su propia linea "comprueba:" y medio centenar de objetivos
+    colgando. Dos de ellos -out/guardtest y out/paletachk- usan vendor/.
+
+    No estan rotos: trampolin.mk los quita con un sed cuando vendor/ no
+    esta, y comprobado clonando de verdad -mover vendor/ y lanzar la
+    tanda- sale en verde. Pero **esos dos nombres estan escritos a mano
+    dentro del sed**. El dia que alguien anada a esa linea un objetivo
+    nuevo que use vendor/, el clon se rompe y este guion no lo veria,
+    porque mira otro fichero.
+
+    Asi que aqui se comprueba justo eso: que todo objetivo de la linea
+    "comprueba:" de Makefile que use vendor/ este nombrado en el sed de
+    trampolin.mk. La regla es distinta de la de local.mk -alli se
+    descuelgan con ifneq, aqui se borran con sed- y por eso va aparte.
+    """
+    mkf = os.path.join(RAIZ, 'Makefile')
+    tra = os.path.join(RAIZ, 'trampolin.mk')
+    if not os.path.isfile(mkf) or not os.path.isfile(tra):
+        print('  no encuentro Makefile o trampolin.mk   MAL')
+        return 1
+
+    texto = io.open(mkf, encoding='utf-8', errors='replace').read()
+    tramp = io.open(tra, encoding='utf-8', errors='replace').read()
+
+    objs = []
+    for m in re.finditer(r'(?m)^comprueba:[ \t]*(.*)$', texto):
+        for o in m.group(1).split(';')[0].split():
+            if not o.startswith('$'):
+                objs.append(o)
+    if not objs:
+        print('  Makefile: no encuentro ningun "comprueba: X"   MAL')
+        return 1
+
+    # Las dependencias de cada objetivo, segun su propia regla.
+    reglas = {}
+    for m in re.finditer(r'(?m)^([^\s:#][^:=\n]*):([^=\n].*)$', texto):
+        for nombre in m.group(1).split():
+            reglas.setdefault(nombre, '')
+            reglas[nombre] += ' ' + m.group(2)
+
+    malos = []
+    for o in objs:
+        if 'vendor/' in reglas.get(o, ''):
+            if o not in tramp:
+                malos.append(o)
+
+    usan = [o for o in objs if 'vendor/' in reglas.get(o, '')]
+    print('  Makefile: %d objetivos cuelgan de comprueba; %d usan vendor/'
+          % (len(objs), len(usan)))
+    if malos:
+        print('')
+        for o in malos:
+            print('  Makefile: "%s" usa vendor/ y trampolin.mk NO lo quita' % o)
+        print('')
+        print('  En un clon no hay vendor/, y trampolin.mk solo borra de la')
+        print('  linea "comprueba:" los nombres que lleva escritos. Anade')
+        print('  este al sed de ahi, junto a out/guardtest y out/paletachk.')
+        return 1
+    print('  y los %d estan nombrados en el sed de trampolin.mk  ok' % len(usan))
+    return 0
 
 
 def main():
@@ -170,6 +237,9 @@ def main():
 
     print('  los %d guardados, guardados   ok' % con_vendor)
     print('')
+    rc = makefile_y_trampolin()
+    if rc != 0:
+        return rc
     print('VENDOR: todo correcto')
     return 0
 

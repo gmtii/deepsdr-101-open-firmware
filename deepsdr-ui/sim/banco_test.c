@@ -219,7 +219,23 @@ int main(void)
          * de control o media letra acentuada en UTF-8. */
         banco_nombre_pon(2U, "OM\tradio");
         di("un tabulador corta ahi", strcmp(banco_nombre(2U), "OM") == 0, 0);
-        banco_nombre_pon(2U, "Espa\xc3\xb1a");
+        /*
+         * "\xc3\xb1" "a" Y NO "\xc3\xb1a" - 08/11/2026.
+         *
+         * En C, \x se come TODOS los digitos hexadecimales que encuentra
+         * detras, y la 'a' de "Espa\xc3\xb1a" es uno de ellos: el
+         * compilador leia \xb1a = 2842, que no cabe en un char, y lo
+         * decia en cada tanda -"hex escape sequence out of range"-. O sea
+         * que este caso no estaba probando los dos bytes de la 'n' con
+         * virgulilla seguidos de una 'a', que es lo que dice su
+         * comentario, sino otra cosa.
+         *
+         * Pasaba igual, porque el 0xc3 ya corta por si solo, pero una
+         * prueba que no lleva dentro lo que dice que lleva no prueba lo
+         * que cree. Cerrando la cadena y abriendo otra se acaba el
+         * escape, que es la forma de siempre de salir de esto.
+         */
+        banco_nombre_pon(2U, "Espa\xc3\xb1" "a");
         di("y un byte alto tambien", strcmp(banco_nombre(2U), "Espa") == 0, 0);
     }
 
@@ -250,19 +266,77 @@ int main(void)
             && strcmp(banco_nombre(3U), "Marina") == 0), 0);
         di("y las memorias siguen ahi", banco_usadas(0U) == 1U, 0);
 
+        /*
+         * LA LONGITUD SE MIDE, NO SE ESCRIBE A MANO - 08/11/2026.
+         *
+         * Estos dos casos le pasaban a banco_de_csv() un numero contado a
+         * ojo: 72 y 60. El primero sobraba por uno -se colaba el '\0'- y
+         * el segundo se pasaba por SEIS, o sea que la funcion recorria
+         * seis bytes que no eran del texto. En el PC eso no rompia nada
+         * -detras habia otra cadena- y el banco salia en verde: lo
+         * encontro AddressSanitizer en la revision a fondo del 08/11,
+         * compilando todos los bancos con -fsanitize=address.
+         *
+         * Lo grave no es el byte: es que el caso decia "un renglon de
+         * nombre roto se salta" y lo que de verdad estaba leyendo no era
+         * ese texto, sino ese texto MAS seis bytes de lo que hubiera al
+         * lado. Un banco que no sabe lo que le esta dando a la funcion no
+         * esta comprobando lo que dice que comprueba.
+         *
+         * Con "sizeof - 1" lo cuenta el compilador, que no se equivoca, y
+         * ademas sigue vivo si alguien toca el texto.
+         */
+        static const char k_viejo[] =
+            "banco,memoria,hz,modo,paso,fil_lo,fil_hi,cw\n"
+            "1,1,9690000,1,2,100,4000,0\n";
+        static const char k_roto[] =
+            "nombre,\nnombre,9,x\nnombre\n"
+            "1,1,9690000,1,2,100,4000,0\n";
+
         /* Un fichero VIEJO, sin renglones de nombre, se lee igual: es lo
          * que tiene en el disco quien actualice. */
         banco_init();
         di("un fichero sin nombres se lee igual",
-           (banco_de_csv("banco,memoria,hz,modo,paso,fil_lo,fil_hi,cw\n"
-                         "1,1,9690000,1,2,100,4000,0\n", 72U)
+           (banco_de_csv(k_viejo, (uint32_t)(sizeof k_viejo - 1U))
             && banco_usadas(0U) == 1U && banco_nombre(0U)[0] == '\0'), 0);
+
+        /*
+         * UN NOMBRE MAS LARGO QUE EL HUECO, DESDE EL FICHERO - 08/11/2026.
+         *
+         * El caso (8) de mas arriba ya probaba un nombre larguisimo, pero
+         * entrando por banco_nombre_pon(). Por el FICHERO no entraba
+         * ninguno, y ese camino es otro: banco_de_csv() copia el nombre a
+         * un "char t[BANCO_NOM_MAX]" de la pila con un bucle propio
+         *
+         *     while (k < fin && n < (BANCO_NOM_MAX - 1U)) { t[n++] = buf[k++]; }
+         *
+         * cuyo "&&" es lo unico que separa un renglon largo de escribir
+         * fuera de ese array. Cambiandolo por un "||" el banco entero
+         * seguia en verde: lo encontro la pasada de mutantes de la revision
+         * a fondo del 08/11.
+         *
+         * Y no es un caso de laboratorio: el fichero de bancos se EDITA en
+         * un PC, a mano, y ahi nadie cuenta los caracteres.
+         *
+         * Se pide 40 y tienen que quedar 13 (BANCO_NOM_MAX - 1).
+         */
+        banco_init();
+        {
+            static const char k_largo[] =
+                "nombre,1,RADIOS DE ONDA CORTA DE TODO EL MUNDO\n"
+                "1,1,9690000,1,2,100,4000,0\n";
+            banco_de_csv(k_largo, (uint32_t)(sizeof k_largo - 1U));
+            di("un nombre larguisimo del fichero se corta al tope",
+               strlen(banco_nombre(0U)) == (size_t)(BANCO_NOM_MAX - 1U), 0);
+            di("y lo que queda es el principio del nombre",
+               strncmp(banco_nombre(0U), "RADIOS DE OND",
+                       (size_t)(BANCO_NOM_MAX - 1U)) == 0, 0);
+        }
 
         /* Y uno con el renglon roto no se lleva por delante lo demas. */
         banco_init();
         di("un renglon de nombre roto se salta",
-           (banco_de_csv("nombre,\nnombre,9,x\nnombre\n"
-                         "1,1,9690000,1,2,100,4000,0\n", 60U)
+           (banco_de_csv(k_roto, (uint32_t)(sizeof k_roto - 1U))
             && banco_usadas(0U) == 1U), 0);
     }
 
@@ -336,6 +410,59 @@ int main(void)
         s_buf[n] = '\0';
         di("el fichero dice 9000 y no 5", strstr(s_buf, ",9000,") != 0, 0);
         di("y la cabecera lo llama paso_hz", strstr(s_buf, "paso_hz") != 0, 0);
+
+        /*
+         * UN INDICE DE PASO QUE NO EXISTE - 08/11/2026.
+         *
+         * paso_a_hz() se guarda las espaldas con
+         *
+         *     if (s_pasos_hz == 0 || idx >= s_pasos_n) { return 0UL; }
+         *
+         * y ese ">=" es lo unico que separa un indice fuera de sitio de
+         * leer la tabla una posicion mas alla. Cambiandolo por un ">" -o
+         * sea dejando pasar justo el indice PASOS_N, el primero que no
+         * existe- el banco entero seguia en verde: no habia ni un caso que
+         * grabase una memoria con un paso fuera de la tabla. Lo encontro
+         * la pasada de mutantes de la revision a fondo del 08/11.
+         *
+         * Llegar aqui no hace falta corromper nada raro: basta con un
+         * MEM.CSV de una radio que tenga mas pasos que esta, o un fichero
+         * editado a mano, que es como se usan estos ficheros.
+         *
+         * Se prueba el borde exacto, PASOS_N, porque el de mas alla ya lo
+         * cazaba cualquier cosa.
+         *
+         * Y SE PRUEBA CON UN CEBO, no mirando si sale un cero. Esto hay que
+         * explicarlo porque la primera version de este caso NO VALIA: se
+         * limitaba a comprobar que el fichero decia 0, y leer una posicion
+         * de mas tambien daba 0 -lo que hubiera detras resulto ser cero- o
+         * sea que pasaba con el fallo puesto. Un caso que aprueba las dos
+         * versiones no comprueba nada, que es la leccion del "? 1 : 1" de
+         * sim/dirlleno.c.
+         *
+         * Asi que la tabla que se le da tiene UNA POSICION MAS de la que se
+         * declara, con un numero imposible dentro. Si paso_a_hz() se sale,
+         * ese numero aparece en el fichero y no hay forma de confundirlo.
+         */
+        {
+            static uint32_t k_cebo[PASOS_N + 1U];
+            uint8_t ip;
+
+            for (ip = 0U; ip < PASOS_N; ip++) { k_cebo[ip] = k_pasos[ip]; }
+            k_cebo[PASOS_N] = 987654UL;      /* el cebo: ningun paso vale eso */
+
+            banco_init();
+            banco_pasos_pon(k_cebo, PASOS_N);   /* le digo que son PASOS_N */
+            memset(&m, 0, sizeof m);
+            m.hz = 1008000UL;
+            m.modo = 2U;
+            m.paso = PASOS_N;        /* el primero que NO esta en la tabla */
+            banco_graba(0U, 0U, &m);
+            n = banco_a_csv(s_buf, sizeof s_buf);
+            s_buf[n] = '\0';
+            di("un paso fuera de la tabla no se lee de la posicion de al lado",
+               strstr(s_buf, "987654") == 0, 0);
+        }
 
         /* Un fichero VIEJO, con el paso como indice: un numero pequeño
          * tiene que entenderse como indice y no como hercios. */

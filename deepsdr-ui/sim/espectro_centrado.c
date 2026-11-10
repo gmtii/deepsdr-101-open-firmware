@@ -66,6 +66,26 @@ int main(void)
 
     nco_init();
     nco_freq(&osc, 24000.0f, FS);
+    /*
+     * LA FASE A CERO, Y NO ES ADORNO - 08/11/2026.
+     *
+     * nco_freq() pone el INCREMENTO y nada mas: la fase la deja como
+     * estaba. En el firmware eso no se nota porque todos los nco_t son
+     * variables de fichero y arrancan a cero solas, pero aqui `osc` es
+     * una variable local, o sea basura de la pila, y nco_mezcla() se
+     * ponia a leer la tabla del seno con una fase que nadie habia
+     * escrito. Diez millones de lecturas de memoria sin inicializar en
+     * una sola pasada del banco.
+     *
+     * No falseaba el resultado -el indice sale de los 10 bits altos, asi
+     * que cae dentro de la tabla igual, y lo que se mide aqui es tiempo-
+     * pero es comportamiento indefinido, y sobre todo TAPA: un banco que
+     * grita diez millones de veces bajo valgrind es un banco donde ya no
+     * se ve el error de verdad el dia que lo haya. ncotest.c si llamaba a
+     * nco_fase_cero() en sus cuatro casos; este se habia quedado sin.
+     * Encontrado con valgrind en la cuarta pasada de la revision a fondo.
+     */
+    nco_fase_cero(&osc);
 
     for (n = 0; n < N; n++) {
         g_i[n] = 1000.0f * cosf(6.2831853f * 0.1f * (float)n);
@@ -122,6 +142,7 @@ int main(void)
         nco_t o2;
         double sum_i = 0.0, sum_q = 0.0, mod;
         nco_init();
+        nco_fase_cero(&o2);   /* local: la pila no viene a cero. Ver arriba */
         /*
          * EL SIGNO ES EL DE LA RADIO, NO EL QUE PARECE - 13/10/2026.
          *

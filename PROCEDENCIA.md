@@ -207,7 +207,7 @@ El patrón del proyecto siempre fue el mismo: leer la referencia para entender e
 algoritmo, escribir el código propio, y dejar escrito en la cabecera qué se miró
 y qué no se copió.
 
-### La cadena de HFDL — 32 ficheros, referencia `dumphfdl`
+### La cadena de HFDL — 34 ficheros, referencia `dumphfdl`
 
 [dumphfdl](https://github.com/szpajder/dumphfdl), de Tomasz Lemiech, es
 **GPL-3.0-or-later**. Los ficheros `User/hfdl_*.c/.h` citan su `src/hfdl.c`,
@@ -228,7 +228,7 @@ Lo que dicen las cabeceras, y hay que leerlo entero antes de opinar:
 - Varias piezas se resolvieron **distinto** a propósito, con el porqué medido:
   el preámbulo, el ecualizador y el AGC están escritos con constantes propias.
 
-Aun así, treinta y dos ficheros que citan un proyecto GPL en sus cabeceras es
+Aun así, treinta y cuatro ficheros que citan un proyecto GPL en sus cabeceras es
 lo primero que va a mirar cualquiera que llegue al repositorio.
 
 ### `User/ecualiz.h` — referencia `sigutils` (LGPLv3)
@@ -303,7 +303,7 @@ da con este inventario**, porque es la más estricta de todas las de arriba:
 |---|---|---|
 | `Ft8Lib/` | MIT | Permisiva: se puede meter en una obra AGPL sin pedir nada. Lo único que pide es que **el aviso viaje con el código**, y eso falta. |
 | Tablas de `constants.h`, de WSJT-X | GPL-3.0 | La propia GPLv3, en su **artículo 13 («Use with the GNU Affero General Public License»)**, da permiso expreso para combinar una obra suya con una obra bajo AGPLv3 y distribuir el resultado. |
-| Los 32 ficheros de HFDL, escritos contra `dumphfdl` | GPL-3.0-**or-later** | Igual que arriba, y además el «or later» deja la puerta abierta de par en par. Son reimplementación documentada, así que la pregunta ni siquiera debería llegar a plantearse; si alguien la plantea, la respuesta ya está escrita y además la licencia la cubre. |
+| Los 34 ficheros de HFDL, escritos contra `dumphfdl` | GPL-3.0-**or-later** | Igual que arriba, y además el «or later» deja la puerta abierta de par en par. Son reimplementación documentada, así que la pregunta ni siquiera debería llegar a plantearse; si alguien la plantea, la respuesta ya está escrita y además la licencia la cubre. |
 | `sigutils`, de `ecualiz.h` | LGPL-3.0 | No se usó ni una línea, y está escrito en la cabecera. No hay nada que encajar. |
 | `Firmware/`, `CMSIS/` | GigaDevice / ARM | Se usan tal cual, con sus avisos. |
 | `rm68120_exmc.c`, la tabla del panel | Apache-2.0 (Espressif) | Permisiva y **compatible en esta dirección**: Apache-2.0 se puede incorporar a una obra GPLv3/AGPLv3; al revés no. Pide que el aviso viaje con el código, y viaja. |

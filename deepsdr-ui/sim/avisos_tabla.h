@@ -5,6 +5,8 @@
 static const char *const k_avisos[] = {
     "192 kHz no cabe: vuelvo a 96",
     "192 kHz does not fit: back to 96",
+    "9600 NECESITA 96 kHz: MIRA RATE",
+    "9600 NEEDS 96 kHz: SEE RATE",
     "GUARDANDO OTRA FOTO",
     "SAVING ANOTHER PICTURE",
     "EL FAX YA SE GUARDA SOLO",

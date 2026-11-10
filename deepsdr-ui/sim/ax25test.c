@@ -198,6 +198,54 @@ int main(void)
                   "origen, destino, repetidor y SSID salen en su sitio");
         comprueba(strstr(g_txt, "!4025.12N/00341.45W>Prueba") != NULL,
                   "y los datos salen enteros");
+        /*
+         * Y EN SU SITIO EXACTO, NO "por ahi dentro" - 08/11/2026.
+         *
+         * El strstr() de arriba dice que los datos ESTAN, no DONDE. Y la
+         * diferencia importa: ax25_trama_dbg() se salta dos bytes -el de
+         * control y el PID, que son maquinaria del enlace y no texto- con
+         * un "p = p + 2". Cambiando ese mas por un menos, los datos siguen
+         * saliendo enteros, con DOS BYTES DE BASURA DELANTE, y el strstr
+         * los encuentra igual: el banco se quedaba en verde. Lo encontro
+         * la pasada de mutantes de la revision a fondo del 08/11.
+         *
+         * Con la linea entera comparada letra a letra ya no hay sitio
+         * donde esconder dos bytes.
+         */
+        comprueba(strcmp(g_txt,
+                         "EA4HEW-9>APRS,WIDE1-1:"
+                         "!4025.12N/00341.45W>Prueba\n") == 0,
+                  "y el renglon entero es exactamente el que toca");
+        ax25_stop();
+    }
+
+    printf("\n2b. una carga util CON ESPACIOS\n");
+    {
+        /*
+         * POR QUE HACE FALTA ESTE CASO - 08/11/2026.
+         *
+         * ax25_trama_dbg() cambia por un punto todo lo que no sea
+         * imprimible, con "(c >= 32U && c < 127U)". El 32 es el ESPACIO, o
+         * sea el borde justo: dejandolo fuera -">" en vez de ">="- todos
+         * los espacios de un comentario de APRS saldrian como puntos.
+         *
+         * Y no lo cazaba nadie, porque la unica carga util del banco era
+         * "!4025.12N/00341.45W>Prueba", que no lleva ni un espacio. Un
+         * comentario de APRS de verdad casi siempre lleva.
+         */
+        static uint8_t d2[AX25_TRAMA_MAX];
+        uint16_t n2 = trama_ui(d2, "EA4HEW", 9, "APRS", 0, "WIDE1",
+                               "!4025.12N/00341.45W>En ruta a Madrid 73");
+
+        ax25_start((float)FS);
+        g_n = 0;
+        ax25_trama_dbg(d2, n2);
+        recoge();
+        printf("    %s", g_txt);
+        comprueba(strcmp(g_txt,
+                         "EA4HEW-9>APRS,WIDE1-1:"
+                         "!4025.12N/00341.45W>En ruta a Madrid 73\n") == 0,
+                  "los espacios salen como espacios y no como puntos");
         ax25_stop();
     }
 

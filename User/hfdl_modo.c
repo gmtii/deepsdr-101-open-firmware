@@ -3550,11 +3550,27 @@ void hfdl_modo_simbolo(float ih, float qh, float i_sym, float q_sym)
         if (st == HFDL_PREAMBLE_LOCKED && !prekey_arma()) {
             s_pk_sin_armar++;   /* solo se apunta: ya no se tira */
         }
-        if (0) {
-            s_pk_sin_armar++;
-            hfdl_preamble_sync_reset(&e->preambulo);
-            return;
-        }
+        /*
+         * AQUI HABIA UN "if (0)" - borrado el 08/11/2026.
+         *
+         * Cuando se quito la decision de tirar el enganche, el cuerpo
+         * viejo -otro s_pk_sin_armar++, el hfdl_preamble_sync_reset() y
+         * el return- se dejo puesto detras de un "if (0)" en vez de
+         * borrarlo. El compilador lo tiraba, o sea que no costaba ni un
+         * byte, pero el fichero contaba otra cosa de la que hacia: el
+         * contador parecia subir dos veces, y el comportamiento retirado
+         * seguia ahi a un caracter de volver -cambiar ese 0 por un 1-.
+         *
+         * Es la misma regla que persigue tools/interruptores_check.py en
+         * los #define: lo que no vale es que el codigo y lo que dice el
+         * codigo digan cosas distintas. Lo encontro clang con
+         * -Wunreachable-code en la tercera pasada de la revision a fondo;
+         * gcc con los avisos de este proyecto no lo veia.
+         *
+         * Lo que se quiso conservar esta conservado y explicado en el
+         * comentario de arriba: la MEDIDA se queda -hfdl_modo_sin_armar()
+         * sigue contando lo que se habria tirado-, la decision no.
+         */
         if (st == HFDL_PREAMBLE_LOCKED) {
             /*
              * UN PRE-KEY, UN ENGANCHE - 14/10/2026.

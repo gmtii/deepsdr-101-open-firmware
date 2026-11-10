@@ -178,7 +178,7 @@ def los_ficheros_que_pide_el_make(raiz):
     POR QUE - 13/10/2026.
 
     Ordenando la carpeta para publicarla, GD32F450VE_FLASH.ld -el guion
-    del enlazador, sin el cual no se compila NADA- acabo dentro de docs\.
+    del enlazador, sin el cual no se compila NADA- acabo dentro de docs/.
     Y no lo dijo nadie: raiz_check.py solo mira las rutas que nombran los
     makefiles DEL SIMULADOR, y copias_check.py solo mira los ficheros que
     estan duplicados en los dos arboles. El .ld no es ninguna de las dos

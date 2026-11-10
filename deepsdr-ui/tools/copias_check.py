@@ -58,10 +58,24 @@ def pares(raiz_fw, raiz_sim):
     # cat_vuelta.ps1 se añade el 03/11/2026: habia DOS copias y nadie las
     # miraba, asi que la de aqui se quedo atras sin que saltara nada. Es el
     # mismo fallo que trajo aqui a mando_check.py.
+    #
+    # aire_iq.py se añade el 08/11/2026, en la revision a fondo: estaba
+    # duplicado byte a byte y sin vigilar, o sea esperando a separarse.
+    #
+    # Y UN AVISO PARA QUIEN AMPLIE ESTA LISTA. En tools/ y en
+    # deepsdr-ui/tools/ hay otros dos nombres repetidos -mapa_pack.py y
+    # prestamo_check.py- que NO son copias: son herramientas DISTINTAS que
+    # se llaman igual. Meterlas aqui no las mantendria al dia, las
+    # destruiria, porque "sincronizar" es copiar una encima de la otra.
+    # local.mk lo dice del prestamo ("Y EL OTRO prestamo_check, EL DE LA
+    # RAIZ"), y ahora tambien esta dicho aqui, que es donde se mira la
+    # lista.
     for n in ("emisoras_pack.py", "datos_pack.py", "icao24_recorta.py",
               "emisoras_check.py", "icao24.py", "novedades_check.py",
               "mando_check.py", "cat_vuelta.ps1", "aprs_hora_check.py",
               "sstv_modos_check.py",
+              "ps1_check.py",
+              "aire_iq.py",
               "paises_xy.csv", "sitios_xy.csv"):
         orig = os.path.join(raiz_fw, "tools", n)
         if os.path.isfile(orig):

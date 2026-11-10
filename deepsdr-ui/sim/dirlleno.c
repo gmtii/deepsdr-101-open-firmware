@@ -65,6 +65,32 @@ static void ocupa(uint32_t k, const char *n11)
     e[28] = 0U; e[29] = 0U; e[30] = 0U; e[31] = 0U;
 }
 
+/*
+ * UNA ENTRADA DE FICHERO DE VERDAD - 08/11/2026.
+ *
+ * ocupa() escribe el nombre y pone a cero el primer cluster y el tamaño,
+ * que es lo que hace falta para OCUPAR una ranura. Pero eso no es un
+ * fichero: una entrada con el primer cluster a cero es una entrada sin
+ * datos, y spi_flash_fichero_cabeza() la rechaza a proposito -mira que el
+ * cluster este entre 2 y el ultimo- porque un fichero sin primer cluster
+ * no tiene cabecera que reescribir.
+ *
+ * Esta la usa el caso 2, que SI quiere un fichero. Ver el comentario de
+ * ese caso.
+ */
+static void ocupa_real(uint32_t k, const char *n11, uint16_t cluster,
+                       uint32_t bytes)
+{
+    uint8_t *e = &g_chip[raiz() + k * 32U];
+    ocupa(k, n11);
+    e[26] = (uint8_t)(cluster & 0xFFU);
+    e[27] = (uint8_t)((cluster >> 8) & 0xFFU);
+    e[28] = (uint8_t)(bytes & 0xFFU);
+    e[29] = (uint8_t)((bytes >> 8) & 0xFFU);
+    e[30] = (uint8_t)((bytes >> 16) & 0xFFU);
+    e[31] = (uint8_t)((bytes >> 24) & 0xFFU);
+}
+
 static uint32_t ranura_de(const char *n11)
 {
     uint32_t k;
@@ -107,17 +133,37 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Las dieciseis primeras, ocupadas. Un pendrive con historia llega a
-     * esto solo. */
-    for (k = 0U; k < 16U; k++) {
+    /*
+     * EL DIRECTORIO SE LLENA SEGUIDO, SIN AGUJEROS - 08/11/2026.
+     *
+     * Antes se ocupaban las dieciseis primeras ranuras y se dejaba
+     * PANT007.BMP sola en la 53, con treinta y siete ranuras a 0x00 en
+     * medio. Y eso NO es un directorio de verdad: en FAT, un 0x00 en el
+     * primer byte de una entrada significa "aqui se acaba el directorio y
+     * detras no hay nada mas". Lo escriben asi todos: al borrar se pone
+     * 0xE5, que quiere decir "esta libre pero sigue mirando", y las
+     * ranuras se reparten de la mas temprana en adelante, asi que un
+     * hueco de 0x00 en medio no lo deja ninguno.
+     *
+     * Montado con el agujero, lo que de verdad se estaba probando era lo
+     * que hace el driver ante un volumen imposible, no si la busqueda
+     * llega al sector 3. Ahora se llenan las 53 ranuras seguidas y
+     * PANT007.BMP va en la 53, que cae en el sector 3 igual que antes: la
+     * pregunta de este banco -"¿se mira la raiz ENTERA o solo su primer
+     * sector?"- se contesta igual, y ademas sobre un disco que puede
+     * existir.
+     */
+    for (k = 0U; k < 3U * 16U + 5U; k++) {
         char n[12];
         sprintf(n, "VIEJO%03u   ", (unsigned)k);
         ocupa(k, n);
     }
-    /* Y un fichero de verdad mas alla, para las pruebas 2 y 3. */
-    ocupa(3U * 16U + 5U, "PANT007 BMP");
+    /* Y un fichero de verdad detras, para las pruebas 2 y 3. De verdad
+     * quiere decir CON primer cluster: ver ocupa_real(). */
+    ocupa_real(3U * 16U + 5U, "PANT007 BMP", 2U, 4096UL);
 
-    printf("\n  con las 16 primeras ranuras ocupadas\n");
+    printf("\n  con las %u primeras ranuras ocupadas\n",
+           (unsigned)(3U * 16U + 6U));
 
     /* 1. Que quepa, y donde. */
     if (!spi_flash_reserva("PANT008 ", "BMP", FOTO, &addr, &porque)) {
@@ -132,12 +178,35 @@ int main(int argc, char **argv)
 
     /* 2. Que se siga leyendo lo que hay mas alla. */
     {
-        uint8_t tmp[64];
-        /* No tiene datos, pero encontrarla o no es lo que se mide: si no la
-         * encontrara, spi_flash_recorta() sobre ella tampoco haria nada. */
-        (void)tmp;
+        /*
+         * ESTE CASO NO COMPROBABA NADA - arreglado el 08/11/2026.
+         *
+         * Estaba escrito asi:
+         *
+         *     ... spi_flash_fichero_cabeza(...) == 0U ? 1 : 1, 0);
+         *
+         * O sea que llamaba a la funcion, tiraba el resultado y le pasaba
+         * un 1 al comparador. Pasaba siempre, dijera lo que dijera la
+         * funcion. Y encima se llama "un fichero del sector 3 se
+         * encuentra", que es justo lo que NO estaba mirando. Un caso que
+         * no puede fallar no es una prueba: es una linea verde de adorno
+         * que ademas tapa el hueco, porque quien lea la lista cuenta un
+         * banco de mas. Lo caza gcc con -Wduplicated-branches, en la
+         * tercera pasada de la revision a fondo.
+         *
+         * Al ponerle la comprobacion de verdad, FALLABA. Y no por la
+         * radio: la entrada que montaba el banco tenia el primer cluster
+         * a cero -ocupa() lo pone a cero- y spi_flash_fichero_cabeza()
+         * rechaza eso a proposito, porque un fichero sin primer cluster
+         * no tiene cabecera que reescribir. O sea que el apaño de "? 1 :
+         * 1" estaba tapando un montaje mal hecho, no un fallo del
+         * firmware. Con ocupa_real() la entrada es un fichero y el caso
+         * mide lo que dice su nombre: que la busqueda llega al sector 3 y
+         * no se queda en el primero, que es de lo que va este banco
+         * entero.
+         */
         di("un fichero del sector 3 se encuentra",
-           spi_flash_fichero_cabeza("PANT007 ", "BMP", &addr) == 0U ? 1 : 1, 0);
+           spi_flash_fichero_cabeza("PANT007 ", "BMP", &addr) != 0U, 0);
     }
 
     /* 3. El contador de nombres. */

@@ -18,6 +18,685 @@ ordered by date, does not spare the detail, and is not published.
 
 ---
 
+## V6.71 · 2026-11-10
+
+### Qué cambia
+
+**Los ajustes volvían a salir como estaban: `CONFIG.CSV` no se guardaba.**
+
+- Avisado por un usuario del repositorio al pasar de la V6.25 a la V6.58:
+  **los ajustes dejaron de guardarse**. Con un detalle que resulta ser la
+  clave: **`MEM.CSV` sí se guardaba**, en el mismo disco y por el mismo
+  camino.
+- Era una **confusión de unidades**. Dos comprobaciones del driver medían
+  el fichero *en sectores de 512 bytes* y lo comparaban con una cuenta de
+  *clusters de verdad*. Mientras un cluster fueron 512 bytes las dos daban
+  lo mismo; desde que la radio formatea con **clusters de 4 kB**, no. Y
+  entonces `CONFIG.CSV`, que mide 2.048, salía «cuatro» por un lado y
+  «uno» por el otro: **no podía cuadrar nunca**. `MEM.CSV`, por debajo de
+  512 bytes, cuadraba siempre. Ahí estaba entera la diferencia entre los
+  dos ficheros.
+- Arrastraba tres cosas: el guardado suave no se usaba **jamás** —cada
+  guardado bloqueaba el bucle principal 176 ms—; eso se leyó el 01/11 como
+  «la cadena de clusters está rota» y se curó subiendo el antirrebote del
+  autoguardado **de 3 a 30 segundos**, que es lo que hacía que un cambio
+  seguido de apagar se perdiera; y la reparación de arranque **borraba y
+  reescribía `CONFIG.CSV` en cada encendido**, para nada.
+- Arreglado: las tres cuentas usan el tamaño de cluster del volumen, **el
+  antirrebote vuelve a 3 segundos** y, si la reparación de arranque no
+  consigue reescribir el fichero que acaba de borrar, **ahora lo dice** en
+  vez de callarse. El guardado pasa de 176 ms de tirón a 35 vueltas del
+  bucle de 256 bytes.
+- Ningún banco lo veía porque todos corrían sobre un disco de **un sector
+  por cluster**, donde la cuenta mala acierta por casualidad. El banco
+  nuevo formatea con el formateador de la radio antes de preguntar.
+
+**La flash sube 136 bytes** (490.416, quedan 1.104 libres).
+
+### What's new
+
+**Settings kept coming back unchanged: `CONFIG.CSV` was not being saved.**
+
+- Reported by a user after moving from V6.25 to V6.58: **settings stopped
+  being saved**. With one detail that turned out to be the key: **`MEM.CSV`
+  was saved fine**, on the same disk and through the same path.
+- It was a **unit mix-up**. Two checks in the driver measured the file *in
+  512-byte sectors* and compared that against a count of *real clusters*.
+  While a cluster was 512 bytes both agreed; since the radio formats with
+  **4 kB clusters**, they don't. So `CONFIG.CSV`, which is 2,048 bytes,
+  came out as "four" on one side and "one" on the other: it **could never
+  match**. `MEM.CSV`, under 512 bytes, always matched. That was the whole
+  difference between the two files.
+- It dragged three things along: the smooth save was **never** used — every
+  save blocked the main loop for 176 ms; on 01/11 that was read as "the
+  cluster chain is broken" and cured by raising the autosave debounce
+  **from 3 to 30 seconds**, which is what made a change followed by a
+  power-off get lost; and the boot-time repair **deleted and rewrote
+  `CONFIG.CSV` on every single boot**, for nothing.
+- Fixed: all three counts now use the volume's cluster size, **the debounce
+  is back to 3 seconds**, and if the boot repair cannot rewrite the file it
+  just deleted, **it now says so** instead of staying quiet. A save goes
+  from one 176 ms stall to 35 passes of 256 bytes.
+- No bench caught it because they all ran on a **one-sector-per-cluster**
+  disk, where the wrong arithmetic happens to be right. The new bench
+  formats with the radio's own formatter before asking.
+
+**Flash grows by 136 bytes** (490,416, leaving 1,104 free).
+
+---
+
+## V6.70 · 2026-11-09
+
+### Qué cambia
+
+**Un modo nuevo: APRS9K6, el AX.25 de 9.600 bits por segundo.**
+
+- **En 145,825 MHz no está sólo la ISS.** Digipiten cinco satélites, y
+  cuatro de ellos —la ISS, IO-86, NO-44 y SONATE-2— van a 1.200 baudios:
+  ésos ya se oían. El quinto, **KNACKSAT-2, va a 9.600** y hasta hoy no
+  había forma de oírlo, porque 9.600 no son dos tonos sino FSK directa con
+  la banda base aleatorizada: el decodificador de siempre no tenía nada que
+  medir.
+- Sirve además para **Marina en 145,925** y **GRBBeta en 145,935**, que
+  también digipiten a 9.600. Los demás digipetidores de 9.600 están en
+  436 MHz, fuera del alcance de la radio.
+- **Pide 96 kHz.** A 9.600 baudios hacen falta diez muestras por bit, y con
+  la casilla RATE en 48 kHz salen cinco. En ese caso el modo **no arranca y
+  lo dice en pantalla**, en vez de quedarse encendido decodificando nada —
+  que es lo mismo que ver en pantalla que no hay tráfico—.
+- El filtro de canal se abre solo a 9 kHz, como ya hacía el AIS: con el de
+  voz los flancos se redondean hasta cerrar el ojo.
+- **Y cuesta la mitad que el de 1.200**: 3,3 % de cada segundo contra
+  6,1 %, corriendo ocho veces más rápido. No es magia — el de 1.200 se paga
+  dos correladores de tono y éste no tiene tonos que correlar.
+
+**La flash sube 860 bytes** (490.280, quedan 1.240 libres).
+
+**Importante: esto no se ha probado en antena.** Funciona en el banco con
+señal fabricada, ruido, desintonía y Doppler; lo que haga con un satélite
+de verdad está por ver.
+
+### What's new
+
+**A new mode: APRS9K6, AX.25 at 9,600 bits per second.**
+
+- **145.825 MHz is not just the ISS.** Five satellites digipeat there, and
+  four of them — the ISS, IO-86, NO-44 and SONATE-2 — run at 1,200 baud:
+  those you could already hear. The fifth, **KNACKSAT-2, runs at 9,600**
+  and until today there was no way to hear it, because 9,600 is not two
+  tones but direct FSK with a scrambled baseband: the old decoder had
+  nothing to measure.
+- It also works for **Marina on 145.925** and **GRBBeta on 145.935**, which
+  digipeat at 9,600 too. The other 9,600 digipeaters are on 436 MHz, out of
+  the radio's reach.
+- **It needs 96 kHz.** At 9,600 baud you need ten samples per bit, and with
+  the RATE cell at 48 kHz you only get five. In that case the mode **does
+  not start and says so on screen**, rather than staying on and decoding
+  nothing — which looks exactly like no traffic.
+- The channel filter opens up to 9 kHz by itself, as AIS already did: with
+  the voice one the edges round off until the eye closes.
+- **And it costs half what the 1,200 one costs**: 3.3 % of each second
+  against 6.1 %, running eight times faster. No magic — the 1,200 one pays
+  for two tone correlators and this one has no tones to correlate.
+
+**Flash grows by 860 bytes** (490,280, leaving 1,240 free).
+
+**Important: this has not been tested on the air.** It works on the bench
+with a synthesised signal, noise, tuning error and Doppler; what it does
+with a real satellite remains to be seen.
+
+---
+
+## V6.69 · 2026-11-09
+
+### Qué cambia
+
+**La pantalla negra después de guardar una captura.**
+
+- **En APRS, al guardar una foto de la pantalla el hueco del panel se
+  quedaba negro**, y sólo volvía al tocar donde estaría el botón Borrar —que
+  tampoco se veía, porque vive justo ahí—. Le pasaba igual a RTTY, CW,
+  NAVTEX, PSK31, DSC, el paquete de HF, el SSTV, el fax y HELL.
+- Al acabar la foto la radio reconstruye la pantalla, y eso le devuelve la
+  franja de arriba, el espectro y la barra de botones. **Lo de en medio
+  no**: ese hueco lo pinta cada modo a su manera y hay que avisarle. Se
+  avisaba **sólo** a los ocho modos de panel entero (FT8, HFDL, WSPR, AIS,
+  ALE, JTTY, STANAG e IDENT), que eran los únicos que se veían bien.
+- **Y buscando ésa salió otra**: al cerrar un menú encima de la imagen,
+  HELL recibía el aviso del fax en vez del suyo, así que su cinta tampoco
+  se repintaba.
+- Las dos son el mismo fallo de siempre —una lista de modos escrita a mano
+  a la que le falta uno, y van siete—, así que esta vez **la lista se ha
+  quitado de en medio**: vive en un solo sitio y una comprobación
+  automática exige que los nombre a todos.
+- **La flash sube 56 bytes** (489.420).
+
+### What's new
+
+**The black screen after saving a screenshot.**
+
+- **In APRS, saving a picture of the screen left the panel area black**,
+  and it only came back when you tapped where the Clear button would be —
+  which wasn't visible either, because it lives right there. The same
+  happened in RTTY, CW, NAVTEX, PSK31, DSC, HF packet, SSTV, fax and HELL.
+- After the picture the radio rebuilds the screen, which brings back the
+  top strip, the spectrum and the button bar. **Not the middle**: that area
+  is painted by each mode in its own way and has to be told. It was telling
+  **only** the eight full-panel modes (FT8, HFDL, WSPR, AIS, ALE, JTTY,
+  STANAG and IDENT) — which is why those were the ones that looked right.
+- **Looking for that one turned up another**: when a menu closed over an
+  image, HELL got the fax's notification instead of its own, so its strip
+  wasn't repainted either.
+- Both are the same old bug — a hand-written list of modes with one
+  missing, and that makes seven — so this time **the list has been taken
+  out of the picture**: it lives in a single place, and an automatic check
+  demands that it name every one of them.
+- **Flash grows by 56 bytes** (489,420).
+
+---
+
+## V6.68 · 2026-11-08
+
+### Qué cambia
+
+**La radio va más desahogada, y en un caso mucho más.** No hay nada nuevo
+que se vea: lo que hay es trabajo que se hacía y no hacía falta.
+
+- **El identificador de señales (IDENT, y STANAG en Auto) se comía el 85 %
+  de la CPU con la banda vacía. Ahora se come el 37 %.** La rutina que mira
+  si una raya del espectro sobresale del ruido recorría cuatrocientas
+  casillas preguntándole a cada una a qué distancia estaba del centro, y esa
+  distancia no depende de lo que se oye: sólo de la casilla. Con la banda
+  vacía el espectro se llena de falsos candidatos y se repetía esa cuenta
+  quinientas sesenta veces por ventana, doce veces por segundo. Da
+  **exactamente el mismo resultado**, comprobado bit a bit contra la versión
+  anterior en 470.456 casos y contra las nueve grabaciones de referencia.
+- **WSPR ya no deja la pantalla muerta tres segundos y medio cada dos
+  minutos.** Cuando no hay nadie transmitiendo, el decodificador agota su
+  presupuesto de búsqueda entero de un tirón, y durante ese rato nadie
+  miraba el táctil. Ahora lo mira cada pocos milisegundos. La
+  decodificación no cambia en nada.
+- **Pintar texto cuesta la mitad.** Una cifra del dial pasa de 37.682 a
+  18.165 instrucciones y la franja de arriba entera de 21,3 a 18,7 ms. El
+  bucle que dibuja cada letra preguntaba punto por punto si ese punto cabía
+  en la pantalla, y la respuesta es la misma para toda la fila. Los píxeles
+  que salen son **idénticos**, comprobados uno a uno.
+- **APRS baja del 7,5 % al 6,6 %** de cada segundo: llamaba dos veces por
+  muestra, a 96 kHz, a una función que se puede poner en línea.
+
+**La flash sube 644 bytes** (489.364), casi todos del identificador.
+
+Y seis bancos nuevos que miden todo esto en un Cortex-M4 simulado
+instrucción a instrucción, tres de ellos dedicados a demostrar que lo que
+sale es lo mismo que salía antes.
+
+### What's new
+
+**The radio has more headroom, and in one case a great deal more.** Nothing
+new to see: what there is is work that was being done and wasn't needed.
+
+- **The signal identifier (IDENT, and STANAG in Auto) was eating 85 % of the
+  CPU on an empty band. It now eats 37 %.** The routine that decides whether
+  a spectral line stands out from the noise walked four hundred bins asking
+  each one how far it was from the centre, and that distance doesn't depend
+  on what you're hearing: only on the bin. On an empty band the spectrum
+  fills with false candidates and that work was repeated five hundred and
+  sixty times per window, twelve windows a second. It gives **exactly the
+  same result**, checked bit for bit against the previous version over
+  470,456 cases and against the nine reference recordings.
+- **WSPR no longer freezes the screen for three and a half seconds every two
+  minutes.** With nobody transmitting, the decoder burns its whole search
+  budget in one go, and during that time nothing was reading the touch
+  panel. It now reads it every few milliseconds. Decoding is unchanged.
+- **Drawing text costs half as much.** A dial digit goes from 37,682 to
+  18,165 instructions and the whole top strip from 21.3 to 18.7 ms. The
+  loop that draws each letter asked, point by point, whether that point fit
+  on screen — and the answer is the same for the whole row. The pixels it
+  produces are **identical**, checked one by one.
+- **APRS drops from 7.5 % to 6.6 %** of each second: it was calling a
+  function twice per sample, at 96 kHz, that can be inlined.
+
+**Flash grows by 644 bytes** (489,364), nearly all of it the identifier.
+
+Plus six new benches that measure all of this on a simulated Cortex-M4,
+instruction by instruction — three of them dedicated to proving that what
+comes out is what came out before.
+
+---
+
+## V6.67 · 2026-11-08
+
+### Qué cambia
+
+**Una revisión a fondo del proyecto entero, de principio a fin.** No hay
+nada nuevo que se vea: lo que hay son **veintitantos fallos arreglados**,
+ninguno de ellos visible desde la radio, y la caja de herramientas apretada
+para que no se vuelvan a colar.
+
+Lo que se arregló, en corto:
+
+- **Cinco guardianes que decían «todo correcto» sin haber mirado nada.** Si
+  les dabas una ruta equivocada —o una carpeta vacía— recorrían cero
+  ficheros y terminaban en verde. Ahora salen con error y dicen que no
+  saben dónde mirar.
+- **Un banco de la cascada que sólo dibujaba la mitad de las líneas** en la
+  velocidad más rápida, y el arreglo correspondiente.
+- **Comprobaciones que no comprobaban nada**: una que se llamaba a sí misma
+  `? 1 : 1` y aprobaba siempre, y otra que le daba a la función seis bytes
+  de memoria que no eran suyos.
+- **Un banco que echaba una moneda al aire** en cada tanda, con el umbral
+  dentro del propio temblor de la medida.
+- **Siete agujeros de cobertura** encontrados estropeando el código a
+  propósito y mirando si algún banco se enteraba.
+- **El cargador de arranque** pasa ahora los mismos avisos del compilador
+  que el firmware, que es donde menos gracia hace un `else if` muerto.
+- **Dos números publicados que habían dejado de ser verdad**, uno de ellos
+  en el fichero que contesta la pregunta de licencia.
+
+Y un banco nuevo que le mete basura a los tres sitios por donde entran
+bytes que no escribe la radio: `CONFIG.CSV`, el fichero de bancos y el
+cable del ordenador. Uno de esos tres —el que lee tus ajustes— no lo
+compilaba **ningún** banco hasta hoy.
+
+- **La flash sube 8 bytes** (488.720), y es el único coste de toda la
+  revisión: una función de inicialización de HFDL que se dejaba un campo
+  sin escribir.
+- **Y un fallo que metió la propia revisión, encontrado al repasarla**:
+  `make -C boot` dejó de compilar el cargador —entraba, pasaba los avisos
+  nuevos y salía en verde sin generar nada— porque el objetivo nuevo quedó
+  delante de `all` y se convirtió en el objetivo por defecto. Arreglado con
+  un `.DEFAULT_GOAL` explícito.
+
+### What's new
+
+**A deep review of the whole project, end to end.** Nothing new to see:
+what there is are **twenty-odd bugs fixed**, none of them visible from the
+radio, and the toolbox tightened so they can't creep back.
+
+In short:
+
+- **Five guards that reported "all correct" without having looked at
+  anything.** Given a wrong path — or an empty folder — they walked zero
+  files and finished green. They now exit with an error.
+- **A waterfall bench that only drew half the lines** at the fastest
+  setting, plus the matching fix.
+- **Checks that checked nothing**: one written as `? 1 : 1`, which always
+  passed, and another handing the function six bytes of memory that
+  weren't its own.
+- **A bench that was flipping a coin** every run, its threshold inside the
+  measurement's own jitter.
+- **Seven coverage holes** found by deliberately breaking the code and
+  seeing whether any bench noticed.
+- **The bootloader** now gets the same compiler warnings as the firmware.
+- **Two published numbers that had stopped being true**, one of them in the
+  file that answers the licence question.
+
+Plus a new bench that feeds rubbish to the three doors where bytes the
+radio didn't write come in: `CONFIG.CSV`, the banks file and the computer's
+cable. One of those three — the one that reads your settings — had **no**
+bench compiling it until today.
+
+- **Flash grows by 8 bytes** (488,720), the only cost of the whole review:
+  one HFDL init function that was leaving a field unwritten.
+- **And one bug the review itself introduced, caught while re-checking it**:
+  `make -C boot` stopped building the bootloader — it ran, passed the new
+  warnings and exited green without producing anything — because the new
+  target landed ahead of `all` and became the default goal. Fixed with an
+  explicit `.DEFAULT_GOAL`.
+
+---
+
+## V6.66 · 2026-11-06
+
+### Qué cambia
+
+**La cascada en bucle viene PUESTA.** La V6.65 la entregó apagada, detrás de
+un interruptor que había que ir a buscar a la ventana de Información.
+
+Eso es un arreglo que no arregla nada hasta que alguien lo enciende, y se
+entregó así justo después de que el usuario dijera que no iba a andar
+probando interruptores. **El fallo es de la entrega.**
+
+- **El interruptor se queda**, para poder volver a la cascada desplazada
+  de siempre con un toque en Información.
+- **No sube ni un byte de flash ni de RAM**: lo único que cambia es el
+  valor inicial de una variable.
+
+### What's new
+
+**Waterfall loop mode now ships ON.** V6.65 shipped it off, behind a toggle
+you had to go and find in the Information window.
+
+That is a fix that fixes nothing until someone switches it on, and it
+shipped that way right after the user said he was not going to go around
+flipping switches. **The fault is in the delivery.**
+
+- **The toggle stays**, so the old scrolling waterfall is one tap away in
+  the Information window.
+- **Not one byte of flash or RAM**: the only change is a variable's initial
+  value.
+
+---
+
+## V6.65 · 2026-11-06
+
+### Qué cambia
+
+**La cascada en bucle: escribe 756 puntos al panel por línea nueva en vez de
+54.432.** Interruptor nuevo en la ventana de Información, «Cascada en
+bucle».
+
+Y es el arreglo del siseo, no otro mando para probar. La cadena de medidas:
+
+- **No es audio perdido.** Los cuatro contadores a cero en las dos
+  pantallas, el margen del buffer de salida plano al 45%. Medido.
+- **No es el tiempo que tarda cada escritura.** Barrido del bus de 4 a 15
+  ciclos: cada escritura 2,4 veces más larga, la vuelta un 45% más lenta,
+  **el siseo igual**. Medido.
+- **Son las escrituras por segundo.** Es lo único que cambia la velocidad de
+  la cascada, que es lo único que mueve el siseo.
+
+Y la cascada escribe **las 72 filas enteras cada vez que llega UNA línea**,
+porque al desplazarse ninguna fila de la pantalla sigue enseñando lo mismo.
+En bucle no se desplaza: la línea nueva se escribe en su sitio y nada más se
+mueve.
+
+Contado en un banco nuevo, `sim/panel_trafico.c`, con el código de dibujo de
+verdad:
+
+```
+  configuración                        escrituras/s     %
+  ------------------------------------------------------
+  cascada desplazada, rápida            2.568.705    100
+  cascada desplazada, lenta               658.230     26     <- lo que ya sabías
+  cascada EN BUCLE, rápida                416.225     16
+  espectro solo, sin cascada              385.305     15
+  el menú abierto                               0      0
+```
+
+**En bucle y a toda velocidad se queda a un punto y medio de no tener
+cascada**, y por debajo de lo que consigue ponerla lenta — sin perder ni un
+fotograma.
+
+**Lo que se paga es cómo se ve**: en vez de deslizarse, la imagen se queda
+quieta y hay una línea de escritura que la recorre. Por eso va con
+interruptor y no puesto a la fuerza.
+
+### What's new
+
+**Waterfall loop mode: 756 pixel writes per new line instead of 54,432.**
+New toggle in the Information window, "Waterfall loop".
+
+And this is the hiss fix, not another knob to try. The chain of
+measurements:
+
+- **It is not lost audio.** All four counters zero on both screens, output
+  buffer margin flat at 45%. Measured.
+- **It is not how long each write takes.** Sweeping the bus from 4 to 15
+  cycles made each write 2.4× longer and the loop 45% slower, **and the
+  hiss unchanged**. Measured.
+- **It is writes per second.** Which is the only thing waterfall speed
+  changes, and waterfall speed is the only thing that moves the hiss.
+
+And the waterfall writes **all 72 rows every time ONE line arrives**,
+because when it scrolls, not one screen row still shows what it showed
+before. In loop mode nothing scrolls: the new line is written in its place
+and nothing else moves.
+
+Counted in a new bench, `sim/panel_trafico.c`, against the real drawing
+code:
+
+```
+  configuration                          writes/s      %
+  ------------------------------------------------------
+  scrolling waterfall, fast             2,568,705    100
+  scrolling waterfall, slow               658,230     26     <- what you knew
+  LOOP waterfall, fast                    416,225     16
+  spectrum only, no waterfall             385,305     15
+  menu open                                     0      0
+```
+
+**Loop mode at full speed lands a point and a half from having no waterfall
+at all**, below what slowing it down achieves — without losing a frame.
+
+**What it costs is how it looks**: instead of scrolling, the image stays put
+and a write line sweeps through it. That is why it is a toggle and not
+forced.
+
+---
+
+## V6.64 · 2026-11-06
+
+### Qué cambia
+
+**La tanda apunta en qué posición están los dos mandos que mueven el
+tráfico al panel.** Son 48 bytes de firmware, y es lo único que faltaba.
+
+Porque la primera tanda con `DA;` dio un **resultado negativo limpio**: los
+cuatro contadores de avería salieron **cero en las 35 muestras, en las dos
+pantallas**, y el margen del buffer de salida plano al 45% de 1024,
+idéntico con espectro y sin él. **El siseo no es audio perdido ni el DMA
+quedándose seco.** La hipótesis que el propio comentario de `gd32_i2s.h`
+señalaba —el blit robándole SRAM al audio— queda refutada con su propio
+contador.
+
+Lo que sí lo mueve, probado de oído: **la velocidad de la cascada sí, el
+brillo no.** O sea que escala con el tráfico al panel.
+
+- **Y los dos mandos ya existían**: la velocidad de la cascada en Ajustes y
+  el tiempo de dato del bus EXMC en la ventana de Información. Lo que
+  faltaba no era el mando, era que la tanda **apuntase** en qué posición
+  estaba cada uno. Sin eso, un barrido hecho a dedo sobre 35 filas es una
+  tanda perdida.
+- **`cat_vuelta.ps1` agrupa solo por la pareja (bus, cascada)** y saca lo
+  que cuesta cada posición en microsegundos de volcado. El barrido a dedo
+  se convierte en tabla.
+
+Es la misma lección del bit del NCO y del bit del menú, por tercera vez:
+**una medida en la que no consta el estado de la radio no puede refutar
+nada.**
+
+### What's new
+
+**The run now records which position the two knobs that drive panel traffic
+are in.** It is 48 bytes of firmware, and it was the only thing missing.
+
+Because the first run with `DA;` gave a **clean negative**: all four fault
+counters came out **zero across 35 samples, on both screens**, and the
+output buffer's margin flat at 45% of 1024, identical with and without the
+spectrum. **The hiss is not lost audio, nor the DMA running dry.** The very
+hypothesis `gd32_i2s.h`'s own comment pointed at — the blit stealing SRAM
+from the audio — is refuted by its own counter.
+
+What does move it, confirmed by ear: **waterfall speed yes, brightness no.**
+So it scales with panel traffic.
+
+- **And both knobs already existed**: waterfall speed in Settings and the
+  EXMC data setup time in the Information window. What was missing was not
+  the knob but the run **recording** where each one was. Without that, a
+  sweep done by finger across 35 rows is a wasted run.
+- **`cat_vuelta.ps1` now groups by the (bus, waterfall) pair** on its own
+  and reports what each position costs in microseconds of blit. The
+  by-finger sweep becomes a table.
+
+Same lesson as the NCO bit and the menu bit, for the third time: **a
+measurement that does not state the radio's condition cannot refute
+anything.**
+
+---
+
+## V6.63 · 2026-11-06
+
+### Qué cambia
+
+**Una orden de CAT nueva, `DA;`, para medir el camino del audio por el
+cable.** Es un instrumento, no un arreglo: el usuario oye un siseo en FM que
+desaparece al entrar en el menú principal, y hasta hoy no había forma de
+mirarlo sin tener la radio delante y un dedo en la pantalla de Información.
+
+- **Los contadores ya existían todos.** Lo que faltaba era poder leerlos.
+- **Son dos averías distintas y hay que saber cuál.** La **entrada**: la
+  interrupción llega tan tarde que las dos banderas del DMA están puestas y
+  se pierde media captura (`tarde`), o el periférico se queda sin sitio
+  (`over`). La **salida**: el I2S se queda sin palabra que mandar (`under`).
+- **Y el sospechoso tiene nombre desde octubre.** El comentario de
+  `gd32_i2s.h` dice de `under`: *«la que sube si algo le roba acceso a la
+  SRAM al DMA del audio — el blit de la pantalla, el IPA»*. Que es, palabra
+  por palabra, lo que el síntoma propone.
+- **Y una tercera cosa que no es avería sino margen.** `hmin`/`hmax` dicen
+  dónde cae la escritura dentro de la mitad del buffer. Los dos altos = se
+  está llegando al final del presupuesto. Eso avisa **antes** de que se
+  rompa nada.
+
+El estado de la radio va también en `DA;`, aunque `DD;` ya lo lleve: el bit
+del menú es la variable del experimento, y **una medida en la que no consta
+el estado de la radio no puede refutar nada**.
+
+**Y `cat_vuelta.ps1` reparte la tanda sola.** No por quieto/moviendo como
+las del arrastre, sino por en qué pantalla estabas, que lo dice la propia
+radio. Se toma una tanda seguida, se entra en el menú a la mitad, y el
+veredicto sale repartido.
+
+**Más una red nueva: `tools/ps1_check.py`.** En esta máquina no hay
+PowerShell, así que un fallo de sintaxis en el script no salía hasta tener
+el cable puesto. Y se coló uno escribiendo esto mismo: un acento grave
+dentro de comillas dobles, que en PowerShell es la escapada. Ahora
+`make comprueba` lo mira.
+
+### What's new
+
+**A new CAT command, `DA;`, to measure the audio path over the cable.** This
+is an instrument, not a fix: the user hears a hiss on FM that disappears on
+entering the main menu, and until today there was no way to look at it
+without the radio in front of you and a finger on the Information screen.
+
+- **The counters all existed already.** What was missing was being able to
+  read them.
+- **These are two different faults and you need to know which.** The
+  **input**: the interrupt arrives so late that both DMA flags are set and
+  half a capture is lost (`tarde`), or the peripheral runs out of room
+  (`over`). The **output**: the I2S runs out of words to send (`under`).
+- **And the suspect has had a name since October.** The comment in
+  `gd32_i2s.h` says of `under`: *"the one that rises if something steals
+  SRAM access from the audio DMA — the screen blit, the IPA"*. Which is,
+  word for word, what the symptom suggests.
+- **Plus a third thing that is margin, not failure.** `hmin`/`hmax` say
+  where the write lands inside the buffer half. Both high = the budget is
+  running out. That warns **before** anything breaks.
+
+The radio's state ships with `DA;` too, even though `DD;` already carries
+it: the menu bit is the variable under test, and **a measurement that does
+not state the radio's condition cannot refute anything**.
+
+**And `cat_vuelta.ps1` splits the run by itself.** Not by still/moving like
+the drag ones, but by which screen you were on, which the radio reports. Take
+one continuous run, enter the menu halfway, and the verdict comes out split.
+
+**Plus a new net: `tools/ps1_check.py`.** There is no PowerShell on this
+machine, so a syntax error in the script did not show up until the cable was
+connected. And one slipped in while writing this: a backtick inside double
+quotes, which in PowerShell is the escape character. `make comprueba` now
+looks for it.
+
+---
+
+## V6.62 · 2026-11-05
+
+### Qué cambia
+
+**Una cabecera de SSTV leída a duras penas ya no bloquea la corrección por
+ritmo.** Salió midiendo el umbral de señal/ruido que pidió un usuario del
+proyecto, y es un fallo que estaba desde que existe la detección automática.
+
+- **La paridad caza un bit malo, no dos.** Hay una franja de unos tres
+  decibelios —entre 18 y 21 dB de señal/ruido— donde la cabecera **no se
+  calla: dice otro modo**, con la paridad cuadrando. Medido con veinte
+  semillas por punto: pasa en el 5 al 15% de los intentos, y salieron Robot
+  36, Robot 72 y Martin 2.
+- **Y mentir era peor que callarse**, porque un modo que viene de la
+  cabecera tiene prohibido que el ritmo lo corrija. A 20,7 dB sin cabecera
+  salían 89 renglones recuperados por ritmo; a 18,7 con una cabecera
+  mentirosa, 191 renglones con error 106 de 255. **Con mejor señal, peor
+  foto.**
+- **El arreglo no es rechazarla.** Exigir un margen mínimo funciona —a 50 Hz
+  no miente ni una vez— pero se lleva por delante lecturas buenas: a 23 dB
+  bajaba de 19 aciertos de 20 a 14. Cambiar un fallo por otro no es
+  arreglar.
+- **Lo que se hace es no bloquear.** Una cabecera con los ocho bits holgados
+  manda, como siempre. Una que pasa la paridad raspando pone el modo igual
+  —es la mejor pista que hay— pero deja que el ritmo la desautorice si los
+  sincronismos dicen otra cosa.
+
+Fotos que acaban con el modo equivocado, sobre 300 intentos:
+
+```
+  antes .... 8
+  ahora .... 1      y sin perder ni una lectura buena
+```
+
+**Y de paso, el umbral que se preguntaba.** No es un número, son tres, y
+están a 8–9 dB unos de otros (cifras en S/N total y, entre paréntesis, en un
+ancho de 3 kHz):
+
+```
+  la cabecera VIS se rompe a ....... 23 dB  (26)
+  la imagen, con el modo puesto:
+      Martin 1 y Scottie 1 ......... 15 dB  (18)
+      PD120 ........................ 17 dB  (20)
+  deja de salir nada:
+      Martin 1 ...................... 3 dB   (6)
+      Scottie 1 ..................... 9 dB  (12)
+      PD120 ........................ 11 dB  (14)
+```
+
+### What's new
+
+**An SSTV header read by the skin of its teeth no longer blocks rhythm
+correction.** It turned up while measuring the signal-to-noise threshold a
+project user asked about, and it has been there since automatic detection
+existed.
+
+- **Parity catches one bad bit, not two.** There is a band of about three
+  decibels — between 18 and 21 dB SNR — where the header **does not stay
+  quiet: it reports a different mode**, with parity checking out. Measured
+  over twenty seeds per point: it happens in 5 to 15% of attempts, and it
+  produced Robot 36, Robot 72 and Martin 2.
+- **And lying was worse than staying quiet**, because a mode that comes from
+  the header is forbidden from being corrected by the rhythm. At 20.7 dB
+  with no header, 89 lines recovered by rhythm; at 18.7 dB with a lying
+  header, 191 lines at error 106 of 255. **Better signal, worse picture.**
+- **The fix is not to reject it.** Demanding a minimum margin works — at
+  50 Hz it never lies — but it costs good reads: at 23 dB it fell from 19
+  hits out of 20 to 14. Trading one bug for another is not a fix.
+- **What it does is not lock.** A header whose eight bits are all
+  comfortable rules, as always. One that scrapes past parity still sets the
+  mode — it is the best clue there is — but lets the rhythm overrule it if
+  the sync pulses say otherwise.
+
+Pictures ending on the wrong mode, out of 300 attempts:
+
+```
+  before ... 8
+  now ...... 1      and not one good read lost
+```
+
+**And the threshold that was asked about.** It is not one number but three,
+and they sit 8–9 dB apart (figures in total SNR and, in brackets, in a 3 kHz
+bandwidth):
+
+```
+  the VIS header breaks at ......... 23 dB  (26)
+  the image, with the mode set:
+      Martin 1 and Scottie 1 ....... 15 dB  (18)
+      PD120 ........................ 17 dB  (20)
+  nothing comes out at all:
+      Martin 1 ...................... 3 dB   (6)
+      Scottie 1 ..................... 9 dB  (12)
+      PD120 ........................ 11 dB  (14)
+```
+
+---
+
 ## V6.61 · 2026-11-05
 
 ### Qué cambia

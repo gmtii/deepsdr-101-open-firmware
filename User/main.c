@@ -529,6 +529,7 @@ static uint8_t modo_panel_entero(void); /* los modos sin osciloscopio - ver su d
 #define PANEL_CLASE_IMAGEN  2U
 #define PANEL_CLASE_PANEL   3U
 static uint8_t panel_clase(uint8_t activo, uint8_t imagen);
+static void panel_capa_repinta(void);  /* ver su definicion: la lista de clases vive ahi y solo ahi */
 static void capt_poll(void);     /* la captura de pantalla - ver capt_pide() */
 static uint8_t capt_pide(void);
 static void capt_aviso_tick(void);
@@ -3133,49 +3134,52 @@ int main(void)
                  * RTTY: su panel se repinta entero y ya esta. Vale para las
                  * dos transiciones -entrar en FT8 y cerrarse el menu-
                  * porque en las dos lo que hay debajo no sirve. */
-                if (img_now) {
-                    /*
-                     * EL SSTV Y EL FAX SE PINTAN SOLOS, y por eso aqui no
-                     * se dibuja nada: basta con marcarles la zona como
-                     * sucia. sstv_poll() y fax_poll() borran de SPEC_Y
-                     * hasta el final del panel -rtty_scope_panel_reset()-
-                     * y vuelven a sacar su cabecera. Dibujar tambien desde
-                     * aqui era pintar encima de lo suyo.
-                     */
-                    if (sstv_activo()) { sstv_panel_reinicia(); }
-                    else               { fax_panel_reinicia(); }
                 /*
-                 * LA SEXTA LISTA A MANO DE LA MISMA FAMILIA - 19/10/2026.
+                 * ======================================================
+                 * QUIEN REPINTA EL HUECO AL IRSE LO DE ENCIMA.
+                 * ======================================================
                  *
-                 * Aqui habia esto:
+                 * Tres clases comparten este hueco y cada una lo pinta a
+                 * su manera, asi que lo unico que hay que hacer aqui es
+                 * AVISAR A LA QUE ESTE PUESTA. Quien sabe cual es -y la
+                 * unica que lo sabe- es panel_capa_repinta().
                  *
-                 *   ft8_modo_activo() || hfdl_modo_activo() ||
-                 *   wspr_modo_activo() || ais_modo_activo() ||
-                 *   ale_modo_activo() || jtty_modo_activo()
+                 * Aqui habia DOS listas a mano, y a las dos les faltaba un
+                 * modo:
                  *
-                 * y le faltaban STANAG e IDENT, que usan EXACTAMENTE el
-                 * mismo panel -son los dos ultimos que entraron en
-                 * modo_panel_entero()-. O sea que al cerrarse un menu
-                 * encima del panel, esos dos caian en la rama del panel de
-                 * TEXTO y quien repintaba era rtty_scope_panel_reset(),
-                 * que no es el suyo.
+                 *   - la del panel entero, escrita como
+                 *       ft8_modo_activo() || hfdl_modo_activo() || ...
+                 *     se quedo sin STANAG y sin IDENT (19/10/2026), que
+                 *     usan exactamente ese panel: caian en la rama del
+                 *     panel de TEXTO y les repintaba quien no era.
+                 *   - la de imagen, escrita como "si es SSTV, sstv; si
+                 *     no, fax", se quedo sin HELL (visto el 09/11/2026),
+                 *     que tambien pinta una cinta. En HELL se llamaba a
+                 *     fax_panel_reinicia(), que pone a cero el contador de
+                 *     filas DEL FAX y no toca la cinta de HELL.
                  *
-                 * Hasta hoy el sintoma era suave -el panel se repintaba
-                 * entero en cuanto cambiaba cualquier cosa, y en esos dos
-                 * modos cambia varias veces por segundo-, asi que tapaba
-                 * el menu casi al instante y nadie lo veia. Con el
-                 * repintado por renglones sucios deja de taparlo solo: lo
-                 * que no cambia, no se repinta. Un fallo que estaba
-                 * escondido detras de un derroche.
+                 * Y la misma familia, un piso mas arriba, dejaba el hueco
+                 * NEGRO despues de guardar una captura. Ver capt_restaura().
                  *
-                 * La pregunta que contesta esta rama es "¿este modo pinta
-                 * con ft8_panel_draw()?", y eso ya lo sabe
-                 * modo_panel_entero(), que es quien reparte el dibujo unas
-                 * lineas mas abajo. Una lista menos.
+                 * El sintoma de todas fue suave mientras el panel se
+                 * repintaba entero varias veces por segundo. Con el
+                 * repintado por renglones sucios deja de taparse solo: lo
+                 * que no cambia, no se repinta.
                  */
-                } else if (modo_panel_entero()) {
-                    ft8_panel_reinicia();
+                if (img_now || modo_panel_entero()) {
+                    panel_capa_repinta();
                 } else {
+                /*
+                 * LA CLASE OSC ES LA UNICA A LA QUE HAY QUE BORRARLE LA
+                 * ZONA DESDE AQUI. Las otras tres se la borran ellas
+                 * solas en su propio poll; esta no, porque su rejilla se
+                 * pinta por renglones y nadie limpia el fondo.
+                 *
+                 * Por eso este sitio no se puede resolver entero con
+                 * panel_capa_repinta(): hace falta el borrado, y ademas
+                 * hay que elegir entre repintar y BORRAR EL TEXTO, que
+                 * son dos cosas distintas y solo el que llama sabe cual.
+                 */
                 rtty_scope_panel_reset();
                 /* s_img_was: venir de una foto es cambiar de modo aunque
                  * active_now no se haya movido -los dos son digitales-, y
@@ -3203,8 +3207,9 @@ int main(void)
                      * decoded line just because the person checked
                      * MODE/SHIFT/BAUD - repaint only, via
                      * rtty_text_force_redraw() (added 10/08/2026, per
-                     * the project owner, fixing exactly this). */
-                    rtty_text_force_redraw();
+                     * the project owner, fixing exactly this) - que es lo
+                     * que hace panel_capa_repinta() para esta clase. */
+                    panel_capa_repinta();
                 }
                 }
             }
@@ -4393,6 +4398,18 @@ typedef struct {
     uint8_t fax;                /* 1 = ademas enciende el de WEFAX */
     uint8_t sstv;               /* 1 = ademas enciende el de SSTV */
     uint8_t ax25;               /* 1 = ademas enciende el de paquete AX.25 */
+    /*
+     * Y EL 9600 DE LOS SATELITES - 09/11/2026.
+     *
+     * Es un interruptor y no una variante del de arriba porque enciende OTRA
+     * COSA: el mismo ax25.c, si, pero por la puerta directa -sin tonos, con
+     * desaleatorizador- y ademas pidiendo el filtro de canal ANCHO. Las dos
+     * filas llevan NFM y ax25=1, asi que sin un campo propio
+     * demod_mode_entry_active() no sabria cual de las dos esta puesta y se
+     * encenderian las dos a la vez, que es exactamente lo que le pasaba a
+     * las tres filas de SAM antes del 11/10.
+     */
+    uint8_t g3ruh;              /* 1 = AX.25 a 9600 G3RUH, no a 1200 AFSK */
     uint8_t ft8;                /* 1 = ademas enciende el de FT8 */
     uint8_t hfdl;               /* 1 = ademas enciende el de HFDL */
     uint8_t wspr;               /* 1 = ademas enciende el de WSPR */
@@ -4525,8 +4542,8 @@ _Static_assert(MODO_FAM_COUNT <= UIC_CATS,
                "mas familias de modos que sitios en la columna (UIC_CATS)");
 
 static const demod_mode_entry_t k_demod_modes[] = {
-    { "AM", T("Amplitud modulada", "Amplitude mod."),   DEMOD_MODE_AM,  RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
-    { "SAM", T("AM síncrona", "Synchronous AM"),         DEMOD_MODE_SAM, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA }, /* synchronous AM, 21/08/2026 - see sam.h */
+    { "AM", T("Amplitud modulada", "Amplitude mod."),   DEMOD_MODE_AM,  RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
+    { "SAM", T("AM síncrona", "Synchronous AM"),         DEMOD_MODE_SAM, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA }, /* synchronous AM, 21/08/2026 - see sam.h */
     /*
      * LAS DOS MITADES DE SAM - 11/10/2026.
      *
@@ -4560,16 +4577,16 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * tools/modos_check.py, y el banco canto al primer intento.
      */
     { "SAM-U", T("Sólo la banda alta", "SAM, upper only"),
-                                                         DEMOD_MODE_SAM, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA, SAM_BANDA_USB },
+                                                         DEMOD_MODE_SAM, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA, SAM_BANDA_USB },
     { "SAM-L", T("Sólo la banda baja", "SAM, lower only"),
-                                                         DEMOD_MODE_SAM, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA, SAM_BANDA_LSB },
-    { "USB", T("Banda lateral alta", "Upper sideband"),  DEMOD_MODE_USB, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
-    { "LSB", T("Banda lateral baja", "Lower sideband"),  DEMOD_MODE_LSB, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
-    { "NFM", T("FM estrecha", "Narrow FM"),         DEMOD_MODE_NFM, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
-    { "WFM", T("FM ancha", "Wide FM"),            DEMOD_MODE_WFM, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
-    { "CW", T("Telegrafía Morse", "Morse telegraphy"),    DEMOD_MODE_USB, RTTY_VARIANT_NONE,     1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG }, /* ver el comentario de arriba */
-    { "RTTY-L", T("Teletipo en LSB", "Teletype on LSB"),     DEMOD_MODE_LSB, RTTY_VARIANT_NORMAL,   0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG }, /* confirmed correct polarity on LSB, 08/08/2026 */
-    { "RTTY-U", T("Teletipo en USB", "Teletype on USB"),     DEMOD_MODE_USB, RTTY_VARIANT_INVERTED, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG }, /* USB mirrors LSB - see this block's comment */
+                                                         DEMOD_MODE_SAM, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA, SAM_BANDA_LSB },
+    { "USB", T("Banda lateral alta", "Upper sideband"),  DEMOD_MODE_USB, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
+    { "LSB", T("Banda lateral baja", "Lower sideband"),  DEMOD_MODE_LSB, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
+    { "NFM", T("FM estrecha", "Narrow FM"),         DEMOD_MODE_NFM, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
+    { "WFM", T("FM ancha", "Wide FM"),            DEMOD_MODE_WFM, RTTY_VARIANT_NONE,     0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_ANA },
+    { "CW", T("Telegrafía Morse", "Morse telegraphy"),    DEMOD_MODE_USB, RTTY_VARIANT_NONE,     1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG }, /* ver el comentario de arriba */
+    { "RTTY-L", T("Teletipo en LSB", "Teletype on LSB"),     DEMOD_MODE_LSB, RTTY_VARIANT_NORMAL,   0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG }, /* confirmed correct polarity on LSB, 08/08/2026 */
+    { "RTTY-U", T("Teletipo en USB", "Teletype on USB"),     DEMOD_MODE_USB, RTTY_VARIANT_INVERTED, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG }, /* USB mirrors LSB - see this block's comment */
     /*
      * NAVTEX, etapa 25. Otro oyente colgado de USB, como el CW: por debajo
      * es banda lateral alta y lo que anade es el decodificador de SITOR-B.
@@ -4578,18 +4595,18 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * escuchara del reves, el conmutador de navtex.c lo arregla sin cambiar
      * de modo.
      */
-    { "NAVTEX", T("Avisos marítimos", "Marine warnings"),     DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
+    { "NAVTEX", T("Avisos marítimos", "Marine warnings"),     DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
     /*
      * WEFAX, etapa 26. El cuarto oyente colgado de USB. A diferencia de los
      * otros tres, lo que saca no es texto sino una imagen, asi que se lleva
      * el panel entero - ver fax_panel_linea().
      */
-    { "WEFAX", T("Mapas del tiempo", "Weather charts"),      DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_IMG },
+    { "WEFAX", T("Mapas del tiempo", "Weather charts"),      DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_IMG },
     /*
      * SSTV, etapa 27. Como el fax, pero en color y con el sincronismo metido
      * en la propia señal, asi que no hay nada que ajustar a mano.
      */
-    { "SSTV", T("Fotos por radio", "Pictures over radio"),       DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_IMG },
+    { "SSTV", T("Fotos por radio", "Pictures over radio"),       DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_IMG },
     /*
      * Y LA MISMA SSTV, PERO EN FM - 13/10/2026.
      *
@@ -4613,8 +4630,8 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * una foto torcida en uno de los dos sin que se viera por que.
      */
     { "SSTV-FM", T("Fotos por radio (FM)", "Pictures, narrow FM"),
-                                                                 DEMOD_MODE_NFM, RTTY_VARIANT_NONE, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_IMG },
-    { "HELL", T("Texto dibujado", "Drawn text")      ,      DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, MODO_FAM_IMG },
+                                                                 DEMOD_MODE_NFM, RTTY_VARIANT_NONE, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_IMG },
+    { "HELL", T("Texto dibujado", "Drawn text")      ,      DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, MODO_FAM_IMG },
     /*
      * APRS, etapa 28. EL UNICO QUE NO VA EN BANDA LATERAL: el paquete de
      * VHF se transmite en FM estrecha, asi que por debajo lleva NFM y el
@@ -4622,7 +4639,41 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * lateral como a los otros cinco. Ver demod_am.c, donde se engancha en
      * un sitio distinto y por eso.
      */
-    { "APRS", T("Paquete AX.25", "AX.25 packet"),         DEMOD_MODE_NFM, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
+    { "APRS", T("Paquete AX.25", "AX.25 packet"),         DEMOD_MODE_NFM, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
+    /*
+     * Y EL MISMO AX.25 A 9.600, QUE ES LO QUE HAY EN 145,825 ADEMAS DE LA
+     * ISS - 09/11/2026.
+     *
+     * En 145,825 digipiten cinco: la ISS, IO-86, NO-44 y SONATE-2 a 1200
+     * con los tonos de Bell 202 -la fila de arriba- y KNACKSAT-2 a 9.600
+     * FSK con AX.25 G3RUH, que no son tonos sino FSK directa con la banda
+     * base aleatorizada. Mismo fichero, otra puerta de entrada; ver
+     * proceso_directo() en ax25.c.
+     *
+     * Y esta fila vale para dos mas que caen dentro de lo que la radio
+     * alcanza: Marina en 145,925 y GRBBeta en 145,935, las dos con GFSK
+     * 9k6 G3RUH. Los demas digipetidores de 9.600 estan en 436 MHz, o sea
+     * por encima de TUNE_MAX_HZ.
+     *
+     * DOS COSAS QUE NO SON OPCIONALES y que por eso llevan interruptor
+     * propio en vez de ser una variante de la fila de arriba:
+     *
+     *   - ARRANCA POR OTRO SITIO, ax25_start_g3ruh(), que ademas dice que
+     *     NO si la radio esta a 48 kHz: a 9.600 baudios hacen falta diez
+     *     muestras por bit y a 48 salen cinco.
+     *   - PIDE EL FILTRO DE CANAL ANCHO. La hoja del modem de G3RUH pide
+     *     15 kHz de FI -prefiere 20, admite 16- y el de NFM esta
+     *     dimensionado para un canal de voz de 12,5. El que si llega es el
+     *     que ya existe para el AIS: 18 kHz, con 0,02 dB de perdida a
+     *     4,8 kHz y 0,62 a 7,2, donde la hoja admite 4 y 10. Ver ax25.h.
+     */
+    /* La descripcion se queda en "AX.25 a 9600" y no en "Paquete AX.25 a
+     * 9600": lo segundo mide 151 px y la celda densa de la rejilla tiene
+     * 142, o sea que saldria CORTADA en pantalla. Lo caza make modos2, que
+     * existe justo por eso desde que las dos filas de SAM salieron
+     * recortadas el 13/10/2026. */
+    { "APRS9K6", T("AX.25 a 9600", "AX.25 at 9600"),
+                                                          DEMOD_MODE_NFM, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 1U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
     /*
      * El mismo AX.25 por el otro camino: 300 baudios y 200 Hz por banda
      * lateral, en vez de 1200 y Bell 202 por el discriminador de FM. Todo
@@ -4632,13 +4683,13 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * al decodificador le da igual, porque el NRZI vive de los cambios de
      * tono y no de cual es cual.
      */
-    { "PKT300", T("Paquete de HF", "HF packet"),            DEMOD_MODE_LSB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
+    { "PKT300", T("Paquete de HF", "HF packet"),            DEMOD_MODE_LSB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
     /*
      * DSC de onda corta. Va en USB, que es como se escucha el GMDSS en HF.
      * Lleva su propio interruptor y no reusa el del NAVTEX aunque compartan
      * modulacion: lo de detras no se parece en nada. Ver dsc.h.
      */
-    { "DSC", T("Llamada marítima", "Maritime DSC"),         DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, MODO_FAM_DIG },
+    { "DSC", T("Llamada marítima", "Maritime DSC"),         DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, MODO_FAM_DIG },
     /*
      * FT8, etapa 30. Vuelve a banda lateral alta, como los cuatro de arriba,
      * pero se diferencia de todos ellos en una cosa que manda en todo lo
@@ -4654,7 +4705,7 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * Eso es justo lo que hace ft8_modo_stop() al volver: reinicia la
      * cascada, porque lo que hay en ese buffer ya no son pixeles.
      */
-    { "FT8", T("Digital de HF", "HF digital"),         DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
+    { "FT8", T("Digital de HF", "HF digital"),         DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
     /*
      * HFDL, etapa 31. Los datos de los aviones en onda corta.
      *
@@ -4672,7 +4723,7 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * de noche 8.927, 8.942 y 6.559. Es USB, y el ancho de filtro ancho -no
      * hay que centrar nada a mano: el mezclador se busca la subportadora.
      */
-    { "HFDL", T("Datos de aviones", "Aircraft data"),      DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_AIR },
+    { "HFDL", T("Datos de aviones", "Aircraft data"),      DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_AIR },
     /*
      * WSPR, etapa 34. Las balizas de onda corta: 200 mW cruzando un oceano.
      *
@@ -4712,7 +4763,7 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * siguiente que copie la tabla creyendolo le suma 1.500 Hz a todo. ***
      */
 #if WSPR_MODO
-    { "WSPR", T("Balizas de HF", "HF beacons"),         DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
+    { "WSPR", T("Balizas de HF", "HF beacons"),         DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
 #endif
     /*
      * AIS, etapa 35. Los barcos.
@@ -4745,7 +4796,7 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * usuario cuando yo di por hecho que no: AIS va en 160 MHz y la radio
      * llega mas arriba. Era cierto.
      */
-    { "AIS", T("Barcos", "Ships"),                DEMOD_MODE_NFM, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
+    { "AIS", T("Barcos", "Ships"),                DEMOD_MODE_NFM, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
     /*
      * ALE, etapa 36. Quien anda por la banda.
      *
@@ -4770,7 +4821,7 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * indicativo, y hace falta porque ALE no lleva CRC: el Golay corrige
      * hasta tres errores por mitad y, cuando no puede, a veces no se entera.
      */
-    { "ALE", T("Sondeos de HF", "HF soundings"),         DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
+    { "ALE", T("Sondeos de HF", "HF soundings"),         DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
     /*
      * PSK31, etapa 37. Conversacion escrita en 31 hercios.
      *
@@ -4796,7 +4847,7 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * frecuencia medido en hercios con signo - se gira hasta que se acerca
      * a cero.
      */
-    { "PSK31", T("Charla en fase", "Phase-shift chat"),        DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
+    { "PSK31", T("Charla en fase", "Phase-shift chat"),        DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
     /*
      * JTTY, etapa 37. El teletipo nuevo del equipo de WSJT-X, estrenado en
      * la v3.2.0-rc1 de septiembre de 2026.
@@ -4828,7 +4879,7 @@ static const demod_mode_entry_t k_demod_modes[] = {
      * mas o menos en medio del filtro y el receptor la encuentra - dice el
      * desvio en su columna para poder afinar-.
      */
-    { "JTTY", T("Teletipo digital", "Digital teletype"),      DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
+    { "JTTY", T("Teletipo digital", "Digital teletype"),      DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 0U, MODO_FAM_DIG },
 /*
  * STANAG - etapa 40, 02/10/2026.
  *
@@ -4850,7 +4901,7 @@ static const demod_mode_entry_t k_demod_modes[] = {
  * Es USB por debajo porque come de la banda lateral ya diezmada a 12 kHz,
  * igual que FT8, ALE y JTTY. Ver demod_am.c.
  */
-    { "STANAG", T("Módem naval OTAN", "NATO naval modem"), DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, MODO_FAM_DIG },
+    { "STANAG", T("Módem naval OTAN", "NATO naval modem"), DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, MODO_FAM_DIG },
 /*
  * IDENT - 05/10/2026.
  *
@@ -4870,7 +4921,7 @@ static const demod_mode_entry_t k_demod_modes[] = {
  * Es USB por debajo por lo mismo que los otros cuatro: come de la banda
  * lateral ya diezmada a 12 kHz. Ver demod_am.c.
  */
-    { "IDENT", T("¿Qué señal es?", "What signal is this?"), DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, MODO_FAM_DIG }
+    { "IDENT", T("¿Qué señal es?", "What signal is this?"), DEMOD_MODE_USB, RTTY_VARIANT_NONE, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 0U, MODO_FAM_DIG }
 };
 #define DEMOD_MODE_ENTRY_COUNT (sizeof(k_demod_modes) / sizeof(k_demod_modes[0]))
 /*
@@ -7506,6 +7557,7 @@ static uint8_t demod_mode_entry_active(uint8_t i)
                      k_demod_modes[i].fax == wefax_activo() &&
                      k_demod_modes[i].sstv == sstv_activo() &&
                      k_demod_modes[i].ax25 == ax25_activo() &&
+                     k_demod_modes[i].g3ruh == ax25_g3ruh_activo() &&
                      k_demod_modes[i].ft8 == ft8_modo_activo() &&
                      k_demod_modes[i].hfdl == hfdl_modo_activo() &&
                      k_demod_modes[i].wspr == wspr_modo_activo() &&
@@ -12227,7 +12279,17 @@ static void tasa_rf_reaplica(void)
 
     sdr_rx_set_block_hook(0);
 
-    if (ax25_activo() && demod_am_get_mode() == DEMOD_MODE_NFM) {
+    if (ax25_g3ruh_activo()) {
+        /* El de 9.600 tambien cuelga del discriminador, y ademas no vale a
+         * 48 kHz: si la casilla RATE se ha puesto ahi, se apaga y se dice,
+         * en vez de quedarse con el lazo mal configurado y el panel vacio
+         * -que es lo que le paso al AIS el 09/10-. */
+        if (!ax25_start_g3ruh(demod_am_get_active_fs_hz())) {
+            ax25_stop();
+            capt_avisa(tr("9600 NECESITA 96 kHz: MIRA RATE",
+                          "9600 NEEDS 96 kHz: SEE RATE"));
+        }
+    } else if (ax25_activo() && demod_am_get_mode() == DEMOD_MODE_NFM) {
         /* Solo el de VHF. Su audio sale del discriminador de FM y por tanto
          * a la tasa de radiofrecuencia, que es lo que acaba de cambiar. El
          * paquete de HF va por banda lateral, siempre a 12 kHz, y no se
@@ -16818,13 +16880,31 @@ static volatile uint16_t s_wf_lps;      /* lineas por segundo conseguidas */
  * mano tiene el mismo tamaño que la señal que se busca. No se puede medir
  * por fuera. Tiene que contarlo la radio.
  *
- * Asi que se guarda el ultimo valor DISTINTO DE CERO, mas el peor
- * fotograma visto. Con eso se mira el menu, se apunta, se graba el otro
- * cargador y se comparan dos numeros en vez de dos impresiones.
+ * Asi que se guarda el ultimo valor DISTINTO DE CERO. Con eso se mira el
+ * menu, se apunta, se graba el otro cargador y se comparan dos numeros en
+ * vez de dos impresiones.
+ *
+ * AQUI DECIA "mas el peor fotograma visto" - corregido el 08/11/2026.
+ *
+ * Y no era verdad. Habia debajo una "static volatile uint16_t
+ * s_frame_peor_ms" con su comentario -"el fotograma mas largo visto"- que
+ * NO LA ESCRIBIA NI LA LEIA NADIE: ni una linea en todo el arbol. O sea
+ * que el peor fotograma no se guardaba, no salia por ningun sitio, y el
+ * unico rastro que dejaba eran dos bytes de RAM y esta frase prometiendo
+ * un dato que no existe.
+ *
+ * El aviso de gcc que se puso en la V6.66 --Werror=unused-variable, por
+ * el s_gir_suma de la revision del arrastre- NO la cazaba, y conviene
+ * saber por que: gcc no avisa de una variable de fichero declarada
+ * `volatile`, porque `volatile` significa "esto se toca por fuera" y el
+ * compilador se calla. Clang si lo dice. Lo encontro clang en la tercera
+ * pasada de la revision a fondo del 08/11.
+ *
+ * Si algun dia hace falta el peor fotograma, se mide: el sitio es el
+ * mismo donde se calcula s_fps, y la frase vuelve.
  */
 static volatile uint16_t s_wf_lps_vivo;   /* ultimo s_wf_lps != 0 */
 static volatile uint16_t s_fps_vivo;      /* ultimo s_fps != 0 */
-static volatile uint16_t s_frame_peor_ms; /* el fotograma mas largo visto */
 static uint16_t s_wf_lineas;            /* van contadas dentro de este segundo */
 static uint16_t s_wf_lineas_antes;      /* para saber si ESTE fotograma volco */
 /* Fotogramas por segundo, en la misma ventana de un segundo que las lineas.
@@ -18133,6 +18213,91 @@ static void cat_dibujo_lee(cat_dibujo_t *d)
                            | (nr_ss_get_enabled() ? 512UL : 0UL));
 }
 
+/*
+ * Lo que contesta "DA;": el camino del audio. Ver cat_audio_t en cat.h para
+ * el porque y para que es cada cosa.
+ *
+ * LAS DIFERENCIAS SE SACAN CON FOTOS, NO BORRANDO. Estos contadores no son
+ * nuestros - viven en sdr_rx.c y en gd32_i2s.c y los mira tambien la ventana
+ * de Informacion -, asi que ponerlos a cero aqui dejaria aquel renglon
+ * midiendo otra cosa cada vez que alguien preguntara por el cable. Mismo
+ * patron que los tres contadores prestados de "DD".
+ *
+ * Y SI EL CONTADOR DE VERDAD HA BAJADO, la diferencia es cero y se vuelve a
+ * enganchar. Pasa de verdad: tocar el renglon de audio de Informacion llama
+ * a sdr_rx_cuentas_cero() y a gd32_i2s_cuentas_cero(), que es justo lo que
+ * hay que hacer antes de una tanda para que hmin y hmax signifiquen algo.
+ * Sin esta guardia, la resta sin signo se iria a 4.29e9 y la tanda entera
+ * saldria inservible por haber hecho lo correcto.
+ */
+static uint32_t s_da_tarde, s_da_over, s_da_under, s_da_repes;
+
+static uint32_t da_dif(uint32_t ahora, uint32_t *antes)
+{
+    uint32_t d = (ahora >= *antes) ? (ahora - *antes) : 0UL;
+    *antes = ahora;
+    return d;
+}
+
+static void cat_audio_lee(cat_audio_t *a)
+{
+    uint32_t tope;
+
+    if (a == 0) { return; }
+
+    a->tarde = da_dif(sdr_rx_get_tarde(),            &s_da_tarde);
+    a->over  = da_dif(sdr_rx_get_over_count(),       &s_da_over);
+    a->under = da_dif(gd32_i2s_get_tx_under_count(), &s_da_under);
+    a->repes = da_dif(gd32_i2s_get_half_repes(),     &s_da_repes);
+
+    /*
+     * hmin a 0xFFFFFFFF significa "aun no se ha escrito ninguna mitad" (ver
+     * gd32_i2s.h). Se manda como cero y no como el numero gordo, que por el
+     * camino se recortaria a 99999 y se leeria como un margen enorme, que es
+     * exactamente lo contrario de lo que pasa.
+     */
+    a->hmin = gd32_i2s_get_half_min();
+    if (a->hmin == 0xFFFFFFFFUL) { a->hmin = 0UL; }
+    a->hmax = gd32_i2s_get_half_max();
+    a->pal  = gd32_i2s_get_half_palabras();
+
+    /*
+     * LA CARGA, CON EL CONTADOR DEL MODO QUE HAY PUESTO - 06/11/2026.
+     *
+     * Salia 0% en las dos tandas del siseo, y las dos eran de FM ancha. El
+     * motivo: se preguntaba siempre a demod_am_get_last_cycles(), y en WFM
+     * el que cuenta es demod_wfm_get_last_cycles() - el camino es otro -.
+     * Un hueco que sale cero cuando el modo no es el suyo no es un dato
+     * que falte: es un dato que miente, y encima justo en el modo en el
+     * que estabamos midiendo.
+     */
+    tope = carga_tope_ciclos();
+    {
+        uint32_t usados = (demod_am_get_mode() == DEMOD_MODE_WFM)
+                          ? demod_wfm_get_last_cycles()
+                          : demod_am_get_last_cycles();
+        a->carga = (tope != 0UL) ? ((usados * 100UL) / tope) : 0UL;
+    }
+    if (a->carga > 100UL) { a->carga = 100UL; }
+
+    /* Los MISMOS bits que "DD", y a proposito: dos tandas que se comparan
+     * tienen que decir el estado con el mismo alfabeto. */
+    a->estado = (uint32_t)((s_nco_on              ? 1UL : 0UL)
+                           | (s_menu_open         ? 2UL : 0UL)
+                           | (s_dedo_dial         ? 4UL : 0UL)
+                           | (modo_panel_entero() ? 8UL : 0UL)
+                           | (((uint32_t)s_spec_zoom & 0x0FUL) << 4)
+                           | (s_bd_espectro       ? 256UL : 0UL)
+                           | (nr_ss_get_enabled() ? 512UL : 0UL));
+
+    /* Los dos mandos que mueven el trafico al panel. Ver cat_audio_t. */
+    a->bus   = (uint32_t)rm68120_bus_dato();
+    a->wfvel = (uint32_t)s_wf_vel;
+    a->pend  = (uint32_t)rm68120_bus_pendiente();
+    a->ipa   = (uint32_t)(ipa_blit_hay() ? 1U : 0U);
+    a->dma   = (uint32_t)(lcd_dma_hay()  ? 1U : 0U);
+}
+
 static const cat_radio_t k_cat_radio = {
     cat_freq_lee, cat_freq_pon,
     cat_modo_lee, cat_modo_pon,
@@ -18140,7 +18305,8 @@ static const cat_radio_t k_cat_radio = {
     cat_vol_lee, cat_vol_pon,
     cat_ancho_lee,
     cat_diag_lee,
-    cat_dibujo_lee
+    cat_dibujo_lee,
+    cat_audio_lee
 };
 
 static void cat_puente_init(void)
@@ -18192,7 +18358,7 @@ enum { INFO_VERSION = 0, INFO_MICRO, INFO_FLASH,
        INFO_TEMP, INFO_BATT, INFO_TICS, INFO_RTC,
        INFO_XDFU, INFO_XFORMATEAR,
        INFO_XCHIP, INFO_XSERIE, INFO_XFS, INFO_XFORMATO, INFO_XMAPA,
-       INFO_CASCADA,
+       INFO_CASCADA, INFO_XWFB,
        INFO_XSITIO, INFO_XAVIONES, INFO_XBORRACHIP,
        INFO_XIPA, INFO_XDMA, INFO_XBUS, INFO_XPEND, INFO_XFRAME,
        INFO_XVUELTA, INFO_XPOLL2,
@@ -18325,6 +18491,7 @@ static const texto_t k_info_nombres[INFO_COUNT] = {
     T("Formato", "Format"),
     T("Mapa", "Map"),
     T("Cascada", "Waterfall"),
+    T("Cascada en bucle", "Waterfall loop"),
     T("Sitio para fotos", "Room for photos"),
     T("Cargar datos", "Load data"),
     T("Borrar el chip", "Erase whole chip"),
@@ -20300,6 +20467,32 @@ static const char *info_valor(uint8_t id, char *buf, char *pie)
         while (buf[i] != '\0') { i++; }
         buf[i++] = ' '; buf[i++] = 'n'; buf[i++] = 's';
         buf[i] = '\0';
+        return buf;
+    }
+    case INFO_XWFB: {
+        /*
+         * LA CASCADA EN BUCLE, Y CUANTO SE AHORRA. 06/11/2026.
+         *
+         * Se enseña el estado y, al lado, las escrituras al panel que
+         * cuesta cada linea nueva en cada modo. No es decorativo: es el
+         * numero del que va todo esto, y tenerlo delante al tocar el
+         * interruptor es lo que convierte "suena distinto" en una medida.
+         */
+        uint8_t i = 0U;
+        const char *e = waterfall_bucle() ? tr("en bucle", "loop")
+                                          : tr("desplazada", "scrolling");
+        while (e[i] != '\0' && i < 20U) { buf[i] = e[i]; i++; }
+        buf[i] = '\0';
+        {
+            uint8_t j = pie_num_tope(pie, 0U,
+                                     waterfall_bucle()
+                                       ? (uint32_t)WATERFALL_WIDTH
+                                       : ((uint32_t)WATERFALL_WIDTH *
+                                          (uint32_t)WATERFALL_ROWS),
+                                     999999UL);
+            (void)pie_txt(pie, j, tr(" puntos al panel por linea",
+                                     " pixels to panel per line"));
+        }
         return buf;
     }
     case INFO_XPEND: {
@@ -23031,6 +23224,7 @@ static void grid_apply(uint8_t cel)
                 s_usb_hallados = (n == 0U) ? 255U : n;
             }
             else if (id == (uint8_t)INFO_XIPA)      { ipa_blit_pon(!ipa_blit_hay()); }
+            else if (id == (uint8_t)INFO_XWFB)      { waterfall_bucle_pon(!waterfall_bucle()); }
             else if (id == (uint8_t)INFO_XDMA)      { lcd_dma_pon(!lcd_dma_hay()); }
             else if (id == (uint8_t)INFO_XVUELTA) {
                 /*
@@ -23616,7 +23810,19 @@ static void menu_mode_preset_callback(void *widget, ui_event_t event, void *user
          * numero que un dia cambia en un sitio y no en el otro.
          */
         if (k_demod_modes[idx].ax25) {
-            if (k_demod_modes[idx].mode == DEMOD_MODE_NFM) {
+            if (k_demod_modes[idx].g3ruh) {
+                /*
+                 * El de 9.600. Puede decir que NO -a 48 kHz salen cinco
+                 * muestras por bit y hacen falta diez-, y entonces se
+                 * queda apagado en vez de arrancar un lazo que no va a
+                 * decodificar nunca. Ver ax25_start_g3ruh().
+                 */
+                if (!ax25_start_g3ruh(demod_am_get_active_fs_hz())) {
+                    ax25_stop();
+                    capt_avisa(tr("9600 NECESITA 96 kHz: MIRA RATE",
+                                  "9600 NEEDS 96 kHz: SEE RATE"));
+                }
+            } else if (k_demod_modes[idx].mode == DEMOD_MODE_NFM) {
                 ax25_start(demod_am_get_active_fs_hz());
             } else {
                 /* Paquete de HF: el audio sale del camino de banda lateral,
@@ -23727,7 +23933,7 @@ static void menu_mode_preset_callback(void *widget, ui_event_t event, void *user
          * Y es UN SOLO juego de biquads para los tres (NFM, AIS y SSTV-FM),
          * porque los tres son NFM y no pueden estar a la vez.
          */
-        demod_am_chf_ancho((uint8_t)(k_demod_modes[idx].ais
+        demod_am_chf_ancho((uint8_t)((k_demod_modes[idx].ais || k_demod_modes[idx].g3ruh)
                                      || (k_demod_modes[idx].sstv
                                          && k_demod_modes[idx].mode
                                             == DEMOD_MODE_NFM)));
@@ -27640,7 +27846,22 @@ static void ft8_chapa(void)
                 s_ft8_barra[i++] = 'x';
             }
             if (ms >= FT8_BARRA_MS_AVISA) {
-                uint16_t t = (ms > 99900U) ? 99900U : ms;
+                /*
+                 * SIN RECORTE, Y A PROPOSITO - 08/11/2026.
+                 *
+                 * Aqui habia un "(ms > 99900U) ? 99900U : ms". `ms` es
+                 * uint16_t, o sea que no puede valer mas de 65.535 y esa
+                 * comparacion NO ERA CIERTA NUNCA: el compilador la tiraba
+                 * entera y el renglon se quedaba diciendo que recortaba
+                 * algo que no recortaba. Lo caza -Wtype-limits.
+                 *
+                 * El techo lo pone ft8_modo_ms(), que SATURA en 65.535 al
+                 * medir (ver s_ms_dec en ft8_modo.c). Asi que lo peor que
+                 * se puede pintar aqui es "65,5 s": dos cifras y un
+                 * decimal, que es justo lo que admite el ancho de esta
+                 * chapa segun la cuenta de mas arriba.
+                 */
+                uint16_t t = ms;
 
                 i = ft8_punto(s_ft8_barra, i);
                 ft8_num(s_ft8_barra, &i, (int32_t)(t / 1000U));
@@ -31502,19 +31723,26 @@ static void capt_progreso(void)
 static void capt_restaura(void)
 {
     /*
-     * Y EL PANEL DIGITAL, QUE NADIE REPINTA AQUI - 19/10/2026.
+     * Y EL PANEL DE EN MEDIO, QUE NADIE REPINTA AQUI - 19/10/2026,
+     * corregido el 09/11/2026.
      *
      * El cartel de la captura se pinta ENCIMA, justo en medio, que es
-     * donde vive el panel de los modos que se lo llevan entero. Quitarlo
-     * es repintar lo de debajo, y radio_screen_draw() -lo que se llama en
-     * la rama de la radio- no toca ese panel: lo pinta ft8_panel_draw() en
-     * su propio ritmo.
+     * donde vive el panel. Quitarlo es repintar lo de debajo, y
+     * radio_screen_draw() -lo que se llama en la rama de la radio- no toca
+     * ese hueco: lo pinta cada clase de panel a su ritmo.
      *
      * Antes se arreglaba solo por derroche: el siguiente repintado era
      * entero y borraba el cartel. Desde que solo se repintan los renglones
-     * que cambian, hay que decirlo. Ver ui_digi_olvida().
+     * que cambian, hay que decirlo.
+     *
+     * *** Y AQUI PONIA ft8_panel_reinicia(), QUE ES SOLO UNA DE LAS
+     * CUATRO CLASES. *** El usuario lo vio en APRS: guardar una captura
+     * dejaba el hueco NEGRO hasta tocar el boton Borrar, que tampoco se
+     * veia porque vive ahi dentro. APRS pinta rejilla de texto, no panel.
+     * Lo mismo en RTTY, CW, NAVTEX, PSK31, DSC, el paquete de HF, el SSTV,
+     * el fax y HELL. Ver panel_capa_repinta().
      */
-    ft8_panel_reinicia();
+    panel_capa_repinta();
 
     switch (menu_capa()) {
     case MENU_CAPA_QTH:  ui_qth_draw(&s_qth);   break;
@@ -34170,6 +34398,68 @@ static uint8_t panel_clase(uint8_t activo, uint8_t imagen)
     if (imagen)                { return PANEL_CLASE_IMAGEN; }
     if (modo_panel_entero())   { return PANEL_CLASE_PANEL; }
     return PANEL_CLASE_OSC;
+}
+
+/*
+ * ======================================================================
+ * *** LO DE ENCIMA SE HA IDO: REPINTA LO TUYO - 09/11/2026. ***
+ * ======================================================================
+ *
+ * LO QUE PASABA: en APRS, despues de guardar una captura de pantalla, el
+ * hueco del panel se quedaba NEGRO. Volvia al tocar donde estaria el boton
+ * Borrar, que tampoco se veia porque vive en ese mismo hueco.
+ *
+ * Y el camino es este. Al acabar la foto, capt_restaura() llama a
+ * radio_screen_draw(), que empieza con un gfx_fill_screen() a negro y
+ * reconstruye la franja de arriba, el espectro y la barra de botones -por
+ * eso esas tres se ven bien-. Lo que hay en medio NO lo pinta esa funcion:
+ * lo pinta cada clase de panel por su cuenta. Y capt_restaura() llamaba
+ * ademas a ft8_panel_reinicia() para avisar al panel... y SOLO a ese.
+ *
+ * APRS no es de esa clase. APRS es PANEL_CLASE_OSC -rejilla de texto- y su
+ * rejilla, desde que se repinta por renglones sucios, no repinta lo que no
+ * ha cambiado: sin trama nueva, el negro se queda. Tocar el boton invisible
+ * provoca un repintado y por eso "se arregla solo" al tocar.
+ *
+ * LO MISMO LE PASA a RTTY, CW, NAVTEX, PSK31, DSC y el paquete de HF, y a
+ * las tres clases de IMAGEN -SSTV, fax y HELL-, que tampoco se enteraban.
+ *
+ * ======================================================================
+ * Y POR QUE ESTO ES UNA FUNCION Y NO DOS LINEAS EN capt_restaura().
+ * ======================================================================
+ *
+ * Porque es la SEPTIMA vez que en este fichero se escribe a mano la lista
+ * de clases de panel y la septima vez que a una copia le falta un modo. Las
+ * seis anteriores estan contadas en los comentarios de este mismo fichero:
+ * la de digi_panel_active() -que se dejo WSPR, AIS y ALE, tres veces el
+ * mismo olvido y por eso existe tools/panel_check.py-, la del cierre de
+ * menu -que se dejo STANAG e IDENT, 19/10-, y la del boton Borrar -que se
+ * dejo HELL, 08/10-.
+ *
+ * De hecho, buscando esta se encontro OTRA: el reparto del cierre de menu
+ * resuelve la clase IMAGEN con "si es SSTV, sstv; si no, fax", y HELL
+ * tambien es IMAGEN. En HELL se llamaba a fax_panel_reinicia(), que pone a
+ * cero el contador de filas DEL FAX y no toca la cinta de HELL. Esa es la
+ * septima, y se cae sola al tener un solo sitio.
+ *
+ * Asi que la lista vive AQUI y en ningun otro lado. Lo vigila
+ * tools/panel_check.py, que ademas exige que capt_restaura() no nombre a
+ * ninguna clase por su cuenta.
+ *
+ * LO QUE ESTA FUNCION NO HACE, y es la mitad de para que sirve: NO BORRA
+ * NADA. Lo de debajo sigue siendo bueno -el texto decodificado, la cinta de
+ * la imagen, la tabla del panel-; lo unico que se ha perdido son los
+ * pixeles. Para el otro caso -entrar en un modo desde otro, donde lo de
+ * antes ya no vale- estan rtty_text_panel_reset() y compania, que si
+ * borran, y el que llama elige cual de las dos cosas quiere.
+ */
+static void panel_capa_repinta(void)
+{
+    if (sstv_activo())            { sstv_panel_reinicia(); }
+    else if (wefax_activo())      { fax_panel_reinicia(); }
+    else if (hell_activo())       { hell_panel_reinicia(); }
+    else if (modo_panel_entero()) { ft8_panel_reinicia(); }
+    else                          { rtty_text_force_redraw(); }
 }
 
 

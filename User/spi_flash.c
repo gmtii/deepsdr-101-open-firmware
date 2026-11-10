@@ -2961,15 +2961,55 @@ static uint32_t s_async_data_len;
  * exactamente la misma comprobacion que hace el camino rapido ahi abajo,
  * escrita una sola vez y llamada desde los dos sitios.
  */
+/*
+ * ======================================================================
+ * *** Y LOS CLUSTERS SE CUENTAN EN CLUSTERS, NO EN SECTORES - 10/11/2026,
+ * avisado por un usuario: los ajustes dejaron de guardarse. ***
+ * ======================================================================
+ *
+ * Esta funcion y spi_flash_async_save_start() median cuantos clusters
+ * ocupa el fichero DIVIDIENDO POR 512, mientras que cadena_ultimo(), con
+ * la que comparan, cuenta clusters DE VERDAD. Mientras el volumen tuvo un
+ * sector por cluster las dos cuentas daban lo mismo y nadie lo noto.
+ *
+ * Pero el formateador de la propia radio pone clusters de 4 kB desde el
+ * 06/10/2026 -ver formato.c, y ahi esta explicado por que-. En un disco
+ * formateado por la radio:
+ *
+ *     CONFIG.CSV mide 2.048 -> ocupa UN cluster, y la cuenta decia CUATRO
+ *     MEM.CSV    mide ~300  -> ocupa UN cluster, y la cuenta decia UNO
+ *
+ * O sea que para CONFIG.CSV la comparacion NO PODIA CUADRAR NUNCA, y para
+ * MEM.CSV cuadraba siempre. Esa es, entera, la averia que conto el
+ * usuario: las memorias se guardan y los ajustes no. Cualquier fichero de
+ * 512 bytes o menos se libra; los demas no.
+ *
+ * Lo que arrastraba:
+ *
+ *   - el camino suave se negaba SIEMPRE, asi que cada guardado de ajustes
+ *     eran 176 ms bloqueando el bucle principal. El 01/11/2026 eso se leyo
+ *     como "su cadena esta rota" y se curo subiendo el antirrebote de 3 a
+ *     30 segundos. La cadena no estaba rota: la prueba estaba mal;
+ *   - y settings_cadena_repara() borraba y reescribia CONFIG.CSV en CADA
+ *     arranque de CADA radio con el disco formateado por ella misma,
+ *     porque la condicion que mira no podia ser cierta jamas.
+ *
+ * Ningun banco lo veia: sim/ajustes_flash.c corre sobre fat12_vacio.img,
+ * que tiene un sector por cluster. Lo fija ahora sim/cadena_spc.c, que
+ * formatea con el formateador de la radio antes de preguntar.
+ */
 uint8_t spi_flash_cadena_seguida(const char name8[8], const char ext3[3])
 {
     uint32_t dir_off, old_size, cuantos, ultimo, saltos, n;
     uint16_t old_cluster;
 
+    if (!geo_lee()) {
+        return 0U;   /* volumen que no sabemos escribir: no hay nada que decir */
+    }
     if (!dir_find_entry(name8, ext3, &dir_off, &old_cluster, &old_size)) {
         return 0U;   /* no esta: que lo cree quien toque, por el camino normal */
     }
-    n = (old_size + (ROOT_DIR_SECTOR_BYTES - 1U)) / ROOT_DIR_SECTOR_BYTES;
+    n = (old_size + (CLUSTER_BYTES - 1U)) / CLUSTER_BYTES;
     if (n == 0U) { n = 1U; }
 
     if (!cadena_ultimo((uint32_t)old_cluster, &ultimo, &cuantos, &saltos)) {
@@ -2985,11 +3025,19 @@ uint8_t spi_flash_async_save_start(const char name8[8], const char ext3[3],
     uint32_t dir_off;
     uint16_t old_cluster;
     uint32_t old_size;
-    uint32_t new_num_clusters = (len + (ROOT_DIR_SECTOR_BYTES - 1U)) / ROOT_DIR_SECTOR_BYTES;
+    uint32_t new_num_clusters;
     uint32_t old_num_clusters;
     uint32_t i;
     uint32_t first_data_sector;
 
+    /* CLUSTER_BYTES y no 512: ver el comentario de
+     * spi_flash_cadena_seguida(), que llevaba la misma cuenta mal. Y la
+     * geometria se relee aqui, que es donde se usa, porque el volumen
+     * puede haber cambiado por USB desde el guardado anterior. */
+    if (!geo_lee()) {
+        return 0U;
+    }
+    new_num_clusters = (len + (CLUSTER_BYTES - 1U)) / CLUSTER_BYTES;
     if (new_num_clusters == 0U) {
         new_num_clusters = 1U;
     }
@@ -2999,7 +3047,7 @@ uint8_t spi_flash_async_save_start(const char name8[8], const char ext3[3],
     if (!dir_find_entry(name8, ext3, &dir_off, &old_cluster, &old_size)) {
         return 0U; /* no existing entry - not the fast path, caller should create one the normal (blocking) way first */
     }
-    old_num_clusters = (old_size + (ROOT_DIR_SECTOR_BYTES - 1U)) / ROOT_DIR_SECTOR_BYTES;
+    old_num_clusters = (old_size + (CLUSTER_BYTES - 1U)) / CLUSTER_BYTES;
     if (old_num_clusters == 0U) {
         old_num_clusters = 1U;
     }

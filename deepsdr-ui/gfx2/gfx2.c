@@ -104,9 +104,48 @@ uint32_t gfx2_banda_pixeles(void) { return (uint32_t)GFX2_W * (uint32_t)GFX2_BAN
  * Se expande el destino de 565 a 888 replicando bits altos - la misma
  * expansion que hace el panel - se mezcla en 888 y se vuelve a 565. Hacerlo
  * en 565 directamente acumularia error de cuantizacion en cada capa. */
+/*
+ * ======================================================================
+ * *** LO QUE SE PROBO AQUI Y SE QUEDO FUERA - 08/11/2026. ***
+ * ======================================================================
+ *
+ * Cada pixel mezclado paga tres divisiones entre 255 aqui dentro, y en el
+ * binario de la radio son `udiv` de verdad: gcc, para el Cortex-M4, da por
+ * bueno el divisor en un registro antes que la multiplicacion alta. Un
+ * UDIV de este nucleo cuesta entre dos y doce ciclos y una multiplicacion
+ * uno, asi que cambiarlas por (x * 0x8081) >> 23 -que es EXACTAMENTE lo
+ * mismo de 0 a 65535, comprobado valor por valor en
+ * deepsdr-ui/sim/div255.c- parecia regalado.
+ *
+ * Se probo y SE QUITO. El unico instrumento que hay aqui es QEMU con
+ * -icount, que cuenta INSTRUCCIONES y no ciclos: no puede ver lo que
+ * cuesta un udiv. Y en instrucciones el cambio sale PEOR -0x8081 no cabe
+ * en un inmediato, asi que son tres instrucciones contra una- : un relleno
+ * de 200x40 con alfa pasaba de 217.120 a 233.002.
+ *
+ * O sea que lo unico que se podia decir era "la hoja del fabricante dice
+ * que esto corre mas", con la medida diciendo lo contrario. En este
+ * proyecto eso no entra. El dia que haya una medida de reloj por el cable
+ * -como la de tools/cat_vuelta.ps1- se vuelve a mirar; el banco de
+ * div255.c se queda, que la identidad ya esta comprobada.
+ *
+ * Lo que SI se quedo son los dos sitios donde la division sobraba sin
+ * discusion: el nib*255/15 de gfx2_text_uno(), que es nib*17 exacto, y el
+ * alfa opaco de aqui abajo.
+ */
 static inline uint16_t blend(uint16_t dst, gfx2_rgba_t c, uint16_t cov)
 {
-    uint32_t a = ((uint32_t)c.a * cov) / 255u;
+    /*
+     * ALFA OPACO: NI MULTIPLICAR NI DIVIDIR.
+     *
+     * Con c.a = 255 esto es (255*cov)/255, o sea cov, exacto para
+     * cualquier cov de 0 a 255. Y c.a = 255 es el caso NORMAL: la paleta
+     * entera es opaca y lo que gradua la mezcla es la cobertura del
+     * glifo, no la transparencia del color. Se ahorra una multiplicacion
+     * y una division en todos los pixeles de todo el texto.
+     */
+    uint32_t a = (c.a == 255u) ? (uint32_t)cov
+                               : (((uint32_t)c.a * cov) / 255u);
     uint32_t dr, dg, db;
 
     PROF_BLEND();
@@ -1043,17 +1082,71 @@ static int16_t gfx2_text_uno(gfx2_surf_t *s, int16_t cx, int16_t y,
     if (g->w && g->h) {
         const uint8_t *bm = &f->bitmap[g->off];
         int16_t row_bytes = (int16_t)((g->w + 1) / 2);
+        /*
+         * ==============================================================
+         * EL RECORTE EN X, UNA VEZ POR GLIFO - 08/11/2026.
+         * ==============================================================
+         *
+         * El bucle de abajo llamaba a px_blend() por pixel, y px_blend()
+         * vuelve a preguntarse lo mismo cada vez: si la x cae dentro de
+         * la ventana de recorte y si cae dentro de la banda. Dos restas,
+         * cuatro comparaciones y una llamada con su prologo y su epilogo,
+         * por CADA punto de CADA letra. Y la respuesta es la misma para
+         * toda la fila, porque lo unico que cambia es gx.
+         *
+         * Asi que los dos limites se calculan aqui, una vez, y el bucle
+         * de dentro recorre SOLO los puntos que se van a escribir. Es el
+         * mismo recorte con las mismas cuentas -la ventana de gfx2_rec_*
+         * y el ancho de la banda- y pinta exactamente los mismos pixeles
+         * con la misma cobertura: lo unico que desaparece es preguntarlo
+         * sesenta veces por letra.
+         *
+         * La y sigue comprobandose por fila, que ya estaba bien: es una
+         * comparacion por fila, no por punto.
+         *
+         * Medido en deepsdr-ui/m4/m4_dibujo.c, una letra de ui_14.
+         */
+        /*
+         * En int32_t y no en int16_t: la marquesina de RDS pinta su texto
+         * desde x = x1 - rds_off, y ese desplazamiento crece con el
+         * desfile hasta sacar el origen muy a la izquierda. Restarle la
+         * ventana a un origen asi se sale de los 16 bits con signo, y de
+         * ahi saldrian unos limites al reves. Se recortan a [0, g->w] al
+         * final, que son numeros pequeños.
+         */
+        int32_t base = (int32_t)cx + (int32_t)g->bx;  /* x de pantalla de gx=0 */
+        int32_t xlo  = (int32_t)s->x;                 /* el mayor de los dos */
+        int32_t xhi  = (int32_t)s->x + (int32_t)s->w; /* y el menor de estos */
+        int32_t ancho_fila = (int32_t)(base - (int32_t)s->x);
+        int32_t g0, g1;
+
+        if ((int32_t)s_rec_x0 > xlo) { xlo = (int32_t)s_rec_x0; }
+        if ((int32_t)s_rec_x1 < xhi) { xhi = (int32_t)s_rec_x1; }
+
+        g0 = xlo - base; if (g0 < 0) { g0 = 0; }
+        g1 = xhi - base; if (g1 > (int32_t)g->w) { g1 = (int32_t)g->w; }
 
         for (gy = 0; gy < g->h; gy++) {
             int16_t sy = (int16_t)(y + g->by + gy);
+            uint16_t *fila;
+
             if (sy < s->y || sy >= (int16_t)(s->y + s->h)) continue;
-            for (gx = 0; gx < g->w; gx++) {
+            /* El puntero se queda SIEMPRE dentro del buffer: lo que sale
+             * del origen del glifo se suma al indice, no al puntero. Si no,
+             * con el glifo empezando a la izquierda de la banda, esto seria
+             * un puntero fuera de sitio aunque luego nadie lo leyera. */
+            fila = &s->px[(int32_t)(sy - s->y) * s->w];
+            for (gx = (int16_t)g0; gx < (int16_t)g1; gx++) {
                 uint8_t byte = bm[gy * row_bytes + (gx >> 1)];
                 uint8_t nib = (gx & 1) ? (uint8_t)(byte & 0x0F)
                                        : (uint8_t)(byte >> 4);
                 if (nib) {
-                    uint16_t cov = (uint16_t)((nib * 255u) / 15u);
-                    px_blend(s, (int16_t)(cx + g->bx + gx), sy, c, cov);
+                    /* nib*255/15 es nib*17 y punto: 255 es 15 por 17, asi
+                     * que la division es exacta para cualquier nib y no
+                     * hace falta ninguna. Era un `udiv` por pixel. */
+                    uint16_t cov = (uint16_t)(nib * 17u);
+                    int32_t lx = ancho_fila + (int32_t)gx;
+                    fila[lx] = blend(fila[lx], c, cov);
                 }
             }
         }
@@ -1143,6 +1236,51 @@ void gfx2_text_in(gfx2_surf_t *s, int16_t x, int16_t y, int16_t w,
 /* ------------------------------------------------------------------------
  * Waterfall
  * ------------------------------------------------------------------------ */
+
+/*
+ * UNA SOLA FILA DE LA CASCADA - 06/11/2026.
+ *
+ * POR QUE EXISTE, Y ES EL FONDO DEL ASUNTO DEL SISEO.
+ *
+ * gfx2_wf_blit(), aqui abajo, vuelca LAS SETENTA Y DOS FILAS enteras cada
+ * vez que llega UNA linea nueva: 756 x 72 = 54.432 escrituras al panel para
+ * enseñar 756 puntos. No es un derroche evitable con un atajo, es como
+ * funciona una cascada que se desplaza: la fila i de la pantalla enseña en
+ * cada fotograma una fila distinta del historial, asi que no hay ni una que
+ * se pueda dejar como estaba.
+ *
+ * Y ESO IMPORTA MAS QUE EL TIEMPO QUE TARDA. Medido en la radio el
+ * 06/11/2026: el siseo de la FM escala con la velocidad de la cascada -o
+ * sea con cuantos volcados por segundo- y NO con lo que tarda cada
+ * escritura. Un barrido del tiempo de dato del bus de 4 a 15 ciclos dejo
+ * cada escritura 2,4 veces mas larga, la vuelta un 45% mas lenta, y el
+ * siseo igual. Lo que cuenta son las ESCRITURAS POR SEGUNDO, no los
+ * microsegundos que el bus este ocupado.
+ *
+ * Asi que la palanca no es ir mas despacio: es escribir menos. Esta funcion
+ * vuelca una fila y una sola, para la cascada en bucle - ver
+ * waterfall_blit() -, que escribe 756 puntos donde la desplazada escribe
+ * 54.432. Setenta y dos veces menos.
+ */
+void gfx2_wf_fila(int16_t x, int16_t y, int16_t w,
+                  const uint8_t *idx, const uint16_t *cmap)
+{
+    int16_t i;
+
+    /* La banda, como todos los demas y por lo mismo: ver el comentario de
+     * gfx2_wf_blit() aqui debajo, que costo una captura de pantalla morada. */
+    if (gfx2_banda_coge() == (uint16_t *)0) {
+        return;
+    }
+    for (i = 0; i < w; i++) { s_band[i] = cmap[idx[i]]; }
+
+    if (s_chivato) {
+        s_chivato((uint16_t)x, (uint16_t)y, (uint16_t)(x + w - 1), (uint16_t)y);
+    }
+    rm68120_set_window((uint16_t)x, (uint16_t)y, (uint16_t)(x + w - 1), (uint16_t)y);
+    for (i = 0; i < w; i++) { rm68120_dato(s_band[i]); }
+    gfx2_banda_suelta();
+}
 
 void gfx2_wf_blit(int16_t x, int16_t y, int16_t w, int16_t rows,
                   const uint8_t *idx, int16_t stride, int16_t head,

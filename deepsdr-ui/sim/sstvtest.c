@@ -66,30 +66,8 @@ static void guarda_ppm(const char *nombre, int n)
     fclose(f);
 }
 
-/*
- * Error medio por componente entre lo decodificado y el patron.
- *
- * El renglon `y` de lo decodificado corresponde a la linea `y * vdec` de la
- * imagen de verdad: los modos PD grandes tienen mas lineas de las que caben y
- * se pinta una de cada vdec. Comparar sin eso mediria una imagen contra otra
- * desplazada y daria un error enorme aunque todo estuviera bien.
- */
-static double error_medio(int n, uint8_t vdec)
-{
-    double e = 0.0; long m = 0;
-    int y, x, c;
-    for (y = 2; y < n; y++) {
-        for (x = 4; x < (int)SSTV_ANCHO - 4; x++) {
-            uint8_t p[3];
-            patron(x, y * (int)vdec, &p[0], &p[1], &p[2]);
-            for (c = 0; c < 3; c++) {
-                double d = (double)g_img[y][x][c] - (double)p[c];
-                e += (d < 0 ? -d : d); m++;
-            }
-        }
-    }
-    return m ? e / m : 999.0;
-}
+/* error_medio() vive en sim/sstv_genera.h desde el 05/11/2026: lo usan
+ * los dos bancos, y dos copias se desincronizan. */
 
 static void prueba(uint8_t modo, int lineas, double ppm, double sigma,
                    const char *ppmfile, int exigir, double umbral)

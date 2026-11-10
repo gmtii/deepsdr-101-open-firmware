@@ -727,6 +727,28 @@ int main(void)
         comprueba(strcmp(r, "7201") == 0,
                   "un PS en blanco NO tapa el codigo (el agujero de antes)");
 
+        /*
+         * (e2) EL NOMBRE DE ANTES NO PUEDE SEGUIR AHI - 08/11/2026.
+         *
+         * `ps` es un buffer que se queda con el ULTIMO nombre que llego, y
+         * `tiene_ps` es lo que dice si ese nombre sigue valiendo. Cuando la
+         * emisora se pierde, `tiene_ps` baja a cero y el buffer sigue
+         * lleno: si la funcion mirase el buffer en vez de la bandera,
+         * enseñaria "COPE" de una emisora que ya no se esta oyendo, y nadie
+         * lo notaria porque el renglon se ve igual de bien.
+         *
+         * El caso (c) de aqui arriba ya pasa tiene_ps a 0, pero con un
+         * buffer de OCHO ESPACIOS, y eso no distingue nada: entre por donde
+         * entre, el recorte de espacios lo deja en cero igual. Lo encontro
+         * la pasada de mutantes de la revision a fondo del 08/11, cambiando
+         * el "&&" de rds_rotulo() por un "||": el banco entero seguia en
+         * verde. Este caso lo pone rojo.
+         */
+        rds_rotulo(r, (uint8_t)sizeof r, 1U, 0x7201U, 0U, "COPE    ");
+        printf("    PS caducado, con codigo    -> \"%s\"\n", r);
+        comprueba(strcmp(r, "7201") == 0,
+                  "un PS que ya no vale NO se enseña aunque siga en el buffer");
+
         /* (f) Ni una cosa ni la otra: vacio de verdad, que es lo honrado. */
         rds_rotulo(r, (uint8_t)sizeof r, 0U, 0x0000U, 0U, "        ");
         printf("    sin nada                   -> \"%s\"\n", r);

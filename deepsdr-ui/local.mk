@@ -335,6 +335,36 @@ basura: out/basura ; ./out/basura $(SEMILLAS)
 
 comprueba: basura
 
+# ---------------------------------------------------------------------
+# LA MISMA IDEA, POR LAS OTRAS TRES PUERTAS. 08/11/2026.
+# ---------------------------------------------------------------------
+#
+# `basura` mete entradas hostiles por el AUDIO. Pero por el audio no entra
+# todo: CONFIG.CSV, el fichero de bancos y el cable del ordenador traen
+# bytes que NO escribe la radio -los dos ficheros se editan desde un PC- y
+# ninguno de los tres tenia un banco que les metiera basura.
+#
+# Y uno de los tres, User/settings.c, NO LO COMPILABA NINGUN BANCO: es el
+# que lee lo que el usuario ha escrito a mano y el que decide con que
+# arranca la radio. Ver la cabecera de sim/texto_basura.c.
+#
+# Lleva los MISMOS detectores que `basura`, y por el mismo motivo: aqui no
+# se comprueba ningun valor, el veredicto lo dan ellos. Compilado sin
+# ellos el banco se niega a correr y lo dice, en vez de salir en verde sin
+# haber mirado nada.
+#
+# 100.000 vueltas cuestan 4 segundos, asi que caben en cada tanda.
+VUELTAS ?= 100000
+
+out/texto_basura: sim/texto_basura.c $(FIRMWARE)/User/banco.c                   $(FIRMWARE)/User/cat.c $(FIRMWARE)/User/settings.c
+	@mkdir -p out
+	$(CC) -O1 -g $(BASURA_SAN) -Wall -I hostinc -I sim -I sim/gd32shim 	      -I$(FIRMWARE)/User -o $@ $^ -lm
+
+.PHONY: textobasura
+textobasura: out/texto_basura ; ./out/texto_basura $(VUELTAS)
+
+comprueba: textobasura
+
 # Cobertura del manual, y que el manual sea UNO. Ver tools/manual_check.py:
 # existia desde el 06/10, apuntaba a la copia vieja de docs/ y NO LO CORRIA
 # NADIE -no estaba en ningun Makefile-, asi que llevaba dos dias diciendo
@@ -963,6 +993,14 @@ comprueba: aprshora
 sstvmodos: ; python3 tools/sstv_modos_check.py $(FIRMWARE)/User/sstv.c $(FIRMWARE)/User/sstv.h
 comprueba: sstvmodos
 
+# LO POCO QUE SE PUEDE COMPROBAR DE UN .ps1 SIN PowerShell: en esta maquina
+# no hay, asi que un fallo de sintaxis no salia hasta tener la radio
+# delante. Ver tools/ps1_check.py, que lleva los dos fallos que ya se han
+# cometido.
+.PHONY: ps1
+ps1: ; python3 tools/ps1_check.py $(FIRMWARE)/tools/cat_vuelta.ps1 $(FIRMWARE)/tools/cat_prueba.ps1
+comprueba: ps1
+
 # QUE LA RAMA B DEL PANEL NO CAMBIE SIN QUERER - 05/10/2026.
 #
 # Es la rama que usa la radio del usuario. El 05/10 se rehicieron las tres
@@ -1345,6 +1383,45 @@ comprueba: nco
 # ajustes y con su peor valor. Un indicador que desaparece miente por
 # omision, y hasta que esto se midio el del NCO se caia en catorce de los
 # treinta y siete.
+# PINTAR TEXTO: QUE SIGAN SIENDO LOS MISMOS PIXELES - 08/11/2026.
+#
+# El bucle de glifos de gfx2.c llamaba a px_blend() punto por punto, y
+# px_blend() se vuelve a preguntar en cada uno si esa x cae dentro de la
+# ventana de recorte y de la banda. La respuesta es la misma para la fila
+# entera: se calculan los limites una vez por glifo y el bucle recorre solo
+# lo que escribe. Una letra de ui_14 paso de 4.752 a 2.723 instrucciones y
+# la franja de arriba de 4,25 a 3,74 millones.
+#
+# Un limite que se pase por uno es media cifra del dial comida. Este banco
+# lleva dentro el bucle de antes y compara LOS PIXELES, no contadores.
+# Se trae gfx2.c con un #include porque el bucle es interno.
+out/textoigual: sim/texto_igual.c sim/lcd_sim.c gfx2/fonts_data.c \
+                gfx2/gfx2.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) $(GFX2) -I$(FIRMWARE)/User -o $@ \
+	      sim/texto_igual.c sim/lcd_sim.c gfx2/fonts_data.c $(LDLIBS)
+
+.PHONY: textoigual
+textoigual: out/textoigual ; ./out/textoigual
+
+comprueba: textoigual
+
+# Y LA IDENTIDAD QUE SE QUEDO FUERA, QUE IGUAL SIRVE MAÑANA.
+#
+# (x * 0x8081) >> 23 es exactamente x/255 de 0 a 65535, y nib*17 es
+# exactamente nib*255/15. Lo segundo esta puesto en gfx2.c; lo primero se
+# probo y se quito porque en instrucciones sale peor y aqui no hay forma de
+# medir ciclos. El banco se queda: la identidad ya esta comprobada valor a
+# valor y el dia que haya una medida de reloj no hay que volver a pensarla.
+out/div255: sim/div255.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -o $@ sim/div255.c
+
+.PHONY: div255
+div255: out/div255 ; ./out/div255
+
+comprueba: div255
+
 out/chipstest: sim/chipstest.c sim/lcd_sim.c gfx2/gfx2.c gfx2/ui_top.c gfx2/fonts_data.c sim/peores.h $(FIRMWARE)/User/rds_pi.c
 	@mkdir -p out
 	$(CC) $(CFLAGS) $(GFX2) -I$(FIRMWARE)/User -o $@ sim/chipstest.c sim/lcd_sim.c gfx2/gfx2.c gfx2/ui_top.c gfx2/fonts_data.c $(FIRMWARE)/User/rds_pi.c $(LDLIBS)
@@ -2015,6 +2092,26 @@ out/espectrooro: sim/espectro_oro.c sim/lcd_sim.c vendor/gfx.c $(FIRMWARE)/User/
 .PHONY: espectrooro
 espectrooro: out/espectrooro ; ./out/espectrooro && ./out/espectrooro --sinparcial
 
+# CUANTOS PUNTOS SE LE ESCRIBEN AL PANEL. La magnitud con la que escala el
+# siseo de la FM - ver sim/panel_trafico.c -. Cuelga de `comprueba` porque
+# lleva una comprobacion de verdad: que la cascada en bucle escriba una
+# fila y no setenta y dos.
+out/trafico: sim/panel_trafico.c sim/lcd_sim.c vendor/gfx.c \
+             $(FIRMWARE)/User/spectrum.c $(FIRMWARE)/User/waterfall.c \
+             gfx2/gfx2.c gfx2/fonts_data.c
+	@mkdir -p out
+	$(CC) -O2 -Wall -I hostinc -I sim -I gfx2 -I $(FIRMWARE)/User -I vendor -I $(FIRMWARE)/Ft8Lib -o $@ $(FUENTES) $(LDLIBS)
+
+.PHONY: trafico
+trafico: out/trafico ; ./out/trafico
+
+# Entre guardias porque usa vendor/gfx.c, que no esta en un clon: sin esto
+# "make comprueba" muere ahi. Lo caza tools/vendor_check.py, que es quien
+# me lo acaba de parar.
+ifneq ($(wildcard vendor/gfx.c),)
+comprueba: trafico
+endif
+
 ifneq ($(wildcard vendor/gfx.c),)
 comprueba: espectrooro
 endif
@@ -2078,6 +2175,27 @@ out/ajustesflash: sim/ajustes_flash.c sim/w25q_sim.c sim/gd32_pines.c $(FIRMWARE
 ajustesflash: out/fat12_vacio.img out/ajustesflash ; ./out/ajustesflash
 
 comprueba: ajustesflash
+
+# ---------------------------------------------------------------------
+# LA MISMA PREGUNTA, PERO EN EL DISCO QUE FORMATEA LA RADIO (10/11/2026).
+#
+# ajustesflash, ahi arriba, corre sobre out/fat12_vacio.img, que tiene UN
+# SECTOR POR CLUSTER. Ahi una cuenta de clusters hecha dividiendo por 512
+# da el resultado bueno por casualidad. El formateador de la radio pone
+# clusters de 4 kB, y entonces no. Ver la cabecera de sim/cadena_spc.c:
+# ese hueco es por donde se colo la averia de los ajustes que no se
+# guardaban.
+out/cadenaspc: sim/cadena_spc.c sim/w25q_sim.c sim/gd32_pines.c \
+               $(FIRMWARE)/User/formato.c $(FIRMWARE)/User/disco.c \
+               $(FIRMWARE)/User/spi_flash.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -Ihostinc -Isim \
+	      -o $@ $(filter %.c,$^) $(LDLIBS)
+
+.PHONY: cadenaspc
+cadenaspc: out/cadenaspc ; ./out/cadenaspc
+
+comprueba: cadenaspc
 
 # ---------------------------------------------------------------------
 # EL BUFFER QUE LA CASCADA LE PRESTA A FT8 (25/09/2026). Dos mitades:
@@ -2528,6 +2646,45 @@ comprueba: avipant
 out/wsprtest: sim/wspr_pruebas.c $(FIRMWARE)/User/wspr_msg.c $(FIRMWARE)/User/wspr_fano.c
 	@mkdir -p out
 	$(CC) -O2 -Wall -Wextra -I hostinc -I sim -I $(FIRMWARE)/User -o $@ $^ $(LDLIBS)
+
+# EL LATIDO DENTRO DEL TRABAJO LARGO - 08/11/2026.
+#
+# pump.h existe desde el 29/10 porque el tactil iba duro en STANAG y en
+# IDENT, y el arreglo fue un `pump();` suelto dentro de los bucles largos.
+# No habia nada que vigilara que siguiera ahi: se borra en una
+# reorganizacion, compila, enlaza, decodifica igual, y lo unico que se nota
+# es que meses despues la pantalla vuelve a ir dura. Este banco cuelga un
+# contador del gancho de verdad y exige que lata.
+out/latido: sim/latido.c $(FIRMWARE)/User/wspr_fano.c \
+            $(FIRMWARE)/User/wspr_msg.c $(FIRMWARE)/User/wspr_rx.c \
+            $(FIRMWARE)/User/stanag_det.c
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ $(filter %.c,$^) $(LDLIBS)
+
+.PHONY: latido
+latido: out/latido ; ./out/latido
+
+comprueba: latido
+
+# EL 9600 G3RUH DE LOS SATELITES - 09/11/2026.
+#
+# ax25.c tiene DOS puertas de entrada: la de siempre -dos correladores de
+# tono, 1200 en VHF y 300 en HF- y la directa, que es FSK sin tonos con la
+# banda base aleatorizada. Este banco fabrica la senal entera, de la trama
+# a las muestras del discriminador, y exige que salga la trama que entro.
+#
+# Mide ademas las cuatro cosas que pasan en el aire y no en un laboratorio:
+# la radio desintonizada, el ruido, el Doppler y el flanco redondeado de
+# una GFSK. Y que a 48 kHz el modo diga que NO en vez de quedarse mudo.
+out/g3ruh: sim/g3ruh.c $(FIRMWARE)/User/ax25.c $(FIRMWARE)/User/nco.c \
+           $(FIRMWARE)/User/nco_tabla.c $(FIRMWARE)/User/ax25.h
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ $(filter %.c,$^) $(LDLIBS)
+
+.PHONY: g3ruh
+g3ruh: out/g3ruh ; ./out/g3ruh
+
+comprueba: g3ruh
 
 .PHONY: wspr
 wspr: out/wsprtest ; ./out/wsprtest
@@ -3569,6 +3726,25 @@ out/stanagdet: sim/stanag_det_test.c $(FIRMWARE)/User/stanag_det.c
 	@mkdir -p out
 	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -Ihostinc -Isim -o $@ \
 	      sim/stanag_det_test.c $(FIRMWARE)/User/stanag_det.c -lm
+
+# QUE realce() SIGA DANDO EL MISMO BIT - 08/11/2026.
+#
+# realce() se reescribio para que no recorra las 413 casillas del entorno
+# una a una: la ventana del detector paso de 8,27 a 3,61 millones de
+# instrucciones y el segundo entero, con la banda vacia, del 50 % al 22 %.
+# Pero lo que devuelve decide con un umbral de 9 dB si una raya es un tono,
+# o sea que una decima de dB cambia lo que sale por pantalla. Este banco
+# lleva dentro la version de ANTES y exige el MISMO BIT, no un parecido.
+# Se trae stanag_det.c con un #include porque realce() es interna.
+out/realceigual: sim/realce_igual.c $(FIRMWARE)/User/stanag_det.c \
+                 $(FIRMWARE)/User/stanag_det.h
+	@mkdir -p out
+	$(CC) $(CFLAGS) -I$(FIRMWARE)/User -o $@ sim/realce_igual.c $(LDLIBS)
+
+.PHONY: realceigual
+realceigual: out/realceigual ; ./out/realceigual
+
+comprueba: realceigual
 
 .PHONY: stanagdet
 stanagdet: out/stanagdet ; ./out/stanagdet
@@ -5680,7 +5856,180 @@ m4:
 	   $(MAKE) out/m4_tactil.elf && $(M4QEMU) out/m4_tactil.elf && \
 	   $(MAKE) out/m4_audio.elf && $(M4QEMU) out/m4_audio.elf && \
 	   $(MAKE) out/m4_vuelta.elf && $(M4QEMU) out/m4_vuelta.elf && \
-	   $(MAKE) numeros; \
+	   $(MAKE) numeros && \
+	   $(MAKE) m4todo; \
+	 fi
+
+# ---------------------------------------------------------------------
+# LOS NUEVE BANCOS DEL M4 QUE MIDEN LA RADIO ENTERA - 08/11/2026.
+# ---------------------------------------------------------------------
+#
+# Hasta hoy el banco del M4 medía ocho cosas sueltas -el espectro, la
+# cabecera, el I2C, FT8, el tactil, el audio, la vuelta y los numeros-.
+# Lo que faltaba era el resto de la radio, que es casi toda: los seis
+# demoduladores, los veintitantos decodificadores, el dibujado entero, el
+# disco y las piezas transversales.
+#
+# Ahora estan. Cada uno mide lo suyo y NINGUNO lleva topes: son medidas,
+# no guardianes. Por eso cuelgan de `m4` y no de `comprueba`: un numero de
+# rendimiento que se pone rojo solo porque otra version del compilador
+# ordene dos instrucciones de otra manera es un banco que se aprende a
+# ignorar.
+#
+#   m4_demod    los seis modos y los filtros del camino de audio
+#   m4_imagen   SSTV, WEFAX y HELL
+#   m4_digi1    RTTY, NAVTEX, DSC, PSK31, JTTY y CW
+#   m4_digi2    APRS/PKT300, AIS, WSPR, ALE e IDENT
+#   m4_stanag   las dos cadenas gordas: STANAG y HFDL
+#   m4_dibujo   la cascada (bucle contra desplazada), gfx2, la franja y el panel
+#   m4_disco    spi_flash, ajustes, bancos, las tablas y el mapa
+#   m4_rds      RDS, FFT, NCO y los correctores de espejo
+#   m4_arbitro  cuanto cuesta de verdad el detector de STANAG, por segundo
+#   m4_piezas   y en que se va esa ventana, trozo a trozo
+#
+# El ultimo existe por una discrepancia: midiendo la radio salieron DOS
+# numeros para stanag_det_paso() que no se parecian, 2,7 y 7,8 millones de
+# instrucciones. No era que uno estuviera mal: es que el detector cuesta
+# el triple con la banda VACIA que con una señal limpia, porque sin
+# estructura que encontrar se recorre todo buscandola. m4_arbitro lo mide
+# dandole un segundo exacto de audio y contando la tanda entera, que es lo
+# unico que no admite interpretacion.
+#
+# Los -I de CMSIS van ANTES de -Ihostinc a proposito: hostinc trae un
+# arm_math.h de mentira, y aqui se quiere medir el codigo que de verdad
+# corre en la radio, con el CMSIS bueno.
+M4INC = -I$(FIRMWARE)/CMSIS/Include -I$(FIRMWARE)/CMSIS/DSP/Include \
+        -I$(FIRMWARE)/CMSIS/DSP/PrivateInclude \
+        -Igfx2 -I$(FIRMWARE)/User -I$(FIRMWARE)/Ft8Lib -Ihostinc -Isim
+
+#
+# *** Y DE QUE DEPENDEN ESTOS BANCOS - 08/11/2026. ***
+#
+# De todo el firmware, no solo de su propio .c. Hasta hoy cada regla
+# listaba nada mas m4/m4_loquesea.c y m4/start.c, asi que tocar
+# User/stanag_det.c y volver a llamar al `make` contestaba "is up to date"
+# y QEMU medía EL BINARIO DE ANTES. Se vio justo midiendo una mejora del
+# detector: el numero no se movia ni un bit.
+#
+# Un banco que mide la version anterior y dice que no ha cambiado nada es
+# peor que no tener banco. Asi que las reglas dependen de las fuentes del
+# firmware -M4DEPS- y la orden de compilar coge solo lo suyo con
+# $(filter m4/%.c,$^), que si no se intentarian compilar las doscientas.
+M4DEPS := $(wildcard $(FIRMWARE)/User/*.c) $(wildcard $(FIRMWARE)/User/*.h) \
+          $(wildcard gfx2/*.c) $(wildcard gfx2/*.h) $(wildcard m4/*.h)
+
+M4DSP = $(FIRMWARE)/CMSIS/DSP/Source/FilteringFunctions/arm_biquad_cascade_df1_f32.c \
+        $(FIRMWARE)/CMSIS/DSP/Source/FilteringFunctions/arm_biquad_cascade_df1_init_f32.c \
+        $(FIRMWARE)/CMSIS/DSP/Source/ComplexMathFunctions/arm_cmplx_mag_f32.c \
+        $(FIRMWARE)/CMSIS/DSP/Source/FilteringFunctions/arm_fir_f32.c \
+        $(FIRMWARE)/CMSIS/DSP/Source/FilteringFunctions/arm_fir_init_f32.c \
+        $(FIRMWARE)/CMSIS/DSP/Source/FilteringFunctions/arm_fir_decimate_f32.c \
+        $(FIRMWARE)/CMSIS/DSP/Source/FilteringFunctions/arm_fir_decimate_init_f32.c \
+        $(FIRMWARE)/CMSIS/DSP/Source/FilteringFunctions/arm_fir_interpolate_f32.c \
+        $(FIRMWARE)/CMSIS/DSP/Source/FilteringFunctions/arm_fir_interpolate_init_f32.c
+
+out/m4_demod.elf: m4/m4_demod.c m4/start.c $(M4DEPS)
+	@mkdir -p out
+	$(M4CC) $(M4FLAGS) $(M4DEFS) $(M4INC) $(filter m4/%.c,$^) \
+	  $(FIRMWARE)/User/demod_am.c $(FIRMWARE)/User/sam.c \
+	  $(FIRMWARE)/User/disc_fm.c $(FIRMWARE)/User/semibanda.c \
+	  $(FIRMWARE)/User/agc.c $(FIRMWARE)/User/audiofil.c \
+	  $(FIRMWARE)/User/anotch.c $(FIRMWARE)/User/nb.c \
+	  $(FIRMWARE)/User/rapido.c $(FIRMWARE)/User/nr_ss.c \
+	  $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c \
+	  $(FIRMWARE)/User/fft.c $(M4DSP) -o $@ $(M4LIBS)
+
+out/m4_imagen.elf: m4/m4_imagen.c m4/start.c sim/sstv_genera.h $(M4DEPS)
+	@mkdir -p out
+	$(M4CC) $(M4FLAGS) $(M4DEFS) $(M4INC) $(filter m4/%.c,$^) \
+	  $(FIRMWARE)/User/sstv.c $(FIRMWARE)/User/wefax.c $(FIRMWARE)/User/hell.c \
+	  $(FIRMWARE)/User/disc_fm.c $(FIRMWARE)/User/nco.c \
+	  $(FIRMWARE)/User/nco_tabla.c -o $@ $(M4LIBS)
+
+out/m4_digi1.elf: m4/m4_digi1.c m4/start.c $(M4DEPS)
+	@mkdir -p out
+	$(M4CC) $(M4FLAGS) $(M4DEFS) $(M4INC) $(filter m4/%.c,$^) \
+	  $(FIRMWARE)/User/rtty.c $(FIRMWARE)/User/rtty_auto.c \
+	  $(FIRMWARE)/User/rtty_scope.c $(FIRMWARE)/User/navtex.c \
+	  $(FIRMWARE)/User/dsc.c $(FIRMWARE)/User/psk31.c $(FIRMWARE)/User/cw.c \
+	  $(FIRMWARE)/User/jtty_rx.c $(FIRMWARE)/User/jtty_fec.c \
+	  $(FIRMWARE)/User/jtty_msg.c $(FIRMWARE)/User/nco.c \
+	  $(FIRMWARE)/User/nco_tabla.c $(FIRMWARE)/User/fft.c -o $@ $(M4LIBS)
+
+out/m4_digi2.elf: m4/m4_digi2.c m4/start.c $(M4DEPS)
+	@mkdir -p out
+	$(M4CC) $(M4FLAGS) $(M4DEFS) $(M4INC) $(filter m4/%.c,$^) \
+	  $(FIRMWARE)/User/ax25.c $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c \
+	  $(FIRMWARE)/User/ais_rx.c $(FIRMWARE)/User/ais_msg.c \
+	  $(FIRMWARE)/User/ais_modo.c $(FIRMWARE)/User/wspr_rx.c \
+	  $(FIRMWARE)/User/wspr_msg.c $(FIRMWARE)/User/wspr_fano.c \
+	  $(FIRMWARE)/User/wspr_modo.c $(FIRMWARE)/User/ale_rx.c \
+	  $(FIRMWARE)/User/ale_golay.c $(FIRMWARE)/User/ale_modo.c \
+	  $(FIRMWARE)/User/ident.c $(FIRMWARE)/User/stanag_det.c -o $@ $(M4LIBS)
+
+out/m4_stanag.elf: m4/m4_stanag.c m4/start.c $(M4DEPS)
+	@mkdir -p out
+	$(M4CC) $(M4FLAGS) $(M4DEFS) $(M4INC) $(filter m4/%.c,$^) \
+	  $(filter-out %/hfdl_ram.c,$(wildcard $(FIRMWARE)/User/hfdl_*.c)) \
+	  $(FIRMWARE)/User/stanag_rx.c $(FIRMWARE)/User/stanag_det.c \
+	  $(FIRMWARE)/User/s4415.c $(FIRMWARE)/User/stanag_modo.c \
+	  $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c \
+	  $(FIRMWARE)/CMSIS/DSP/Source/FilteringFunctions/arm_fir_f32.c \
+	  $(FIRMWARE)/CMSIS/DSP/Source/FilteringFunctions/arm_fir_init_f32.c \
+	  -o $@ $(M4LIBS)
+
+out/m4_dibujo.elf: m4/m4_dibujo.c m4/start.c m4/panel.c $(M4DEPS)
+	@mkdir -p out
+	$(M4CC) $(M4FLAGS) $(M4DEFS) $(M4INC) $(filter m4/%.c,$^) \
+	  gfx2/gfx2.c gfx2/fonts_data.c gfx2/idioma.c gfx2/ui_top.c gfx2/ui_digi.c \
+	  gfx2/spec_chrome.c gfx2/spec_agc.c gfx2/spec_snap.c \
+	  $(FIRMWARE)/User/spectrum.c $(FIRMWARE)/User/waterfall.c -o $@ $(M4LIBS)
+
+out/m4_disco.elf: m4/m4_disco.c m4/start.c m4/panel.c $(M4DEPS)
+	@mkdir -p out
+	$(M4CC) $(M4FLAGS) $(M4DEFS) $(M4INC) $(filter m4/%.c,$^) \
+	  gfx2/gfx2.c gfx2/fonts_data.c gfx2/idioma.c \
+	  $(FIRMWARE)/User/spi_flash.c $(FIRMWARE)/User/settings.c \
+	  $(FIRMWARE)/User/banco.c $(FIRMWARE)/User/icao24_db.c \
+	  $(FIRMWARE)/User/dxcc.c $(FIRMWARE)/User/mapa.c \
+	  $(FIRMWARE)/User/mapa_bin.c $(FIRMWARE)/User/mapa_eti.c \
+	  $(FIRMWARE)/User/mapa_datos.c $(FIRMWARE)/User/zona_alta.c -o $@ $(M4LIBS)
+
+out/m4_rds.elf: m4/m4_rds.c m4/start.c $(M4DEPS)
+	@mkdir -p out
+	$(M4CC) $(M4FLAGS) $(M4DEFS) $(M4INC) $(filter m4/%.c,$^) \
+	  $(FIRMWARE)/User/rds.c $(FIRMWARE)/User/rds_pi.c $(FIRMWARE)/User/fft.c \
+	  $(FIRMWARE)/User/nco.c $(FIRMWARE)/User/nco_tabla.c \
+	  $(FIRMWARE)/User/iqbal.c $(FIRMWARE)/User/iqancho.c \
+	  gfx2/spec_agc.c -o $@ $(M4LIBS)
+
+out/m4_arbitro.elf: m4/m4_arbitro.c m4/start.c $(M4DEPS)
+	@mkdir -p out
+	$(M4CC) $(M4FLAGS) $(M4DEFS) $(M4INC) $(filter m4/%.c,$^) \
+	  $(FIRMWARE)/User/stanag_det.c -o $@ $(M4LIBS)
+
+# EL REPARTO DE LA VENTANA DEL DETECTOR, PIEZA A PIEZA.
+#
+# El arbitro de aqui arriba dice LO QUE CUESTA; este dice EN QUE SE VA. Es
+# el que encontro que realce() se llevaba el 79 % de una ventana con la
+# banda vacia, y por eso se trae stanag_det.c con un #include en vez de
+# enlazarlo: desde fuera no se ven las funciones internas. OJO: por eso
+# mismo aqui NO va $(FIRMWARE)/User/stanag_det.c en la orden de compilar.
+out/m4_piezas.elf: m4/m4_piezas.c m4/start.c $(M4DEPS)
+	@mkdir -p out
+	$(M4CC) $(M4FLAGS) $(M4DEFS) $(M4INC) $(filter m4/%.c,$^) \
+	  -o $@ $(M4LIBS)
+
+# Los diez de una vez, aparte de `m4` para poder lanzar solo lo nuevo
+# cuando se esta midiendo algo concreto.
+.PHONY: m4todo
+m4todo:
+	@if ! command -v qemu-system-arm >/dev/null 2>&1; then \
+	   echo "  qemu-system-arm no esta instalado: me salto la medida del M4"; \
+	 else \
+	   for b in demod imagen digi1 digi2 stanag dibujo disco rds arbitro piezas; do \
+	     $(MAKE) out/m4_$$b.elf && $(M4QEMU) out/m4_$$b.elf || exit 1; \
+	   done; \
 	 fi
 
 .PHONY: saltopinta

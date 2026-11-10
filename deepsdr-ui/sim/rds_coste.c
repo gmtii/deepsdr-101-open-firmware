@@ -488,8 +488,38 @@ int main(int argc, char **argv)
                   "con RDS limpio acaba enganchado (la medida vale)");
         comprueba(!b.enganchado_final,
                   "sin RDS no engancha (escenario B de verdad)");
-        comprueba(d.ns_med < 1.15 * b.ns_med && b.ns_med < 1.15 * d.ns_med,
-                  "el tiempo por bloque no depende del escenario (15%)");
+        /*
+         * EL 15% ERA UN BANCO QUE MEDIA LA MAQUINA - 08/11/2026.
+         *
+         * Esta linea exigia que las dos medianas no se separasen mas de un
+         * 15%, y se ponia roja sola. Medido ocho veces seguidas en la
+         * misma maquina y con el mismo binario, la razon D/B salio:
+         *
+         *     1,067  1,101  1,102  1,102  1,102  1,138  1,162  y una roja
+         *
+         * O sea que el umbral caia DENTRO del temblor. Un banco que
+         * aprueba o suspende segun lo ocupado que este el ordenador en ese
+         * momento no esta midiendo el codigo: cada tanda es una moneda al
+         * aire, y en cuanto alguien ve el primer rojo falso aprende a
+         * relanzar "make comprueba" en vez de leerlo. Eso es peor que no
+         * tener el banco.
+         *
+         * Y la respuesta ya estaba escrita doce lineas mas abajo, para el
+         * p99,9: en nanosegundos no se puede resolver esto. La diferencia
+         * de VERDAD entre escenarios esta medida con callgrind -que cuenta
+         * instrucciones y no segundos- y son 53.227 contra 53.690 por
+         * bloque: un 0,87%. Ninguna mediana de reloj de pared va a ver
+         * nunca un 0,87% en una maquina compartida.
+         *
+         * Asi que esta comprobacion se queda, pero en el sitio donde el
+         * reloj de pared SI sirve: no para confirmar que son iguales -eso
+         * lo dice callgrind- sino para cazar que uno se dispare. Con el
+         * peor temblor visto en 1,17, el 1,50 deja margen de sobra y
+         * seguiria cazando un escenario que costase vez y media, que es el
+         * tamaño de regresion que importaria.
+         */
+        comprueba(d.ns_med < 1.50 * b.ns_med && b.ns_med < 1.50 * d.ns_med,
+                  "ningun escenario se dispara contra otro (50%)");
         /*
          * EL p99,9 NO SE COMPRUEBA, Y HAY QUE DECIR POR QUE.
          *

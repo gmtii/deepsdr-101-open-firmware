@@ -54,9 +54,30 @@ static uint16_t s_head = 0; /* indice fisico de la fila logica 0 */
  * cerrojo aqui dentro y no una regla que cumplir fuera. */
 static uint8_t s_prestada = 0U;
 
+/* "El proximo volcado, entero". Vive aqui arriba y no al lado de s_bucle
+ * porque waterfall_presta() y waterfall_init(), que la ponen, estan antes.
+ * El porque esta donde se usa, en waterfall_blit(). */
+static uint8_t s_todo = 1U;
+
+/*
+ * LINEAS EMPUJADAS DESDE EL ULTIMO VOLCADO - 08/11/2026, revision a fondo.
+ *
+ * Y ES UN FALLO MIO DE LA V6.65. En "Muy rapida" el bucle principal empuja
+ * DOS lineas y vuelca UNA sola vez (ver el camino `dos` de main.c, que
+ * reparte el fotograma en dos mitades). La cascada desplazada no se entera
+ * porque repinta las 72 filas; la de bucle dibujaba solo la ultima, asi que
+ * LA MITAD DE LAS LINEAS NO LLEGABA A LA PANTALLA.
+ *
+ * Asi que se cuenta cuantas van desde el ultimo volcado y se dibujan todas.
+ * Se acota a las filas que hay: si alguna vez se empujaran mas de 72 entre
+ * dos volcados, dibujarlas todas es exactamente repintar la cascada entera.
+ */
+static uint8_t s_pend = 0U;
+
 void waterfall_presta(uint8_t si)
 {
     s_prestada = (uint8_t)(si ? 1U : 0U);
+    s_todo = 1U;   /* al devolverlo, lo de debajo ya no vale */
 }
 
 uint8_t waterfall_prestada(void) { return s_prestada; }
@@ -86,6 +107,8 @@ void waterfall_init(void)
      */
     memset(&g_ft8_shared_ram, 0, sizeof g_ft8_shared_ram);
     s_head = 0;
+    s_todo = 1U;   /* ver waterfall_entero() */
+    s_pend = 0U;
 }
 
 void waterfall_push_line(const uint8_t *line)
@@ -97,6 +120,7 @@ void waterfall_push_line(const uint8_t *line)
      * nueva fila 0) y escribe encima. Solo 1 fila copiada. */
     s_head = (uint16_t)((s_head + WATERFALL_ROWS - 1U) % WATERFALL_ROWS);
     memcpy(&s_buf[s_head][0], line, WATERFALL_WIDTH);
+    if (s_pend < (uint8_t)WATERFALL_ROWS) { s_pend++; }
 }
 
 /* ---------------------------------------------------------------------
@@ -222,10 +246,99 @@ void waterfall_pinta_en(gfx2_surf_t *sf, int16_t px, int16_t py,
     }
 }
 
+/*
+ * LA CASCADA EN BUCLE - 06/11/2026.
+ *
+ * La de siempre se DESPLAZA: la fila i de la pantalla enseña una fila
+ * distinta del historial en cada fotograma, asi que al llegar UNA linea hay
+ * que volcar LAS SETENTA Y DOS. Son 54.432 escrituras al panel para enseñar
+ * 756 puntos.
+ *
+ * En bucle no se desplaza nada: la fila i de la pantalla es siempre la fila
+ * i del anillo, y la linea nueva se escribe en el sitio que le toca. Una
+ * fila, 756 escrituras. **Setenta y dos veces menos.**
+ *
+ * POR QUE ESTO Y NO IR MAS DESPACIO. Medido en la radio: el siseo de la FM
+ * escala con los volcados por segundo y no con lo que tarda cada
+ * escritura - un barrido del tiempo de dato del bus de 4 a 15 ciclos dejo
+ * la vuelta un 45% mas lenta y el siseo igual -. Lo que hay que bajar es la
+ * cuenta de escrituras.
+ *
+ * LO QUE SE PAGA ES COMO SE VE: en vez de deslizarse, la imagen se queda
+ * quieta y hay una linea de escritura que la recorre, dejando el salto de
+ * tiempo a su paso. Es como lo hacen muchos equipos, pero no es lo mismo, y
+ * por eso va con interruptor y no puesto a la fuerza. Vive en la ventana de
+ * Informacion, con los otros interruptores de experimento -IPA, DMA, bus,
+ * pendiente-, que es donde van las cosas que hay que poder encender y
+ * apagar escuchando.
+ */
+/*
+ * Y ARRANCA ENCENDIDO - 06/11/2026.
+ *
+ * La V6.65 lo entrego APAGADO, detras de un interruptor que habia que ir a
+ * buscar a la ventana de Informacion. Eso es un arreglo que no arregla
+ * nada hasta que alguien lo enciende, y se entrego asi justo despues de que
+ * el usuario dijera que no iba a andar probando interruptores. El fallo es
+ * de la entrega, no de quien no lo encendio.
+ *
+ * Asi que va puesto. El interruptor se queda para volver a la cascada
+ * desplazada de siempre, que es lo que tiene que poder hacerse; lo que no
+ * puede ser es que haya que encontrarlo para que la radio haga lo correcto.
+ */
+static uint8_t s_bucle = 1U;
+
+/*
+ * Y UN VOLCADO ENTERO PENDIENTE - 06/11/2026, encontrado por sim/captura.
+ *
+ * La cascada desplazada tiene una propiedad que no se ve hasta que se
+ * quita: como repinta las 72 filas en cada linea, **se cura sola**. Si algo
+ * pinta encima -un cartel, la captura de pantalla, volver de FT8- el
+ * destrozo dura un fotograma.
+ *
+ * En bucle no: solo se escribe la fila nueva, asi que lo que haya quedado
+ * encima se queda ahi hasta que la linea de escritura pase por debajo, y
+ * eso son hasta 72 lineas. El banco de captura lo canto a la primera, con
+ * 53.676 pixeles distintos - que son, casi exactos, las 72 filas -.
+ *
+ * Asi que hay una bandera de "esta vez, entero". La ponen el arranque, el
+ * cambio de modo y devolver la RAM prestada de FT8, que son los tres sitios
+ * donde se sabe que lo de debajo ya no vale.
+ *
+ * LO QUE ESTO NO CUBRE, y va dicho: un cartel que se pinte encima sin pasar
+ * por ninguno de esos tres. Ahi el destrozo sigue hasta que la linea pase.
+ * La cascada desplazada no tiene ese agujero. Es parte del precio del modo
+ * y por eso el interruptor sigue estando.
+ */
+void waterfall_entero(void) { s_todo = 1U; }
+
+uint8_t waterfall_bucle(void)          { return s_bucle; }
+void    waterfall_bucle_pon(uint8_t on){ s_bucle = (uint8_t)(on ? 1U : 0U); s_todo = 1U; }
+
 void waterfall_blit(uint16_t x, uint16_t y, const uint16_t *lut)
 {
     /* Prestado a FT8: lo que hay ahi no son indices de paleta. */
     if (s_prestada) { return; }
+
+    /*
+     * En bucle, UNA fila: la que acaba de escribir waterfall_push_line(),
+     * que es la fisica s_head, y va en la fila s_head de la pantalla
+     * -porque aqui la correspondencia es directa y no se mueve-.
+     */
+    if (s_bucle && !s_todo) {
+        /* TODAS las que se hayan empujado desde el volcado anterior, no
+         * solo la ultima. Ver s_pend. La mas reciente es la fisica s_head
+         * y las anteriores van subiendo de indice. */
+        uint8_t k;
+        for (k = 0U; k < s_pend; k++) {
+            uint16_t f = (uint16_t)((s_head + k) % WATERFALL_ROWS);
+            gfx2_wf_fila((int16_t)x, (int16_t)(y + f), WATERFALL_WIDTH,
+                         &s_buf[f][0], lut);
+        }
+        s_pend = 0U;
+        return;
+    }
+    s_todo = 0U;
+    s_pend = 0U;
 
     /* gfx2_wf_blit() recorre el historial circular desde s_head, convierte
      * cada indice con la LUT dentro de la banda compositora y saca cada

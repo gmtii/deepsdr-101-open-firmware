@@ -95,6 +95,29 @@ def sin_comentarios(src):
 def main():
     cabeceras = sorted(f for f in os.listdir(USER) if f.endswith('.h'))
     fuentes   = sorted(f for f in os.listdir(USER) if f.endswith('.c'))
+
+    #
+    # Y SI NO HA MIRADO NADA, NO DICE "TODO BIEN" - 08/11/2026.
+    #
+    # Este guion se busca User/ el solo, a partir de donde esta el fichero.
+    # Con User/ vacio -o movido, o con este guion copiado a otro sitio-
+    # recorria cero cabeceras, encontraba cero funciones de motor y
+    # terminaba con su "SIN LLAMAR: todo correcto" y salida 0. O sea que
+    # dejaba de vigilar SIN QUE NADIE SE ENTERARA, que es la peor forma de
+    # fallar que tiene un guardian.
+    #
+    # Es exactamente la leccion que ya estaba escrita en copias_check.py
+    # ("NO HE COMPARADO NADA"), en version_check.py ("un guardian que no
+    # encuentra nada no dice todo bien, dice no se donde mirar") y, desde
+    # la pasada anterior de esta misma revision, en citas_check.py,
+    # interruptores_check.py y md_enlaces_check.py. Aqui se habia quedado
+    # sin aplicar. Encontrado en la segunda pasada del 08/11, probandolo
+    # con un arbol de mentira que solo tenia tools/ y un User/ vacio.
+    #
+    if not cabeceras or not fuentes:
+        print('*** NO HE ENCONTRADO NI UNA CABECERA EN %s ***' % USER)
+        print('    la ruta no es la que creia; esto NO es que este todo bien')
+        return 1
     # SIN COMENTARIOS. La primera version no los quitaba de los .c, y al
     # probar que el banco cazaba el fallo original -comentando la llamada a
     # rtty_auto_poll()- siguio diciendo que todo bien: la llamada comentada

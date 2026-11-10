@@ -76,27 +76,16 @@ static void comprueba(int ok, const char *que)
  * baja con un desplazamiento grande, es que se perdio media foto y eso hay
  * que verlo, no esconderlo.
  */
-static double error_desp(int hasta, uint8_t vdec, int desp)
-{
-    double suma = 0.0; long n = 0;
-    int x, y;
-    if (hasta <= 0) { return 999.0; }
-    for (y = 0; y < hasta; y++) {
-        for (x = 0; x < (int)SSTV_ANCHO; x++) {
-            uint8_t r, g, b;
-            int ly = (y + desp) * (int)vdec;
-            if (ly >= (int)SSTV_ALTO) { continue; }
-            patron(x, ly, &r, &g, &b);
-            suma += fabs((double)g_img[y][x][0] - r);
-            suma += fabs((double)g_img[y][x][1] - g);
-            suma += fabs((double)g_img[y][x][2] - b);
-            n += 3;
-        }
-    }
-    return n ? suma / (double)n : 999.0;
-}
 
-static double error_medio(int hasta, uint8_t vdec, int *mejor_desp)
+/*
+ * El error CON LA IMAGEN COLOCADA: prueba trece desplazamientos verticales y
+ * se queda con el mejor. No es lo mismo que error_medio() -que compara
+ * renglon a renglon tal cual- y por eso desde el 05/11/2026 no se llama
+ * igual: las dos convivian con el mismo nombre en ficheros distintos y al
+ * subir la otra a sim/sstv_genera.h chocaron. Aqui hace falta buscar el
+ * desplazamiento porque este banco engancha A MITAD de imagen a proposito.
+ */
+static double error_colocado(int hasta, uint8_t vdec, int *mejor_desp)
 {
     double mejor = 999.0;
     int d;
@@ -154,7 +143,7 @@ static const char *a_pelo(uint8_t modo, int lineas, double sigma, double off_hz,
     }
     {
         int d = -1;
-        double e = error_medio(g_max_y > 0 ? g_max_y : 0, pl.vdec, &d);
+        double e = error_colocado(g_max_y > 0 ? g_max_y : 0, pl.vdec, &d);
         if (err)  { *err  = e; }
         if (desp) { *desp = d; }
     }

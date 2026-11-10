@@ -57,7 +57,61 @@ ASM := $(FW)/CMSIS/GD/GD32F4xx/Source/GCC/startup_gd32f450_470.S
 #
 HDR := $(wildcard *.h) $(wildcard $(FW)/User/*.h)
 
-all: customboot.bin
+# EL OBJETIVO POR DEFECTO ES "all", Y HAY QUE DECIRLO - 08/11/2026.
+#
+# En make, el objetivo por defecto es EL PRIMERO que aparece en el fichero,
+# y hasta hoy ese era "all" porque no habia nada delante. Al meter el
+# bloque de avisos de aqui debajo, "avisos:" paso a ser el primero y
+# "make -C boot" dejo de compilar el cargador: entraba, pasaba los avisos,
+# decia "ok" y SALIA CON CERO sin generar nada.
+#
+# Lo metí yo en la misma revision a fondo del 08/11 y no lo vio nadie
+# -ni el make, que salia en verde, ni la tanda, que no compila el
+# cargador- hasta que se borro customboot.bin a mano y se mando compilar:
+# no volvio a aparecer. Es exactamente la clase de fallo que esta revision
+# persigue, cometido por la revision.
+#
+# Con esta linea el orden del fichero deja de importar: se puede meter un
+# objetivo nuevo donde convenga y "make -C boot" sigue haciendo lo que
+# dice su nombre.
+.DEFAULT_GOAL := all
+
+# ---------------------------------------------------------------------
+# LOS AVISOS DE User/, TAMBIEN AQUI - 08/11/2026.
+# ---------------------------------------------------------------------
+#
+# El firmware lleva desde septiembre seis avisos extra sobre User/ (ver
+# avisos.mk: -Wduplicated-cond, -Wduplicated-branches, -Wlogical-op,
+# -Wnull-dereference, -Wjump-misses-init, y -Werror en los dos que no dan
+# falsos positivos). Cazan la clase de fallo que en este proyecto ya ha
+# mordido varias veces: la misma condicion escrita dos veces en un
+# else-if, dos ramas identicas, un || donde iba un &&.
+#
+# El cargador no los llevaba. Y es NUESTRO codigo -boot_main.c,
+# disco_msc.c, atajo_gesto.c, panel_serie.c y los demas- y ademas es la
+# unica pieza que, si sale mal, deja la radio sin forma de arreglarse por
+# USB. O sea el sitio donde menos gracia hace un else-if muerto.
+#
+# POR QUE ES UN OBJETIVO APARTE Y NO UN "CFLAGS +=": porque aqui se
+# compila y se enlaza de una sola pasada, y en $(SRC) van, junto a lo
+# nuestro, la pila USB del fabricante, Firmware/Source y CMSIS. Meter
+# -Werror en el CFLAGS comun se lo pondria tambien a ese codigo ajeno, que
+# es justo lo que avisos.mk dice que NO se hace: "-Werror en codigo ajeno
+# significa que un dia no compila por algo que no es nuestro".
+#
+# Asi que se mira aparte, con -fsyntax-only -que no genera nada y tarda un
+# par de segundos- y SOLO sobre los .c de esta carpeta. Cuelga de "all"
+# por el mismo motivo que pila, mapa y panel cuelgan del "all" de arriba:
+# no se saca un cargador sin que esto haya pasado por medio.
+#
+# Repasado el 08/11 con gcc y con clang: los nueve .c de boot/ estan
+# limpios hoy, asi que esto no tapa nada que ya estuviera roto.
+.PHONY: avisos
+avisos:
+	@for f in *.c; do 	   $(CC) $(CFLAGS) -fsyntax-only 	     -Wduplicated-cond -Werror=duplicated-cond 	     -Wduplicated-branches -Wlogical-op -Wnull-dereference 	     -Wjump-misses-init -Werror=unused-variable "$$f" || exit 1; 	 done
+	@echo "  cargador: los avisos de User/ pasan tambien aqui  ok"
+
+all: avisos customboot.bin
 customboot.elf: $(SRC) $(ASM) $(HDR) GD32F450VE_BOOT.ld reglas.mk
 	$(CC) $(CFLAGS) $(LDFLAGS) -Wl,-Map=$(@:.elf=.map) $(SRC) $(ASM) -o $@
 	arm-none-eabi-size $@
