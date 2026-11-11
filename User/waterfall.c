@@ -273,19 +273,26 @@ void waterfall_pinta_en(gfx2_surf_t *sf, int16_t px, int16_t py,
  * apagar escuchando.
  */
 /*
- * Y ARRANCA ENCENDIDO - 06/11/2026.
+ * Y ARRANCA APAGADO OTRA VEZ - 11/11/2026.
  *
- * La V6.65 lo entrego APAGADO, detras de un interruptor que habia que ir a
- * buscar a la ventana de Informacion. Eso es un arreglo que no arregla
- * nada hasta que alguien lo enciende, y se entrego asi justo despues de que
- * el usuario dijera que no iba a andar probando interruptores. El fallo es
- * de la entrega, no de quien no lo encendio.
+ * La V6.66 lo puso a 1 a la fuerza, razonando que un interruptor que hay
+ * que ir a buscar es un arreglo que no arregla nada. El razonamiento era
+ * bueno y la decision mala, porque se llevo por delante COMO SE VE la
+ * cascada, que es lo que el usuario mira todo el rato.
  *
- * Asi que va puesto. El interruptor se queda para volver a la cascada
- * desplazada de siempre, que es lo que tiene que poder hacerse; lo que no
- * puede ser es que haya que encontrarlo para que la radio haga lo correcto.
+ * En bucle la imagen no se desliza: se queda quieta y hay una linea de
+ * escritura que la recorre, dejando el salto de tiempo a su paso. Eso esta
+ * escrito ahi arriba desde el primer dia y se acepto como "lo que se
+ * paga". Pues no se paga: un usuario lo conto como que la radio iba lenta
+ * y que se veia escanear. No iba lenta -en coste el bucle es mas barato,
+ * 756 escrituras por cuadro contra 54.432- pero daba igual, porque lo que
+ * el ve es una cascada que ya no corre.
+ *
+ * El interruptor se queda donde estaba, en la ventana de Informacion, para
+ * quien quiera el bucle. Lo que vuelve a su sitio es lo que la radio hace
+ * sin que nadie toque nada.
  */
-static uint8_t s_bucle = 1U;
+static uint8_t s_bucle = 0U;
 
 /*
  * Y UN VOLCADO ENTERO PENDIENTE - 06/11/2026, encontrado por sim/captura.

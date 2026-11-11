@@ -18,6 +18,108 @@ ordered by date, does not spare the detail, and is not published.
 
 ---
 
+## V6.72 · 2026-11-11
+
+### Qué cambia
+
+**La cascada vuelve a deslizarse. Era eso.**
+
+- Avisado por un usuario: **desde una versión posterior a la V6.62 se ve
+  escanear**, y antes la imagen cambiaba deprisa. Era la **cascada en
+  bucle**, que la **V6.66 pasó a entregar encendida**.
+- En bucle la imagen **no se desliza**: se queda quieta y hay una línea de
+  escritura que la recorre de arriba abajo, dejando el salto de tiempo a su
+  paso. Eso estaba escrito en el código desde el primer día y se dio por
+  aceptable. No lo es: lo que se ve es una cascada que ya no corre.
+- No iba lenta — en coste el bucle es **más barato**, 756 escrituras por
+  cuadro contra 54.432 —, pero daba igual: lo que el usuario mira todo el
+  rato es cómo se mueve.
+- **Vuelve a arrancar desplazada**, como hasta la V6.65. El interruptor
+  sigue en la ventana de Información para quien quiera el bucle.
+
+### Y de paso, dos cosas mías de la V6.71
+
+- Avisado por un usuario el mismo día: en la V6.71 **se veía escanear la
+  cascada**, cuando antes la imagen cambiaba deprisa. Y era culpa del
+  arreglo de la víspera.
+- En la V6.71 bajé el antirrebote del autoguardado de `CONFIG.CSV` **de 30
+  segundos a 3**, razonando que, con el camino suave ya aceptándose, el
+  guardado deja de notarse. **Suave no quiere decir gratis**: un guardado
+  son dos bloques de 4 kB, o sea treinta y dos programaciones de página,
+  una por vuelta del bucle principal. El camino asíncrono **reparte** ese
+  trabajo, no lo quita — la cascada se para el mismo rato, sólo que a
+  trocitos, durante unas treinta y cuatro vueltas seguidas. A tres
+  segundos eso se paga diez veces más a menudo, y entre tanda y tanda ya
+  no da tiempo a recuperar.
+- **El antirrebote vuelve a 30 segundos**, que es donde estaba. Vuelve con
+  él el precio de siempre: apagar dentro de esos treinta segundos pierde
+  el último cambio.
+- **Lo que NO se deshace** es el arreglo de la V6.71: la cuenta de
+  clusters que se hacía en sectores de 512. Ése era el fallo de verdad —
+  el que dejaba `CONFIG.CSV` sin guardarse — y no tiene nada que ver con
+  la cascada.
+
+- **Y el panadaptador arranca siempre a su velocidad de serie.** La fila de
+  los milisegundos de cuadro llega a 250 ms —cuatro cuadros por segundo— y
+  al 0, que lo congela. Eso es útil, porque el repintado mete hasta 10 dB
+  de siseo en el audio. Lo que estaba mal era **guardarlo**: el síntoma de
+  tenerlo bajo no se parece a un ajuste, se parece a una radio rota —la
+  cascada a tirones, se ve escanear—, y quien lo bajó una tarde no se
+  acuerda tres semanas después. La fila sigue estando y surte efecto en el
+  acto; lo que ya no hace es sobrevivir al apagado.
+
+**La flash baja 28 bytes**: 490.388, quedan 1.132 libres.
+
+### What's new
+
+**The waterfall scrolls again. That was it.**
+
+- Reported by a user: **since some version after V6.62 you can see it
+  scanning**, where before the picture changed quickly. It was the
+  **looping waterfall**, which **V6.66 started shipping switched on**.
+- In loop mode the image **does not scroll**: it stays put and a write line
+  travels down it, leaving the time step behind as it passes. That was
+  written in the code from day one and taken as acceptable. It is not: what
+  you see is a waterfall that no longer runs.
+- It was not slow — in cost the loop is **cheaper**, 756 panel writes per
+  frame against 54,432 — but that is beside the point: how it moves is what
+  the user looks at all the time.
+- **It boots scrolling again**, as it did up to V6.65. The switch stays in
+  the Information window for anyone who wants the loop.
+
+### And two things of mine from V6.71, while I was at it
+
+- Reported by a user the same day: on V6.71 **you could see the waterfall
+  scanning**, where before the picture changed quickly. It was the
+  previous day's fix that did it.
+- In V6.71 I lowered the `CONFIG.CSV` autosave debounce **from 30 seconds
+  to 3**, reasoning that with the smooth path now being accepted the save
+  would no longer show. **Smooth does not mean free**: one save is two
+  4 kB blocks, i.e. thirty-two page programs, one per pass of the main
+  loop. The async path **spreads** that work, it does not remove it — the
+  waterfall stops for just as long, only in slices, across some thirty-four
+  consecutive passes. At three seconds that is paid ten times as often,
+  and there is no longer time to recover between batches.
+- **The debounce is back to 30 seconds**, where it was. Back with it comes
+  the usual price: switching off within those thirty seconds loses the
+  last change.
+- **What is NOT reverted** is V6.71's actual fix: the cluster count that
+  was being done in 512-byte sectors. That was the real bug — the one that
+  left `CONFIG.CSV` unsaved — and it has nothing to do with the waterfall.
+
+- **And the panadapter always starts at its default speed.** The frame-period
+  row goes up to 250 ms —four frames per second— and down to 0, which
+  freezes it. That is useful, because repainting puts up to 10 dB of hiss
+  into the audio. What was wrong was **saving it**: having it turned down
+  does not look like a setting, it looks like a broken radio —the waterfall
+  crawling, visibly scanning— and whoever turned it down one afternoon does
+  not remember three weeks later. The row is still there and still takes
+  effect immediately; what it no longer does is survive a power cycle.
+
+**Flash drops 28 bytes**: 490,388, leaving 1,132 free.
+
+---
+
 ## V6.71 · 2026-11-10
 
 ### Qué cambia

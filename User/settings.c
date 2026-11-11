@@ -57,29 +57,37 @@ extern volatile uint32_t g_msticks; /* same free-running ms counter touch.c/touc
  * comprueba que el camino suave se niega.
  *
  * ======================================================================
- * *** Y DE TREINTA DE VUELTA A TRES - 10/11/2026. LO DE ARRIBA ESTABA
- * CURANDO EL SINTOMA DE OTRA COSA. ***
+ * *** Y SE QUEDAN EN TREINTA. LOS BAJE A TRES EL 10/11/2026 Y HUBO QUE
+ * DESHACERLO AL DIA SIGUIENTE: SE VEIA EN LA CASCADA. ***
  * ======================================================================
  *
- * "Una cadena rota no se arregla sola, asi que en esa radio TODOS los
- * guardados son bloqueantes". Cierto el sintoma, falso el diagnostico: la
- * cadena de aquella radio no estaba rota. Lo que estaba mal era la PRUEBA
- * -contaba los clusters dividiendo por 512 en un volumen con clusters de
- * 4 kB, o sea que para CONFIG.CSV no podia cuadrar nunca-. Todo el porque
- * esta en spi_flash_cadena_seguida(), arreglado el 10/11/2026.
+ * EL RAZONAMIENTO QUE ME LOS HIZO BAJAR, y por que era corto. El arreglo
+ * de las unidades de spi_flash_cadena_seguida() hace que el camino suave
+ * vuelva a aceptarse, asi que di por hecho que el guardado deja de verse y
+ * que los treinta segundos ya no compraban nada.
  *
- * Con la cuenta buena, el camino suave vuelve a aceptarse en los discos
- * que formatea la propia radio: el guardado va a 256 bytes por vuelta del
- * bucle y no se ve. O sea que los treinta segundos ya no compran nada, y
- * lo que costaban era lo que conto el usuario que destapo todo esto:
- * apagar, o entrar en modo disco, dentro de esos treinta segundos pierde
- * el cambio - y en un disco recien formateado eso es CONFIG.CSV no
- * llegando a existir.
+ * LO QUE NO MIRE: suave no quiere decir gratis. Un guardado son DOS
+ * bloques de 4 kB -los datos y el bloque del directorio-, o sea TREINTA Y
+ * DOS programaciones de pagina de 256 bytes, una por vuelta del bucle. Lo
+ * que hace el camino asincrono es REPARTIR ese trabajo, no quitarlo: la
+ * cascada se queda parada el mismo rato, solo que a trocitos. Y el reparto
+ * dura unas treinta y cuatro vueltas seguidas.
  *
- * Tres segundos es lo que habia cuando esto funcionaba, y el desgaste que
- * supone es el mismo que tuvo durante meses.
+ * A treinta segundos eso se paga una vez cada treinta segundos. A tres, se
+ * paga DIEZ VECES MAS, y entonces la cascada no tiene tiempo de recuperar
+ * entre tanda y tanda. Un usuario lo vio al dia siguiente de entregarlo:
+ * que se nota como escanea y que antes la imagen cambiaba deprisa. Tenia
+ * razon.
+ *
+ * Asi que vuelven a treinta, que es donde estaban. Lo que se sigue
+ * arriesgando es lo de siempre -apagar dentro de esos treinta segundos
+ * pierde el ultimo cambio- y eso es un precio conocido; lo otro era una
+ * regresion en lo que se ve todo el rato.
+ *
+ * El fallo del usuario ruso NO era esto: era la cuenta de clusters, y esa
+ * se queda arreglada. Ver spi_flash_cadena_seguida().
  */
-#define SETTINGS_SAVE_DEBOUNCE_MS 3000UL
+#define SETTINGS_SAVE_DEBOUNCE_MS 30000UL
 
 static uint8_t s_dirty = 0U;
 

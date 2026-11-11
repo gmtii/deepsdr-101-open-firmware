@@ -15571,11 +15571,36 @@ static void extras_aplicar(const settings_extra_t *e)
         s_wf_vel = wf_vel_por_clave((uint8_t)ex_rec(e->v[SET_X_WFVEL], 0, 255));
         s_wf_frames = 0U;
     }
-    if (EX_HAY(SET_X_FPS_MS)) {
-        /* Cero es el panadaptador congelado y vale; por arriba se recorta a
-         * lo que ofrece la fila. Ver su comentario en settings.h. */
-        s_frame_ms = (uint32_t)ex_rec(e->v[SET_X_FPS_MS], 0, 250);
-    }
+    /*
+     * ==================================================================
+     * *** EL PERIODO DE CUADRO YA NO SE RESTAURA AL ARRANCAR -
+     * 11/11/2026, avisado por un usuario. ***
+     * ==================================================================
+     *
+     * Aqui habia:
+     *
+     *     if (EX_HAY(SET_X_FPS_MS)) {
+     *         s_frame_ms = (uint32_t)ex_rec(e->v[SET_X_FPS_MS], 0, 250);
+     *     }
+     *
+     * La fila de los milisegundos de cuadro llega hasta 250, o sea CUATRO
+     * cuadros por segundo, y hasta el 0, que congela el panadaptador. Eso
+     * es util -el repintado mete hasta 10 dB de siseo en el audio, medido-
+     * y por eso existe. Lo que estaba mal era GUARDARLO.
+     *
+     * Porque el sintoma de tenerlo bajo no se parece a un ajuste: se parece
+     * a una radio rota. La cascada avanza a tirones y se ve como escanea.
+     * Quien lo bajo una tarde para escuchar mejor no se acuerda tres
+     * semanas despues, y lo que ve es que la radio va lenta desde que
+     * actualizo. Un ajuste que sobrevive al apagado y que no se puede
+     * adivinar mirando la pantalla es una trampa.
+     *
+     * Asi que la fila se queda -se baja y se congela igual, y surte efecto
+     * en el acto- pero el panadaptador ARRANCA SIEMPRE a su velocidad de
+     * serie. La clave se sigue escribiendo en CONFIG.CSV, para no romper un
+     * fichero de nadie ni la vuelta de settings_extra_toma(); simplemente
+     * no manda al arrancar.
+     */
     if (EX_HAY(SET_X_CONTORNO)) {
         s_spec_smooth_passes = (uint8_t)ex_rec(e->v[SET_X_CONTORNO], 0, SPECTRUM_LINE_SMOOTH_MAX);
         spectrum_set_line_smooth(s_spec_smooth_passes);
